@@ -16,6 +16,16 @@ actor LSPClient {
     private(set) var state: State = .starting
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
+    private var serverRequests = LSPServerRequests()
+    private struct InboundRequest {
+        let generation: UUID
+        let method: String
+        let task: Task<Void, Never>
+    }
+    private var inbound: [LSPID: InboundRequest] = [:]
+    private var commandSession: UUID?
+    private var commandEditFailure: String?
+    private(set) var supportsCodeActionResolve = false
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
     private(set) var capabilities: LSPCapabilities = .empty
     private(set) var supportsDocumentFormatting: Bool = false
@@ -74,6 +84,9 @@ actor LSPClient {
         }
         textDocumentSyncKind = caps.syncKind
         capabilities = LSPCapabilities.fromInitializeResult(rawResult)
+        if let rawResult, let value = try? LSPJSONValue.decode(from: rawResult) {
+            supportsCodeActionResolve = value["capabilities"]?["codeActionProvider"]?["resolveProvider"] == .bool(true)
+        }
         supportsDocumentFormatting = capabilities.supports(.formatDocument)
         if let rawResult,
            let result = try? JSONSerialization.jsonObject(with: rawResult) as? [String: Any],
@@ -227,6 +240,65 @@ actor LSPClient {
         return try JSONDecoder().decode(LSPWorkspaceEdit.self, from: raw)
     }
 
+    func codeActions(uri: String, range: LSPRange, diagnostics: [LSPDiagnostic], only: [String]? = nil) async throws -> [LSPCodeAction] {
+        var context: [String: LSPJSONValue] = ["diagnostics": .array(try diagnostics.map {
+            if let original = $0.wireValue { return original }
+            return try LSPJSONValue.decode(from: JSONEncoder().encode($0))
+        }), "triggerKind": .number("1")]
+        if let only { context["only"] = .array(only.map(LSPJSONValue.string)) }
+        let params = LSPJSONValue.object([
+            "textDocument": .object(["uri": .string(uri)]),
+            "range": try LSPJSONValue.decode(from: JSONEncoder().encode(range)), "context": .object(context)
+        ])
+        return try await LSPCodeAction.decodeList(sendRequest(method: "textDocument/codeAction", params: params))
+    }
+
+    func resolveCodeAction(_ action: LSPCodeAction) async throws -> LSPCodeAction {
+        guard !action.isCommand else { return action }
+        guard let raw = try await sendRequest(method: "codeAction/resolve", params: action.wireValue) else { throw LSPError.invalidPayload }
+        return try LSPCodeAction(wireValue: LSPJSONValue.decode(from: raw))
+    }
+
+    func executeCommand(_ command: LSPCommand) async throws {
+        var params: [String: LSPJSONValue] = ["command": .string(command.command)]
+        if let arguments = command.arguments { params["arguments"] = .array(arguments) }
+        _ = try await sendRequest(method: "workspace/executeCommand", params: LSPJSONValue.object(params), timeoutNanoseconds: 60_000_000_000)
+    }
+
+    func setConfigurationHandler(_ handler: @escaping LSPServerRequests.Configuration) {
+        serverRequests.configuration = handler
+    }
+
+    func beginCommandSession(applyEdit: @escaping LSPServerRequests.EditHandler) throws -> UUID {
+        guard commandSession == nil else { throw LSPError.commandAlreadyRunning }
+        let id = UUID()
+        commandSession = id
+        commandEditFailure = nil
+        serverRequests.applyEdit = applyEdit
+        return id
+    }
+
+    func endCommandSession(_ id: UUID) {
+        guard commandSession == id else { return }
+        commandSession = nil
+        serverRequests.applyEdit = nil
+        cancelInboundRequests()
+    }
+
+    func finishCommandSession(_ id: UUID) async throws {
+        guard commandSession == id else { return }
+        serverRequests.applyEdit = nil
+        let edits = inbound.values.filter { $0.method == "workspace/applyEdit" }.map(\.task)
+        await withTaskCancellationHandler {
+            for task in edits { await task.value }
+        } onCancel: {
+            Task { await self.endCommandSession(id) }
+        }
+        let failure = commandEditFailure
+        endCommandSession(id)
+        if let failure { throw LSPError.responseError(.init(code: -32800, message: failure)) }
+    }
+
     func rangeFormatting(uri: String, range: LSPRange, options: LSPFormattingOptions) async throws -> [LSPTextEdit] {
         struct Params: Encodable {
             let textDocument: LSPTextDocumentIdentifier
@@ -253,19 +325,15 @@ actor LSPClient {
         }
         let raw = try await sendRequest(method: "textDocument/diagnostic", params: params)
         guard let raw, raw.count > 4 else { return nil }
-        // Attempt full report decoding first.
-        if let report = try? JSONDecoder().decode(LSPFullDocumentDiagnosticReport.self, from: raw) {
-            return report.items
-        }
-        // Attempt unchanged report — caller receives nil and reuses cache.
-        if let _ = try? JSONDecoder().decode(LSPUnchangedDocumentDiagnosticReport.self, from: raw) {
-            return nil
-        }
-        // Legacy fallback: some servers omit `kind` and return bare [Diagnostic].
-        return try? JSONDecoder().decode([LSPDiagnostic].self, from: raw)
+        let value = try LSPJSONValue.decode(from: raw)
+        if value["kind"] == .string("unchanged") { return nil }
+        if case .array(let items) = value["items"] { return try LSPDiagnostic.decodeWire(items) }
+        if case .array(let items) = value { return try LSPDiagnostic.decodeWire(items) }
+        return nil
     }
 
     func shutdown() async {
+        cancelInboundRequests()
         // Send the polite handshake only if we ever reached `.ready`. For
         // clients that died during `initialize()` (or never started), the
         // request would be pointless or hang — but we still need to kill
@@ -302,6 +370,10 @@ actor LSPClient {
         let data: Data
         if method == "initialize", let initializeParams = params as? InitializeParams {
             data = try Self.encodeInitializeRequest(id: id, params: initializeParams)
+        } else if let params = params as? LSPJSONValue {
+            data = try LSPJSONValue.object([
+                "jsonrpc": .string("2.0"), "id": .number(String(nextId)), "method": .string(method), "params": params
+            ]).encodedData()
         } else {
             data = try Self.outgoingJSONEncoder().encode(req)
         }
@@ -316,6 +388,8 @@ actor LSPClient {
         return try await withTaskCancellationHandler {
             defer { timeoutTask?.cancel() }
             return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data?, Error>) in
+                guard !Task.isCancelled else { cont.resume(throwing: CancellationError())
+                return }
                 pending[id] = cont
                 do {
                     try transport.send(data)
@@ -331,6 +405,7 @@ actor LSPClient {
 
     private func failPendingRequest(id: LSPID, error: Error) {
         if let cont = pending.removeValue(forKey: id) {
+            try? sendNotification(method: "$/cancelRequest", params: ["id": AnyEncodable(id)])
             cont.resume(throwing: error)
         }
     }
@@ -468,7 +543,10 @@ actor LSPClient {
         let json = """
         {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
         """
-        return Data(json.utf8)
+        let workspace = #""workspace":{"applyEdit":true,"configuration":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"changeAnnotationSupport":{"groupsOnLabel":false}},"executeCommand":{"dynamicRegistration":false}},"#
+        let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#
+        return Data(json.replacingOccurrences(of: #""textDocument":{"#,
+                                              with: workspace + #""textDocument":{"# + actions).utf8)
     }
 
     private nonisolated static func jsonString(_ value: String) throws -> String {
@@ -477,6 +555,14 @@ actor LSPClient {
     }
 
     private func consume() async {
+        defer {
+            cancelInboundRequests()
+            state = .dead
+            for continuation in pending.values { continuation.resume(throwing: LSPError.transportClosed) }
+            pending.removeAll()
+            for continuation in diagnosticsSubscribers.values { continuation.finish() }
+            diagnosticsSubscribers.removeAll()
+        }
         for await event in transport.incoming {
             switch event {
             case .frame(let data):
@@ -484,6 +570,7 @@ actor LSPClient {
             case .stderr:
                 continue
             case .exited:
+                cancelInboundRequests()
                 state = .dead
                 for (_, cont) in pending {
                     cont.resume(throwing: LSPError.transportClosed)
@@ -510,12 +597,14 @@ actor LSPClient {
 
         if env.method == nil, env.id != nil {
             // Pure response.
-            guard let resp = try? JSONDecoder().decode(LSPResponse.self, from: frame) else { return }
-            if let cont = pending.removeValue(forKey: resp.id) {
-                if let err = resp.error {
+            guard let id = env.id, let value = try? LSPJSONValue.decode(from: frame) else { return }
+            if let cont = pending.removeValue(forKey: id) {
+                if let rawError = try? value["error"]?.encodedData(),
+                   let err = try? JSONDecoder().decode(LSPResponseError.self, from: rawError) {
                     cont.resume(throwing: LSPError.responseError(err))
                 } else {
-                    cont.resume(returning: resp.result)
+                    // Keep opaque numbers intact; the general response decoder normalizes them.
+                    cont.resume(returning: try? value["result"]?.encodedData())
                 }
             }
             return
@@ -525,23 +614,61 @@ actor LSPClient {
 
         if env.id == nil {
             // Server-initiated notification.
-            struct Note: Decodable { let params: JSONValue? }
-            guard let note = try? JSONDecoder().decode(Note.self, from: frame) else { return }
-            if method == "textDocument/publishDiagnostics",
-               let raw = note.params,
-               let data = try? JSONEncoder().encode(raw),
-               let parsed = try? JSONDecoder().decode(LSPPublishDiagnosticsParams.self, from: data) {
-                for (_, cont) in diagnosticsSubscribers { cont.yield(parsed) }
+            guard let value = try? LSPJSONValue.decode(from: frame) else { return }
+            if method == "textDocument/publishDiagnostics", let params = value["params"],
+               let uri = params["uri"]?.stringValue, case .array(let values) = params["diagnostics"],
+               let diagnostics = try? LSPDiagnostic.decodeWire(values) {
+                let batch = LSPPublishDiagnosticsParams(uri: uri, diagnostics: diagnostics)
+                for (_, cont) in diagnosticsSubscribers { cont.yield(batch) }
+            }
+            if method == "$/cancelRequest", let value = try? LSPJSONValue.decode(from: frame),
+               let rawID = try? value["params"]?["id"]?.encodedData(), let id = try? JSONDecoder().decode(LSPID.self, from: rawID) {
+                cancelInboundRequest(id)
             }
             return
         }
 
-        // Server-initiated request. We don't implement any of these yet
-        // (`workspace/configuration`, `client/registerCapability`, …) but we
-        // owe the server a response per JSON-RPC, otherwise it can stall
-        // waiting on us. Reply with method-not-found (-32601).
         guard let id = env.id else { return }
-        try? sendErrorResponse(id: id, code: -32601, message: "method not implemented: \(method)")
+        guard inbound[id] == nil else { return }
+        let params = (try? LSPJSONValue.decode(from: frame))?["params"] ?? .null
+        let handler = serverRequests
+        let generation = UUID()
+        let task = Task {
+            let reply = await handler.handle(method: method, params: params)
+            guard self.inbound[id]?.generation == generation else { return }
+            self.completeInbound(id: id, reply: reply)
+        }
+        inbound[id] = InboundRequest(generation: generation, method: method, task: task)
+    }
+
+    private func cancelInboundRequests() {
+        for id in Array(inbound.keys) { cancelInboundRequest(id) }
+    }
+
+    private func cancelInboundRequest(_ id: LSPID) {
+        guard let request = inbound[id] else { return }
+        request.task.cancel()
+        completeInbound(id: id, reply: request.method == "workspace/applyEdit"
+            ? .init(result: LSPApplyEditResult.cancelled.wireValue)
+            : .init(error: .init(code: -32800, message: "Request cancelled")))
+    }
+
+    private func completeInbound(id: LSPID, reply: LSPServerRequests.Reply) {
+        guard let request = inbound.removeValue(forKey: id) else { return }
+        if request.method == "workspace/applyEdit", commandSession != nil,
+           reply.result?["applied"] == .bool(false) {
+            commandEditFailure = reply.result?["failureReason"]?.stringValue ?? "Workspace edit was not applied."
+        }
+        if let error = reply.error {
+            try? sendErrorResponse(id: id, code: error.code, message: error.message)
+        } else {
+            let idValue: LSPJSONValue
+            switch id { case .int(let value): idValue = .number(String(value))
+            case .string(let value): idValue = .string(value) }
+            if let data = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": reply.result ?? .null]).encodedData() {
+                try? transport.send(data)
+            }
+        }
     }
 
     private nonisolated func sendErrorResponse(id: LSPID, code: Int, message: String) throws {
@@ -561,6 +688,8 @@ actor LSPClient {
 }
 
 enum LSPError: Error {
+    case invalidPayload
+    case commandAlreadyRunning
     case transportClosed
     case responseError(LSPResponseError)
     case requestTimedOut

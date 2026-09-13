@@ -42,6 +42,7 @@ final class CodeEditorCoordinator {
     private var editorCommandRouter: EditorCommandRouter?
     private var editorCommandStatusTask: Task<Void, Never>?
     private var renameFeature: RenameFeature?
+    private var codeActionsFeature: CodeActionsFeature?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -609,6 +610,8 @@ final class CodeEditorCoordinator {
         editorCommandStatusTask?.cancel()
         renameFeature?.cancel()
         renameFeature = nil
+        codeActionsFeature?.cancel()
+        codeActionsFeature = nil
         editorCommandStatusTask = nil
         if let editorCommandRouter {
             EditorCommandAvailability.shared.deactivate(editorCommandRouter)
@@ -703,10 +706,15 @@ final class CodeEditorCoordinator {
 
     private func installEditorCommands(on textView: CodeTextView) {
         renameFeature?.cancel()
+        codeActionsFeature?.cancel()
         if let root = currentOriginatingWorktreeRoot ?? currentRoot {
             renameFeature = RenameFeature(textView: textView, tabs: appState.tabs, root: root,
                                           synchronize: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
                                           isCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) == true })
+            codeActionsFeature = CodeActionsFeature(textView: textView, tabs: appState.tabs, root: root,
+                                                    synchronize: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+                                                    isCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) == true },
+                                                    diagnostics: { [weak self] in self?.diagnosticsFeature.current ?? [] })
         }
         let router = EditorCommandRouter()
         router.register(.definition) { [weak self, weak textView] range in
@@ -743,6 +751,9 @@ final class CodeEditorCoordinator {
         }
         router.register(.rename, isAvailable: canEdit) { [weak self] range in
             self?.renameFeature?.rename(range: range)
+        }
+        router.registerCodeActions(isAvailable: canEdit) { [weak self] range in
+            self?.codeActionsFeature?.show(range: range)
         }
         router.register(.formatSelection, isAvailable: { [weak textView] in
             canEdit() && (textView?.selectedRange().length ?? 0) > 0

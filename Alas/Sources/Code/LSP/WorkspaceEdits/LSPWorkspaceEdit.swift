@@ -6,7 +6,7 @@ import Foundation
 /// exactly. Generic `Codable` preserves Foundation-representable numeric values,
 /// but may canonicalize their spelling because `Decoder` does not expose the
 /// original JSON token.
-indirect enum LSPJSONValue: Codable, Equatable, Sendable {
+indirect enum LSPJSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)
     case number(String)

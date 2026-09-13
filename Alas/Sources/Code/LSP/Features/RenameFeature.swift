@@ -171,7 +171,7 @@ final class RenameFeature {
         }
     }
 
-    private func prepare(_ edit: LSPWorkspaceEdit, context: EditorRequestContext,
+    func prepare(_ edit: LSPWorkspaceEdit, context: EditorRequestContext,
                          generations: [EditorDocumentID: WorkspaceEditBufferGeneration]) async throws -> WorkspaceEditPlan {
         guard isCurrent(context) else { throw Error.stale }
         let access = HostWorkspaceEditFileAccess(tabs: tabs) { [root] document in

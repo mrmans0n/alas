@@ -264,6 +264,8 @@ struct LSPDocumentSymbol: Decodable, Sendable {
 }
 
 struct LSPDiagnostic: Codable, Hashable, Sendable {
+    /// Original protocol fields, including numeric codes, tags, related information and opaque data.
+    var wireValue: LSPJSONValue?
     let range: LSPRange
     let severity: Int?       // 1=error 2=warning 3=info 4=hint
     let code: String?
@@ -272,6 +274,7 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey { case range, severity, code, source, message }
     init(from decoder: Decoder) throws {
+        wireValue = try? LSPJSONValue(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         range = try c.decode(LSPRange.self, forKey: .range)
         severity = try c.decodeIfPresent(Int.self, forKey: .severity)
@@ -282,6 +285,8 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
         message = try c.decode(String.self, forKey: .message)
     }
     func encode(to encoder: Encoder) throws {
+        if let wireValue { try wireValue.encode(to: encoder)
+        return }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(range, forKey: .range)
         try c.encodeIfPresent(severity, forKey: .severity)
@@ -291,9 +296,90 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
     }
 }
 
+extension LSPJSONValue {
+    subscript(_ key: String) -> LSPJSONValue? {
+        guard case .object(let fields) = self else { return nil }
+        return fields[key]
+    }
+
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+}
+
+struct LSPCommand: Sendable {
+    let title: String
+    let command: String
+    let arguments: [LSPJSONValue]?
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let title = wireValue["title"]?.stringValue, let command = wireValue["command"]?.stringValue else {
+            throw LSPError.invalidPayload
+        }
+        self.title = title
+        self.command = command
+        if case .array(let arguments) = wireValue["arguments"] { self.arguments = arguments } else { self.arguments = nil }
+    }
+}
+
+/// Both Command and CodeAction retain their original union shape on the wire.
+struct LSPCodeAction: Codable, Sendable {
+    struct Disabled: Sendable { let reason: String }
+    let wireValue: LSPJSONValue
+    let title: String
+    let kind: String?
+    let diagnostics: [LSPJSONValue]?
+    let disabled: Disabled?
+    let edit: LSPWorkspaceEdit?
+    let command: LSPCommand?
+    let data: LSPJSONValue?
+    let isPreferred: Bool?
+    let isCommand: Bool
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let title = wireValue["title"]?.stringValue else { throw LSPError.invalidPayload }
+        self.wireValue = wireValue
+        self.title = title
+        kind = wireValue["kind"]?.stringValue
+        if case .array(let values) = wireValue["diagnostics"] { diagnostics = values } else { diagnostics = nil }
+        disabled = wireValue["disabled"]?["reason"]?.stringValue.map(Disabled.init)
+        if let value = wireValue["edit"], value != .null {
+            edit = try JSONDecoder().decode(LSPWorkspaceEdit.self, from: value.encodedData())
+        } else { edit = nil }
+        isCommand = wireValue["command"]?.stringValue != nil
+        if isCommand { command = try LSPCommand(wireValue: wireValue) }
+        else if let value = wireValue["command"], value != .null { command = try LSPCommand(wireValue: value) }
+        else { command = nil }
+        data = wireValue["data"]
+        if case .bool(let value) = wireValue["isPreferred"] { isPreferred = value } else { isPreferred = nil }
+    }
+
+    init(from decoder: Decoder) throws { try self.init(wireValue: LSPJSONValue(from: decoder)) }
+    func encode(to encoder: Encoder) throws { try wireValue.encode(to: encoder) }
+
+    static func decodeList(_ data: Data?) throws -> [LSPCodeAction] {
+        guard let data else { return [] }
+        let value = try LSPJSONValue.decode(from: data)
+        if value == .null { return [] }
+        guard case .array(let values) = value else { throw LSPError.invalidPayload }
+        return try values.map { try LSPCodeAction(wireValue: $0) }
+    }
+}
+
 struct LSPPublishDiagnosticsParams: Decodable, Sendable {
     let uri: String
     let diagnostics: [LSPDiagnostic]
+}
+
+extension LSPDiagnostic {
+    static func decodeWire(_ values: [LSPJSONValue]) throws -> [LSPDiagnostic] {
+        try values.map { value in
+            var diagnostic = try JSONDecoder().decode(LSPDiagnostic.self, from: value.encodedData())
+            diagnostic.wireValue = value
+            return diagnostic
+        }
+    }
 }
 
 // MARK: - Formatting

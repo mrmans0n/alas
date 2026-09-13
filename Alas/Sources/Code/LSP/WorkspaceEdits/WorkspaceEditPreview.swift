@@ -9,6 +9,9 @@ final class WorkspaceEditPreviewModel {
     private(set) var isApplying = false
     private(set) var errorMessage: String?
     private(set) var requiresRecovery = false
+    private(set) var didApply = false
+    private var applicationTask: Task<WorkspaceEditOutcome, Never>?
+    private var isCancelled = false
 
     init(plan: WorkspaceEditPlan, apply: @escaping (WorkspaceEditPlan) async -> WorkspaceEditOutcome) {
         self.plan = plan
@@ -60,15 +63,26 @@ final class WorkspaceEditPreviewModel {
     }
 
     func apply() async -> Bool {
-        guard !isApplying, !requiresRecovery else { return false }
+        guard !isApplying, !requiresRecovery, !isCancelled else { return false }
         isApplying = true
         errorMessage = nil
-        defer { isApplying = false }
-        let outcome = await applyPlan(plan)
+        defer { isApplying = false
+        applicationTask = nil }
+        let task = Task { await applyPlan(plan) }
+        applicationTask = task
+        let outcome = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
         errorMessage = Self.message(for: outcome)
         if case .recoveryRequired = outcome { requiresRecovery = true }
-        if case .applied = outcome { return true }
+        if case .applied = outcome { didApply = true
+        return true }
         return false
+    }
+
+    func cancel() {
+        isCancelled = true
+        applicationTask?.cancel()
     }
 
     static func message(for outcome: WorkspaceEditOutcome) -> String? {

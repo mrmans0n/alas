@@ -349,6 +349,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 )
                 let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI)
                 let task = Task<Bool, Never> {
+                    await newClient.setConfigurationHandler { [weak self] scope, section in
+                        await self?.configurationValue(scope: scope, section: section, key: key) ?? .null
+                    }
                     do { try await newClient.initialize()
                     return true } catch { return false }
                 }
@@ -793,6 +796,20 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 && holder.openedURIs.contains(context.document.uri)
                 && holder.serverGeneration == context.serverGeneration
                 && holder.versions[context.document.uri] == context.version
+        }
+    }
+
+    /// Indentation uses the same document-derived options as explicit formatting.
+    /// Unknown sections and scopes never borrow configuration from another holder.
+    private func configurationValue(scope: String?, section: String?, key: Key) -> LSPJSONValue {
+        guard let scope, let holder = holders[key], holder.openedURIs.contains(scope),
+              let text = holder.texts[scope] else { return .null }
+        let options = RenameFeature.formattingOptions(text: text)
+        switch section {
+        case "editor": return .object(["tabSize": .number(String(options.tabSize)), "insertSpaces": .bool(options.insertSpaces)])
+        case "editor.tabSize": return .number(String(options.tabSize))
+        case "editor.insertSpaces": return .bool(options.insertSpaces)
+        default: return .null
         }
     }
 

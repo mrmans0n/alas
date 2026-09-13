@@ -81,6 +81,10 @@ final class EditorCommandRouter {
         }
     }
 
+    func registerCodeActions(isAvailable: @escaping () -> Bool, handler: @escaping Handler) {
+        register(.codeActions, isAvailable: isAvailable, handler: handler)
+    }
+
     func isSupported(_ command: EditorCommandID) -> Bool {
         capabilities.supports(command)
     }
