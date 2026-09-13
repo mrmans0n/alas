@@ -64,11 +64,15 @@ struct TabBarView: View {
     var body: some View {
         HStack(spacing: 0) {
             if sidebarHidden {
+                // Fade in with the sidebar's collapse animation rather than
+                // popping in when the layout transaction lands.
                 TrafficLights()
                     .padding(.leading, 12)
                     .padding(.trailing, 10)
+                    .transition(.opacity)
                 ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
                     .padding(.trailing, 8)
+                    .transition(.opacity)
             }
             ScrollViewReader { scrollProxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -118,6 +122,7 @@ struct TabBarView: View {
             if rightSidebarHidden {
                 ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
                     .padding(.trailing, 8)
+                    .transition(.opacity)
             }
         }
         .frame(height: 34)

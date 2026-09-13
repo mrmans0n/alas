@@ -14,6 +14,10 @@ struct RightPaneView: View {
     @State private var rps: RightPaneState?
     @State private var agentManager: ACPSessionManager?
     @State private var agentSidebarRevision = 0
+    /// Last rendered width of the rail-hosted body, so its collapse
+    /// transition can lag the content by a fraction of it.
+    @State private var railBodyWidth: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         state: AppState,
@@ -206,6 +210,15 @@ struct RightPaneView: View {
                         tabContent(rps: rps)
                             .scrollIndicators(.hidden)
                     }
+                    // The rail stays put at the window edge; the body keeps
+                    // its last frame on removal and slides under the rail
+                    // while the center grows over its other side.
+                    .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { railBodyWidth = $0 }
+                    .transition(PaneCollapseMotion.transition(
+                        edge: .trailing,
+                        width: railBodyWidth,
+                        reduceMotion: reduceMotion
+                    ))
                 }
                 RightPaneRail(
                     activeTab: rps.activeTab,

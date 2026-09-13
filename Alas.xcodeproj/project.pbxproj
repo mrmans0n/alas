@@ -1115,6 +1115,7 @@
 		A2E0A755C2854FE489530FE3 /* ImageDiffDifferenceComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */; };
 		A2E1FD8035E30CF785E9CF44 /* RightPaneCheckpointStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99D2B248B372F47870C5AE /* RightPaneCheckpointStateTests.swift */; };
 		A3655FEDF6C5E3C128401DA7 /* AppKitDiffScrollerReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2967A37F842D09F43063F3 /* AppKitDiffScrollerReconciler.swift */; };
+		A376933929049D190A12FCAF /* PaneCollapseMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA92DF8763DF7CC38F321E8A /* PaneCollapseMotion.swift */; };
 		A383F1C9B0B00B2805576209 /* ACPScrollDirectionClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D0190EE078ADB537982F7DC /* ACPScrollDirectionClassifierTests.swift */; };
 		A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */; };
 		A3EE2DE5C01EB87DE7BCC801 /* ACPStdioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D20C843AB88A6EB14D2A1BD /* ACPStdioClient.swift */; };
@@ -1342,6 +1343,7 @@
 		C487C3AD43E7B5BBB45490DB /* CodexInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01F0314E357190EF2A1F861B /* CodexInstaller.swift */; };
 		C4D640619C91B2668340B04E /* EnvBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */; };
 		C4E0EADB37C91E54DCB897AB /* CommitPromptEditorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB6A90FAE1D410744D02A454 /* CommitPromptEditorWindow.swift */; };
+		C4FA0554C8870DAB138A23A5 /* PaneCollapseMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB8943EE7A50290D64A6448C /* PaneCollapseMotionTests.swift */; };
 		C512EC7827D3C46907DDB7A1 /* HighlightCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E50B0600EF60A0D9B09877 /* HighlightCapture.swift */; };
 		C51451EC8E103EB5FEF82EFE /* ACPSessionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EB39DE3614B5BEC4D3EBF13 /* ACPSessionLifecycleTests.swift */; };
 		C51D65D3D40F801BC94ABBDD /* TabsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A218B5125FC963339E40605E /* TabsManager.swift */; };
@@ -3157,6 +3159,7 @@
 		CB2EB554CB6AF797545DB95D /* HeadReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadReader.swift; sourceTree = "<group>"; };
 		CB5E3661944CDA65ABCCB826 /* AgentsPaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsPaneTests.swift; sourceTree = "<group>"; };
 		CB68E9C3C8853AF7E8AB5DB4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		CB8943EE7A50290D64A6448C /* PaneCollapseMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneCollapseMotionTests.swift; sourceTree = "<group>"; };
 		CB90EF05C6A486F35ACD0E1B /* MarkdownFenceEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFenceEditing.swift; sourceTree = "<group>"; };
 		CBFD1CE53DE229626220B457 /* ACPTerminalTailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTerminalTailView.swift; sourceTree = "<group>"; };
 		CC13E4C0AF55A2524341EB36 /* ImageDiffSideBySideViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffSideBySideViewTests.swift; sourceTree = "<group>"; };
@@ -3269,6 +3272,7 @@
 		DA09B830D18CCEE251D0E10A /* EmptyTabViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyTabViewTests.swift; sourceTree = "<group>"; };
 		DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRow.swift; sourceTree = "<group>"; };
 		DA89D4C70102BCF7B6B2450B /* ACPManagedAdapterDescriptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPManagedAdapterDescriptor.swift; sourceTree = "<group>"; };
+		DA92DF8763DF7CC38F321E8A /* PaneCollapseMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneCollapseMotion.swift; sourceTree = "<group>"; };
 		DAA7CD14A8FA2D335A59B062 /* HTTPRequestParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRequestParser.swift; sourceTree = "<group>"; };
 		DB06768157EC73872B1CC677 /* WorkspaceCheckoutDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutDetailView.swift; sourceTree = "<group>"; };
 		DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStackCommitTests.swift; sourceTree = "<group>"; };
@@ -4037,6 +4041,7 @@
 				F89DAC6A8A16FADF8D614D0A /* PairedPrimaryComposerSurfaceTests.swift */,
 				6F88DEFC78E8D8AF65CB740A /* PairedReviewComposerSurfaceTests.swift */,
 				2837802CC8770FF56D2EAF66 /* PaneBandLayoutTests.swift */,
+				CB8943EE7A50290D64A6448C /* PaneCollapseMotionTests.swift */,
 				6FD359E5712BE30FF37251EE /* PaneDragMathTests.swift */,
 				4DA7089B238D285A1A2040CA /* PaneLeafEncodeTests.swift */,
 				16C9E59E3987C1D3C9989D91 /* PaneTreeTests.swift */,
@@ -6289,6 +6294,7 @@
 			isa = PBXGroup;
 			children = (
 				7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */,
+				DA92DF8763DF7CC38F321E8A /* PaneCollapseMotion.swift */,
 				7E467DCC037978A4942F8C8B /* PaneDragMath.swift */,
 				6877F0319EB6602B047BCC3F /* RightRailSizing.swift */,
 				5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */,
@@ -7367,6 +7373,7 @@
 				66DCE2D5A6D886BAE5A6B9A0 /* PairedComposerTextControls.swift in Sources */,
 				7962F21EA05595E2182ECF6E /* PairedDelimiterEditing.swift in Sources */,
 				9B472368F15A281048C8D70E /* PaneBandStyle.swift in Sources */,
+				A376933929049D190A12FCAF /* PaneCollapseMotion.swift in Sources */,
 				6635C1BBE700E46738D5648F /* PaneDragMath.swift in Sources */,
 				86718F7E55531B8E4356D7D1 /* PaneTree.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
@@ -8221,6 +8228,7 @@
 				E4BE423D04F69D25C520A80B /* PairedReviewComposerSurfaceTests.swift in Sources */,
 				C9DCF97ADE5B0664AD2D0035 /* PairedTextEditorMarkdownStylingTests.swift in Sources */,
 				EBE8559BE604FF1D2DBD2831 /* PaneBandLayoutTests.swift in Sources */,
+				C4FA0554C8870DAB138A23A5 /* PaneCollapseMotionTests.swift in Sources */,
 				439761195191FAC857E78705 /* PaneDragMathTests.swift in Sources */,
 				4BDE8C92734D3A60645C0500 /* PaneLeafEncodeTests.swift in Sources */,
 				CAE7524F4289A256FF1069FC /* PaneTreeTests.swift in Sources */,
