@@ -204,6 +204,21 @@ struct MinimapTests {
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
     }
 
+    @Test("Navigation windows tile only the latest snapshot of a replayed message")
+    @MainActor func replayedMessageNavigation() {
+        let first = ACPMessage.agent(id: UUID(), messageId: "replayed", StreamingText("partial"))
+        let prompt = ACPMessage.user(id: UUID(), text: "Next", attachments: [])
+        let latest = ACPMessage.agent(id: UUID(), messageId: "replayed", StreamingText("complete"))
+        let messages = [first, prompt, latest]
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages, visibleHead: 0, visibleTail: 3, stableId: { $0.stableId }
+        )
+        #expect(rows.map(\.index) == [1, 2])
+        #expect(Set(rows.map(\.stableId)).count == rows.count)
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows.map { ($0.index, $0.stableId) })
+        #expect(lookup.transcriptIndex(for: latest.stableId) == 2)
+    }
+
     @Test("Completed responses refresh their bands without rebuilding on every chunk")
     @MainActor func completedResponseBands() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
