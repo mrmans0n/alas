@@ -101,8 +101,7 @@ struct SectionHeader<Trailing: View>: View {
             .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
             trailing()
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(theme.color("section-head-bg"))
+        .paneBand(fill: theme.color("section-head-bg"))
     }
 }
 

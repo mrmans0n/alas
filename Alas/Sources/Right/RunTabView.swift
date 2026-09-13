@@ -378,9 +378,7 @@ private struct RunLoadingSection: View {
                 RunLoadingBar(width: 16, height: 12)
                 Spacer(minLength: 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(theme.color("section-head-bg"))
+            .paneBand(fill: theme.color("section-head-bg"))
 
             ForEach(rowWidths.indices, id: \.self) { index in
                 HStack(spacing: 6) {
@@ -426,8 +424,7 @@ private struct RunScopeHeader: View {
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(theme.color("section-head-bg"))
+        .paneBand(fill: theme.color("section-head-bg"))
     }
 }
 

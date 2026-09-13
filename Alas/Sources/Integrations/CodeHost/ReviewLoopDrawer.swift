@@ -7,6 +7,7 @@ struct ReviewLoopDrawer: View {
     var onRevealReviewRequest: (Int) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var model: ReviewReadinessModel {
         ReviewReadinessModel(
@@ -17,24 +18,23 @@ struct ReviewLoopDrawer: View {
         )
     }
 
+    private var layout: PaneDrawerLayout {
+        PaneDrawerLayout(expanded: state.isExpanded)
+    }
+
     var body: some View {
         let model = model
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(toneColor(model.primaryTone).opacity(0.24))
-                .frame(height: 1)
             collapsedRow(model: model)
 
             if state.isExpanded {
                 expandedBody(model: model)
+                    .transition(.paneDrawerBody)
             }
         }
-        .background(
-            ZStack(alignment: .top) {
-                theme.color("bg-1").opacity(0.97)
-                toneColor(model.primaryTone).opacity(0.028)
-            }
-        )
+        // The status tone lives in the dot and chips only; the surface
+        // itself stays neutral so it matches the section header bands.
+        .paneDrawer(layout, fill: theme.color("section-head-bg"), hairline: theme.color("line"))
     }
 
     private func collapsedRow(model: ReviewReadinessModel) -> some View {
@@ -58,9 +58,10 @@ struct ReviewLoopDrawer: View {
                     chipView(chip)
                 }
             }
-            Icon(name: state.isExpanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+            Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
+                .rotationEffect(layout.chevronAngle)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, layout.innerHorizontal(12))
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -86,7 +87,9 @@ struct ReviewLoopDrawer: View {
     }
 
     func toggleExpanded() {
-        state.setExpanded(!state.isExpanded)
+        withAnimation(PaneDrawerLayout.animation(reduceMotion: reduceMotion)) {
+            state.setExpanded(!state.isExpanded)
+        }
         if state.isExpanded, let request = state.snapshot?.reviewRequest {
             onRevealReviewRequest(request.number)
         }
@@ -162,7 +165,7 @@ struct ReviewLoopDrawer: View {
                 facts(model.facts)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, layout.innerHorizontal(12))
         .padding(.bottom, 10)
     }
 
@@ -315,6 +318,7 @@ private struct ReviewReadinessActionButton: View {
 }
 
 private extension ReviewReadinessModel {
+    /// Drives the status dot; the drawer surface itself is tone-neutral.
     var primaryTone: Chip.Tone {
         chips.first?.tone ?? .muted
     }

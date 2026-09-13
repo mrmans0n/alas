@@ -29,6 +29,9 @@ struct RightPaneToolbar: View {
         .padding(.leading, 10)
         .padding(.trailing, 4)
         .frame(height: 34)
+        // Flush, not a `paneBand`: this row is the pane's chrome, and reads
+        // as the counterpart to the center pane's toolbar. The floating
+        // bands start below it.
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .windowDragHandle()
