@@ -1265,7 +1265,346 @@ struct AppStateAttentionTests {
     }
 
     @MainActor
-    private struct Fixture {
+    // MARK: - Harness attention settle debounce
+
+    @Test func harnessAwaitingAttentionIsDebouncedUntilSettled() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.events.first?.kind == .agentAwaiting)
+        #expect(state.attentionStore.events.first?.body == "Question")
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func harnessAwaitingAttentionIsCancelledByBusyWithinWindow() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")] == nil)
+    }
+
+    @Test func harnessAwaitingAttentionRefreshesBodyWhenPoked() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.events.first?.body == "Second")
+    }
+
+    @Test func harnessPermissionAttentionIsAlsoDebounced() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest, body: "Allow?")
+        #expect(state.attentionStore.events.isEmpty)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.events.first?.kind == .agentPermission)
+    }
+
+    @Test func harnessPermissionAttentionSwitchingToAwaitingReplacesPendingSignal() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest, body: "Allow?")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question?")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.events.first?.kind == .agentAwaiting)
+        #expect(state.attentionStore.events.first?.body == "Question?")
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:permission")] == nil)
+    }
+
+    @Test func settledHarnessAwaitingAttentionStillLands() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")]?.isActive == false)
+    }
+
+    @Test func forgetSessionCancelsPendingHarnessAttention() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.harness.forgetSession("session")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func acknowledgeDuringSettleWindowKeepsLandedEventAcknowledged() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId!)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func acknowledgeAfterTransitionLandsStillAcknowledges() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let eventID = try #require(state.attentionStore.events.first?.id)
+        #expect(state.attentionStore.acknowledgments[eventID] == nil)
+
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId!)
+        #expect(state.attentionStore.acknowledgments[eventID] != nil)
+    }
+
+    @Test func preAcknowledgementDoesNotSurviveAFlappedTransition() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while pending, then the agent resumes before the window
+        // closes — the parked transition is rejected and the marker with it.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.isEmpty)
+
+        // A fresh awaiting must badge normally.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Again")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func preAcknowledgementDoesNotLeakAcrossAwaitingFlurries() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while pending, then the agent resumes and waits again — all
+        // inside the settle window. The second waiting spell is genuinely
+        // new and must badge normally.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Again")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func preAcknowledgementDoesNotSurvivePendingKindSwitch() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while an awaiting is pending, then the pending kind flips to
+        // permission — a signal the user has not seen and must badge for.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest, body: "Allow?")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.kind == .agentPermission)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func preAcknowledgementDoesNotSuppressNewUnseenQuestion() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while pending, then the agent asks a different question
+        // before the user returns — the new question must badge for itself.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second question")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body == "Second question")
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func whitespaceOnlyReemitKeepsPreAcknowledgment() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // The same question re-emitted with whitespace differences is the
+        // same attention occurrence — the pre-acknowledgment must survive.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "  Question  ")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func bodyReplacingStateNameFingerprintIsANewOccurrence() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // A bodyless awaiting has the state-name fingerprint; a follow-up
+        // whose literal body equals the state name must still be a distinct
+        // occurrence, per the producer's hashing.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: nil)
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "awaitingInput")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func acknowledgementSuppressedWhileInboxOpenDoesNotPreAcknowledge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        state.openAttentionInbox()
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.closeAttentionInbox()
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func repeatedBodyUpdatesCannotStarveTheBadge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        // Body updates arriving faster than the settle window keep poking
+        // the timer, but the max-wait ceiling forces the badge through.
+        for index in 0..<12 {
+            state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Update \(index)")
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(state.attentionStore.events.isEmpty == false)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body?.hasPrefix("Update ") == true)
+        #expect(state.attentionAggregation.unresolvedCount >= 1)
+    }
+
+    @Test func preAcknowledgementDoesNotSuppressNewQuestionBody() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while the first question is pending, then the agent asks a
+        // different one — the user has not seen the new question and must
+        // badge for it.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second question")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body == "Second question")
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @MainActor private struct Fixture {
         let now = Date()
         let url: URL
         let store: AttentionStore
@@ -1284,12 +1623,23 @@ struct AppStateAttentionTests {
             store = AttentionStore(url: url)
         }
 
-        func makeState() -> AppState {
-            AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
+        func makeState(attentionSettleInterval: TimeInterval = 0) -> AppState {
+            AppState(
+                store: MemoryStore(),
+                attentionStore: AttentionStore(url: url),
+                harnessAttentionSettleInterval: attentionSettleInterval
+            )
         }
 
-        func makeStateWithWorktree(lineageID: String? = nil, maxEvents: Int = 2_000) -> AppState {
-            let state = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url, maxEvents: maxEvents))
+        func makeStateWithWorktree(
+            lineageID: String? = nil, maxEvents: Int = 2_000,
+            attentionSettleInterval: TimeInterval = 0
+        ) -> AppState {
+            let state = AppState(
+                store: MemoryStore(),
+                attentionStore: AttentionStore(url: url, maxEvents: maxEvents),
+                harnessAttentionSettleInterval: attentionSettleInterval
+            )
             let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: now)
             let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
                                     path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: now, lineageID: lineageID)

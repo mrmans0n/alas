@@ -324,6 +324,19 @@ final class AppState {
     var runScriptCatalogGeneration = 0
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    /// Settle window before a harness awaiting/permission transition reaches
+    /// the attention store, so flapping states never flash the sidebar badge.
+    @ObservationIgnored
+    let harnessAttentionSettleInterval: TimeInterval
+    @ObservationIgnored
+    var harnessAttentionDebouncers: [String: DebounceTimer] = [:]
+    @ObservationIgnored
+    var pendingHarnessAttention: [String: HarnessActivityTransition] = [:]
+    /// Pre-acknowledgments recorded while a session's awaiting transition
+    /// was parked in the settle window, keyed by the fingerprint the user
+    /// actually saw; the matching transition must land pre-acknowledged.
+    @ObservationIgnored
+    var harnessAttentionPreAcknowledgedSessions: [String: String] = [:]
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
     let mcpHTTPSupervisor = AlasMCPHTTPSupervisor()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
@@ -803,13 +816,15 @@ final class AppState {
             try WorktreeTrashCleaner.launch($0)
         },
         attentionStore: AttentionStore? = nil,
-        attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil
+        attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
+        harnessAttentionSettleInterval: TimeInterval = 1.5
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
         self.attentionNavigationEnvironment = attentionNavigationEnvironment
+        self.harnessAttentionSettleInterval = harnessAttentionSettleInterval
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager

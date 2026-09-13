@@ -2,6 +2,10 @@ import Foundation
 import CryptoKit
 
 enum AttentionProducer {
+    static func harnessFingerprint(state: ActivityState, body: String?) -> String {
+        body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
+    }
+
     static func harness(
         sessionID: String,
         agent: AgentKind,
@@ -12,7 +16,7 @@ enum AttentionProducer {
     ) -> [AttentionObservation] {
         let awaitingKey = AttentionSourceKey(rawValue: "session:\(sessionID):awaiting")
         let permissionKey = AttentionSourceKey(rawValue: "session:\(sessionID):permission")
-        let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
+        let fingerprint = harnessFingerprint(state: state, body: body)
 
         switch state {
         case .awaitingInput:

@@ -537,7 +537,17 @@ extension AppState {
     }
 
     private func acknowledgeSessionTarget(worktreeID: String, owner: SessionOwnerID, sessionID: String) {
+        // Mirrors the suppression guards in the acknowledge helpers below;
+        // without this an interaction while the inbox is open would record a
+        // pre-acknowledgment the helpers themselves refuse to apply.
+        guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
         let target = AttentionJumpTarget.session(sessionID: sessionID)
+        if let pending = pendingHarnessAttention[sessionID] {
+            // The awaiting event doesn't exist yet — it's parked in the
+            // settle window. Remember the intent (keyed by the fingerprint
+            // the user actually saw) so the badge never appears for it.
+            harnessAttentionPreAcknowledgedSessions[sessionID] = fingerprint(for: pending)
+        }
         if case .workspaceCheckout = owner {
             acknowledgeAttentionTarget(target)
         } else {
@@ -707,12 +717,120 @@ extension AppState {
     func observeHarnessAttention(_ transition: HarnessActivityTransition) {
         // Forget can arrive after the tab or session owner has already been removed.
         guard let state = transition.state else {
+            cancelPendingHarnessAttention(for: transition.sessionID)
             for suffix in ["awaiting", "permission"] {
                 observeAttention(.inactive(sourceKey: .init(rawValue: "session:\(transition.sessionID):\(suffix)")), at: transition.occurredAt)
             }
             return
         }
-        guard let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner),
+        // Entering an awaiting-like state is held briefly: agents routinely
+        // emit awaiting → busy flurries, and writing through immediately
+        // makes the sidebar triangle flash and vanish. Snapshots are state
+        // reconciliation and land immediately. A non-positive settle
+        // interval bypasses the debounce (used by tests).
+        if !transition.isSnapshot,
+           harnessAttentionSettleInterval > 0,
+           state == .awaitingInput || state == .permissionRequest {
+            schedulePendingHarnessAttention(transition)
+            return
+        }
+        // A busy/idle transition means the parked awaiting never happened.
+        // Cancel the timer, pending entry, and any pre-acknowledgment marker
+        // before applying it, so the acknowledgement this transition emits
+        // can't leak onto a transition that is still waiting to land.
+        cancelPendingHarnessAttention(for: transition.sessionID)
+        applyHarnessAttention(transition)
+    }
+
+    // MARK: Harness attention settle debounce
+
+    private func schedulePendingHarnessAttention(_ transition: HarnessActivityTransition) {
+        let sessionID = transition.sessionID
+        guard let resolution = attentionSessionResolution(for: sessionID, owner: transition.owner),
+              let context = attentionContext(for: resolution.worktree),
+              let state = transition.state,
+              AttentionProducer.harness(
+                  sessionID: sessionID, agent: transition.agent, state: state,
+                  body: transition.body, owner: context.owner, display: context.display
+              ).compactMap(\.activeSignal).first != nil else { return }
+        if pendingHarnessAttention[sessionID]?.state == transition.state {
+            if let existing = pendingHarnessAttention[sessionID],
+               fingerprint(for: existing) != fingerprint(for: transition) {
+                // A different question than the one the user may have
+                // pre-acknowledged — the marker must not suppress it.
+                // Whitespace-only re-emits produce the same fingerprint and
+                // keep the marker intact.
+                harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
+            }
+            pendingHarnessAttention[sessionID] = transition
+            harnessAttentionDebouncers[sessionID]?.poke()
+        } else {
+            // A different kind (e.g. permission → awaiting) supersedes the
+            // old pending signal entirely — including any pre-acknowledgment
+            // recorded against it, since the user hasn't seen this kind.
+            harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
+            harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
+            pendingHarnessAttention[sessionID] = transition
+            let debouncer = DebounceTimer(
+                interval: harnessAttentionSettleInterval,
+                queue: .main,
+                // Repeated body updates poke the timer; the ceiling keeps a
+                // chatty integration from starving the badge forever.
+                maxWait: harnessAttentionSettleInterval * 2
+            )
+            debouncer.onFire = { [weak self] in
+                guard let self else { return }
+                self.harnessAttentionDebouncers.removeValue(forKey: sessionID)
+                guard let transition = self.pendingHarnessAttention.removeValue(forKey: sessionID) else { return }
+                self.applyPendingHarnessAttention(transition)
+            }
+            harnessAttentionDebouncers[sessionID] = debouncer
+            debouncer.poke()
+        }
+    }
+
+    /// A pending awaiting/permission signal only lands if the session is
+    /// still in that state when the settle window closes; anything else means
+    /// the state flapped and the badge should never have appeared.
+    private func applyPendingHarnessAttention(_ transition: HarnessActivityTransition) {
+        guard let current = harness.activityBySession[transition.sessionID]?.state,
+              current == transition.state else {
+            // The marker only applies to this pending transition; a rejected
+            // one must not suppress the next genuine badge for the session.
+            harnessAttentionPreAcknowledgedSessions.removeValue(forKey: transition.sessionID)
+            return
+        }
+        let wasPreAcknowledged = harnessAttentionPreAcknowledgedSessions.removeValue(forKey: transition.sessionID) == fingerprint(for: transition)
+        applyHarnessAttention(transition)
+        guard wasPreAcknowledged else { return }
+        // The user already viewed this session while the transition was
+        // parked; acknowledge the freshly-landed event so the badge doesn't
+        // surface for it.
+        if let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner) {
+            acknowledgeSessionTarget(
+                worktreeID: resolution.worktree.id,
+                owner: resolution.owner,
+                sessionID: transition.sessionID
+            )
+        }
+    }
+
+    private func cancelPendingHarnessAttention(for sessionID: String) {
+        harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
+        pendingHarnessAttention.removeValue(forKey: sessionID)
+        harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
+    }
+
+    /// The attention fingerprint a pending transition will produce (mirrors
+    /// `AttentionProducer.harnessFingerprint`).
+    private func fingerprint(for transition: HarnessActivityTransition) -> String {
+        guard let state = transition.state else { return "" }
+        return AttentionProducer.harnessFingerprint(state: state, body: transition.body)
+    }
+
+    private func applyHarnessAttention(_ transition: HarnessActivityTransition) {
+        guard let state = transition.state,
+              let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner),
               let context = attentionContext(for: resolution.worktree) else { return }
         let observations = AttentionProducer.harness(
             sessionID: transition.sessionID, agent: transition.agent, state: state,
