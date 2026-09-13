@@ -56,6 +56,7 @@ struct EditorTabView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var findPresentation: EditorFindPresentation = .hidden
+    @State private var showsRunScriptWritingHelp = false
     @State private var findController = EditorFindController()
     @State private var findText: String = ""
     @State private var replaceText: String = ""
@@ -112,6 +113,12 @@ struct EditorTabView: View {
                 },
                 trailing: AnyView(HStack(spacing: 8) {
                     statusBadge
+                    if runScriptScope != nil {
+                        Button("Help me write this") { showsRunScriptWritingHelp = true }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-muted"))
+                    }
                     if !isBinary {
                         Button {
                             appState.config.code.showMinimap.toggle()
@@ -128,6 +135,17 @@ struct EditorTabView: View {
                     }
                 })
             )
+            .sheet(isPresented: $showsRunScriptWritingHelp) {
+                RunScriptWritingHelpDialog(fileName: absoluteFileURL.lastPathComponent) { request in
+                    guard let scope = runScriptScope else { return }
+                    _ = try appState.runScriptWritingHelpAgent(in: worktree)
+                    let buffer = conflictBannerBuffer
+                    if buffer.dirty { try buffer.save() }
+                    try appState.startRunScriptWritingHelp(
+                        scope: scope, scriptURL: absoluteFileURL, in: worktree, request: request
+                    )
+                }
+            }
             if isBinary {
                 binaryPlaceholder
             } else {
@@ -475,6 +493,13 @@ struct EditorTabView: View {
 
     private var nudgeAbsolutePath: String {
         absoluteFilePath
+    }
+
+    private var runScriptScope: RunScriptScope? {
+        guard !worktreePath.isRemoteAlasPath,
+              externalAbsolutePath == nil || externalEditable,
+              !isBinary else { return nil }
+        return RunScriptWritingHelp.scope(for: absoluteFileURL, worktreeRoot: worktreePath)
     }
 
     static func shouldShowConflictBanner(externalAbsolutePath: String?, externalEditable: Bool) -> Bool {

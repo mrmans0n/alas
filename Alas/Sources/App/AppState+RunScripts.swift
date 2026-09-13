@@ -805,13 +805,21 @@ extension AppState {
     func createPendingRunScript(
         name: String,
         onExit: RunScriptOnExit,
-        globalDir: URL = Paths.runScriptsGlobalDir
+        globalDir: URL = Paths.runScriptsGlobalDir,
+        writingHelpRequest: String? = nil
     ) throws {
         guard let presentation = pendingRunScriptCreation,
               let worktree = worktree(withId: presentation.worktreeId),
               worktree.projectId == presentation.projectId
         else {
             throw RunScriptCreationError.worktreeUnavailable
+        }
+
+        if let writingHelpRequest {
+            _ = try runScriptWritingHelpAgent(in: worktree)
+            guard !writingHelpRequest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw RunScriptWritingHelpError.emptyRequest
+            }
         }
 
         let url = try RunScriptCreator.create(
@@ -839,6 +847,15 @@ extension AppState {
         }
         pendingRunScriptCreation = nil
         runScriptCatalogGeneration += 1
+        if let writingHelpRequest {
+            do {
+                try startRunScriptWritingHelp(
+                    scope: presentation.scope, scriptURL: url, in: worktree, request: writingHelpRequest
+                )
+            } catch {
+                showFileActionError(title: "Writing Help Unavailable", message: error.localizedDescription)
+            }
+        }
     }
 
     func cancelPendingRunScriptCreation() {
