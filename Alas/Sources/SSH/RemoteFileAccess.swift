@@ -62,6 +62,12 @@ enum RemoteOperationTiming {
 /// Remote file I/O prefers the persistent helper channel. The POSIX ssh
 /// scripts remain the compatibility path for hosts without a usable helper.
 enum RemoteFileAccess {
+    static func canFallbackAfterWriteError(_ error: RemoteHelperClientError) -> Bool {
+        // A lost transport response can follow a committed write. Only a
+        // method-not-found reply proves no mutation was dispatched.
+        if case .jsonrpc(let rpcError) = error { return rpcError.code == -32601 }
+        return false
+    }
     /// Chained GNU-then-BSD mtime probe, reused across scripts.
     private static let statMtime = "stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m \"$f\""
 
@@ -197,11 +203,11 @@ enum RemoteFileAccess {
     /// Atomically writes content while preserving the mode of an existing
     /// file. New files use the remote process's umask. Prints the post-save
     /// mtime on stdout.
-    static func writeScript(path: String) -> String {
+    static func writeScript(path: String, permissions: Int? = nil) -> String {
         "f=\(SSHCommand.shellQuote(path)); t=\"$f.alas-$$.tmp\"; "
             + "[ -L \"$f\" ] && exit 6; "
             + "[ -d \"$f\" ] && exit 7; "
-            + "mode=\"\"; "
+            + "mode=\"\(permissions.map { String($0 & 0o7777, radix: 8) } ?? "")\"; "
             + "if [ -f \"$f\" ]; then "
             + "mode=$(stat -c %a -- \"$f\" 2>/dev/null || stat -f %Lp \"$f\") || exit 3; "
             + "cp -p \"$f\" \"$t\" || exit 3; "
@@ -213,17 +219,19 @@ enum RemoteFileAccess {
             + statMtime
     }
 
-    static func write(
+    @MainActor static func write(
         host: String,
         path: String,
         content: String,
         expectedMtime: Date? = nil,
-        expectedContent: String? = nil
+        expectedContent: String? = nil,
+        revalidateBeforeWrite: @MainActor () throws -> Void = {}
     ) async throws -> Date {
         if await helperSupportsWrite(host: host, expectedContent: expectedContent) {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
+                try revalidateBeforeWrite()
                 let result = try await client.write(
                     path: path,
                     content: content,
@@ -239,7 +247,7 @@ enum RemoteFileAccess {
                 RemoteOperationTiming.log(
                     "fs/write",
                     host: host,
-                    transport: error.shouldFallbackToRemoteExec ? "helper-fallback" : "helper",
+                    transport: canFallbackAfterWriteError(error) ? "helper-fallback" : "helper",
                     startedAt: startedAt
                 )
                 if case .jsonrpc(let rpcError) = error, rpcError.code == -32030 {
@@ -247,13 +255,14 @@ enum RemoteFileAccess {
                         rpcError.message.contains("missing") ? .deleted : .changed
                     )
                 }
-                guard error.shouldFallbackToRemoteExec else {
+                guard canFallbackAfterWriteError(error) else {
                     throw RemoteFileAccessError.writeFailed(String(describing: error))
                 }
             } catch let error as RemoteFileAccessError {
                 throw error
             } catch {
-                RemoteOperationTiming.log("fs/write", host: host, transport: "helper-fallback", startedAt: startedAt)
+                RemoteOperationTiming.log("fs/write", host: host, transport: "helper", startedAt: startedAt)
+                throw RemoteFileAccessError.writeFailed("Remote write outcome is unknown.")
             }
         }
 
@@ -276,16 +285,17 @@ enum RemoteFileAccess {
                 }
             }
         }
-        return try await writeViaExec(host: host, path: path, content: content)
+        try revalidateBeforeWrite()
+        return try await writeViaExec(host: host, path: path, content: content, expectedContent: expectedContent)
     }
 
-    private static func writeViaExec(host: String, path: String, content: String) async throws -> Date {
+    private static func writeViaExec(host: String, path: String, content: String, expectedContent: String?) async throws -> Date {
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/write", host: host, transport: "exec", startedAt: startedAt) }
         let invocation = RemoteExec.invocation(
             host: host,
             cwd: nil,
-            command: writeScript(path: path)
+            command: (expectedContent.map { RemoteFileOps.contentGuard(path: path, expected: Data($0.utf8)) } ?? "") + writeScript(path: path)
         )
         let result = try await Process.run(
             invocation.executable,
@@ -296,6 +306,7 @@ enum RemoteFileAccess {
         if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
             throw RemoteFileAccessError.connectionFailed(result.stderr)
         }
+        if result.exitCode == 42 { throw RemoteFileAccessError.saveConflict(.changed) }
         guard result.exitCode == 0,
               let seconds = TimeInterval(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         else {
@@ -413,6 +424,15 @@ enum RemoteFileAccess {
 
     private static func helperIsInstalled(host: String) async -> Bool {
         await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil
+    }
+
+    static func permissions(host: String, path: String) async throws -> Int {
+        let command = "f=\(SSHCommand.shellQuote(path)); [ -f \"$f\" ] && [ ! -L \"$f\" ] || exit 42; stat -c %a -- \"$f\" 2>/dev/null || stat -f %Lp \"$f\""
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: command)
+        guard result.exitCode == 0, let mode = Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), radix: 8) else {
+            throw RemoteFileAccessError.writeFailed("Could not read remote file permissions.")
+        }
+        return mode
     }
 
     private static func helperSupportsRead(host: String) async -> Bool {

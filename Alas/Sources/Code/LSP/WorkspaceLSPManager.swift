@@ -796,6 +796,12 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
     }
 
+    func workspaceEditVersion(for document: EditorDocumentID, worktreeRoot: URL) -> Int? {
+        guard let key = holderKey(forURI: document.uri, withinWorktreeRoot: worktreeRoot), key.host == document.host,
+              let holder = holders[key], holder.openedURIs.contains(document.uri) else { return nil }
+        return holder.versions[document.uri]
+    }
+
     /// Returns `nil` when the file is not currently open on an LSP server.
     /// Returns `false` when it is open but the served text does not contain
     /// `text` at `line`.

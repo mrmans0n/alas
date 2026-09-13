@@ -1,6 +1,6 @@
 import Foundation
 
-struct EditorDocumentID: Hashable, Sendable {
+struct EditorDocumentID: Hashable, Sendable, Codable {
     let host: String?
     let worktreeID: String
     let uri: String

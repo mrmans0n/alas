@@ -2151,6 +2151,40 @@ final class TabsManager {
         tabBuffers[tabId] ?? peekExternalBuffer(tabId: tabId)
     }
 
+    /// Looks across inactive tabs and external editors without creating a buffer.
+    func workspaceEditBuffer(for document: EditorDocumentID) -> EditorBuffer? {
+        for (tabID, buffer) in tabBuffers {
+            guard bufferKeys[tabID]?.worktreeId == document.worktreeID,
+                  buffer.workspaceEditHost == document.host,
+                  buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI == document.uri else { continue }
+            return buffer
+        }
+        for (tabID, entry) in externalTabURLs where entry.worktreeId == document.worktreeID && entry.url.lspURI == document.uri {
+            if let buffer = peekExternalBuffer(tabId: tabID), buffer.workspaceEditHost == document.host { return buffer }
+        }
+        return nil
+    }
+
+    /// Capture before sending rename/code-action requests. The receipt path
+    /// must reject changed or closed identities, even if text changed back.
+    func workspaceEditGenerations(host: String?, worktreeID: String) -> [EditorDocumentID: WorkspaceEditBufferGeneration] {
+        var result: [EditorDocumentID: WorkspaceEditBufferGeneration] = [:]
+        for (tabID, buffer) in tabBuffers where bufferKeys[tabID]?.worktreeId == worktreeID && buffer.workspaceEditHost == host {
+            let document = EditorDocumentID(host: host, worktreeID: worktreeID, uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
+            result[document] = WorkspaceEditBufferGeneration(buffer)
+        }
+        for (tabID, entry) in externalTabURLs where entry.worktreeId == worktreeID {
+            if let buffer = peekExternalBuffer(tabId: tabID), buffer.workspaceEditHost == host {
+                result[EditorDocumentID(host: host, worktreeID: worktreeID, uri: entry.url.lspURI)] = WorkspaceEditBufferGeneration(buffer)
+            }
+        }
+        return result
+    }
+
+    func workspaceEditVersion(for document: EditorDocumentID, buffer: EditorBuffer) -> Int? {
+        lsp?.workspaceEditVersion(for: document, worktreeRoot: buffer.worktreeRoot)
+    }
+
     /// Non-creating lookup for an external editor buffer. Returns nil if no
     /// external buffer has been registered for this tab (or if the tab isn't
     /// an external editor tab). Used by read-only checks (e.g.

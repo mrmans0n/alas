@@ -154,6 +154,101 @@ final class EditorBuffer {
     private(set) var loadKind: LoadKind = .loaded
 
     private(set) var editGeneration: Int = 0
+    private(set) var fileWatchGeneration: Int = 0
+    private(set) var workspaceEditDeleted = false
+    private var workspaceEditMutationInFlight = false
+
+    var workspaceEditHost: String? { remoteHost }
+
+    func beginWorkspaceEditMutation() throws {
+        guard !workspaceEditMutationInFlight, !remoteSaveInFlight,
+              initialLoadFinished, !readOnly, !isExternal || externalEditable else { throw SaveError.remoteSaveConflict }
+        workspaceEditMutationInFlight = true
+    }
+
+    func endWorkspaceEditMutation() { workspaceEditMutationInFlight = false }
+
+    func refreshWorkspaceEditDiskMetadata(modifiedAt: Date?) {
+        if remoteHost != nil {
+            if let modifiedAt { originalMtime = modifiedAt }
+        } else {
+            updateOriginalMtime(from: absoluteFileURL)
+            updateOriginalFileIdentity(from: absoluteFileURL)
+        }
+    }
+
+    func awaitWorkspaceEditLifecycle() async {
+        await languageReopenTask?.value
+        await lspOpenTask?.value
+    }
+
+    /// Workspace edits keep open text unsaved, including resource deletion.
+    /// A tombstone retains the live storage and its baseline for recovery.
+    func applyWorkspaceEditContent(_ content: Data?, expectedGeneration: Int) throws {
+        guard editGeneration == expectedGeneration, initialLoadFinished,
+              !readOnly, !isExternal || externalEditable,
+              !remoteSaveInFlight else { throw SaveError.remoteSaveConflict }
+        let wasDeleted = workspaceEditDeleted
+        if let content {
+            guard let text = String(data: content, encoding: .utf8) else { throw SaveError.remoteSaveConflict }
+            setStorageText(text)
+            workspaceEditDeleted = false
+            conflict = nil
+        } else {
+            workspaceEditDeleted = true
+            conflict = .deletedOnDisk
+            stopWatching()
+        }
+        if wasDeleted != workspaceEditDeleted {
+            transitionWorkspaceEditLifecycle(from: absoluteFileURL, oldLanguage: openedLanguage)
+        }
+        handleEdit(edit: nil)
+        snapshotNow()
+        if let lsp, let language = openedLanguage, !workspaceEditDeleted, !wasDeleted {
+            let url = absoluteFileURL
+            let text = storage.string
+            Task { await lsp.didChange(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text, edits: nil) }
+        }
+    }
+
+    func rebindWorkspaceEdit(to document: EditorDocumentID, expectedGeneration: Int) throws {
+        guard editGeneration == expectedGeneration, !isExternal,
+              document.host == remoteHost, let url = URL(string: document.uri),
+              let path = Self.relativePath(for: url, worktreeRoot: worktreeRoot),
+              shouldFollowPathChange?(relativePath, path) ?? true else { throw SaveError.remoteSaveConflict }
+        let oldURL = absoluteFileURL
+        let oldPath = relativePath
+        let oldLanguage = openedLanguage
+        stopWatching()
+        relativePath = path
+        language = lsp?.language(forPath: path)
+        workspaceEditDeleted = false
+        conflict = nil
+        editGeneration &+= 1
+        onPathChanged?(oldPath, path)
+        snapshotNow()
+        transitionWorkspaceEditLifecycle(from: oldURL, oldLanguage: oldLanguage)
+    }
+
+    private func transitionWorkspaceEditLifecycle(from oldURL: URL, oldLanguage: String?) {
+        let pendingOpen = lspOpenTask
+        cancelPendingLSPOpen()
+        let prior = languageReopenTask
+        prior?.cancel()
+        openedLanguage = nil
+        let path = relativePath
+        languageReopenTask = Task { [weak self] in
+            await prior?.value
+            await pendingOpen?.value
+            guard let self else { return }
+            if let lsp, let oldLanguage {
+                await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: oldURL, languageId: oldLanguage)
+            }
+            guard !Task.isCancelled, relativePath == path, !workspaceEditDeleted else { return }
+            if remoteHost != nil { openRemoteLSPIfNeeded() } else { openLSPDocumentIfReady() }
+            startWatching()
+        }
+    }
 
     @ObservationIgnored
     private var editObservers: [UUID: (EditorTextEdit?) -> Void] = [:]
@@ -188,6 +283,7 @@ final class EditorBuffer {
     private var watcherSource: DispatchSourceFileSystemObject?
     @ObservationIgnored
     private var watcherFD: Int32 = -1
+    private var watcherDeliveryGeneration = 0
     @ObservationIgnored
     private let remoteHost: String?
     var isRemote: Bool { remoteHost != nil }
@@ -504,6 +600,7 @@ final class EditorBuffer {
 
     private func openLSPDocumentIfReady() {
         guard initialLoadFinished,
+              !workspaceEditDeleted,
               !isExternal,
               remoteHost == nil,
               openedLanguage == nil,
@@ -711,13 +808,22 @@ final class EditorBuffer {
             eventMask: [.write, .extend, .rename, .delete, .attrib],
             queue: Self.watchQueue
         )
-        src.setEventHandler { [weak self] in
-            Task { @MainActor in self?.handleWatcherEvent() }
+        let deliverEvent = watcherEventDelivery()
+        src.setEventHandler {
+            Task { @MainActor in deliverEvent() }
         }
         src.setCancelHandler { Darwin.close(fd) }
         src.resume()
         watcherSource = src
         watcherFD = fd
+    }
+
+    private func watcherEventDelivery() -> @MainActor () -> Void {
+        let generation = watcherDeliveryGeneration
+        return { [weak self] in
+            guard let self, self.watcherDeliveryGeneration == generation else { return }
+            self.handleWatcherEvent()
+        }
     }
 
     func startWatchingIfNeeded() {
@@ -730,6 +836,9 @@ final class EditorBuffer {
     }
 
     func stopWatching() {
+        // A canceled source may already have queued a MainActor callback.
+        // It belongs to the old inode/path and must not affect a rebound buffer.
+        watcherDeliveryGeneration &+= 1
         remotePollTask?.cancel()
         remotePollTask = nil
         remoteHelperSession?.stop()
@@ -775,6 +884,7 @@ final class EditorBuffer {
         session.onEvent = { [weak self] event in
             guard let self, event.kind == .files else { return }
             guard fileWatchMatcher.matches(event: event) else { return }
+            self.fileWatchGeneration &+= 1
             Task { @MainActor in await self.checkRemoteConflict(host: host) }
         }
         session.onAvailabilityChanged = { [weak self] _ in
@@ -813,6 +923,7 @@ final class EditorBuffer {
     }
 
     private func handleWatcherEvent() {
+        fileWatchGeneration &+= 1
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if !FileManager.default.fileExists(atPath: url.path) {
             watcherSource?.cancel()
@@ -1023,6 +1134,7 @@ final class EditorBuffer {
     /// `originalMtime`, and clears `dirty`. Throws on any IO failure; the
     /// buffer is left dirty so the user can retry.
     func save() throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
         guard !readOnly else { return }
         switch saveDisposition {
@@ -1040,6 +1152,7 @@ final class EditorBuffer {
     }
 
     func saveAwaitingRemote() async throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
         guard !readOnly else { return }
         switch saveDisposition {
@@ -1091,6 +1204,7 @@ final class EditorBuffer {
                 guard remoteSaveGeneration == generation else { return }
             }
             guard remoteSaveGeneration == generation else { return }
+            guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
             remoteSaveInFlight = true
             defer {
                 remoteSaveInFlight = false
@@ -1170,6 +1284,7 @@ final class EditorBuffer {
     }
 
     func saveAs(relativePath newRelativePath: String) throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
@@ -1203,6 +1318,7 @@ final class EditorBuffer {
     }
 
     func moveTo(relativePath newRelativePath: String) throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
@@ -1247,6 +1363,8 @@ final class EditorBuffer {
     func saveAsRemote(relativePath newRelativePath: String) async throws {
         guard let host = remoteHost else { throw remotePathOperationError() }
         guard !readOnly else { return }
+        try beginWorkspaceEditMutation()
+        defer { endWorkspaceEditMutation() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1298,6 +1416,8 @@ final class EditorBuffer {
     func moveToRemote(relativePath newRelativePath: String) async throws {
         guard let host = remoteHost else { throw remotePathOperationError() }
         guard !readOnly else { return }
+        try beginWorkspaceEditMutation()
+        defer { endWorkspaceEditMutation() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -2059,6 +2179,7 @@ final class EditorBuffer {
     /// successful remote read so didOpen never advertises a placeholder.
     private func openRemoteLSPIfNeeded(fileURL: URL? = nil, text: String? = nil) {
         guard initialLoadFinished,
+              !workspaceEditDeleted,
               !readOnly,
               case .loaded = loadKind,
               !isExternal,
@@ -2066,7 +2187,7 @@ final class EditorBuffer {
               openedLanguage == nil,
               lspOpenTask == nil,
               let lsp,
-              let language
+              let language = effectiveLanguage
         else { return }
         let url = fileURL ?? worktreeRoot.appendingPathComponent(relativePath)
         let documentText = text ?? storage.string
@@ -2293,6 +2414,10 @@ final class EditorBuffer {
 
     func handleWatcherEventForTesting() {
         handleWatcherEvent()
+    }
+
+    func watcherEventDeliveryForTesting() -> @MainActor () -> Void {
+        watcherEventDelivery()
     }
 
     var isWatchingForTesting: Bool {

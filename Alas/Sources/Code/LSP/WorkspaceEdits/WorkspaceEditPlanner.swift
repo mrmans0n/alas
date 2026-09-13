@@ -1,6 +1,6 @@
 import Foundation
 
-struct WorkspaceFileSnapshot: Equatable, Sendable {
+struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
     let document: EditorDocumentID
     let content: Data?
     let bufferVersion: Int?
@@ -8,6 +8,11 @@ struct WorkspaceFileSnapshot: Equatable, Sendable {
     let isDirty: Bool
     let isDirectory: Bool
     let isSymbolicLink: Bool
+    let diskContent: Data?
+    let originalContent: Data?
+    let permissions: Int?
+    let bufferGeneration: Int?
+    let fileWatchGeneration: Int?
 
     init(
         document: EditorDocumentID,
@@ -16,7 +21,12 @@ struct WorkspaceFileSnapshot: Equatable, Sendable {
         isOpen: Bool = false,
         isDirty: Bool = false,
         isDirectory: Bool = false,
-        isSymbolicLink: Bool = false
+        isSymbolicLink: Bool = false,
+        diskContent: Data? = nil,
+        originalContent: Data? = nil,
+        permissions: Int? = nil,
+        bufferGeneration: Int? = nil,
+        fileWatchGeneration: Int? = nil
     ) {
         self.document = document
         self.content = content
@@ -25,6 +35,11 @@ struct WorkspaceFileSnapshot: Equatable, Sendable {
         self.isDirty = isDirty
         self.isDirectory = isDirectory
         self.isSymbolicLink = isSymbolicLink
+        self.diskContent = diskContent
+        self.originalContent = originalContent
+        self.permissions = permissions
+        self.bufferGeneration = bufferGeneration
+        self.fileWatchGeneration = fileWatchGeneration
     }
 
     func replacing(document: EditorDocumentID? = nil, content: Data?) -> WorkspaceFileSnapshot {
@@ -35,7 +50,12 @@ struct WorkspaceFileSnapshot: Equatable, Sendable {
             isOpen: isOpen,
             isDirty: isDirty,
             isDirectory: isDirectory,
-            isSymbolicLink: isSymbolicLink
+            isSymbolicLink: isSymbolicLink,
+            diskContent: diskContent,
+            originalContent: originalContent,
+            permissions: permissions,
+            bufferGeneration: bufferGeneration,
+            fileWatchGeneration: fileWatchGeneration
         )
     }
 }
@@ -48,8 +68,8 @@ struct WorkspaceEditPlan: Equatable, Sendable {
     let requiresPreview: Bool
 }
 
-struct WorkspaceEditPlanStep: Equatable, Sendable {
-    enum Kind: Equatable, Sendable {
+struct WorkspaceEditPlanStep: Equatable, Sendable, Codable {
+    enum Kind: String, Equatable, Sendable, Codable {
         case text
         case create
         case rename

@@ -24,6 +24,7 @@ struct AlasApp: App {
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())
         } else {
+            try? WorkspaceEditJournal().cleanSuccessfulRecords(retaining: [])
             let recovery = StartupRecovery()
             _state = State(initialValue: AppState(
                 restoreActiveTabsOnStartup: !recovery.begin()
