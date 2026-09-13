@@ -538,11 +538,11 @@ extension AppState {
 
     private func acknowledgeSessionTarget(worktreeID: String, owner: SessionOwnerID, sessionID: String) {
         let target = AttentionJumpTarget.session(sessionID: sessionID)
-        if pendingHarnessAttention[sessionID] != nil {
+        if let pending = pendingHarnessAttention[sessionID] {
             // The awaiting event doesn't exist yet — it's parked in the
-            // settle window. Remember the intent so the badge never appears
-            // for a session the user has already looked at.
-            harnessAttentionPreAcknowledgedSessions.insert(sessionID)
+            // settle window. Remember the intent (keyed by the fingerprint
+            // the user actually saw) so the badge never appears for it.
+            harnessAttentionPreAcknowledgedSessions[sessionID] = fingerprint(for: pending)
         }
         if case .workspaceCheckout = owner {
             acknowledgeAttentionTarget(target)
@@ -750,6 +750,11 @@ extension AppState {
                   body: transition.body, owner: context.owner, display: context.display
               ).compactMap(\.activeSignal).first != nil else { return }
         if pendingHarnessAttention[sessionID]?.state == transition.state {
+            if pendingHarnessAttention[sessionID]?.body != transition.body {
+                // A different question than the one the user may have
+                // pre-acknowledged — the marker must not suppress it.
+                harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
+            }
             pendingHarnessAttention[sessionID] = transition
             harnessAttentionDebouncers[sessionID]?.poke()
         } else {
@@ -757,9 +762,15 @@ extension AppState {
             // old pending signal entirely — including any pre-acknowledgment
             // recorded against it, since the user hasn't seen this kind.
             harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
-            harnessAttentionPreAcknowledgedSessions.remove(sessionID)
+            harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
             pendingHarnessAttention[sessionID] = transition
-            let debouncer = DebounceTimer(interval: harnessAttentionSettleInterval, queue: .main)
+            let debouncer = DebounceTimer(
+                interval: harnessAttentionSettleInterval,
+                queue: .main,
+                // Repeated body updates poke the timer; the ceiling keeps a
+                // chatty integration from starving the badge forever.
+                maxWait: harnessAttentionSettleInterval * 2
+            )
             debouncer.onFire = { [weak self] in
                 guard let self else { return }
                 self.harnessAttentionDebouncers.removeValue(forKey: sessionID)
@@ -779,10 +790,10 @@ extension AppState {
               current == transition.state else {
             // The marker only applies to this pending transition; a rejected
             // one must not suppress the next genuine badge for the session.
-            harnessAttentionPreAcknowledgedSessions.remove(transition.sessionID)
+            harnessAttentionPreAcknowledgedSessions.removeValue(forKey: transition.sessionID)
             return
         }
-        let wasPreAcknowledged = harnessAttentionPreAcknowledgedSessions.remove(transition.sessionID) != nil
+        let wasPreAcknowledged = harnessAttentionPreAcknowledgedSessions.removeValue(forKey: transition.sessionID) == fingerprint(for: transition)
         applyHarnessAttention(transition)
         guard wasPreAcknowledged else { return }
         // The user already viewed this session while the transition was
@@ -800,7 +811,15 @@ extension AppState {
     private func cancelPendingHarnessAttention(for sessionID: String) {
         harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
         pendingHarnessAttention.removeValue(forKey: sessionID)
-        harnessAttentionPreAcknowledgedSessions.remove(sessionID)
+        harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
+    }
+
+    /// The attention fingerprint a pending transition will produce — the
+    /// trimmed body when present, the state name otherwise (mirrors
+    /// `AttentionProducer.harness`).
+    private func fingerprint(for transition: HarnessActivityTransition) -> String {
+        let trimmed = transition.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? (transition.state?.rawValue ?? "") : trimmed
     }
 
     private func applyHarnessAttention(_ transition: HarnessActivityTransition) {

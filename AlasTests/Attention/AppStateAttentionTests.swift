@@ -1476,6 +1476,71 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 1)
     }
 
+    @Test func preAcknowledgementDoesNotSuppressNewUnseenQuestion() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while pending, then the agent asks a different question
+        // before the user returns — the new question must badge for itself.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second question")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body == "Second question")
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func repeatedBodyUpdatesCannotStarveTheBadge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+
+        // Body updates arriving faster than the settle window keep poking
+        // the timer, but the max-wait ceiling forces the badge through.
+        for index in 0..<12 {
+            state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Update \(index)")
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(state.attentionStore.events.isEmpty == false)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body?.hasPrefix("Update ") == true)
+        #expect(state.attentionAggregation.unresolvedCount >= 1)
+    }
+
+    @Test func preAcknowledgementDoesNotSuppressNewQuestionBody() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while the first question is pending, then the agent asks a
+        // different one — the user has not seen the new question and must
+        // badge for it.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second question")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(event.body == "Second question")
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
     @MainActor private struct Fixture {
         let now = Date()
         let url: URL
