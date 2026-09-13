@@ -163,7 +163,7 @@ private struct ACPMCPStatusPopover: View {
 
             if status.showsSwitchToHTTPAction, let onSwitchToHTTP {
                 VStack(alignment: .leading, spacing: 6) {
-                    AlasButton(title: "Switch to HTTP transport", style: .subtle) {
+                    AlasButton(title: "Switch to HTTP transport", icon: "arrow.triangle.2.circlepath", style: .normal) {
                         onSwitchToHTTP()
                     }
                 }
