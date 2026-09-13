@@ -754,8 +754,10 @@ extension AppState {
             harnessAttentionDebouncers[sessionID]?.poke()
         } else {
             // A different kind (e.g. permission → awaiting) supersedes the
-            // old pending signal entirely.
+            // old pending signal entirely — including any pre-acknowledgment
+            // recorded against it, since the user hasn't seen this kind.
             harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
+            harnessAttentionPreAcknowledgedSessions.remove(sessionID)
             pendingHarnessAttention[sessionID] = transition
             let debouncer = DebounceTimer(interval: harnessAttentionSettleInterval, queue: .main)
             debouncer.onFire = { [weak self] in
