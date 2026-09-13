@@ -53,7 +53,7 @@ struct ACPTranscriptMinimapLayout {
     private func bandCount(for message: ACPMessage) -> Int {
         switch message {
         case .agent(_, _, let text):
-            switch text.value.utf8.count {
+            switch text.utf8Length {
             case 0..<320: return 1
             case 320..<1_600: return 2
             case 1_600..<6_400: return 3
@@ -108,6 +108,7 @@ struct ACPTranscriptMinimapLayout {
 final class ACPTranscriptMinimap {
     private var theme: Theme?
     private var generation: UInt64?
+    private var streamingState: ACPSession.StreamingState?
     private var offset: Int?
     private var transcriptID: ObjectIdentifier?
     private var cachedDrawing = MinimapDrawing()
@@ -115,6 +116,7 @@ final class ACPTranscriptMinimap {
 
     func needsUpdate(transcript: ACPTranscript, theme: Theme) -> Bool {
         self.theme != theme || generation != transcript.messagesGeneration
+            || streamingState != transcript.streamingState
             || offset != transcript.messageIndexOffset
             || transcriptID != ObjectIdentifier(transcript)
     }
@@ -124,6 +126,7 @@ final class ACPTranscriptMinimap {
         transcriptID = ObjectIdentifier(transcript)
         self.theme = theme
         generation = transcript.messagesGeneration
+        streamingState = transcript.streamingState
         offset = transcript.messageIndexOffset
         layout = ACPTranscriptMinimapLayout(messages: transcript.messages, offset: transcript.messageIndexOffset)
         let userColor = NSColor(theme.color("accent")).withAlphaComponent(0.65)

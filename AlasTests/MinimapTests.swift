@@ -204,6 +204,24 @@ struct MinimapTests {
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
     }
 
+    @Test("Completed responses refresh their bands without rebuilding on every chunk")
+    @MainActor func completedResponseBands() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        let buffer = StreamingText("Hello")
+        transcript.messages = [.agent(id: UUID(), buffer)]
+        transcript.streamingState = .streaming
+        let renderer = ACPTranscriptMinimap()
+        #expect(renderer.drawing(transcript: transcript, theme: theme).marks.count == 1)
+        buffer.append(String(repeating: "response ", count: 1_000))
+        transcript.streamingTick &+= 1
+        #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
+        transcript.streamingState = .idle
+        #expect(renderer.needsUpdate(transcript: transcript, theme: theme))
+        #expect(renderer.drawing(transcript: transcript, theme: theme).marks.count == 4)
+        #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
+    }
+
     @Test("Long alternating conversations keep drawing marks bounded without hiding either speaker")
     @MainActor func transcriptPreviewBounded() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
@@ -259,8 +277,8 @@ struct MinimapTests {
         let history = ACPTranscriptMinimapLayout(messages: [
             .user(id: UUID(), text: "recent", attachments: [])
         ], offset: 1_000)
-        #expect(history.fraction(at: 1_000) > 0)
-        #expect(history.messagePosition(at: 0.5) < 1_000)
+        #expect(history.fraction(at: 1_000) == 0.5)
+        #expect(history.messagePosition(at: 0.25) == 500)
         let empty = ACPTranscriptMinimapLayout(messages: [], offset: 0)
         #expect(empty.fraction(at: 1) == 0)
         #expect(empty.messagePosition(at: 1) == 0)
