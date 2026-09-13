@@ -5,6 +5,8 @@ import SwiftUI
 /// Project/Worktree affordance or reorder projects around Workspace peers.
 struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @Bindable var state: AppState
+    var spaceID: String? = nil
+    var isInteractive = true
     let projectRow: (ProjectConfig) -> ProjectRow
     @State private var editingWorkspace: Workspace?
     @State private var creatingCheckout: Workspace?
@@ -21,8 +23,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var plusHoveringWorkspaceID: UUID?
 
     var body: some View {
-        let members = state.spacesManager.activeSpace?.members
-            ?? state.spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
+        let space = state.spacesManager.space(id: spaceID ?? state.spacesManager.activeSpaceId)
+        let members = space?.members
+            ?? space?.projectIds.map(SpaceMemberReference.project)
             ?? []
         let rows = WorkspaceSidebarLayout.rows(
             members: members,
@@ -33,31 +36,34 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         let checkouts = Dictionary(uniqueKeysWithValues: state.workspacesManager.checkouts.map { ($0.id, $0) })
         let projects = Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0) })
 
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                switch row {
-                case .project(let id):
-                    if let project = projects[id] {
-                        projectRow(project).padding(.vertical, 3)
+        ZStack {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    switch row {
+                    case .project(let id):
+                        if let project = projects[id] {
+                            projectRow(project).padding(.vertical, 3)
+                        }
+                    case .workspace(let id):
+                        if let workspace = workspaces[id] {
+                            workspaceHeader(workspace, projects: projects)
+                        }
+                    case .formerWorkspace:
+                        Label("Former Workspace", systemImage: "archivebox")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(theme.color("fg-muted"))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                    case .checkout(let id):
+                        if let checkout = checkouts[id], checkout.workspaceID.map({ !collapsedWorkspaces.contains($0) }) ?? true {
+                            checkoutRows(checkout, projects: projects)
+                        }
+                    case .member:
+                        EmptyView()
                     }
-                case .workspace(let id):
-                    if let workspace = workspaces[id] {
-                        workspaceHeader(workspace, projects: projects)
-                    }
-                case .formerWorkspace:
-                    Label("Former Workspace", systemImage: "archivebox")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundColor(theme.color("fg-muted"))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                case .checkout(let id):
-                    if let checkout = checkouts[id], checkout.workspaceID.map({ !collapsedWorkspaces.contains($0) }) ?? true {
-                        checkoutRows(checkout, projects: projects)
-                    }
-                case .member:
-                    EmptyView()
                 }
             }
+            .disabled(!isInteractive)
         }
         .sheet(item: $editingWorkspace) { workspace in EditWorkspaceDialog(state: state, workspace: workspace, presented: Binding(get: { editingWorkspace != nil }, set: { if !$0 { editingWorkspace = nil } })) }
         .sheet(item: $creatingCheckout) { workspace in CreateWorkspaceCheckoutDialog(state: state, workspace: workspace, presented: Binding(get: { creatingCheckout != nil }, set: { if !$0 { creatingCheckout = nil } })) }

@@ -65,160 +65,166 @@ struct SidebarView: View {
                     onDismissAttentionItem: { state.dismissAttentionItem($0) },
                     onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
                 )
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        WorkspaceSidebarTree(state: state) { project in
-                            RepoGroupView(
-                                project: project,
-                                worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
-                                collapsed: Binding(
-                                    get: { collapsedProjects.contains(project.id) },
-                                    set: { collapsed in
-                                        if collapsed { collapsedProjects.insert(project.id) }
-                                        else { collapsedProjects.remove(project.id) }
-                                    }
-                                ),
-                                selectedWorktreeId: state.selectedWorktreeId,
-                                isMain: { wt in state.projectsManager.isMain(wt, in: project) },
-                                operationState: { wt in
-                                    state.projectsManager.operationState(for: wt.id)
-                                },
-                                harnessSummary: { worktreeId in
-                                    let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
-                                        switch tab {
-                                        case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                                        case .acpSession(let s): return [s.sessionId]
-                                        default:                 return []
+                SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            WorkspaceSidebarTree(
+                                state: state,
+                                spaceID: spaceID,
+                                isInteractive: spaceID == state.spacesManager.activeSpaceId
+                            ) { project in
+                                RepoGroupView(
+                                    project: project,
+                                    worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
+                                    collapsed: Binding(
+                                        get: { collapsedProjects.contains(project.id) },
+                                        set: { collapsed in
+                                            if collapsed { collapsedProjects.insert(project.id) }
+                                            else { collapsedProjects.remove(project.id) }
                                         }
-                                    }
-                                    return state.harness.summary(forSessionIds: ids)
-                                },
-                                ggMenuModel: { wt in
-                                    state.ggWorktreeMenuModel(project: project, worktree: wt)
-                                },
-                                onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
-                                onNewWorktree: { onNewWorktree(project.id) },
-                                onEditProject: { onEditProject(project.id) },
-                                onRemoveProject: { onRemoveProject(project.id) },
-                                onOpenGGInbox: state.ggInboxAvailable(projectId: project.id)
-                                    ? { state.openGGInbox(projectId: project.id) }
-                                    : nil,
-                                onResetSort: {
-                                    state.projectsManager.resetWorktreeOrder(projectId: project.id)
-                                    state.saveProjects()
-                                },
-                                spaces: state.spacesManager.spaces,
-                                activeSpaceId: state.spacesManager.activeSpaceId,
-                                isProjectInSpace: { spaceId in
-                                    state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
-                                },
-                                canRemoveFromSpace: { _ in
-                                    state.spacesManager.membershipCount(forProject: project.id) > 1
-                                },
-                                onToggleSpaceMembership: { spaceId in
-                                    state.toggleProject(projectId: project.id, inSpace: spaceId)
-                                },
-                                onOpenTerminal: { wt in
-                                    state.selectWorktree(id: wt.id)
-                                    Task { @MainActor in
-                                        _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
-                                    }
-                                },
-                                onOpenIssue: { wt in
-                                    guard let attachment = state.projectsManager.issueAttachment(
-                                        projectId: project.id,
-                                        worktreeId: wt.id
-                                    ) else { return nil }
-                                    return { NSWorkspace.shared.open(attachment.canonicalURL) }
-                                },
-                                onCopyPath: { wt in
-                                    let pb = NSPasteboard.general
-                                    pb.clearContents()
-                                    pb.setString(wt.path.path, forType: .string)
-                                },
-                                onCopyBranch: { wt in
-                                    let pb = NSPasteboard.general
-                                    pb.clearContents()
-                                    pb.setString(wt.branch, forType: .string)
-                                },
-                                onRevealInFinder: { wt in
-                                    NSWorkspace.shared.activateFileViewerSelecting([wt.path])
-                                },
-                                onArchive: { wt in state.archiveWorktree(wt) },
-                                onCleanupWorktrees: { onCleanupWorktrees(project.id) },
-                                onDelete: { wt in state.deleteWorktree(wt) },
-                                onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
-                                showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
-                                onActivateHarness: { wt, sessionId in
-                                    state.activateHarnessSession(
-                                        projectId: project.id,
-                                        worktreeId: wt.id,
-                                        sessionId: sessionId
-                                    )
-                                },
-                                onCopyError: { message in
-                                    let pb = NSPasteboard.general
-                                    pb.clearContents()
-                                    pb.setString(message, forType: .string)
-                                },
-                                onRetryCreate: { wt in
-                                    let retry = Self.retryCreateParameters(
-                                        operationState: state.projectsManager.operationState(for: wt.id),
-                                        defaultBase: state.config.worktrees.baseBranch
-                                    )
-                                    Task { @MainActor in
-                                        await state.createWorktree(
+                                    ),
+                                    selectedWorktreeId: state.selectedWorktreeId,
+                                    isMain: { wt in state.projectsManager.isMain(wt, in: project) },
+                                    operationState: { wt in
+                                        state.projectsManager.operationState(for: wt.id)
+                                    },
+                                    harnessSummary: { worktreeId in
+                                        let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                                            switch tab {
+                                            case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                                            case .acpSession(let s): return [s.sessionId]
+                                            default:                 return []
+                                            }
+                                        }
+                                        return state.harness.summary(forSessionIds: ids)
+                                    },
+                                    ggMenuModel: { wt in
+                                        state.ggWorktreeMenuModel(project: project, worktree: wt)
+                                    },
+                                    onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
+                                    onNewWorktree: { onNewWorktree(project.id) },
+                                    onEditProject: { onEditProject(project.id) },
+                                    onRemoveProject: { onRemoveProject(project.id) },
+                                    onOpenGGInbox: state.ggInboxAvailable(projectId: project.id)
+                                        ? { state.openGGInbox(projectId: project.id) }
+                                        : nil,
+                                    onResetSort: {
+                                        state.projectsManager.resetWorktreeOrder(projectId: project.id)
+                                        state.saveProjects()
+                                    },
+                                    spaces: state.spacesManager.spaces,
+                                    activeSpaceId: state.spacesManager.activeSpaceId,
+                                    isProjectInSpace: { spaceId in
+                                        state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
+                                    },
+                                    canRemoveFromSpace: { _ in
+                                        state.spacesManager.membershipCount(forProject: project.id) > 1
+                                    },
+                                    onToggleSpaceMembership: { spaceId in
+                                        state.toggleProject(projectId: project.id, inSpace: spaceId)
+                                    },
+                                    onOpenTerminal: { wt in
+                                        state.selectWorktree(id: wt.id)
+                                        Task { @MainActor in
+                                            _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
+                                        }
+                                    },
+                                    onOpenIssue: { wt in
+                                        guard let attachment = state.projectsManager.issueAttachment(
                                             projectId: project.id,
-                                            base: retry.base,
-                                            branch: wt.branch,
-                                            destination: wt.path,
-                                            runStartup: false,
-                                            launchSurface: retry.launchSurface,
-                                            ggWorktreeMode: retry.ggWorktreeMode,
-                                            issueAttachment: retry.issueAttachment
+                                            worktreeId: wt.id
+                                        ) else { return nil }
+                                        return { NSWorkspace.shared.open(attachment.canonicalURL) }
+                                    },
+                                    onCopyPath: { wt in
+                                        let pb = NSPasteboard.general
+                                        pb.clearContents()
+                                        pb.setString(wt.path.path, forType: .string)
+                                    },
+                                    onCopyBranch: { wt in
+                                        let pb = NSPasteboard.general
+                                        pb.clearContents()
+                                        pb.setString(wt.branch, forType: .string)
+                                    },
+                                    onRevealInFinder: { wt in
+                                        NSWorkspace.shared.activateFileViewerSelecting([wt.path])
+                                    },
+                                    onArchive: { wt in state.archiveWorktree(wt) },
+                                    onCleanupWorktrees: { onCleanupWorktrees(project.id) },
+                                    onDelete: { wt in state.deleteWorktree(wt) },
+                                    onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
+                                    showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
+                                    onActivateHarness: { wt, sessionId in
+                                        state.activateHarnessSession(
+                                            projectId: project.id,
+                                            worktreeId: wt.id,
+                                            sessionId: sessionId
                                         )
-                                    }
-                                },
-                                onRetryDelete: { wt in state.deleteWorktree(wt) },
-                                onSetGGWorktreeMode: { wt, mode in
-                                    state.setGGWorktreeMode(
-                                        projectId: project.id,
-                                        worktreeId: wt.id,
-                                        mode: mode
-                                    )
-                                },
-                                onRemoveFailed: { wt in
-                                    state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
-                                },
-                                onDropWorktree: { draggedId, destinationId in
-                                    state.projectsManager.reorderWorktree(
-                                        projectId: project.id,
-                                        movingId: draggedId,
-                                        destinationId: destinationId
-                                    )
-                                    state.saveProjects()
-                                },
-                                onDropProject: { draggedId, destinationId in
-                                    state.spacesManager.reorderProjectInActiveSpace(
-                                        movingId: draggedId,
-                                        destinationId: destinationId
-                                    )
-                                    state.saveSpaces()
-                                },
-                                attentionCount: attentionPresentation.count(for: project.id)
-                            )
-                        }
-                        Color.clear
-                            .frame(maxWidth: .infinity, minHeight: 40)
-                            .contentShape(Rectangle())
-                            .dropDestination(for: ProjectDragId.self) { items, _ in
-                                guard let draggedId = items.first?.id else { return false }
-                                state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
-                                state.saveSpaces()
-                                return true
+                                    },
+                                    onCopyError: { message in
+                                        let pb = NSPasteboard.general
+                                        pb.clearContents()
+                                        pb.setString(message, forType: .string)
+                                    },
+                                    onRetryCreate: { wt in
+                                        let retry = Self.retryCreateParameters(
+                                            operationState: state.projectsManager.operationState(for: wt.id),
+                                            defaultBase: state.config.worktrees.baseBranch
+                                        )
+                                        Task { @MainActor in
+                                            await state.createWorktree(
+                                                projectId: project.id,
+                                                base: retry.base,
+                                                branch: wt.branch,
+                                                destination: wt.path,
+                                                runStartup: false,
+                                                launchSurface: retry.launchSurface,
+                                                ggWorktreeMode: retry.ggWorktreeMode,
+                                                issueAttachment: retry.issueAttachment
+                                            )
+                                        }
+                                    },
+                                    onRetryDelete: { wt in state.deleteWorktree(wt) },
+                                    onSetGGWorktreeMode: { wt, mode in
+                                        state.setGGWorktreeMode(
+                                            projectId: project.id,
+                                            worktreeId: wt.id,
+                                            mode: mode
+                                        )
+                                    },
+                                    onRemoveFailed: { wt in
+                                        state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
+                                    },
+                                    onDropWorktree: { draggedId, destinationId in
+                                        state.projectsManager.reorderWorktree(
+                                            projectId: project.id,
+                                            movingId: draggedId,
+                                            destinationId: destinationId
+                                        )
+                                        state.saveProjects()
+                                    },
+                                    onDropProject: { draggedId, destinationId in
+                                        state.spacesManager.reorderProjectInActiveSpace(
+                                            movingId: draggedId,
+                                            destinationId: destinationId
+                                        )
+                                        state.saveSpaces()
+                                    },
+                                    attentionCount: attentionPresentation.count(for: project.id)
+                                )
                             }
+                            Color.clear
+                                .frame(maxWidth: .infinity, minHeight: 40)
+                                .contentShape(Rectangle())
+                                .dropDestination(for: ProjectDragId.self) { items, _ in
+                                    guard let draggedId = items.first?.id else { return false }
+                                    state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
+                                    state.saveSpaces()
+                                    return true
+                                }
+                        }
+                        .padding(.top, 8)
                     }
-                    .padding(.top, 8)
                 }
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerIndicator(
@@ -235,9 +241,7 @@ struct SidebarView: View {
                             onSettings()
                         },
                         onScrollPage: { offset in
-                            if state.switchToAdjacentSpace(offset: offset) {
-                                showTransientSpaceTitle()
-                            }
+                            pageSpace(offset: offset)
                         }
                     )
                     .contentShape(Rectangle())
@@ -248,9 +252,7 @@ struct SidebarView: View {
             .background {
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerScrollCaptureView { offset in
-                        if state.switchToAdjacentSpace(offset: offset) {
-                            showTransientSpaceTitle()
-                        }
+                        pageSpace(offset: offset)
                     }
                 }
             }
@@ -269,10 +271,16 @@ struct SidebarView: View {
             .onEnded { value in
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
                 let offset = value.translation.width < 0 ? 1 : -1
-                if state.switchToAdjacentSpace(offset: offset) {
-                    showTransientSpaceTitle()
-                }
+                pageSpace(offset: offset)
             }
+    }
+
+    private func pageSpace(offset: Int) {
+        let spaces = state.spacesManager.spaces
+        guard let current = spaces.firstIndex(where: { $0.id == state.spacesManager.activeSpaceId }),
+              let next = SpacePagerNavigation.destination(current: current, offset: offset, count: spaces.count)
+        else { return }
+        if state.switchToSpace(id: spaces[next].id) { showTransientSpaceTitle() }
     }
 
     nonisolated static func retryCreateParameters(
