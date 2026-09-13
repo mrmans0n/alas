@@ -89,6 +89,11 @@ struct SpacePagerIndicatorTests {
         #expect(SpacePagerLayout.offset(activeSpaceID: "third", spaces: spaces, pageWidth: 240) == -480)
     }
 
+    @Test func pagerStripExposesOnlyTheActiveSpace() {
+        #expect(SpacePagerLayout.isActive(spaceID: "first", activeSpaceID: "first"))
+        #expect(!SpacePagerLayout.isActive(spaceID: "second", activeSpaceID: "first"))
+    }
+
     @Test func spaceIconRejectsNerdFontPrivateUseGlyphs() {
         #expect(SpaceIcon.sanitized("\u{F015}", fallback: "🏠") == "🏠")
     }

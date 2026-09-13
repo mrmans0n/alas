@@ -83,6 +83,10 @@ enum SpacePagerNavigation {
 }
 
 enum SpacePagerLayout {
+    static func isActive(spaceID: String, activeSpaceID: String) -> Bool {
+        spaceID == activeSpaceID
+    }
+
     static func offset(activeSpaceID: String, spaces: [SpaceConfig], pageWidth: CGFloat) -> CGFloat {
         guard let index = spaces.firstIndex(where: { $0.id == activeSpaceID }) else { return 0 }
         return -CGFloat(index) * pageWidth
@@ -100,8 +104,12 @@ struct SpacePagerContent<Content: View>: View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 ForEach(spaces) { space in
+                    let isActive = SpacePagerLayout.isActive(spaceID: space.id, activeSpaceID: selection)
                     content(space.id)
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .allowsHitTesting(isActive)
+                        .disabled(!isActive)
+                        .accessibilityHidden(!isActive)
                 }
             }
             .offset(x: SpacePagerLayout.offset(
