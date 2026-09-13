@@ -707,12 +707,74 @@ extension AppState {
     func observeHarnessAttention(_ transition: HarnessActivityTransition) {
         // Forget can arrive after the tab or session owner has already been removed.
         guard let state = transition.state else {
+            cancelPendingHarnessAttention(for: transition.sessionID)
             for suffix in ["awaiting", "permission"] {
                 observeAttention(.inactive(sourceKey: .init(rawValue: "session:\(transition.sessionID):\(suffix)")), at: transition.occurredAt)
             }
             return
         }
-        guard let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner),
+        // Entering an awaiting-like state is held briefly: agents routinely
+        // emit awaiting → busy flurries, and writing through immediately
+        // makes the sidebar triangle flash and vanish. Snapshots are state
+        // reconciliation and land immediately. A non-positive settle
+        // interval bypasses the debounce (used by tests).
+        if !transition.isSnapshot,
+           harnessAttentionSettleInterval > 0,
+           state == .awaitingInput || state == .permissionRequest {
+            schedulePendingHarnessAttention(transition)
+            return
+        }
+        applyHarnessAttention(transition)
+    }
+
+    // MARK: Harness attention settle debounce
+
+    private func schedulePendingHarnessAttention(_ transition: HarnessActivityTransition) {
+        let sessionID = transition.sessionID
+        guard let resolution = attentionSessionResolution(for: sessionID, owner: transition.owner),
+              let context = attentionContext(for: resolution.worktree),
+              let state = transition.state,
+              AttentionProducer.harness(
+                  sessionID: sessionID, agent: transition.agent, state: state,
+                  body: transition.body, owner: context.owner, display: context.display
+              ).compactMap(\.activeSignal).first != nil else { return }
+        if pendingHarnessAttention[sessionID]?.state == transition.state {
+            pendingHarnessAttention[sessionID] = transition
+            harnessAttentionDebouncers[sessionID]?.poke()
+        } else {
+            // A different kind (e.g. permission → awaiting) supersedes the
+            // old pending signal entirely.
+            harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
+            pendingHarnessAttention[sessionID] = transition
+            let debouncer = DebounceTimer(interval: harnessAttentionSettleInterval, queue: .main)
+            debouncer.onFire = { [weak self] in
+                guard let self else { return }
+                self.harnessAttentionDebouncers.removeValue(forKey: sessionID)
+                guard let transition = self.pendingHarnessAttention.removeValue(forKey: sessionID) else { return }
+                self.applyPendingHarnessAttention(transition)
+            }
+            harnessAttentionDebouncers[sessionID] = debouncer
+            debouncer.poke()
+        }
+    }
+
+    /// A pending awaiting/permission signal only lands if the session is
+    /// still in that state when the settle window closes; anything else means
+    /// the state flapped and the badge should never have appeared.
+    private func applyPendingHarnessAttention(_ transition: HarnessActivityTransition) {
+        guard let current = harness.activityBySession[transition.sessionID]?.state,
+              current == transition.state else { return }
+        applyHarnessAttention(transition)
+    }
+
+    private func cancelPendingHarnessAttention(for sessionID: String) {
+        harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
+        pendingHarnessAttention.removeValue(forKey: sessionID)
+    }
+
+    private func applyHarnessAttention(_ transition: HarnessActivityTransition) {
+        guard let state = transition.state,
+              let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner),
               let context = attentionContext(for: resolution.worktree) else { return }
         let observations = AttentionProducer.harness(
             sessionID: transition.sessionID, agent: transition.agent, state: state,
