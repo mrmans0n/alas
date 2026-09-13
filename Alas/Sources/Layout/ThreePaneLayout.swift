@@ -22,6 +22,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     @State private var sidebarDragStartWidth: Double?
     @State private var rightDragStartWidth: Double?
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let sidebarMin: Double = 200
     private let sidebarMax: Double = 420
@@ -66,9 +67,17 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
 
             HStack(spacing: 0) {
                 if sizing.sidebarVisible {
+                    // On removal the sidebar keeps its last frame while the
+                    // center grows over it, so the center's leading edge is
+                    // what hides the lagging, fading content.
                     sidebar()
                         .frame(width: CGFloat(alignedSidebarWidth))
                         .frame(maxHeight: .infinity)
+                        .transition(PaneCollapseMotion.transition(
+                            edge: .leading,
+                            width: alignedSidebarWidth,
+                            reduceMotion: reduceMotion
+                        ))
                     DragHandle(
                         axis: .horizontal,
                         onDragChanged: { translation in
@@ -132,12 +141,27 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                             }
                         )
                     }
+                    // With the rail enabled this `if` never toggles on
+                    // collapse — only the frame width animates, and the rail
+                    // host slides its own body under the rail. The transition
+                    // covers the rail-less pane, which leaves the tree.
                     right(!sizing.rightVisible)
                         .frame(width: CGFloat(sizing.rightVisible ? alignedRightWidth : railSizing.railWidth))
                         .frame(maxHeight: .infinity)
+                        .transition(PaneCollapseMotion.transition(
+                            edge: .trailing,
+                            width: alignedRightWidth,
+                            reduceMotion: reduceMotion
+                        ))
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+            // Animate on the *effective* visibility so every trigger — menu
+            // shortcut, toolbar button, rail click, narrow-window auto-collapse
+            // — moves the same way, while gutter drags (which change widths,
+            // not visibility) stay immediate.
+            .animation(PaneCollapseMotion.animation(reduceMotion: reduceMotion), value: sizing.sidebarVisible)
+            .animation(PaneCollapseMotion.animation(reduceMotion: reduceMotion), value: sizing.rightVisible)
         }
     }
 }
