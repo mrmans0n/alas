@@ -87,8 +87,11 @@ enum SpacePagerLayout {
         spaceID == activeSpaceID
     }
 
-    static func allowsKeyboardFocus(spaceID: String, activeSpaceID: String) -> Bool {
-        isActive(spaceID: spaceID, activeSpaceID: activeSpaceID)
+    static func visibleSpaceIDs(previousSpaceID: String?, activeSpaceID: String, reduceMotion: Bool) -> Set<String> {
+        guard !reduceMotion, let previousSpaceID, previousSpaceID != activeSpaceID else {
+            return [activeSpaceID]
+        }
+        return [previousSpaceID, activeSpaceID]
     }
 
     static func offset(activeSpaceID: String, spaces: [SpaceConfig], pageWidth: CGFloat) -> CGFloat {
@@ -103,17 +106,20 @@ struct SpacePagerContent<Content: View>: View {
     let selection: String
     @ViewBuilder let content: (String) -> Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visibleSpaceIDs: Set<String> = []
+    @State private var hideInactivePagesTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 ForEach(spaces) { space in
                     let isActive = SpacePagerLayout.isActive(spaceID: space.id, activeSpaceID: selection)
+                    let isVisible = visibleSpaceIDs.isEmpty ? isActive : visibleSpaceIDs.contains(space.id)
                     content(space.id)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .allowsHitTesting(isActive)
-                        .focusable(SpacePagerLayout.allowsKeyboardFocus(spaceID: space.id, activeSpaceID: selection))
                         .accessibilityHidden(!isActive)
+                        .modifier(SpacePagerPageVisibility(isHidden: !isVisible))
                 }
             }
             .offset(x: SpacePagerLayout.offset(
@@ -124,6 +130,43 @@ struct SpacePagerContent<Content: View>: View {
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: selection)
         }
         .clipped()
+        .onAppear {
+            visibleSpaceIDs = [selection]
+        }
+        .onChange(of: selection) { previous, active in
+            hideInactivePagesTask?.cancel()
+            visibleSpaceIDs = SpacePagerLayout.visibleSpaceIDs(
+                previousSpaceID: previous,
+                activeSpaceID: active,
+                reduceMotion: reduceMotion
+            )
+            guard !reduceMotion else { return }
+            hideInactivePagesTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .seconds(0.25))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                visibleSpaceIDs = [active]
+            }
+        }
+        .onDisappear {
+            hideInactivePagesTask?.cancel()
+            hideInactivePagesTask = nil
+        }
+    }
+}
+
+private struct SpacePagerPageVisibility: ViewModifier {
+    let isHidden: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if isHidden {
+            content.hidden()
+        } else {
+            content
+        }
     }
 }
 
