@@ -53,6 +53,21 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Needs attention",
+                        desc: "Shows the attention inbox and repository attention counts."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.needsAttentionEnabled },
+                            set: { enabled in
+                                state.config.needsAttentionEnabled = enabled
+                                if !enabled {
+                                    state.isAttentionInboxOpen = false
+                                }
+                                state.saveConfig()
+                            }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")

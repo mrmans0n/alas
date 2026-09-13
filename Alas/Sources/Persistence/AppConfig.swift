@@ -58,6 +58,9 @@ struct AppConfig: Codable, Equatable {
     /// decoder force the new default exactly once, then respect whatever the
     /// user sets afterward. See `init(from:)`.
     var rightPaneRailDefaultApplied: Bool = true
+    /// Preview gate for the Needs Attention inbox and project affordances.
+    /// Events continue collecting while its presentation is disabled.
+    var needsAttentionEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -527,6 +530,7 @@ struct AppConfig: Codable, Equatable {
         runTabEnabled: false,
         rightPaneRailEnabled: true,
         rightPaneRailDefaultApplied: true,
+        needsAttentionEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -621,6 +625,7 @@ extension AppConfig {
              workspacesEnabled,
              runTabEnabled,
              rightPaneRailEnabled,
+             needsAttentionEnabled,
              rightPaneRailDefaultApplied,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -876,6 +881,8 @@ extension AppConfig {
             rightPaneRailEnabled = true
         }
         rightPaneRailDefaultApplied = true
+        // Needs Attention remains opt-in while its entry points are in preview.
+        needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

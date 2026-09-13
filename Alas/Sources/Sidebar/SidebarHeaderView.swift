@@ -9,6 +9,7 @@ struct SidebarHeaderView: View {
     let onHideSidebar: () -> Void
     var onNewWorkspace: (() -> Void)? = nil
     var attentionCount: Int = 0
+    var showsAttentionInbox = true
     @Binding var attentionInboxOpen: Bool
     var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
     var attentionLoadError: String? = nil
@@ -24,6 +25,7 @@ struct SidebarHeaderView: View {
          onHideSidebar: @escaping () -> Void,
          onNewWorkspace: (() -> Void)? = nil,
          attentionCount: Int = 0,
+         showsAttentionInbox: Bool = true,
          attentionInboxOpen: Binding<Bool> = .constant(false),
          attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
          attentionLoadError: String? = nil,
@@ -39,6 +41,7 @@ struct SidebarHeaderView: View {
         self.onHideSidebar = onHideSidebar
         self.onNewWorkspace = onNewWorkspace
         self.attentionCount = attentionCount
+        self.showsAttentionInbox = showsAttentionInbox
         self._attentionInboxOpen = attentionInboxOpen
         self.attentionAggregation = attentionAggregation
         self.attentionLoadError = attentionLoadError
@@ -94,7 +97,9 @@ struct SidebarHeaderView: View {
                     headerHovered: hovering
                 )
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
-                attentionToolbarButton
+                if showsAttentionInbox {
+                    attentionToolbarButton
+                }
                 if let onNewWorkspace {
                     Menu {
                         Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
@@ -127,7 +132,9 @@ struct SidebarHeaderView: View {
             Spacer(minLength: 0)
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
-                attentionToolbarButton
+                if showsAttentionInbox {
+                    attentionToolbarButton
+                }
                 Menu {
                     Menu("Sort worktrees") {
                         ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
