@@ -754,6 +754,39 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         scroller.minimap.onNavigationEnd?()
     }
 
+    @Test("Minimap drag mapping stays stable while earlier history is loaded")
+    func minimapDragDuringBackfill() {
+        let session = ACPSession(id: "backfill-minimap", agentId: "claude", worktreeId: "w", title: "t")
+        let tall = ACPMessage.agent(id: UUID(), StreamingText(String(repeating: "Long reply.\n\n", count: 100)))
+        session.replaceTranscriptMessages([
+            .user(id: UUID(), text: "prompt", attachments: []), tall,
+            .user(id: UUID(), text: "next", attachments: [])
+        ], messageIndexOffset: 100)
+        session.followsTranscriptTail = true
+        var host = makeHost(session: session)
+        host.showMinimap = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        let layout = ACPTranscriptMinimapLayout(messages: session.transcript.messages, offset: 100)
+        let destination = Double(layout.fraction(at: 101.5) / (1 - scroller.minimap.proportion))
+        #expect(destination < 1)
+        scroller.minimap.onNavigationStart?()
+        scroller.minimap.onNavigate?(destination)
+        #expect(coordinator.topVisibleMessageIdForTesting == tall.stableId)
+        session.transcript.prependMessages((0..<100).map { _ in
+            .user(id: UUID(), text: "older prompt", attachments: [])
+        })
+        coordinator.update(host: host)
+        scroller.minimap.onNavigate?(destination)
+        #expect(coordinator.topVisibleMessageIdForTesting == tall.stableId)
+        let position = scroller.scrollY
+        scroller.minimap.onNavigationEnd?()
+        #expect(abs(scroller.scrollY - position) < 1)
+        #expect(!session.followsTranscriptTail)
+    }
+
     @Test("Minimap targets skip plan entries that have no transcript row")
     func minimapSkipsHiddenPlans() {
         let session = ACPSession(id: "plan-minimap", agentId: "claude", worktreeId: "w", title: "t")

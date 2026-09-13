@@ -173,15 +173,19 @@ struct MinimapTests {
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
     }
 
-    @Test("Long transcript previews keep fallback marks bounded")
+    @Test("Long alternating conversations keep drawing marks bounded without hiding either speaker")
     @MainActor func transcriptPreviewBounded() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let transcript = ACPTranscript()
-        transcript.messages = (0..<10_000).map { _ in
-            .systemNotice(id: UUID(), text: "message")
+        transcript.messages = (0..<10_000).map { index in
+            index.isMultiple(of: 2)
+                ? .user(id: UUID(), text: "prompt", attachments: [])
+                : .agent(id: UUID(), StreamingText("reply"))
         }
         let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
-        #expect(drawing.marks.count < 3_000)
+        #expect(drawing.marks.count <= 2_048)
+        #expect(drawing.marks.contains { $0.rect.minX == 0 })
+        #expect(drawing.marks.contains { $0.rect.minX >= 24 })
     }
 
     @Test("Transcript blocks preserve consecutive prompts and reserve unloaded history")

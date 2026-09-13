@@ -97,28 +97,37 @@ final class ACPTranscriptMinimap {
         let assistantColor = NSColor(theme.color("fg-muted")).withAlphaComponent(0.38)
         let noticeColor = NSColor(theme.color("fg-faint")).withAlphaComponent(0.2)
         var drawing = MinimapDrawing(height: layout.height)
-        for block in layout.blocks {
-            let x: CGFloat
-            let width: CGFloat
-            let color: NSColor
-            switch block.role {
-            case .user:
-                x = 24
-                width = 64
-                color = userColor
-            case .assistant:
-                x = 0
-                width = 64
-                color = assistantColor
-            case .notice, .history:
-                x = 0
-                width = 88
-                color = noticeColor
+        // Dense histories share drawing buckets while navigation retains every turn.
+        // Keep both speaker lanes instead of sampling away short user prompts.
+        let bucketSize = max(1, Int(ceil(Double(layout.blocks.count) / 512)))
+        let roles: [ACPTranscriptMinimapLayout.Role] = [.history, .notice, .assistant, .user]
+        for start in stride(from: 0, to: layout.blocks.count, by: bucketSize) {
+            let bucket = layout.blocks[start..<min(layout.blocks.count, start + bucketSize)]
+            for role in roles {
+                guard let first = bucket.first(where: { $0.role == role }),
+                      let last = bucket.last(where: { $0.role == role }) else { continue }
+                let x: CGFloat
+                let width: CGFloat
+                let color: NSColor
+                switch role {
+                case .user:
+                    x = bucketSize > 1 ? 48 : 24
+                    width = bucketSize > 1 ? 40 : 64
+                    color = userColor
+                case .assistant:
+                    x = 0
+                    width = bucketSize > 1 ? 40 : 64
+                    color = assistantColor
+                case .notice, .history:
+                    x = 0
+                    width = 88
+                    color = noticeColor
+                }
+                drawing.marks.append(.init(
+                    rect: CGRect(x: x, y: first.y + 2, width: width, height: last.y + last.height - first.y - 4),
+                    color: color
+                ))
             }
-            drawing.marks.append(.init(
-                rect: CGRect(x: x, y: block.y + 2, width: width, height: block.height - 4),
-                color: color
-            ))
         }
         cachedDrawing = drawing
         return drawing
