@@ -45,6 +45,12 @@ enum ACPTranscriptQueuePolicy {
         guard src >= 0, src < queue.count, dst >= 0, dst <= queue.count, src != dst else { return false }
         if queue[src].status == .sending { return false }
         if queue.first?.status == .sending, dst == 0 { return false }
+        // Moving the last item "past the end" (dst == queue.count) is a
+        // no-op: removing it and reinserting at `min(dst, queue.count)`
+        // lands it in the exact slot it started in. Reject so "Move down"
+        // isn't shown as enabled on the tail item without ever reordering
+        // anything.
+        if src == queue.count - 1, dst == queue.count { return false }
         if let firstScheduled = queue.firstIndex(where: { $0.status == .pending && $0.scheduledAt != nil }),
            (queue[src].scheduledAt != nil || dst >= firstScheduled) {
             return false

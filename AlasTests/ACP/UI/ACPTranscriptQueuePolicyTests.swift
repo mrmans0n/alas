@@ -84,4 +84,20 @@ struct ACPTranscriptQueuePolicyTests {
         s.enqueue(blocks: [.text("a")])
         #expect(!ACPTranscriptQueuePolicy.canMoveQueueItem(from: 0, to: 0, queue: s.queue))
     }
+
+    @Test("canMoveQueueItem refuses moving the last item past the end (a no-op)")
+    func canMoveQueueItemRefusesLastItemPastEnd() {
+        // Regression: "Move down" on the tail item computes dst ==
+        // queue.count. Removing the item and reinserting at
+        // min(dst, queue.count) lands it back in the same trailing slot,
+        // so the affordance must be disabled rather than look live and
+        // silently do nothing.
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("b")])
+        s.enqueue(blocks: [.text("c")])
+        #expect(!ACPTranscriptQueuePolicy.canMoveQueueItem(from: 2, to: 3, queue: s.queue))
+        // A middle item moving one slot down IS a real reorder and stays allowed.
+        #expect(ACPTranscriptQueuePolicy.canMoveQueueItem(from: 1, to: 2, queue: s.queue))
+    }
 }
