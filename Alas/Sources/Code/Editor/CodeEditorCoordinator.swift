@@ -38,6 +38,7 @@ final class CodeEditorCoordinator {
     private var currentExternalEditable: Bool = false
     private var currentOriginatingWorktreeRoot: URL?
     private var currentOriginatingRelativePath: String?
+    private var lspBinding: EditorLSPBinding?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -121,16 +122,7 @@ final class CodeEditorCoordinator {
 
         hover = HoverFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -146,16 +138,7 @@ final class CodeEditorCoordinator {
         installHoverObservers(textView: textView)
         definition = DefinitionFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -207,16 +190,7 @@ final class CodeEditorCoordinator {
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -229,16 +203,7 @@ final class CodeEditorCoordinator {
         )
         completion = CompletionFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -486,6 +451,18 @@ final class CodeEditorCoordinator {
         self.buffer = buffer
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
+        if let worktreeID = currentWorktreeId, !buffer.isExternal {
+            lspBinding = EditorLSPBinding(
+                manager: appState.lsp,
+                buffer: buffer,
+                worktreeID: worktreeID,
+                flushPendingChanges: { [weak self] in
+                    await self?.flushPendingLSPDidChangeForCompletion()
+                }
+            )
+        } else {
+            lspBinding = nil
+        }
         let ext = LanguageServerRegistry.extensionKey(forPath: buffer.relativePath)
         let freshlyInferred = appState.lsp.language(forFileExtension: ext)
         // Layer a pre-existing override on top of the freshly inferred
@@ -616,6 +593,7 @@ final class CodeEditorCoordinator {
         hoverHighlight = nil
         completion?.cancelAndDismiss()
         completion = nil
+        lspBinding = nil
         textView?.hoverHandler = nil
         textView?.commandClickHandler = nil
         textView?.flagsChangedHandler = nil
@@ -702,6 +680,22 @@ final class CodeEditorCoordinator {
     }
 
     // MARK: - Edit propagation (highlight + didChange debouncer)
+
+    private func currentLSPClient() -> LSPClient? {
+        guard let language = currentLanguage else { return nil }
+        if let binding = lspBinding {
+            return binding.openedClient(language: language)
+        }
+        guard let absolutePath = currentExternalAbsolutePath,
+              let originatingRoot = currentOriginatingWorktreeRoot else {
+            return nil
+        }
+        return appState.lsp.openedClient(
+            forFile: URL(fileURLWithPath: absolutePath),
+            worktreeRoot: originatingRoot,
+            language: language
+        )
+    }
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
         didChangeTask?.cancel()

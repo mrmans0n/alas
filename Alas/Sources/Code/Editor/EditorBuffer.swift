@@ -1615,15 +1615,7 @@ final class EditorBuffer {
             notifyDidOpen()
             return
         }
-        guard initialLoadFinished,
-              !isExternal,
-              openedLanguage == nil,
-              let lsp,
-              let effective = effectiveLanguage
-        else { return }
-        openedLanguage = effective
-        let worktreeRoot = worktreeRoot
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
+        openRemoteLSPIfNeeded(fileURL: url, text: text)
     }
 
     func saveRecordingError() throws {
@@ -2047,17 +2039,20 @@ final class EditorBuffer {
         readOnly = false
     }
 
-    private func openRemoteLSPIfNeeded() {
+    /// Remote document attachment has exactly one lifecycle owner. Local
+    /// documents attach from `finishInitialLoad`; remote documents wait for a
+    /// successful remote read so didOpen never advertises a placeholder.
+    private func openRemoteLSPIfNeeded(fileURL: URL? = nil, text: String? = nil) {
         guard !isExternal,
               remoteHost != nil,
               openedLanguage == nil,
               let lsp,
               let language
         else { return }
-        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let url = fileURL ?? worktreeRoot.appendingPathComponent(relativePath)
         openedLanguage = language
-        let text = storage.string
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+        let documentText = text ?? storage.string
+        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: documentText) }
     }
 
     /// Load the file from disk, calling `completion` on the main actor

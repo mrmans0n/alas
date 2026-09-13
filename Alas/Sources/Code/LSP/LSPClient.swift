@@ -67,6 +67,9 @@ actor LSPClient {
         )
         let rawResult = try await sendRequest(method: "initialize", params: params)
         let caps = Self.decodeCapabilities(from: rawResult)
+        guard caps.positionEncoding == nil || caps.positionEncoding?.lowercased() == "utf-16" else {
+            throw LSPError.unsupportedPositionEncoding(caps.positionEncoding ?? "unknown")
+        }
         textDocumentSyncKind = caps.syncKind
         supportsDocumentFormatting = caps.supportsFormatting
         supportsPullDiagnostics = caps.supportsPullDiagnostics
@@ -272,9 +275,10 @@ actor LSPClient {
         syncKind: TextDocumentSyncKind,
         supportsFormatting: Bool,
         supportsPullDiagnostics: Bool,
-        completionTriggerCharacters: [String]
+        completionTriggerCharacters: [String],
+        positionEncoding: String?
     ) {
-        guard let data else { return (.full, false, false, []) }
+        guard let data else { return (.full, false, false, [], nil) }
         struct InitializeResult: Decodable {
             let capabilities: ServerCapabilities
         }
@@ -283,6 +287,7 @@ actor LSPClient {
             let documentFormattingProvider: DocumentFormattingProvider?
             let diagnosticProvider: DiagnosticProvider?
             let completionProvider: CompletionProvider?
+            let positionEncoding: String?
         }
         struct DiagnosticProvider: Decodable {
             let identifier: String?
@@ -333,7 +338,7 @@ actor LSPClient {
         }
 
         guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data) else {
-            return (.full, false, false, [])
+            return (.full, false, false, [], nil)
         }
         let syncKind: TextDocumentSyncKind = {
             guard let sync = result.capabilities.textDocumentSync else { return .full }
@@ -344,7 +349,7 @@ actor LSPClient {
         let supportsFormatting = result.capabilities.documentFormattingProvider?.isSupported ?? false
         let supportsPullDiagnostics = result.capabilities.diagnosticProvider != nil
         let triggerCharacters = result.capabilities.completionProvider?.triggerCharacters ?? []
-        return (syncKind, supportsFormatting, supportsPullDiagnostics, triggerCharacters)
+        return (syncKind, supportsFormatting, supportsPullDiagnostics, triggerCharacters, result.capabilities.positionEncoding)
     }
 
     private static func fullRange(for text: String) -> LSPRange {
@@ -397,7 +402,7 @@ actor LSPClient {
         }
         let rootUri = try jsonString(params.rootUri)
         let json = """
-        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
         """
         return Data(json.utf8)
     }
@@ -495,4 +500,5 @@ enum LSPError: Error {
     case transportClosed
     case responseError(LSPResponseError)
     case requestTimedOut
+    case unsupportedPositionEncoding(String)
 }
