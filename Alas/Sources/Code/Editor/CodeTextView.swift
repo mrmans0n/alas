@@ -43,6 +43,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var increaseFontSizeHandler: (() -> Void)?
     var decreaseFontSizeHandler: (() -> Void)?
     var resetFontSizeHandler: (() -> Void)?
+    var editorCommandRouter: EditorCommandRouter?
+    private var commandTargetRange: NSRange?
+    private var commandStatusPopover: NSPopover?
 
     private var multiCursorSelectedRanges: [NSValue]?
     private var possibleColumnSelectionDrag: ColumnSelectionDrag?
@@ -61,6 +64,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     @objc func increaseFontSize(_ sender: Any?) { increaseFontSizeHandler?() }
     @objc func decreaseFontSize(_ sender: Any?) { decreaseFontSizeHandler?() }
     @objc func resetFontSize(_ sender: Any?)    { resetFontSizeHandler?() }
+    @objc func goToDefinition(_ sender: Any?) { invokeEditorCommand(.definition) }
+    @objc func goToTypeDefinition(_ sender: Any?) { invokeEditorCommand(.typeDefinition) }
+    @objc func goToImplementation(_ sender: Any?) { invokeEditorCommand(.implementation) }
+    @objc func findReferences(_ sender: Any?) { invokeEditorCommand(.references) }
+    @objc func renameSymbol(_ sender: Any?) { invokeEditorCommand(.rename) }
+    @objc func showCodeActions(_ sender: Any?) { invokeEditorCommand(.codeActions) }
+    @objc func formatSelection(_ sender: Any?) { invokeEditorCommand(.formatSelection) }
+    @objc func formatDocument(_ sender: Any?) { invokeEditorCommand(.formatDocument) }
+    @objc func showHover(_ sender: Any?) { invokeEditorCommand(.hover) }
+    @objc func goBack(_ sender: Any?) { invokeEditorCommand(.back) }
+    @objc func goForward(_ sender: Any?) { invokeEditorCommand(.forward) }
+    @objc func nextProblem(_ sender: Any?) { invokeEditorCommand(.nextProblem) }
+    @objc func previousProblem(_ sender: Any?) { invokeEditorCommand(.previousProblem) }
+    @objc func toggleInlayHints(_ sender: Any?) { invokeEditorCommand(.toggleInlayHints) }
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)
@@ -84,6 +101,155 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         refreshWarningToolTip()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let nativeMenu = super.menu(for: event) ?? NSMenu()
+        guard let editorCommandRouter else { return nativeMenu }
+
+        let point = convert(event.locationInWindow, from: nil)
+        let offset = utf16Offset(at: point) ?? selectedRange().location
+        commandTargetRange = EditorCommandRouter.targetRange(
+            clickOffset: offset,
+            selection: selectedRange()
+        )
+
+        let commands = editorCommandRouter.availableCommands()
+        guard !commands.isEmpty else {
+            if !editorCommandRouter.serverIsReady,
+               EditorCommandID.allCases.contains(where: editorCommandRouter.isSupported) {
+                nativeMenu.addItem(.separator())
+                let unavailable = NSMenuItem(title: "Language server unavailable", action: nil, keyEquivalent: "")
+                unavailable.isEnabled = false
+                nativeMenu.addItem(unavailable)
+            }
+            return nativeMenu
+        }
+
+        nativeMenu.addItem(.separator())
+        appendCommandGroup([.definition, .typeDefinition, .implementation, .references], to: nativeMenu, available: commands)
+        appendCommandGroup([.rename, .codeActions, .formatSelection, .formatDocument], to: nativeMenu, available: commands)
+        appendCommandGroup([.hover, .nextProblem, .previousProblem], to: nativeMenu, available: commands)
+        return nativeMenu
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard let command = Self.editorCommand(for: item.action) else {
+            return super.validateUserInterfaceItem(item)
+        }
+        return editorCommandRouter?.availableCommands().contains(command) == true
+    }
+
+    private func appendCommandGroup(_ commands: [EditorCommandID], to menu: NSMenu, available: [EditorCommandID]) {
+        let group = commands.filter { available.contains($0) }
+        guard !group.isEmpty else { return }
+        if menu.items.last?.isSeparatorItem == false { menu.addItem(.separator()) }
+        for command in group {
+            let item = NSMenuItem(
+                title: Self.title(for: command),
+                action: Self.selector(for: command),
+                keyEquivalent: Self.keyEquivalent(for: command)
+            )
+            item.keyEquivalentModifierMask = Self.keyEquivalentModifiers(for: command)
+            item.target = self
+            menu.addItem(item)
+        }
+    }
+
+    private func invokeEditorCommand(_ command: EditorCommandID) {
+        let range = commandTargetRange ?? selectedRange()
+        editorCommandRouter?.invoke(command, range: range)
+        commandTargetRange = nil
+    }
+
+    func triggerCommandClick(atUTF16Offset offset: Int) {
+        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: string),
+              let rect = firstRect(for: position)
+        else { return }
+        commandClickHandler?(NSPoint(x: rect.midX, y: rect.midY))
+    }
+
+    func triggerHover(atUTF16Offset offset: Int) {
+        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: string),
+              let rect = firstRect(for: position)
+        else { return }
+        hoverHandler?(NSPoint(x: rect.midX, y: rect.midY))
+    }
+
+    func showCommandStatus(_ message: String) {
+        commandStatusPopover?.close()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSViewController()
+        popover.contentViewController?.view = NSTextField(labelWithString: message)
+        popover.contentViewController?.view.frame = NSRect(x: 0, y: 0, width: 220, height: 28)
+        let range = commandTargetRange ?? selectedRange()
+        let rect = (TextEditCoordinates.lspPosition(utf16Offset: range.location, in: string)).flatMap(firstRect(for:))
+            ?? NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+        popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
+        commandStatusPopover = popover
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak popover] in popover?.close() }
+    }
+
+    private static func editorCommand(for selector: Selector?) -> EditorCommandID? {
+        guard let selector else { return nil }
+        return EditorCommandID.allCases.first { Self.selector(for: $0) == selector }
+    }
+
+    static func selector(for command: EditorCommandID) -> Selector {
+        switch command {
+        case .definition: #selector(goToDefinition(_:))
+        case .typeDefinition: #selector(goToTypeDefinition(_:))
+        case .implementation: #selector(goToImplementation(_:))
+        case .references: #selector(findReferences(_:))
+        case .rename: #selector(renameSymbol(_:))
+        case .codeActions: #selector(showCodeActions(_:))
+        case .formatSelection: #selector(formatSelection(_:))
+        case .formatDocument: #selector(formatDocument(_:))
+        case .hover: #selector(showHover(_:))
+        case .back: #selector(goBack(_:))
+        case .forward: #selector(goForward(_:))
+        case .nextProblem: #selector(nextProblem(_:))
+        case .previousProblem: #selector(previousProblem(_:))
+        case .toggleInlayHints: #selector(toggleInlayHints(_:))
+        }
+    }
+
+    private static func title(for command: EditorCommandID) -> String {
+        switch command {
+        case .definition: "Go to Definition"
+        case .typeDefinition: "Go to Type Definition"
+        case .implementation: "Go to Implementation"
+        case .references: "Find References"
+        case .rename: "Rename Symbol"
+        case .codeActions: "Code Actions"
+        case .formatSelection: "Format Selection"
+        case .formatDocument: "Format Document"
+        case .hover: "Show Hover"
+        case .back: "Back"
+        case .forward: "Forward"
+        case .nextProblem: "Next Problem"
+        case .previousProblem: "Previous Problem"
+        case .toggleInlayHints: "Toggle Inlay Hints"
+        }
+    }
+
+    private static func keyEquivalent(for command: EditorCommandID) -> String {
+        switch command {
+        case .definition: "\u{F70F}"
+        case .references: "\u{F70F}"
+        case .rename: "\u{F705}"
+        case .codeActions: "\r"
+        default: ""
+        }
+    }
+
+    private static func keyEquivalentModifiers(for command: EditorCommandID) -> NSEvent.ModifierFlags {
+        switch command {
+        case .references: [.shift]
+        case .codeActions: [.option]
+        default: []
+        }
     }
 
     private func refreshWarningToolTip() {

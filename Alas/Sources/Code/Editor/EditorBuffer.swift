@@ -1780,6 +1780,13 @@ final class EditorBuffer {
         return true
     }
 
+    /// Applies a previously validated explicit formatting response without
+    /// saving the buffer. The coordinator sends the matching didChange after
+    /// this returns so the server keeps the open document authoritative.
+    func applyExplicitFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
+        applyFormattingEdits(edits)
+    }
+
     // MARK: - Snapshot / restore (hot-exit)
 
     private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {

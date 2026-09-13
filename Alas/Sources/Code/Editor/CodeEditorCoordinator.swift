@@ -39,6 +39,8 @@ final class CodeEditorCoordinator {
     private var currentOriginatingWorktreeRoot: URL?
     private var currentOriginatingRelativePath: String?
     private var lspBinding: EditorLSPBinding?
+    private var editorCommandRouter: EditorCommandRouter?
+    private var editorCommandStatusTask: Task<Void, Never>?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -238,6 +240,7 @@ final class CodeEditorCoordinator {
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
+        installEditorCommands(on: textView)
 
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
@@ -602,6 +605,10 @@ final class CodeEditorCoordinator {
         completion?.cancelAndDismiss()
         completion = nil
         lspBinding = nil
+        editorCommandStatusTask?.cancel()
+        editorCommandStatusTask = nil
+        editorCommandRouter = nil
+        textView?.editorCommandRouter = nil
         textView?.hoverHandler = nil
         textView?.commandClickHandler = nil
         textView?.flagsChangedHandler = nil
@@ -685,6 +692,92 @@ final class CodeEditorCoordinator {
         }
         hoverObservers.removeAll()
         textView?.escapeHandler = nil
+    }
+
+    // MARK: - Editor commands
+
+    private func installEditorCommands(on textView: CodeTextView) {
+        let router = EditorCommandRouter()
+        router.register(.definition) { [weak textView] range in
+            textView?.triggerCommandClick(atUTF16Offset: range.location)
+        }
+        router.register(.hover) { [weak textView] range in
+            textView?.triggerHover(atUTF16Offset: range.location)
+        }
+        router.register(.formatDocument) { [weak self] range in
+            self?.formatDocument(range: range)
+        }
+        editorCommandRouter = router
+        textView.editorCommandRouter = router
+        refreshEditorCommandCapabilities()
+    }
+
+    private func refreshEditorCommandCapabilities() {
+        guard let router = editorCommandRouter else { return }
+        guard let client = currentLSPClient() else {
+            router.update(capabilities: .empty, isServerReady: false)
+            return
+        }
+        Task { [weak self, weak router] in
+            let capabilities = await client.capabilities
+            let isReady = await client.isReady
+            await MainActor.run {
+                guard let self, let router, self.editorCommandRouter === router else { return }
+                router.update(capabilities: capabilities, isServerReady: isReady)
+            }
+        }
+    }
+
+    private func trackEditorCommandAvailability(for client: LSPClient) {
+        editorCommandStatusTask?.cancel()
+        let router = editorCommandRouter
+        editorCommandStatusTask = Task { [weak self, weak router] in
+            while !Task.isCancelled {
+                let capabilities = await client.capabilities
+                let isReady = await client.isReady
+                await MainActor.run {
+                    guard let self, let router, self.editorCommandRouter === router else { return }
+                    router.update(capabilities: capabilities, isServerReady: isReady)
+                }
+                guard isReady else { return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
+    private func formatDocument(range: NSRange) {
+        guard let textView, let buffer else { return }
+        Task { [weak self, weak textView, weak buffer] in
+            guard let self,
+                  let textView,
+                  let buffer,
+                  let request = await self.synchronizeLSPRequest(range: range)
+            else {
+                await MainActor.run { textView?.showCommandStatus("Language server unavailable") }
+                return
+            }
+            do {
+                let edits = try await request.0.formatting(
+                    uri: request.1.document.uri,
+                    options: LSPFormattingOptions(tabSize: 4, insertSpaces: true)
+                )
+                guard self.isLSPRequestCurrent(request.1) else { return }
+                await MainActor.run {
+                    guard self.isLSPRequestCurrent(request.1) else { return }
+                    guard !edits.isEmpty else {
+                        textView.showCommandStatus("No formatting changes")
+                        return
+                    }
+                    guard buffer.applyExplicitFormattingEdits(edits) else {
+                        textView.showCommandStatus("Could not apply formatting")
+                        return
+                    }
+                    self.scheduleEditPropagation(edit: nil)
+                }
+            } catch {
+                await MainActor.run { textView.showCommandStatus("Formatting failed") }
+            }
+        }
     }
 
     // MARK: - Edit propagation (highlight + didChange debouncer)
@@ -917,6 +1010,11 @@ final class CodeEditorCoordinator {
                   self.currentLanguage == language,
                   let client else { return }
             await self.subscribeDiagnostics(for: client, theme: theme)
+            let capabilities = await client.capabilities
+            let isReady = await client.isReady
+            guard let router = self.editorCommandRouter else { return }
+            router.update(capabilities: capabilities, isServerReady: isReady)
+            self.trackEditorCommandAvailability(for: client)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
             if await client.supportsPullDiagnostics {
                 self.startPullDiagnosticsIfNeeded(for: client, uri: url.lspURI, theme: theme)

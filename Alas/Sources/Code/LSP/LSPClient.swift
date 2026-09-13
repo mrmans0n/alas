@@ -17,6 +17,7 @@ actor LSPClient {
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
+    private(set) var capabilities: LSPCapabilities = .empty
     private(set) var supportsDocumentFormatting: Bool = false
     private(set) var supportsPullDiagnostics: Bool = false
     private(set) var completionTriggerCharacters: [String] = []
@@ -71,7 +72,8 @@ actor LSPClient {
             throw LSPError.unsupportedPositionEncoding(caps.positionEncoding ?? "unknown")
         }
         textDocumentSyncKind = caps.syncKind
-        supportsDocumentFormatting = caps.supportsFormatting
+        capabilities = LSPCapabilities.fromInitializeResult(rawResult)
+        supportsDocumentFormatting = capabilities.supports(.formatDocument)
         supportsPullDiagnostics = caps.supportsPullDiagnostics
         completionTriggerCharacters = caps.completionTriggerCharacters
         try sendNotification(method: "initialized", params: [String: Any]())

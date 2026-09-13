@@ -64,6 +64,7 @@ struct AlasApp: App {
         .defaultSize(width: 1320, height: 820)
         .commands {
             appCommands
+            EditorCommands()
         }
 
         Window("Settings", id: "settings") {

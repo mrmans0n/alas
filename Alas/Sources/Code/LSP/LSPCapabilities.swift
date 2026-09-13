@@ -1,0 +1,103 @@
+import Foundation
+
+enum EditorCommandID: String, CaseIterable, Sendable {
+    case definition
+    case typeDefinition
+    case implementation
+    case references
+    case rename
+    case codeActions
+    case formatSelection
+    case formatDocument
+    case hover
+    case back
+    case forward
+    case nextProblem
+    case previousProblem
+    case toggleInlayHints
+}
+
+/// Immutable server capability snapshot captured from `initialize`.
+struct LSPCapabilities: Equatable, Sendable {
+    private let supportedCommands: Set<EditorCommandID>
+
+    static let empty = LSPCapabilities(supportedCommands: [])
+
+    init(supportedCommands: Set<EditorCommandID>) {
+        self.supportedCommands = supportedCommands
+    }
+
+    init(json: Data) throws {
+        let providers = try JSONDecoder().decode(Providers.self, from: json)
+        self.init(providers: providers)
+    }
+
+    static func fromInitializeResult(_ json: Data?) -> LSPCapabilities {
+        guard let json,
+              let result = try? JSONDecoder().decode(InitializeResult.self, from: json)
+        else {
+            return .empty
+        }
+        return LSPCapabilities(providers: result.capabilities)
+    }
+
+    func supports(_ command: EditorCommandID) -> Bool {
+        supportedCommands.contains(command)
+    }
+
+    private init(providers: Providers) {
+        var commands: Set<EditorCommandID> = []
+        if providers.definitionProvider?.isSupported == true { commands.insert(.definition) }
+        if providers.typeDefinitionProvider?.isSupported == true { commands.insert(.typeDefinition) }
+        if providers.implementationProvider?.isSupported == true { commands.insert(.implementation) }
+        if providers.referencesProvider?.isSupported == true { commands.insert(.references) }
+        if providers.renameProvider?.isSupported == true { commands.insert(.rename) }
+        if providers.codeActionProvider?.isSupported == true { commands.insert(.codeActions) }
+        if providers.documentRangeFormattingProvider?.isSupported == true { commands.insert(.formatSelection) }
+        if providers.documentFormattingProvider?.isSupported == true { commands.insert(.formatDocument) }
+        if providers.hoverProvider?.isSupported == true { commands.insert(.hover) }
+        if providers.inlayHintProvider?.isSupported == true { commands.insert(.toggleInlayHints) }
+        self.init(supportedCommands: commands)
+    }
+
+    private struct InitializeResult: Decodable {
+        let capabilities: Providers
+    }
+
+    private struct Providers: Decodable {
+        let hoverProvider: Provider?
+        let definitionProvider: Provider?
+        let typeDefinitionProvider: Provider?
+        let implementationProvider: Provider?
+        let referencesProvider: Provider?
+        let renameProvider: Provider?
+        let codeActionProvider: Provider?
+        let documentRangeFormattingProvider: Provider?
+        let documentFormattingProvider: Provider?
+        let inlayHintProvider: Provider?
+    }
+
+    private enum Provider: Decodable {
+        case unsupported
+        case supported
+
+        var isSupported: Bool {
+            switch self {
+            case .unsupported: false
+            case .supported: true
+            }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(Bool.self) {
+                self = value ? .supported : .unsupported
+                return
+            }
+            _ = try decoder.container(keyedBy: EmptyCodingKeys.self)
+            self = .supported
+        }
+
+        private enum EmptyCodingKeys: CodingKey {}
+    }
+}
