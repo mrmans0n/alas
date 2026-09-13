@@ -41,6 +41,7 @@ final class TabsManager {
     /// Runtime navigation state belongs to the worktree rather than an editor
     /// view, so a reference search survives tab switches and view recreation.
     private var navigationStores: [String: EditorNavigationStore] = [:]
+    @ObservationIgnored private var workspaceUndoCoordinators: [String: WorkspaceEditUndoCoordinator] = [:]
     /// `true` once `loadAll` has been called at least once, meaning any
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
@@ -107,6 +108,16 @@ final class TabsManager {
         let store = EditorNavigationStore()
         navigationStores[worktreeId] = store
         return store
+    }
+
+    func workspaceEditUndoCoordinator(forWorktreeId worktreeId: String, worktreeRoot: URL) -> WorkspaceEditUndoCoordinator {
+        if let coordinator = workspaceUndoCoordinators[worktreeId] { return coordinator }
+        let access = TabsWorkspaceEditUndoAccess(tabs: self, worktreeID: worktreeId, root: worktreeRoot)
+        let coordinator = WorkspaceEditUndoCoordinator(access: access, journal: WorkspaceEditJournal()) { [weak self] document in
+            self?.workspaceEditBuffer(for: document)
+        }
+        workspaceUndoCoordinators[worktreeId] = coordinator
+        return coordinator
     }
 
     /// Opens an LSP target using the worktree's explicit host context. In

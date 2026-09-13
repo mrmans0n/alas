@@ -6,6 +6,20 @@ import AppKit
 /// dirty tracking, save, file-watch, and LSP `didChange` are all
 /// orchestrated by the buffer + coordinator pair.
 final class CodeTextView: NSTextView, FontSizeResponder {
+    private weak var undoBuffer: EditorBuffer?
+    private var suppressViewUndo = false
+    override var undoManager: UndoManager? {
+        if suppressViewUndo, undoBuffer != nil { return nil }
+        return undoBuffer?.undoManager ?? super.undoManager
+    }
+
+    func bindUndo(to buffer: EditorBuffer?) {
+        // Disable view-targeted AppKit inverses before exposing live history.
+        // Toggling allowsUndo after installing the replacement can clear it.
+        undoBuffer = nil
+        if allowsUndo { allowsUndo = false }
+        undoBuffer = buffer
+    }
     enum CompletionKeyAction: Equatable {
         case acceptTop
         case acceptSelected
@@ -60,6 +74,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     private static let columnSelectionDragThreshold: CGFloat = 4
+
+    @objc func undo(_ sender: Any?) { undoManager?.undo() }
+    @objc func redo(_ sender: Any?) { undoManager?.redo() }
 
     @objc func increaseFontSize(_ sender: Any?) { increaseFontSizeHandler?() }
     @objc func decreaseFontSize(_ sender: Any?) { decreaseFontSizeHandler?() }
@@ -479,8 +496,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        let shouldChange = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
-        if shouldChange { pendingCompletionEditRange = affectedCharRange }
+        guard undoBuffer?.undoManager.workspaceActionInFlight != true else { return false }
+        let shouldChange: Bool
+        suppressViewUndo = true
+        shouldChange = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        suppressViewUndo = false
+        if shouldChange {
+            pendingCompletionEditRange = affectedCharRange
+            if let replacementString { undoBuffer?.registerTextUndo(range: affectedCharRange, replacement: replacementString) }
+        }
         return shouldChange
     }
 

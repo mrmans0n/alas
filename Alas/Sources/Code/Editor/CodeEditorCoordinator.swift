@@ -447,6 +447,7 @@ final class CodeEditorCoordinator {
     }
 
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        textView?.bindUndo(to: nil)
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
         let isRebind = self.buffer != nil
@@ -460,6 +461,7 @@ final class CodeEditorCoordinator {
             }
         }
         self.buffer = buffer
+        textView?.bindUndo(to: buffer)
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
         if let worktreeID = currentWorktreeId, !buffer.isExternal {
@@ -491,11 +493,8 @@ final class CodeEditorCoordinator {
         if isRebind {
             // Drop any state captured against the previous buffer before we
             // start the highlight: stale diagnostics would otherwise be
-            // re-applied to the new storage by the async highlight task, and
-            // stale undo records would let Undo/Redo mutate the wrong tab
-            // because the NSUndoManager belongs to the (reused) NSTextView.
+            // re-applied to the new storage by the async highlight task.
             diagnosticsFeature.reset()
-            textView?.undoManager?.removeAllActions()
             textView?.setSelectedRange(NSRange(location: 0, length: 0))
         }
         applyBaseStyle(theme: theme)
@@ -567,6 +566,7 @@ final class CodeEditorCoordinator {
 
     func detach() {
         let detachedTextView = textView
+        textView?.bindUndo(to: nil)
         saveViewState()
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
@@ -623,7 +623,6 @@ final class CodeEditorCoordinator {
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
-        textView?.undoManager?.removeAllActions()
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file

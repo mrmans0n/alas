@@ -1,0 +1,330 @@
+import AppKit
+import Testing
+@testable import Alas
+
+@MainActor
+@Suite(.serialized)
+struct WorkspaceEditUndoTests {
+    @Test func oneAsyncInverseRunsAtATime() async throws {
+        let f = try WorkspaceEditFixture(host: "ssh-host")
+        defer { f.remove() }
+        guard case .applied(let id) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
+        return }
+        let access = PausingUndoAccess(base: f.access)
+        let undo = WorkspaceEditUndoCoordinator(access: access, journal: f.journal, bufferForDocument: { _ in nil })
+        undo.register(operationID: id, affectedDocuments: [f.a, f.b])
+        access.pauseNextSnapshot = true
+        let first = Task { await undo.undo(operationID: id) }
+        defer { access.resume()
+        first.cancel() }
+        for _ in 0..<100 where access.continuation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(undo.isRunning)
+        #expect(await undo.undo(operationID: id) == .conflict([f.a, f.b]))
+        #expect(f.access.files[f.b]?.content == Data("new disk".utf8))
+        access.resume()
+        #expect(await first.value == .applied(id))
+        #expect(f.access.files[f.b]?.content == Data("old disk".utf8))
+    }
+
+    @Test func unconfirmedJournalCannotArmUndo() throws {
+        let f = try WorkspaceEditFixture()
+        defer { f.remove() }
+        let record = try f.journal.recordPrepared(f.plan)
+        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: { _ in nil })
+        undo.register(operationID: record.id, affectedDocuments: [f.a, f.b])
+        #expect(undo.retainedJournalIDs.isEmpty)
+        #expect(f.access.calls.isEmpty)
+    }
+
+    @Test func compoundResourceUndoAndRedoPreserveBufferIdentity() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let a = f.documents[0]
+        let d = EditorDocumentID(host: nil, worktreeID: "w", uri: f.root.appendingPathComponent("d.txt").lspURI)
+        let source = try await f.access.snapshot(a)
+        let missing = try await f.access.snapshot(d)
+        let emptySource = source.removingResource(keepingBuffer: false)
+        let plan = WorkspaceEditPlan(steps: [
+            .init(kind: .rename, document: a, destination: d, before: source, after: source.replacing(document: d, content: source.content), destinationBefore: missing, annotationID: nil, annotationIDs: [], resourceOptions: nil),
+            .init(kind: .create, document: a, destination: nil, before: emptySource, after: emptySource.replacing(content: Data()), destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        ], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        guard case .applied(let id) = await f.undo.executor.apply(plan) else { Issue.record("Resource apply failed")
+        return }
+        f.undo.register(operationID: id, affectedDocuments: [a, d])
+        #expect(f.a.relativePath == "d.txt")
+        #expect(await f.undo.undo(operationID: id) == .applied(id))
+        #expect(f.a.relativePath == "a.txt")
+        #expect(f.a.storage.string == "old")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("a.txt"), encoding: .utf8) == "old")
+        #expect(!FileManager.default.fileExists(atPath: f.root.appendingPathComponent("d.txt").path))
+        f.type("later", in: f.a)
+        #expect(await f.undo.redo(operationID: id) == .conflict([a]))
+        f.a.undoManager.undo()
+        #expect(await f.undo.redo(operationID: id) == .applied(id))
+        #expect(f.a.relativePath == "d.txt")
+        #expect(try Data(contentsOf: f.root.appendingPathComponent("a.txt")).isEmpty)
+    }
+
+    @Test func editableExternalBufferKeepsUndoAfterViewReplacement() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("undo-external-\(UUID()).txt")
+        try Data("old".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let buffer = EditorBuffer(externalAbsoluteURL: file, editable: true)
+        defer { buffer.close(persistDirtySnapshot: false) }
+        func view() -> CodeTextView {
+            let layout = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+            layout.addTextContainer(container)
+            buffer.storage.addLayoutManager(layout)
+            let view = CodeTextView(frame: .zero, textContainer: container)
+            view.bindUndo(to: buffer)
+            return view
+        }
+        let first = view()
+        first.insertText("new", replacementRange: NSRange(location: 0, length: 3))
+        first.bindUndo(to: nil)
+        let second = view()
+        #expect(second.validateUserInterfaceItem(NSMenuItem(title: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "")))
+        second.undoManager?.undo()
+        #expect(buffer.storage.string == "old")
+        second.undoManager?.redo()
+        #expect(buffer.storage.string == "new")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "old")
+    }
+
+    @Test func worktreeOwnsOneUndoCoordinatorAcrossBufferReopen() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let first = f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root)
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        let reopened = f.tabs.buffer(worktreeId: "w", tabId: "reopened-a", worktreeRoot: f.root, relativePath: "a.txt")
+        await reopened.awaitLoadForTesting()
+        defer { reopened.close(persistDirtySnapshot: false) }
+        #expect(f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root) === first)
+        #expect(f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "other", worktreeRoot: f.root) !== first)
+        #expect(!reopened.undoManager.canUndo)
+    }
+
+    @Test func workspaceUndoWaitsForLaterTypingAndChangesUnopenedDisk() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        f.type("new later", in: f.a)
+        #expect(await f.undo.undo(operationID: id) == .conflict([f.documents[0]]))
+        #expect(f.a.storage.string == "new later")
+        f.a.undoManager.undo()
+        #expect(f.a.storage.string == "new")
+        #expect(await f.undo.undo(operationID: id) == .applied(id))
+        #expect(f.a.storage.string == "old")
+        #expect(f.b.storage.string == "old")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "old")
+        #expect(await f.undo.redo(operationID: id) == .applied(id))
+        #expect(f.a.storage.string == "new")
+        #expect(f.b.storage.string == "new")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "new")
+    }
+
+    @Test func duplicateMarkersCannotReplayAndDiskConflictKeepsUndoAvailable() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        try Data("outside".utf8).write(to: f.root.appendingPathComponent("c.txt"))
+        #expect(await f.undo.undo(operationID: id) == .conflict([f.documents[2]]))
+        #expect(f.a.undoManager.canUndo)
+        #expect(f.a.storage.string == "new")
+        try Data("new".utf8).write(to: f.root.appendingPathComponent("c.txt"))
+        f.a.undoManager.undo()
+        f.b.undoManager.undo()
+        for _ in 0..<100 where f.undo.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
+        // Marker callbacks start asynchronous work on the next actor turn.
+        for _ in 0..<100 where f.a.storage.string != "old" { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(f.a.storage.string == "old")
+        #expect(f.b.storage.string == "old")
+        #expect(try f.journal.records().filter { $0.status == .applied }.count == 2)
+        #expect(await f.undo.undo(operationID: id) != .applied(id))
+        f.b.undoManager.redo()
+        for _ in 0..<100 where f.b.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(f.a.storage.string == "new")
+        #expect(f.b.storage.string == "new")
+    }
+
+    @Test func closedTabRemainsRecoverableWithoutOverwritingDiscardedText() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        #expect(await f.undo.undo(operationID: id) == .conflict([f.documents[0]]))
+        #expect(f.b.storage.string == "new")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("a.txt"), encoding: .utf8) == "old")
+        #expect(f.b.undoManager.canUndo)
+    }
+
+    @Test func unknownSSHUndoRetainsOriginalMarkerAndRecoveryJournal() async throws {
+        let f = try WorkspaceEditFixture(host: "ssh-host")
+        defer { f.remove() }
+        guard case .applied(let id) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
+        return }
+        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: { _ in nil })
+        undo.register(operationID: id, affectedDocuments: [f.a, f.b])
+        f.access.disconnectAfterWrite = f.b
+        guard case .recoveryRequired(let recoveryID, _) = await undo.undo(operationID: id) else { Issue.record("Expected unknown SSH result")
+        return }
+        #expect(recoveryID != id)
+        #expect(undo.retainedJournalIDs.contains(id))
+        #expect(undo.retainedJournalIDs.contains(recoveryID))
+        let writes = f.access.calls.filter { $0.hasPrefix("write:") }.count
+        guard case .recoveryRequired = await undo.undo(operationID: id) else { Issue.record("Expected retained unknown result")
+        return }
+        #expect(f.access.calls.filter { $0.hasPrefix("write:") }.count == writes)
+        f.access.disconnected = false
+        f.access.disconnectAfterWrite = nil
+        guard case .recovered = await undo.recover(operationID: id) else { Issue.record("Expected explicit recovery after reconnect")
+        return }
+        #expect(f.access.files[f.b]?.content == Data("new disk".utf8))
+        #expect(await undo.undo(operationID: id) == .applied(id))
+        #expect(f.access.files[f.b]?.content == Data("old disk".utf8))
+    }
+
+    @Test func formattingAndEarlierTypingKeepTheirOwnUndoGroups() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        f.type("typed", in: f.a)
+        let config = AppConfig.Code(fontFamily: "SF Mono", fontSize: 13, formatOnSave: true, showLineNumbers: true, languageServers: [], dismissedInstallNudges: [], userDefinedRecipes: [:])
+        try await f.a.formatAndSave(config: config, lsp: UndoTestFormatter())
+        #expect(try String(contentsOf: f.root.appendingPathComponent("a.txt"), encoding: .utf8) == "formatted")
+        f.a.undoManager.undo()
+        #expect(f.a.storage.string == "typed")
+        f.a.undoManager.undo()
+        #expect(f.a.storage.string == "old")
+        f.a.undoManager.redo()
+        f.a.undoManager.redo()
+        #expect(f.a.storage.string == "formatted")
+    }
+
+    @Test func typingUndoSurvivesReusedViewAndDetach() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-undo-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("old".utf8).write(to: root.appendingPathComponent("a.txt"))
+        try Data("other".utf8).write(to: root.appendingPathComponent("b.txt"))
+        let appState = AppState()
+        let a = appState.tabs.buffer(worktreeId: "undo-test", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
+        let b = appState.tabs.buffer(worktreeId: "undo-test", tabId: "b", worktreeRoot: root, relativePath: "b.txt")
+        await a.awaitLoadForTesting()
+        await b.awaitLoadForTesting()
+        defer { a.close(persistDirtySnapshot: false)
+        b.close(persistDirtySnapshot: false) }
+        let theme = try ThemeStore().current
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        let view = CodeTextView(frame: .zero, textContainer: container)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        coordinator.attach(textView: view, buffer: a, layoutManager: layout, worktreeId: "undo-test", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+        view.undoManager?.beginUndoGrouping()
+        view.insertText("new", replacementRange: NSRange(location: 0, length: 3))
+        view.undoManager?.endUndoGrouping()
+        view.allowsUndo = true
+        coordinator.updateIfNeeded(worktreeId: "undo-test", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        coordinator.updateIfNeeded(worktreeId: "undo-test", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+        #expect(view.undoManager?.canUndo == true)
+        #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        #expect(a.storage.string == "old")
+        #expect(b.storage.string == "other")
+        coordinator.detach()
+        coordinator.attach(textView: view, buffer: a, layoutManager: layout, worktreeId: "undo-test", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+        view.undoManager?.redo()
+        #expect(a.storage.string == "new")
+        coordinator.detach()
+    }
+}
+
+@MainActor
+private struct UndoFixture {
+    let root: URL
+    let tabs: TabsManager
+    let a: EditorBuffer
+    let b: EditorBuffer
+    let documents: [EditorDocumentID]
+    let access: HostWorkspaceEditFileAccess
+    let journal: WorkspaceEditJournal
+    let undo: WorkspaceEditUndoCoordinator
+
+    init() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-undo-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in ["a", "b", "c"] { try Data("old".utf8).write(to: root.appendingPathComponent("\(name).txt")) }
+        tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), tabsDirectory: root.appendingPathComponent("tabs"))
+        a = tabs.buffer(worktreeId: "w", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
+        b = tabs.buffer(worktreeId: "w", tabId: "b", worktreeRoot: root, relativePath: "b.txt")
+        await a.awaitLoadForTesting()
+        await b.awaitLoadForTesting()
+        a.stopWatching()
+        b.stopWatching()
+        let directory = root
+        access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in directory })
+        journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let owner = tabs
+        undo = WorkspaceEditUndoCoordinator(access: access, journal: journal, bufferForDocument: { owner.workspaceEditBuffer(for: $0) })
+        documents = ["a", "b", "c"].map { EditorDocumentID(host: nil, worktreeID: "w", uri: directory.appendingPathComponent("\($0).txt").lspURI) }
+    }
+
+    func rename() async throws -> UUID {
+        var snapshots: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
+        for doc in documents { snapshots[doc] = try await access.snapshot(doc) }
+        let plan = WorkspaceEditPlan(steps: documents.map {
+            let before = snapshots[$0]!
+            return WorkspaceEditPlanStep(kind: .text, document: $0, destination: nil, before: before, after: before.replacing(content: Data("new".utf8)), destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        }, finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: false)
+        let outcome = await WorkspaceEditExecutor(access: access, journal: journal).apply(plan)
+        guard case .applied(let id) = outcome else { throw UndoFixtureError.applyFailed }
+        undo.register(operationID: id, affectedDocuments: Set(documents))
+        return id
+    }
+
+    func type(_ value: String, in buffer: EditorBuffer) {
+        let range = NSRange(location: 0, length: buffer.storage.length)
+        buffer.registerTextUndo(range: range, replacement: value)
+        buffer.storage.replaceCharacters(in: range, with: value)
+    }
+
+    func remove() {
+        a.close(persistDirtySnapshot: false)
+        b.close(persistDirtySnapshot: false)
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private enum UndoFixtureError: Error { case applyFailed }
+
+@MainActor
+private final class UndoTestFormatter: DocumentFormatter {
+    func language(forFileExtension ext: String) -> String? { "swift" }
+    func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]? {
+        [.init(range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 5)), newText: "formatted")]
+    }
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async {}
+}
+
+@MainActor
+private final class PausingUndoAccess: WorkspaceEditFileAccess {
+    let base: MemoryWorkspaceEditAccess
+    var pauseNextSnapshot = false
+    var continuation: CheckedContinuation<Void, Never>?
+    init(base: MemoryWorkspaceEditAccess) { self.base = base }
+    func resume() { continuation?.resume()
+    continuation = nil }
+    func snapshot(_ document: EditorDocumentID) async throws -> WorkspaceFileSnapshot {
+        if pauseNextSnapshot {
+            pauseNextSnapshot = false
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return try await base.snapshot(document)
+    }
+    func replace(_ before: WorkspaceFileSnapshot, with after: WorkspaceFileSnapshot) async throws {
+        try await base.replace(before, with: after)
+    }
+    func move(from: EditorDocumentID, to: EditorDocumentID, expectedSource: WorkspaceFileSnapshot, expectedDestination: WorkspaceFileSnapshot) async throws {
+        try await base.move(from: from, to: to, expectedSource: expectedSource, expectedDestination: expectedDestination)
+    }
+}

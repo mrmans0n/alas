@@ -130,6 +130,23 @@ final class EditorBuffer {
     /// the view detaches it without releasing it.
     let storage: NSTextStorage
 
+    @ObservationIgnored let undoManager = EditorBufferUndoManager()
+
+    /// The inverse targets stable storage, never a text view reused by a tab.
+    func registerTextUndo(range: NSRange, replacement: String, actionName: String = "Typing") {
+        guard programmaticEditDepth == 0, !workspaceEditMutationInFlight,
+              range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return }
+        let previous = (storage.string as NSString).substring(with: range)
+        guard previous != replacement else { return }
+        let inverseRange = NSRange(location: range.location, length: (replacement as NSString).length)
+        undoManager.registerBufferUndo(target: self, actionName: actionName) { buffer in
+            guard NSMaxRange(inverseRange) <= buffer.storage.length,
+                  (buffer.storage.string as NSString).substring(with: inverseRange) == replacement else { return }
+            buffer.registerTextUndo(range: inverseRange, replacement: previous, actionName: actionName)
+            buffer.storage.replaceCharacters(in: inverseRange, with: previous)
+        }
+    }
+
     @ObservationIgnored
     var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint)] = [:]
 
@@ -1870,6 +1887,7 @@ final class EditorBuffer {
     /// not shift. Returns `false` if any edit range is invalid, leaving the
     /// buffer untouched.
     private func applyFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
+        guard !undoManager.workspaceActionInFlight else { return false }
         let text = storage.string
         var nsEdits: [(range: NSRange, newText: String)] = []
         for edit in edits {
@@ -1889,6 +1907,9 @@ final class EditorBuffer {
                 return false
             }
         }
+        let formatted = NSMutableString(string: text)
+        for edit in ascending.reversed() { formatted.replaceCharacters(in: edit.range, with: edit.newText) }
+        registerTextUndo(range: NSRange(location: 0, length: storage.length), replacement: formatted as String, actionName: "Format Document")
         withLoadEditTrackingSuppressed {
             storage.beginEditing()
             for edit in ascending.reversed() {

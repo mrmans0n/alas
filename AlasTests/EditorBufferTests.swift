@@ -2282,11 +2282,7 @@ struct EditorBufferTests {
         #expect(trailingConstrained.origin.x == 500)
     }
 
-    @Test func coordinatorPathChangeClearsTextViewUndoStack() async throws {
-        // Regression: NSTextView's undoManager survives across tab swaps
-        // because CenterPaneView reuses the same text view. Without an
-        // explicit removeAllActions on rebind, Undo would mutate the wrong
-        // buffer's storage.
+    @Test func coordinatorPathChangeUsesTheNewBuffersUndoStack() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let a = 1\n")
         _ = try writeFile(root, "b.swift", "let b = 2\n")
@@ -2300,9 +2296,7 @@ struct EditorBufferTests {
         let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
         layoutManager.addTextContainer(textContainer)
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
-        // NSTextView's undoManager comes from the responder chain; in this
-        // headless test we don't have a window, so feed one in via a
-        // delegate so the rebind path has something concrete to clear.
+        // A fallback responder manager must not replace the buffer history.
         let undoOwner = TestUndoOwner()
         textView.delegate = undoOwner
         let coordinator = CodeEditorCoordinator(appState: appState)
@@ -2313,8 +2307,7 @@ struct EditorBufferTests {
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
-        // Stage an undoable action so canUndo flips on; payload is irrelevant.
-        textView.undoManager?.registerUndo(withTarget: bufferA) { _ in }
+        textView.insertText("changed", replacementRange: NSRange(location: 0, length: bufferA.storage.length))
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.updateIfNeeded(
@@ -2324,13 +2317,13 @@ struct EditorBufferTests {
         )
 
         #expect(textView.undoManager?.canUndo == false)
+        bufferA.undoManager.undo()
+        #expect(bufferA.storage.string == "let a = 1\n")
+        #expect(textView.string != "let a = 1\n")
+        coordinator.detach()
     }
 
-    @Test func coordinatorDetachClearsTextViewUndoStack() async throws {
-        // Regression: AppKit text undo actions target the NSTextView/TextKit
-        // objects that created them. If SwiftUI tears down the editor while
-        // those actions remain in the responder-chain undo manager, a later
-        // Edit > Undo can send _undoRedoTextOperation: to stale objects.
+    @Test func coordinatorDetachDisconnectsViewWithoutClearingBufferHistory() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let a = 1\n")
         let appState = AppState()
@@ -2353,12 +2346,14 @@ struct EditorBufferTests {
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
-        textView.undoManager?.registerUndo(withTarget: textView) { _ in }
+        textView.insertText("changed", replacementRange: NSRange(location: 0, length: buffer.storage.length))
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.detach()
 
-        #expect(textView.undoManager?.canUndo == false)
+        #expect(textView.undoManager?.canUndo != true)
+        buffer.undoManager.undo()
+        #expect(buffer.storage.string == "let a = 1\n")
     }
 }
 
