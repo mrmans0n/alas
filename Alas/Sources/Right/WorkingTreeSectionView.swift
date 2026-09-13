@@ -50,6 +50,8 @@ struct WorkingTreeSectionView: View {
     var onDiscardFile:     ((ChangedFile) -> Void)? = nil
     var onStashChanges:     (() -> Void)? = nil
     var stashChangesDisabled: Bool = false
+    var onCreateCheckpoint: (() -> Void)? = nil
+    var createCheckpointDisabled: Bool = false
     var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
     var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
@@ -111,8 +113,12 @@ struct WorkingTreeSectionView: View {
                         onStashChanges?()
                     }
                     .disabled(stashChangesDisabled || changes.isEmpty || onStashChanges == nil)
-                    Divider()
                 }
+                Button("Create Checkpoint…") {
+                    onCreateCheckpoint?()
+                }
+                .disabled(createCheckpointDisabled || onCreateCheckpoint == nil)
+                Divider()
                 Button("Discard all working tree changes…", role: .destructive) {
                     onDiscardAll?()
                 }
