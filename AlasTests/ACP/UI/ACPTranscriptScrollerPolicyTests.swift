@@ -747,6 +747,8 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         let position = scroller.scrollY
         #expect(coordinator.topVisibleMessageIdForTesting == tall.stableId)
         #expect(abs(scroller.minimap.proportion - initialProportion) > 0.01)
+        session.transcript.messages.append(.user(id: UUID(), text: "new prompt during drag", attachments: []))
+        coordinator.update(host: host)
         scroller.minimap.onNavigate?(destination)
         #expect(abs(scroller.scrollY - position) < 1)
         scroller.minimap.onNavigationEnd?()
