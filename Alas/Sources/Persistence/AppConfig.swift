@@ -53,6 +53,9 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the right pane icon rail. This remains off until the
     /// rail presentation has completed preview testing.
     var rightPaneRailEnabled: Bool = false
+    /// Preview gate for the Needs Attention inbox and project affordances.
+    /// Events continue collecting while its presentation is disabled.
+    var needsAttentionEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -522,6 +525,7 @@ struct AppConfig: Codable, Equatable {
         runTabEnabled: false,
         agentTabEnabled: false,
         rightPaneRailEnabled: false,
+        needsAttentionEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -617,6 +621,7 @@ extension AppConfig {
              runTabEnabled,
              agentTabEnabled,
              rightPaneRailEnabled,
+             needsAttentionEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -860,6 +865,8 @@ extension AppConfig {
         // continue to load without exposing the sidebar rollup.
         agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
         rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
+        // Needs Attention remains opt-in while its entry points are in preview.
+        needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

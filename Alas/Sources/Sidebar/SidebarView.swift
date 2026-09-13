@@ -1,6 +1,22 @@
 import SwiftUI
 import AppKit
 
+struct SidebarAttentionPresentation {
+    let showsInbox: Bool
+    let count: Int
+    private let countsByProject: [String: Int]
+
+    init(enabled: Bool, aggregation: AttentionAggregation) {
+        showsInbox = enabled
+        count = enabled ? aggregation.unresolvedCount : 0
+        countsByProject = enabled ? aggregation.unresolvedCountByProject : [:]
+    }
+
+    func count(for projectID: String) -> Int {
+        countsByProject[projectID, default: 0]
+    }
+}
+
 struct SidebarView: View {
     @Bindable var state: AppState
     @Binding var collapsedProjects: Set<String>
@@ -19,6 +35,10 @@ struct SidebarView: View {
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         let attentionAggregation = state.attentionAggregation
+        let attentionPresentation = SidebarAttentionPresentation(
+            enabled: state.config.needsAttentionEnabled,
+            aggregation: attentionAggregation
+        )
         ZStack {
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,
@@ -35,7 +55,8 @@ struct SidebarView: View {
                     },
                     onHideSidebar: onHideSidebar,
                     onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
-                    attentionCount: attentionAggregation.unresolvedCount,
+                    attentionCount: attentionPresentation.count,
+                    showsAttentionInbox: attentionPresentation.showsInbox,
                     attentionInboxOpen: $state.isAttentionInboxOpen,
                     attentionAggregation: attentionAggregation,
                     attentionLoadError: state.attentionStore.loadError?.localizedDescription,
@@ -184,7 +205,7 @@ struct SidebarView: View {
                                     )
                                     state.saveSpaces()
                                 },
-                                attentionCount: attentionAggregation.unresolvedCountByProject[project.id, default: 0]
+                                attentionCount: attentionPresentation.count(for: project.id)
                             )
                         }
                         Color.clear
