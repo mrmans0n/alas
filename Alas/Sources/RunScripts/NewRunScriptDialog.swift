@@ -9,6 +9,8 @@ struct NewRunScriptDialog: View {
     @State private var name = ""
     @State private var onExit = Self.defaultOnExit
     @State private var errorMessage: String?
+    @State private var wantsWritingHelp = false
+    @State private var writingHelpRequest = ""
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -40,6 +42,11 @@ struct NewRunScriptDialog: View {
                         Spacer(minLength: 0)
                     }
                 }
+                Toggle("Help me write this", isOn: $wantsWritingHelp)
+                    .toggleStyle(.checkbox)
+                if wantsWritingHelp {
+                    RunScriptWritingHelpField(request: $writingHelpRequest)
+                }
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.system(size: 11))
@@ -47,13 +54,16 @@ struct NewRunScriptDialog: View {
                 }
             },
             cancelTitle: "Cancel",
-            confirmTitle: "Create script",
+            confirmTitle: wantsWritingHelp ? "Create script and open chat" : "Create script",
             confirmStyle: .primary,
             onCancel: state.cancelPendingRunScriptCreation,
             onConfirm: submit,
-            confirmEnabled: Self.canCreate(name: name)
+            confirmEnabled: canSubmit
         )
         .onChange(of: name) { _, _ in
+            errorMessage = nil
+        }
+        .onChange(of: wantsWritingHelp) { _, _ in
             errorMessage = nil
         }
     }
@@ -63,12 +73,20 @@ struct NewRunScriptDialog: View {
     }
 
     private func submit() {
-        guard Self.canCreate(name: name) else { return }
+        guard canSubmit else { return }
         do {
-            try state.createPendingRunScript(name: name, onExit: onExit)
+            try state.createPendingRunScript(
+                name: name, onExit: onExit,
+                writingHelpRequest: wantsWritingHelp ? writingHelpRequest : nil
+            )
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private var canSubmit: Bool {
+        Self.canCreate(name: name)
+            && (!wantsWritingHelp || !writingHelpRequest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }

@@ -21,7 +21,7 @@ struct AppStateRunScriptCreationTests {
             addedAt: Date()
         )
         let worktree = Worktree(
-            id: "worktree",
+            id: "worktree-\(UUID().uuidString)",
             projectId: project.id,
             name: "main",
             branch: "main",
@@ -103,5 +103,74 @@ struct AppStateRunScriptCreationTests {
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent(".alas/scripts/build.sh").path
         ))
+    }
+
+    @Test func writingHelpWithoutDefaultAgentDoesNotCreateFile() throws {
+        let (state, _, worktree, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        state.config.agents.worktreeAutoLaunch.agentId = nil
+        state.newRunScript(scope: .repo, in: worktree)
+
+        #expect(throws: RunScriptWritingHelpError.noDefaultAgent) {
+            try state.createPendingRunScript(
+                name: "Build", onExit: .keep, writingHelpRequest: "Build this project"
+            )
+        }
+        #expect(state.pendingRunScriptCreation != nil)
+        #expect(state.runScriptCatalogGeneration == 0)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".alas/scripts/build.sh").path))
+
+        try state.createPendingRunScript(name: "Build", onExit: .keep)
+        #expect(state.pendingRunScriptCreation == nil)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(".alas/scripts/build.sh").path))
+    }
+
+    @Test func writingHelpRejectsUnavailableDefaultAgent() throws {
+        let (state, _, worktree, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        state.config.agents.worktreeAutoLaunch.agentId = "missing-agent"
+
+        #expect(throws: RunScriptWritingHelpError.unsupportedAgent) {
+            try state.runScriptWritingHelpAgent(in: worktree)
+        }
+    }
+
+    @Test(arguments: RunScriptScope.allCases)
+    func assistedCreationOpensDraftInOriginatingWorktree(scope: RunScriptScope) throws {
+        let (state, _, worktree, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agentID = try #require(ACPLaunchCatalog.specs.first?.agentID)
+        state.config.agents.worktreeAutoLaunch.agentId = agentID
+        state.config.agents.builtinState[agentID] = BuiltinAgentState(isEnabled: true, binaryOverride: nil)
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: [], installedIds: [agentID]
+        )
+        let global = root.appendingPathComponent("global")
+        state.newRunScript(scope: scope, in: worktree)
+        state.selectedWorktreeId = "another-worktree"
+
+        try state.createPendingRunScript(
+            name: "Build", onExit: .close, globalDir: global, writingHelpRequest: "Build the project"
+        )
+
+        #expect(state.pendingRunScriptCreation == nil)
+        #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.tabs.tabs(forWorktree: "another-worktree").isEmpty)
+        let tabs = state.tabs.tabs(forWorktree: worktree.id)
+        #expect(tabs.count == 2)
+        let active = try #require(state.tabs.activeTab(forWorktree: worktree.id))
+        guard case .acpSession(let chat) = active else {
+            Issue.record("Expected a writing-help chat")
+            return
+        }
+        let session = try #require(state.session(for: chat.sessionId))
+        #expect(session.agentId == agentID)
+        let scriptURL = (scope == .repo ? root.appendingPathComponent(".alas/scripts") : global)
+            .appendingPathComponent("build.sh")
+        #expect(session.composerDraft == ACPComposerDraft(segments: [.text(RunScriptWritingHelp.prompt(
+            scope: scope, scriptURL: scriptURL, worktreeRoot: root, request: "Build the project"
+        ))]))
+        #expect(try String(contentsOf: scriptURL, encoding: .utf8).contains("# alas-on-exit: close"))
     }
 }
