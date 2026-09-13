@@ -17,6 +17,7 @@ struct ACPMessageList: View {
     /// these to the runner.
     let onQueueEdit: (QueuedPrompt) -> Void
     let onQueueForceSend: (UUID) -> Void
+    let onQueuePromote: (UUID) -> Void
     let onQueueRemove: (UUID) -> Void
     let onQueueRetry: (UUID) -> Void
     let onQueueReorder: (Int, Int) -> Void
@@ -69,6 +70,7 @@ struct ACPMessageList: View {
                 onDismissElicitationURLWait: onDismissElicitationURLWait,
                 onQueueEdit: onQueueEdit,
                 onQueueForceSend: onQueueForceSend,
+                onQueuePromote: onQueuePromote,
                 onQueueRemove: onQueueRemove,
                 onQueueRetry: onQueueRetry,
                 onQueueReorder: onQueueReorder,

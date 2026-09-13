@@ -18,11 +18,38 @@ enum ACPTranscriptQueuePolicy {
         }
     }
 
+    /// 1-based dispatch position of the pending item at `idx` among the
+    /// items that actually render a row (i.e. excluding any in-flight
+    /// `.sending` head). `idx` must itself be `.pending`; every other
+    /// pending item before it, whether it's a plain queued prompt or a
+    /// scheduled one, counts toward its position — scheduled items still
+    /// occupy a slot in the visible list, they just dispatch on their own
+    /// clock instead of FIFO order.
+    nonisolated static func queuePosition(at idx: Int, statuses: [QueuedPrompt.Status]) -> Int {
+        statuses[..<idx].filter { shouldRenderQueueBubble(status: $0) }.count + 1
+    }
+
     nonisolated static func canDropQueuedItem(
         sourceStatus: QueuedPrompt.Status?,
         targetStatus: QueuedPrompt.Status
     ) -> Bool {
         sourceStatus == .pending && targetStatus == .pending
+    }
+
+    /// Whether `ACPSession.moveInQueue(from:to:)` would actually reorder
+    /// anything for this `(src, dst)` pair, so the row's "Move up" /
+    /// "Move down" affordances can disable instead of silently no-opping on
+    /// click. Mirrors `moveInQueue`'s own guards exactly — kept in sync by
+    /// `ACPSessionQueueAPITests`.
+    nonisolated static func canMoveQueueItem(from src: Int, to dst: Int, queue: [QueuedPrompt]) -> Bool {
+        guard src >= 0, src < queue.count, dst >= 0, dst <= queue.count, src != dst else { return false }
+        if queue[src].status == .sending { return false }
+        if queue.first?.status == .sending, dst == 0 { return false }
+        if let firstScheduled = queue.firstIndex(where: { $0.status == .pending && $0.scheduledAt != nil }),
+           (queue[src].scheduledAt != nil || dst >= firstScheduled) {
+            return false
+        }
+        return true
     }
 
     /// Whether a queue mutation is allowed for the session's current
@@ -33,9 +60,9 @@ enum ACPTranscriptQueuePolicy {
     /// a mounted queue row (and therefore the closures its build captured)
     /// for as long as the row's equality token is unchanged, and that token
     /// deliberately covers only rendering/behavior inputs it can compare
-    /// (`QueueBubbleTokenInputs`: item, index, typography, plus theme and
-    /// width) — closures are not `Equatable`, so callback identity cannot be
-    /// part of it.
+    /// (`QueueBubbleTokenInputs`: item, index, typography, derived position
+    /// and move-eligibility, plus theme and width) — closures are not
+    /// `Equatable`, so callback identity cannot be part of it.
     ///
     /// Deciding ownership up front (`isMirror ? {} : realAction`) therefore
     /// bakes a stale answer into a retained row whenever a session changes

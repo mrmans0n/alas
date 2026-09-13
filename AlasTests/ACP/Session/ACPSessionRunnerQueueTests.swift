@@ -421,7 +421,6 @@ struct ACPSessionRunnerQueueTests {
         runner.send(blocks: [.text("redirect")], intent: .steer)
 
         #expect(session.queue == queued)
-        #expect(runner.steerUndoSnapshot() == nil)
 
         try await Task.sleep(nanoseconds: 250_000_000)
 
@@ -459,8 +458,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.isEmpty)
     }
 
-    @Test("forceSendQueuedItem undo re-prepends discarded prompts and drains them on next idle")
-    func forceSendQueuedItemUndoRestores() async throws {
+    @Test("forceSendQueuedItem while busy preserves and later drains the rest of the queue")
+    func forceSendQueuedItemPreservesAndDrainsRest() async throws {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.agentState = .ready
@@ -468,34 +467,18 @@ struct ACPSessionRunnerQueueTests {
         session.enqueue(blocks: [.text("a")])
         session.enqueue(blocks: [.text("selected")])
         runner.forceSendQueuedItem(id: session.queue[1].id)
-        try await Task.sleep(nanoseconds: 250_000_000)
-        #expect(runner.steerUndoSnapshot() != nil)
-        #expect(session.queue.isEmpty)
-        let promptsAfterForceSend = mock.sent.filter { $0.method == "session/prompt" }.count
-        #expect(promptsAfterForceSend == 1)
+        // "a" is left exactly where it was — nothing to undo, nothing
+        // discarded.
+        #expect(session.queue.map(\.blocks) == [[.text("a")]])
 
-        runner.steerUndo()
-        try await Task.sleep(nanoseconds: 200_000_000)
-        // Undo restored "a" to the queue AND the flusher drained it
-        // (state was .idle, so flushQueueIfIdle ran). Final state:
-        // queue empty, 2 prompts total (redirect + the undone item).
+        try await Task.sleep(nanoseconds: 250_000_000)
+        // The redirect ("selected") ran first, then the flusher drained
+        // the preserved tail ("a") once the agent was idle again.
         #expect(session.queue.isEmpty)
-        let promptsAfterUndo = mock.sent.filter { $0.method == "session/prompt" }.count
-        #expect(promptsAfterUndo == 2)
+        let prompts = mock.sent.filter { $0.method == "session/prompt" }.count
+        #expect(prompts == 2)
         let persisted = try store.loadQueue(sessionId: "s")
         #expect(persisted.isEmpty)
-        // Snapshot is consumed after undo.
-        #expect(runner.steerUndoSnapshot() == nil)
-    }
-
-    @Test("steerUndo() is a no-op when snapshot is empty / expired")
-    func steerUndoEmptyNoop() {
-        let (runner, _, session, _) = try! mkRunner()
-        session.enqueue(blocks: [.text("x")])
-        runner.steerUndo()
-        // Queue unchanged.
-        #expect(session.queue.count == 1)
-        #expect(session.queue[0].blocks == [.text("x")])
     }
 
     @Test("queued flush records the user prompt at dispatch (before await)")
@@ -572,7 +555,6 @@ struct ACPSessionRunnerQueueTests {
         runner.send(blocks: [.text("redirect")], intent: .steer)
 
         #expect(session.queue == [tail])
-        #expect(runner.steerUndoSnapshot() == nil)
 
         try await Task.sleep(nanoseconds: 250_000_000)
 
@@ -610,7 +592,7 @@ struct ACPSessionRunnerQueueTests {
         await releaseCancel.open()
     }
 
-    @Test("forceSendQueuedItem while busy steers with the selected queued item")
+    @Test("forceSendQueuedItem while busy steers with the selected item and preserves the rest of the queue")
     func forceSendQueuedItemWhileBusySteersSelectedItem() async throws {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
@@ -625,11 +607,16 @@ struct ACPSessionRunnerQueueTests {
 
         runner.forceSendQueuedItem(id: selectedId)
         #expect(runner.hasRetainedCleanupSteerWork)
+        // "first" and "third" are left in place immediately — unlike the
+        // old discard-and-undo behavior, nothing is removed except the
+        // selected item itself.
+        #expect(session.queue.map(\.blocks) == [[.text("first")], [.text("third")]])
+
         try await Task.sleep(nanoseconds: 250_000_000)
 
         #expect(mock.sent.contains { $0.method == "session/cancel" })
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
-        #expect(prompts.count == 1)
+        #expect(prompts.count == 3)
         var userTexts: [String] = []
         var delegatedSources: [ACPDelegatedPromptSource?] = []
         for msg in session.transcript.messages {
@@ -638,10 +625,9 @@ struct ACPSessionRunnerQueueTests {
                 delegatedSources.append(delegatedSource)
             }
         }
-        #expect(userTexts == ["selected"])
-        #expect(delegatedSources == [source])
+        #expect(userTexts == ["selected", "first", "third"])
+        #expect(delegatedSources == [source, nil, nil])
         #expect(session.queue.isEmpty)
-        #expect(runner.steerUndoSnapshot()?.map { $0.blocks } == [[.text("first")], [.text("third")]])
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
@@ -662,13 +648,16 @@ struct ACPSessionRunnerQueueTests {
         runner.forceSendQueuedItem(id: selectedId)
         try await Task.sleep(nanoseconds: 250_000_000)
 
+        // "selected" isn't double-recorded, and the preserved "first" is
+        // drained right behind it.
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
-        #expect(prompts.count == 1)
+        #expect(prompts.count == 2)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
             if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
         }
-        #expect(userTexts == ["selected"])
+        #expect(userTexts == ["selected", "first"])
+        #expect(session.queue.isEmpty)
     }
 
     @Test("userCancel() drains queue after canceling the running turn")

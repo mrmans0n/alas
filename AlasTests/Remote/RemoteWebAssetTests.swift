@@ -478,7 +478,6 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"case "queueState""#))
         #expect(js.contains("function applyQueueState(msg)"))
         #expect(js.contains("let queueItems = [];"))
-        #expect(js.contains("let steerUndoAvailable = false;"))
     }
 
     @Test func remoteWebDisplaysScheduledQueueDeadlines() throws {
@@ -578,16 +577,6 @@ struct RemoteWebAssetTests {
         // is implicitly `.pending` since renderQueue() filters upstream.
         #expect(!js.contains(#"item.status === "pending""#))
         #expect(!js.contains("is-sending"))
-    }
-
-    @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
-        let js = try asset("app.js")
-        let css = try asset("style.css")
-
-        #expect(js.contains("function steerUndoToast()"))
-        #expect(js.contains(#""queueSteerUndo""#))
-        #expect(js.contains("Queue cleared by steer"))
-        #expect(css.contains(".steer-undo"))
     }
 
     @Test func remoteWebShipsChangesAndFilesTabs() throws {

@@ -315,7 +315,8 @@ final class ACPSessionManager: ObservableObject {
     // MARK: - Remote queue control
 
     /// Promote a queued item to the head (or steer to it when a turn is
-    /// running) — the remote-web twin of the queued bubble's "send now".
+    /// running, preserving every other pending item) — the remote-web twin
+    /// of the "Up next" row's "Send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
         guard !hasManagerQueuePersistence(sessionId: id) else {
@@ -410,12 +411,6 @@ final class ACPSessionManager: ObservableObject {
         session.clearPendingQueue()
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
-    }
-
-    func queueSteerUndo(for id: ACPSession.ID) async {
-        guard await confirmedWriterLease(for: id) else { return }
-        runners[id]?.steerUndo()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 

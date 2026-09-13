@@ -53,7 +53,6 @@ enum RemoteClientMessage: Equatable, Sendable {
     case queueRetry(sessionId: String, itemId: String)
     case queueEdit(sessionId: String, itemId: String)
     case queueClear(sessionId: String)
-    case queueSteerUndo(sessionId: String)
     case listChanges(sessionId: String)
     case fileDiff(sessionId: String, path: String, stage: String?)
     case listFiles(sessionId: String, path: String?)
@@ -150,8 +149,6 @@ extension RemoteClientMessage: Codable {
                 itemId: try c.decode(String.self, forKey: .itemId))
         case "queueClear":
             self = .queueClear(sessionId: try c.decode(String.self, forKey: .sessionId))
-        case "queueSteerUndo":
-            self = .queueSteerUndo(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "listChanges":
             self = .listChanges(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "fileDiff":
@@ -265,9 +262,6 @@ extension RemoteClientMessage: Codable {
         case .queueClear(let s):
             try c.encode("queueClear", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .queueSteerUndo(let s):
-            try c.encode("queueSteerUndo", forKey: .type)
-            try c.encode(s, forKey: .sessionId)
         case .listChanges(let s):
             try c.encode("listChanges", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -340,7 +334,7 @@ extension RemoteClientMessage {
         switch self {
         case .sendPrompt, .takeOver,
              .queueForceSend, .queueRemove, .queueRetry, .queueEdit,
-             .queueClear, .queueSteerUndo:
+             .queueClear:
             return true
         default: return false
         }
@@ -380,7 +374,7 @@ enum RemoteServerMessage: Equatable, Sendable {
     case promptRejected(sessionId: String)
     case sessionConfig(RemoteSessionConfig)
     case sessionRenamed(sessionId: String, title: String)
-    case queueState(sessionId: String, items: [RemoteQueuedPrompt], steerUndoAvailable: Bool)
+    case queueState(sessionId: String, items: [RemoteQueuedPrompt])
     case queueEditRestored(sessionId: String, itemId: String, text: String)
     case error(message: String)
     case changeList(
@@ -406,7 +400,7 @@ extension RemoteServerMessage: Codable {
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
-        case items, steerUndoAvailable, itemId, text
+        case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated
     }
@@ -511,8 +505,7 @@ extension RemoteServerMessage: Codable {
         case "queueState":
             self = .queueState(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
-                items: try c.decode([RemoteQueuedPrompt].self, forKey: .items),
-                steerUndoAvailable: try c.decodeIfPresent(Bool.self, forKey: .steerUndoAvailable) ?? false)
+                items: try c.decode([RemoteQueuedPrompt].self, forKey: .items))
         case "queueEditRestored":
             self = .queueEditRestored(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -685,11 +678,10 @@ extension RemoteServerMessage: Codable {
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(title, forKey: .title)
-        case .queueState(let id, let items, let steerUndoAvailable):
+        case .queueState(let id, let items):
             try c.encode("queueState", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(items, forKey: .items)
-            try c.encode(steerUndoAvailable, forKey: .steerUndoAvailable)
         case .queueEditRestored(let id, let itemId, let text):
             try c.encode("queueEditRestored", forKey: .type)
             try c.encode(id, forKey: .sessionId)

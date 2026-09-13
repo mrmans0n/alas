@@ -588,10 +588,6 @@ struct RemoteProtocolTests {
         let clear = #"{"type":"queueClear","sessionId":"s1"}"#.data(using: .utf8)!
         #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: clear)
             == .queueClear(sessionId: "s1"))
-
-        let undo = #"{"type":"queueSteerUndo","sessionId":"s1"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: undo)
-            == .queueSteerUndo(sessionId: "s1"))
     }
 
     @Test func queueVerbsRoundTrip() throws {
@@ -601,7 +597,6 @@ struct RemoteProtocolTests {
             .queueRetry(sessionId: "s1", itemId: "i3"),
             .queueEdit(sessionId: "s1", itemId: "i4"),
             .queueClear(sessionId: "s1"),
-            .queueSteerUndo(sessionId: "s1"),
         ]
         for message in messages {
             #expect(try roundTrip(message) == message)
@@ -627,8 +622,7 @@ struct RemoteProtocolTests {
             items: [
                 RemoteQueuedPrompt(id: "i1", text: "first", imageCount: 0, resourceCount: 0, status: "sending", lastError: nil, scheduledAt: nil),
                 RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, resourceCount: 1, status: "pending", lastError: "boom", scheduledAt: 1_800_000_000_000),
-            ],
-            steerUndoAvailable: true)
+            ])
         #expect(try roundTrip(state) == state)
     }
 
@@ -643,7 +637,6 @@ struct RemoteProtocolTests {
         #expect(RemoteClientMessage.queueRetry(sessionId: "s1", itemId: "i1").isDriveOrdering)
         #expect(RemoteClientMessage.queueEdit(sessionId: "s1", itemId: "i1").isDriveOrdering)
         #expect(RemoteClientMessage.queueClear(sessionId: "s1").isDriveOrdering)
-        #expect(RemoteClientMessage.queueSteerUndo(sessionId: "s1").isDriveOrdering)
         #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
     }
 
