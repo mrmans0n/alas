@@ -771,10 +771,7 @@ extension ACPSessionStore {
             acc[message.sessionId] = max(acc[message.sessionId] ?? 0, message.createdAt)
         }
         for (sessionId, latest) in latestBySession {
-            try db.exec("""
-            UPDATE sessions SET updated_at = ?
-            WHERE id = ? AND updated_at < ?
-            """, bindings: [latest, sessionId, latest])
+            try bumpSessionActivity(sessionId: sessionId, to: latest)
         }
     }
 
@@ -782,7 +779,7 @@ extension ACPSessionStore {
     /// owner has not created that deterministic row id yet. Unlike the normal
     /// upsert path this must never replace a concurrent takeover's transcript.
     func insertMessageIfMissing(_ message: ACPStoredMessage) throws -> Bool {
-        try db.execChanges("""
+        let inserted = try db.execChanges("""
         INSERT INTO messages (id, session_id, kind, seq, payload, created_at)
         VALUES (?,?,?,?,?,?)
         ON CONFLICT(id) DO NOTHING
@@ -794,6 +791,23 @@ extension ACPSessionStore {
             message.payload,
             message.createdAt
         ]) > 0
+        // A salvaged row is as real as any other write — it just skipped
+        // upsertMessages' path — so it needs the same activity bump, or a
+        // takeover-only session shows stale "last active" once reloaded from
+        // disk (the in-memory cache is bumped separately, from the runner).
+        if inserted {
+            try bumpSessionActivity(sessionId: message.sessionId, to: message.createdAt)
+        }
+        return inserted
+    }
+
+    /// Monotonic `sessions.updated_at` bump shared by `upsertMessages` and
+    /// `insertMessageIfMissing` — never moves the timestamp backward.
+    private func bumpSessionActivity(sessionId: String, to timestamp: Int64) throws {
+        try db.exec("""
+        UPDATE sessions SET updated_at = ?
+        WHERE id = ? AND updated_at < ?
+        """, bindings: [timestamp, sessionId, timestamp])
     }
 
     private func payloadPreservingStoredToolCallContent(for message: ACPStoredMessage) throws -> Data {

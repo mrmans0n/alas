@@ -49,6 +49,12 @@ final class ACPSessionRunner {
     private let leaseFenceProvider: () -> ACPSessionLeaseFence?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    /// Fires only when a message row was actually written (a normal
+    /// `persistIndices`/`persistFromIndex` commit, or a takeover-salvaged
+    /// insert) — unlike `onPersist`, which also fires unconditionally on
+    /// `stop()` for cross-process/lease notification even when nothing was
+    /// written. Callers that track "last activity" want this one.
+    private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
@@ -141,6 +147,7 @@ final class ACPSessionRunner {
          onUserCancel: (() -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
@@ -166,6 +173,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
@@ -2462,6 +2470,7 @@ extension ACPSessionRunner {
         }
         trimLastPersistedPayloads()
         onPersist?()
+        onMessageActivity?()
     }
 
     /// Persist the specific message rows touched by an `apply()` call.
@@ -2536,6 +2545,7 @@ extension ACPSessionRunner {
         }
         trimLastPersistedPayloads()
         onPersist?()
+        onMessageActivity?()
     }
 
     private func effectiveRemoteHost() -> String? {

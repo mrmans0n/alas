@@ -3011,6 +3011,64 @@ struct ACPSessionRunnerTests {
         #expect(text == "fresh")
     }
 
+    @Test("onMessageActivity fires after persistIndices writes a message, unlike onPersist which also fires on no-op stop()")
+    func onMessageActivityFiresOnlyForRealMessageWrites() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-onactivity-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var activityFired = 0
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onMessageActivity: { activityFired += 1 }
+        )
+
+        session.appendSystemNotice("hello")
+        runner.persistIndices([0])
+        await runner.flushPersistence()
+        #expect(activityFired >= 1)
+    }
+
+    @Test("onMessageActivity does not fire on stop() when nothing was persisted")
+    func onMessageActivityDoesNotFireOnNoOpStop() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-onactivity-stop-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var posts = 0
+        var activityFired = 0
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPersist: { posts += 1 },
+            onMessageActivity: { activityFired += 1 }
+        )
+
+        runner.stop()
+        // onPersist keeps firing unconditionally (existing cross-process
+        // notification contract, covered by "onPersist fires on stop()"
+        // below) — onMessageActivity must not, since nothing was written.
+        #expect(posts >= 1)
+        #expect(activityFired == 0)
+    }
+
     @Test("onPersist fires on stop()")
     func onPersistFiresOnStop() throws {
         let url = FileManager.default.temporaryDirectory

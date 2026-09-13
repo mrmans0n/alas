@@ -27,6 +27,53 @@ import Foundation
         #expect(row.updatedAt == laterMessageTime)
     }
 
+    @Test("a salvage insert via insertMessageIfMissing bumps session updated_at")
+    func insertMessageIfMissingBumpsSessionUpdatedAt() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("activity-salvage-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let created: Int64 = 100
+        try store.upsertSession(ACPSessionRow(
+            id: "s1", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: created, updatedAt: created, lastOpenedAt: created, archived: false))
+
+        let salvagedAt: Int64 = 5_000
+        let inserted = try store.insertMessageIfMissing(ACPStoredMessage(
+            id: "m1", sessionId: "s1", kind: "text", seq: 0,
+            payload: Data("hi".utf8), createdAt: salvagedAt))
+
+        #expect(inserted)
+        let row = try #require(try store.loadSession(id: "s1"))
+        #expect(row.updatedAt == salvagedAt)
+    }
+
+    @Test("a no-op insertMessageIfMissing (row already exists) does not bump updated_at")
+    func insertMessageIfMissingNoOpDoesNotBumpUpdatedAt() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("activity-salvage-noop-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let created: Int64 = 100
+        try store.upsertSession(ACPSessionRow(
+            id: "s1", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: created, updatedAt: created, lastOpenedAt: created, archived: false))
+        try store.upsertMessages([
+            ACPStoredMessage(id: "m1", sessionId: "s1", kind: "text", seq: 0,
+                payload: Data("hi".utf8), createdAt: created),
+        ])
+
+        // Same id already exists — ON CONFLICT DO NOTHING — so this must be
+        // a true no-op, including for the session's activity timestamp.
+        let inserted = try store.insertMessageIfMissing(ACPStoredMessage(
+            id: "m1", sessionId: "s1", kind: "text", seq: 0,
+            payload: Data("hi".utf8), createdAt: 9_999))
+
+        #expect(!inserted)
+        let row = try #require(try store.loadSession(id: "s1"))
+        #expect(row.updatedAt == created)
+    }
+
     @Test("persisting messages never moves updated_at backward")
     func upsertMessagesNeverRegressesUpdatedAt() throws {
         let url = FileManager.default.temporaryDirectory

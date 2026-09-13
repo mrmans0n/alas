@@ -3506,8 +3506,8 @@ extension ACPSessionManager {
                                                 sessionId: sessionId
                                               )
                                           },
-                                          onPersist: { [weak self] in
-                                              self?.changeNotifier.post()
+                                          onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onMessageActivity: { [weak self] in
                                               self?.noteMessageActivity(sessionId: sessionId)
                                           },
                                           onPromptWorkChanged: { [weak self] in
