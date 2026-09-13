@@ -236,8 +236,7 @@ private struct SkeletonSectionHeader: View {
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(theme.color("section-head-bg"))
+        .paneBand(fill: theme.color("section-head-bg"))
     }
 }
 

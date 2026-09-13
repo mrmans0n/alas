@@ -51,6 +51,7 @@ struct GGStackDrawer: View {
     let appState: AppState
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var isRefreshing = false
 
@@ -100,21 +101,29 @@ struct GGStackDrawer: View {
         )
     }
 
+    private var layout: PaneDrawerLayout {
+        PaneDrawerLayout(expanded: expanded)
+    }
+
     var body: some View {
         if let model {
             VStack(spacing: 0) {
-                Rectangle().fill(theme.color("accent").opacity(0.24)).frame(height: 1)
                 collapsedRow(model)
-                if expanded { expandedBody(model) }
+                if expanded { expandedBody(model).transition(.paneDrawerBody) }
             }
-            .background(theme.color("bg-1").opacity(0.97))
+            .paneDrawer(layout, fill: theme.color("section-head-bg"), hairline: theme.color("line"))
         } else if let placeholderModel {
             VStack(spacing: 0) {
-                Rectangle().fill(theme.color("accent").opacity(0.24)).frame(height: 1)
                 collapsedRow(placeholderModel)
-                if expanded { expandedBody(placeholderModel) }
+                if expanded { expandedBody(placeholderModel).transition(.paneDrawerBody) }
             }
-            .background(theme.color("bg-1").opacity(0.97))
+            .paneDrawer(layout, fill: theme.color("section-head-bg"), hairline: theme.color("line"))
+        }
+    }
+
+    private func toggleExpanded() {
+        withAnimation(PaneDrawerLayout.animation(reduceMotion: reduceMotion)) {
+            expanded.toggle()
         }
     }
 
@@ -159,15 +168,15 @@ struct GGStackDrawer: View {
             showsChevron: true
         )
         .contentShape(Rectangle())
-        .onTapGesture { expanded.toggle() }
+        .onTapGesture { toggleExpanded() }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.return) {
-            expanded.toggle()
+            toggleExpanded()
             return .handled
         }
         .onKeyPress(.space) {
-            expanded.toggle()
+            toggleExpanded()
             return .handled
         }
         .accessibilityElement(children: .contain)
@@ -175,7 +184,7 @@ struct GGStackDrawer: View {
         .accessibilityHint(expanded ? "Collapse stack status" : "Expand stack status")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
-            expanded.toggle()
+            toggleExpanded()
         }
     }
 
@@ -221,10 +230,11 @@ struct GGStackDrawer: View {
             .help("Open gg inbox")
             refreshControl(showsLoading: showsLoading)
             if showsChevron {
-                Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
+                    .rotationEffect(layout.chevronAngle)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        .padding(.horizontal, layout.innerHorizontal(12)).padding(.vertical, 7)
     }
 
     @ViewBuilder
@@ -259,7 +269,7 @@ struct GGStackDrawer: View {
                         .disabled(isRefreshing)
                 }
             }
-            .padding(.horizontal, 10).padding(.bottom, 10)
+            .padding(.horizontal, layout.innerHorizontal(12)).padding(.bottom, 10)
         }
     }
 
@@ -312,7 +322,7 @@ struct GGStackDrawer: View {
                 factsView(model)
             }
         }
-        .padding(.horizontal, 10).padding(.bottom, 10)
+        .padding(.horizontal, layout.innerHorizontal(12)).padding(.bottom, 10)
     }
 
     private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {

@@ -46,10 +46,10 @@ struct RightPaneRail: View {
         .padding(.horizontal, 3)
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
-        // No opaque fill of its own: the rail sits over the same
-        // `SidebarMaterialBackground` as the rest of the expanded pane, and
-        // an opaque background here would occlude it just for this column.
-        .overlay(Divider().opacity(0.5), alignment: .leading)
+        // Neither a fill nor a divider: the rail sits over the same
+        // `SidebarMaterialBackground` as the rest of the pane, and the pane's
+        // bands float inset from this edge (see `PaneBandLayout`), so there is
+        // no content running up to the rail that needs a boundary drawn.
     }
 
     static func label(for tab: RightPaneTab) -> String {

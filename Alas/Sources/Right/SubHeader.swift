@@ -42,8 +42,7 @@ struct SubHeader: View {
                 }
                 if let trailing { trailing }
             }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(theme.color("section-head-bg"))
+            .paneBand(fill: theme.color("section-head-bg"))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
