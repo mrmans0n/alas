@@ -107,3 +107,26 @@ The identical rerun failed with the same launch error.
 xcrun xctest .../AlasTests.xctest
 Blocked by the expected app-host dependency: Library not loaded: @rpath/Alas.debug.dylib.
 ```
+
+## Review fix round 3
+
+Status: DONE_WITH_TEST_RUNNER_BLOCKER
+
+- Remote attachment now requires a finished initial load, loaded file state,
+  and editable remote content. Both normal open and reconnect/install retry use
+  this same gate, so neither can issue `didOpen` for the loading placeholder.
+- The remote retry integration test uses an actor-backed availability probe
+  counter. It waits for the initial unavailable probe, then enables the server,
+  invokes normal reopen, and asserts one `didOpen` containing the loaded source.
+
+Commands and output:
+
+```text
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -derivedDataPath /private/tmp/alas-code-editor-lsp-dd -quiet build-for-testing
+Completed with existing project Swift 6-mode warnings; no compile errors.
+
+xcodebuild ... -quiet test-without-building -only-testing:AlasTests/EditorBufferTests/remoteFailedLSPOpenRetriesThroughNormalReopen
+TEST EXECUTE FAILED before the selector ran:
+IDELaunchErrorDomain Code=20; RBSRequestErrorDomain Code=5;
+NSPOSIXErrorDomain Code=163 (Launchd job spawn failed).
+```

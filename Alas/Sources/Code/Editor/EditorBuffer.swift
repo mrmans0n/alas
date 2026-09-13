@@ -476,7 +476,11 @@ final class EditorBuffer {
         // empty storage and the loadFromDisk setAttributedString wiped
         // everything, leaving the text view unstyled.
         handleEdit(edit: nil)
-        openLSPDocumentIfReady()
+        if remoteHost != nil {
+            openRemoteLSPIfNeeded()
+        } else {
+            openLSPDocumentIfReady()
+        }
         onInitialLoadFinished?()
     }
 
@@ -2047,7 +2051,10 @@ final class EditorBuffer {
     /// documents attach from `finishInitialLoad`; remote documents wait for a
     /// successful remote read so didOpen never advertises a placeholder.
     private func openRemoteLSPIfNeeded(fileURL: URL? = nil, text: String? = nil) {
-        guard !isExternal,
+        guard initialLoadFinished,
+              !readOnly,
+              case .loaded = loadKind,
+              !isExternal,
               remoteHost != nil,
               openedLanguage == nil,
               lspOpenTask == nil,

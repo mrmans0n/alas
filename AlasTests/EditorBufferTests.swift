@@ -7,6 +7,19 @@ import AppKit
 @MainActor
 @Suite(.serialized)
 struct EditorBufferTests {
+    private actor RemoteAvailabilityGate {
+        private var available = false
+        private var probes = 0
+
+        func probe() -> Bool {
+            probes += 1
+            return available
+        }
+
+        func enable() { available = true }
+        func probeCount() -> Int { probes }
+    }
+
     private func tempWorktree() -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-buffer-\(UUID().uuidString)")
@@ -121,7 +134,8 @@ struct EditorBufferTests {
         RemoteHostRegistry.shared.register(root: root.path, host: "retry-host")
         defer { RemoteHostRegistry.shared.unregister(root: root.path) }
 
-        var remoteAvailable = false
+        let availability = RemoteAvailabilityGate()
+        var createdTransport: FakeTransport?
         let manager = WorkspaceLSPManager(
             registry: LanguageServerRegistry(userDefined: [
                 LanguageServerConfig(
@@ -129,7 +143,7 @@ struct EditorBufferTests {
                     args: [], env: [:], rootMarkers: [], enabled: true
                 )
             ]),
-            remoteLSPAvailable: { _, _, _ in remoteAvailable },
+            remoteLSPAvailable: { _, _, _ in await availability.probe() },
             makeClient: { _, _, _, language, rootURI in
                 let transport = FakeTransport()
                 transport.onSend = { message in
@@ -142,6 +156,7 @@ struct EditorBufferTests {
                         transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
                     }
                 }
+                createdTransport = transport
                 return LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )
@@ -160,15 +175,23 @@ struct EditorBufferTests {
         )
         defer { buffer.close(persistDirtySnapshot: false) }
         await buffer.awaitLoadForTesting()
+        let initialProbeDeadline = Date().addingTimeInterval(2)
+        while await availability.probeCount() == 0, Date() < initialProbeDeadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await availability.probeCount() == 1)
         #expect(!manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
 
-        remoteAvailable = true
+        await availability.enable()
         buffer.reopenLSPDocument()
         let deadline = Date().addingTimeInterval(2)
         while !manager.isDocumentOpen(fileURL: file, worktreeRoot: root), Date() < deadline {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
+        let opens = try #require(createdTransport?.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) })
+        #expect(opens.count == 1)
+        #expect(opens[0].contains(#""text":"let value = 1\n""#))
     }
 
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
