@@ -769,7 +769,12 @@ extension AppState {
     /// the state flapped and the badge should never have appeared.
     private func applyPendingHarnessAttention(_ transition: HarnessActivityTransition) {
         guard let current = harness.activityBySession[transition.sessionID]?.state,
-              current == transition.state else { return }
+              current == transition.state else {
+            // The marker only applies to this pending transition; a rejected
+            // one must not suppress the next genuine badge for the session.
+            harnessAttentionPreAcknowledgedSessions.remove(transition.sessionID)
+            return
+        }
         let wasPreAcknowledged = harnessAttentionPreAcknowledgedSessions.remove(transition.sessionID) != nil
         applyHarnessAttention(transition)
         guard wasPreAcknowledged else { return }
