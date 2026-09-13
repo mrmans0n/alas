@@ -315,15 +315,18 @@ struct LSPTextDocumentIdentifier: Codable, Hashable, Sendable {
 struct LSPTextEdit: Codable, Hashable, Sendable {
     let range: LSPRange
     let newText: String
+    let annotationID: String?
 
-    init(range: LSPRange, newText: String) {
+    init(range: LSPRange, newText: String, annotationID: String? = nil) {
         self.range = range
         self.newText = newText
+        self.annotationID = annotationID
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.newText = try container.decode(String.self, forKey: .newText)
+        self.annotationID = try container.decodeIfPresent(String.self, forKey: .annotationId)
         if let range = try container.decodeIfPresent(LSPRange.self, forKey: .range) {
             self.range = range
         } else if let replace = try container.decodeIfPresent(LSPRange.self, forKey: .replace) {
@@ -337,6 +340,7 @@ struct LSPTextEdit: Codable, Hashable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(range, forKey: .range)
         try container.encode(newText, forKey: .newText)
+        try container.encodeIfPresent(annotationID, forKey: .annotationId)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -344,6 +348,7 @@ struct LSPTextEdit: Codable, Hashable, Sendable {
         case newText
         case insert
         case replace
+        case annotationId
     }
 }
 
