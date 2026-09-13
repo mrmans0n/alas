@@ -137,8 +137,11 @@ struct AgentSidebarRollupBuilder {
     static func build(_ input: Input) -> AgentSidebarRollup {
         let liveSessions = input.liveACP.filter { $0.worktreeId == input.worktreeID }
         let liveIDs = Set(liveSessions.map(\.id))
+        let persistedByID = Dictionary(uniqueKeysWithValues: input.persistedACP.map { ($0.id, $0) })
 
-        let liveRows = liveSessions.map { liveRow(for: $0, remoteHost: input.remoteHost) }
+        let liveRows = liveSessions.map {
+            liveRow(for: $0, remoteHost: input.remoteHost, persisted: persistedByID[$0.id])
+        }
         let persistedRows = input.persistedACP
             .filter { !liveIDs.contains($0.id) }
             .map { persistedRow($0, remoteHost: input.remoteHost) }
@@ -224,17 +227,31 @@ struct AgentSidebarRollupBuilder {
         return ordered
     }
 
-    private static func liveRow(for session: ACPSession, remoteHost: String?) -> AgentSidebarRow {
-        .acp(
+    private static func liveRow(
+        for session: ACPSession,
+        remoteHost: String?,
+        persisted: ACPSessionRow?
+    ) -> AgentSidebarRow {
+        let resolvedState = state(for: session)
+        // A session that disconnects renders in History like any persisted
+        // row, so it needs the same "last activity" semantics; its own
+        // creation time would otherwise misdescribe the accessibility label.
+        let activityAt: Date
+        if resolvedState == .detached, let updatedAt = persisted?.updatedAt {
+            activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
+        } else {
+            activityAt = session.createdAt
+        }
+        return .acp(
             id: session.id,
             agentID: session.agentId,
             title: session.title,
             model: session.currentModel.map(AgentSidebarModelDisplay.shortName(for:)),
-            state: state(for: session),
+            state: resolvedState,
             contextUsage: session.contextUsage,
             plan: planProgress(for: session.transcript.currentPlan),
             host: remoteHost,
-            activityAt: session.createdAt,
+            activityAt: activityAt,
             isLive: true
         )
     }

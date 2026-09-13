@@ -51,6 +51,22 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func disconnectedLiveSessionUsesThePersistedRowsLastActivityNotItsOwnCreationTime() {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        session.agentState = .disconnected
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a",
+            persistedACP: [makeRow(id: "acp-a")],
+            liveACP: [session], terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        let row = try! #require(rollup.history.first)
+        #expect(row.state == .detached)
+        #expect(row.activityAt == Date(timeIntervalSince1970: 2))
+    }
+
+    @Test @MainActor
     func builderFiltersOtherWorktreesAndUsesUnknownForUnhookedTerminal() {
         let rollup = AgentSidebarRollupBuilder.build(.init(
             worktreeID: "worktree-a", persistedACP: [makeRow(id: "a")],
