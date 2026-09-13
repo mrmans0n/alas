@@ -100,6 +100,57 @@ import Foundation
         #expect(row.updatedAt == created)
     }
 
+    @Test("a successful compare-and-swap payload update bumps session updated_at to the write time")
+    func compareAndSwapBumpsSessionUpdatedAt() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("activity-cas-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let created: Int64 = 100
+        try store.upsertSession(ACPSessionRow(
+            id: "s1", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: created, updatedAt: created, lastOpenedAt: created, archived: false))
+        try store.upsertMessages([
+            ACPStoredMessage(id: "m1", sessionId: "s1", kind: "text", seq: 0,
+                payload: Data("base".utf8), createdAt: created),
+        ], activityAt: created)
+
+        let writeTime: Int64 = 5_000
+        let swapped = try store.updateMessagePayloadIfUnchanged(
+            id: "m1", sessionId: "s1", payload: Data("final".utf8),
+            expectedPayload: Data("base".utf8), activityAt: writeTime)
+
+        #expect(swapped)
+        let row = try #require(try store.loadSession(id: "s1"))
+        #expect(row.updatedAt == writeTime)
+    }
+
+    @Test("a rejected compare-and-swap (stale expectedPayload) does not bump updated_at")
+    func rejectedCompareAndSwapDoesNotBumpUpdatedAt() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("activity-cas-rejected-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let created: Int64 = 100
+        try store.upsertSession(ACPSessionRow(
+            id: "s1", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: created, updatedAt: created, lastOpenedAt: created, archived: false))
+        try store.upsertMessages([
+            ACPStoredMessage(id: "m1", sessionId: "s1", kind: "text", seq: 0,
+                payload: Data("actual current payload".utf8), createdAt: created),
+        ], activityAt: created)
+
+        // expectedPayload doesn't match what's actually stored — the CAS
+        // must reject the write, and the timestamp must not move either.
+        let swapped = try store.updateMessagePayloadIfUnchanged(
+            id: "m1", sessionId: "s1", payload: Data("final".utf8),
+            expectedPayload: Data("stale base".utf8), activityAt: 9_999)
+
+        #expect(!swapped)
+        let row = try #require(try store.loadSession(id: "s1"))
+        #expect(row.updatedAt == created)
+    }
+
     @Test("persisting messages never moves updated_at backward")
     func upsertMessagesNeverRegressesUpdatedAt() throws {
         let url = FileManager.default.temporaryDirectory

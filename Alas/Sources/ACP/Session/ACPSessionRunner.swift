@@ -2449,9 +2449,11 @@ extension ACPSessionRunner {
             // notification contract.
             if let basePayload = snapshot.basePayload {
                 let payload = snapshot.payload
+                let sid = sessionId
                 enqueuePersistence({ persistence in
                     try await persistence.compareAndSwapMessagePayload(
                         id: id,
+                        sessionId: sid,
                         payload: payload,
                         expectedPayload: basePayload
                     )

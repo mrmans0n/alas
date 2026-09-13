@@ -845,7 +845,15 @@ extension ACPSessionStore {
         ) > 0
     }
 
-    func updateMessagePayloadIfUnchanged(id: String, payload: Data, expectedPayload: Data) throws -> Bool {
+    /// See `upsertMessages` for why `activityAt` defaults to "now" rather
+    /// than deriving from the message's own (possibly stale) createdAt.
+    func updateMessagePayloadIfUnchanged(
+        id: String,
+        sessionId: String,
+        payload: Data,
+        expectedPayload: Data,
+        activityAt: Int64 = Int64(Date().timeIntervalSince1970)
+    ) throws -> Bool {
         let mergedPayload: Data
         if var incoming = try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload),
            let existing = try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: expectedPayload),
@@ -858,11 +866,19 @@ extension ACPSessionStore {
         } else {
             mergedPayload = payload
         }
-        return try db.execChanges("""
+        let swapped = try db.execChanges("""
         UPDATE messages
         SET payload = ?
         WHERE id = ? AND payload = ?
         """, bindings: [mergedPayload, id, expectedPayload]) > 0
+        // A successful CAS is as real a write as an insert or upsert — it
+        // just doesn't go through either of those paths — so it needs the
+        // same activity bump, or a takeover-salvaged session falls back to
+        // its earlier write time once reloaded from disk.
+        if swapped {
+            try bumpSessionActivity(sessionId: sessionId, to: activityAt)
+        }
+        return swapped
     }
 
     func loadMessagePayload(id: String) throws -> Data? {

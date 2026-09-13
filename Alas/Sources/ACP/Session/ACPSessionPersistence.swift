@@ -502,11 +502,13 @@ actor ACPSessionPersistence {
 
     func compareAndSwapMessagePayload(
         id: String,
+        sessionId: String,
         payload: Data,
         expectedPayload: Data
     ) throws -> Bool {
         try openedStore().updateMessagePayloadIfUnchanged(
             id: id,
+            sessionId: sessionId,
             payload: payload,
             expectedPayload: expectedPayload
         )
@@ -522,11 +524,13 @@ actor ACPSessionPersistence {
 
     func updateMessagePayloadIfUnchanged(
         id: String,
+        sessionId: String,
         payload: Data,
         expectedPayload: Data
     ) throws -> Bool {
         try openedStore().updateMessagePayloadIfUnchanged(
             id: id,
+            sessionId: sessionId,
             payload: payload,
             expectedPayload: expectedPayload
         )
