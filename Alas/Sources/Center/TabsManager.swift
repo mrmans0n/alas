@@ -38,6 +38,9 @@ final class TabsManager {
     }
 
     private var byWorktree: [String: TabsFile] = [:]
+    /// Runtime navigation state belongs to the worktree rather than an editor
+    /// view, so a reference search survives tab switches and view recreation.
+    private var navigationStores: [String: EditorNavigationStore] = [:]
     /// `true` once `loadAll` has been called at least once, meaning any
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
@@ -97,6 +100,46 @@ final class TabsManager {
 
     func tabs(forWorktree id: String) -> [Tab] {
         byWorktree[id]?.tabs ?? []
+    }
+
+    func navigationStore(forWorktreeId worktreeId: String) -> EditorNavigationStore {
+        if let store = navigationStores[worktreeId] { return store }
+        let store = EditorNavigationStore()
+        navigationStores[worktreeId] = store
+        return store
+    }
+
+    /// Opens an LSP target using the worktree's explicit host context. In
+    /// particular, a remote absolute path is only ever handed to the remote
+    /// editor-buffer route, never to local `FileManager` APIs.
+    func openNavigationTarget(
+        _ target: EditorNavigationTarget,
+        worktreeRoot: URL,
+        originatingRelativePath: String?,
+        language: String?
+    ) {
+        guard target.document.host == RemoteHostRegistry.shared.host(forPath: worktreeRoot.path),
+              let url = URL(string: target.document.uri)
+        else { return }
+        let rootPath = worktreeRoot.path.hasSuffix("/") ? worktreeRoot.path : worktreeRoot.path + "/"
+        if url.path.hasPrefix(rootPath) {
+            openEditor(
+                worktreeId: target.document.worktreeID,
+                relativePath: String(url.path.dropFirst(rootPath.count)),
+                revealLine: target.position.line,
+                revealCharacter: target.position.character
+            )
+        } else {
+            openExternalEditor(
+                worktreeId: target.document.worktreeID,
+                absoluteURL: url,
+                revealLine: target.position.line,
+                revealCharacter: target.position.character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktreeRoot,
+                language: language
+            )
+        }
     }
 
     /// Owner-aware session tab lookup. The worktree overload intentionally

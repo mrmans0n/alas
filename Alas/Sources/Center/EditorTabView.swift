@@ -197,6 +197,22 @@ struct EditorTabView: View {
                     onTextViewDetached: { detachFindController(from: $0) },
                     onInitialHighlightReady: onStartupRecoveryReady
                 )
+                EditorNavigationResultsView(
+                    store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
+                    onOpen: { target in
+                        appState.tabs.openNavigationTarget(
+                            target,
+                            worktreeRoot: worktreePath,
+                            originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
+                            language: appState.lsp.language(
+                                forFileExtension: LanguageServerRegistry.extensionKey(forPath: relativePath)
+                            )
+                        )
+                    },
+                    onReturnFocus: {
+                        activeTextView?.window?.makeFirstResponder(activeTextView)
+                    }
+                )
             }
         }
         .background(theme.color("bg-1"))

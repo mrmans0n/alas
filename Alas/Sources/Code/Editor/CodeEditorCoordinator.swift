@@ -56,6 +56,7 @@ final class CodeEditorCoordinator {
     private var hover: HoverFeature?
     private var hoverObservers: [NSObjectProtocol] = []
     private var definition: DefinitionFeature?
+    private var navigation: NavigationFeature?
     private var hoverHighlight: HoverHighlightFeature?
     private var completion: CompletionFeature?
     private var reportedInitialHighlightReady = false
@@ -154,45 +155,43 @@ final class CodeEditorCoordinator {
             openTarget: { [weak self] url, line, character in
                 guard let self,
                       let wid = self.currentWorktreeId else { return }
-                // For external buffers, the originating worktree root is the
-                // anchor for in-worktree-vs-external classification, not the
-                // sentinel that bindBuffer set on currentRoot.
                 let anchor = self.currentOriginatingWorktreeRoot ?? self.currentRoot
                 guard let root = anchor else { return }
-                let abs = url.path
-                let prefix = root.path + "/"
-                if abs.hasPrefix(prefix) {
-                    let rel = String(abs.dropFirst(prefix.count))
-                    self.appState.tabs.openEditor(
-                        worktreeId: wid,
-                        relativePath: rel,
-                        revealLine: line,
-                        revealCharacter: character
-                    )
-                } else {
-                    // Pass the current in-worktree file as the originating
-                    // path so LSP traffic for the external file is routed to
-                    // the correct holder in nested-package layouts.
-                    // Also pass the worktree root and language so TabsManager
-                    // can rebind the LSP holder even when the tab is inactive.
-                    let originatingRel = self.currentExternalAbsolutePath == nil
+                let target = EditorNavigationTarget(
+                    document: EditorDocumentID(
+                        host: RemoteHostRegistry.shared.host(forPath: root.path),
+                        worktreeID: wid,
+                        uri: url.lspURI
+                    ),
+                    position: LSPPosition(line: line, character: character)
+                )
+                self.appState.tabs.openNavigationTarget(
+                    target,
+                    worktreeRoot: root,
+                    originatingRelativePath: self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
-                        : self.currentOriginatingRelativePath
-                    let originatingRoot = self.currentOriginatingWorktreeRoot ?? self.currentRoot
-                    let lang = self.currentLanguage
-                    self.appState.tabs.openExternalEditor(
-                        worktreeId: wid,
-                        absoluteURL: url,
-                        revealLine: line,
-                        revealCharacter: character,
-                        originatingRelativePath: originatingRel,
-                        originatingWorktreeRoot: originatingRoot,
-                        language: lang
-                    )
-                }
+                        : self.currentOriginatingRelativePath,
+                    language: self.currentLanguage
+                )
             },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+        )
+        navigation = NavigationFeature(
+            store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            openTarget: { [weak self] target in
+                guard let self, let root = self.currentOriginatingWorktreeRoot ?? self.currentRoot else { return }
+                self.appState.tabs.openNavigationTarget(
+                    target,
+                    worktreeRoot: root,
+                    originatingRelativePath: self.currentExternalAbsolutePath == nil
+                        ? self.currentRelativePath
+                        : self.currentOriginatingRelativePath,
+                    language: self.currentLanguage
+                )
+            }
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
@@ -703,6 +702,15 @@ final class CodeEditorCoordinator {
         let router = EditorCommandRouter()
         router.register(.definition) { [weak textView] range in
             textView?.triggerCommandClick(atUTF16Offset: range.location)
+        }
+        router.register(.typeDefinition) { [weak self] range in
+            self?.navigation?.perform(.typeDefinition, range: range)
+        }
+        router.register(.implementation) { [weak self] range in
+            self?.navigation?.perform(.implementation, range: range)
+        }
+        router.register(.references) { [weak self] range in
+            self?.navigation?.perform(.references, range: range)
         }
         router.register(.hover) { [weak textView] range in
             textView?.triggerHover(atUTF16Offset: range.location)

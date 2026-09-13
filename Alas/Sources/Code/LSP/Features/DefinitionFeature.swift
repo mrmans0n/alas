@@ -109,7 +109,10 @@ final class DefinitionFeature {
                 ?? URL(fileURLWithPath: loc.uri.removingPercentEncoding ?? loc.uri)
             let path = (url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent)
             let display = "\(path):\(loc.range.start.line + 1)"
-            let snippet = snippetCache.line(at: url, line: loc.range.start.line)
+            // The picker is rendered synchronously. Remote snippets are
+            // loaded by the persistent navigation surface instead of routing
+            // an SSH path through local file APIs while opening this menu.
+            let snippet = url.isRemoteAlasPath ? "" : snippetCache.line(at: url, line: loc.range.start.line)
             return DefinitionPickerEntry(displayPath: display, snippet: snippet)
         }
         let popover = NSPopover()

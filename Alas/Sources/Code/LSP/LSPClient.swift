@@ -132,10 +132,35 @@ actor LSPClient {
     }
 
     func definition(uri: String, position: LSPPosition) async throws -> [LSPLocation] {
-        let raw = try await sendRequest(method: "textDocument/definition", params: [
+        try await locations(method: "textDocument/definition", uri: uri, position: position)
+    }
+
+    func typeDefinition(uri: String, position: LSPPosition) async throws -> [LSPLocation] {
+        try await locations(method: "textDocument/typeDefinition", uri: uri, position: position)
+    }
+
+    func implementation(uri: String, position: LSPPosition) async throws -> [LSPLocation] {
+        try await locations(method: "textDocument/implementation", uri: uri, position: position)
+    }
+
+    func references(uri: String, position: LSPPosition, includeDeclaration: Bool) async throws -> [LSPLocation] {
+        let raw = try await sendRequest(method: "textDocument/references", params: [
+            "textDocument": ["uri": uri],
+            "position": ["line": position.line, "character": position.character],
+            "context": ["includeDeclaration": includeDeclaration]
+        ])
+        return Self.decodeLocations(raw)
+    }
+
+    private func locations(method: String, uri: String, position: LSPPosition) async throws -> [LSPLocation] {
+        let raw = try await sendRequest(method: method, params: [
             "textDocument": ["uri": uri],
             "position": ["line": position.line, "character": position.character]
         ])
+        return Self.decodeLocations(raw)
+    }
+
+    private static func decodeLocations(_ raw: Data?) -> [LSPLocation] {
         guard let raw, raw.count > 4 else { return [] }
         if let single = try? JSONDecoder().decode(LSPLocation.self, from: raw) { return [single] }
         if let many = try? JSONDecoder().decode([LSPLocation].self, from: raw) { return many }
