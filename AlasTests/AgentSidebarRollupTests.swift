@@ -44,10 +44,40 @@ struct AgentSidebarRollupTests {
 
         let row = try! #require(rollup.active.first)
         #expect(row.id == .acp("acp-a"))
-        #expect(row.model == "gpt-5")
+        #expect(row.model == "GPT 5")
         #expect(row.contextUsage?.used == 45_000)
         #expect(row.plan == .init(completed: 1, total: 2, currentStep: "Test isolation"))
         #expect(row.host == "builder.example")
+    }
+
+    @Test @MainActor
+    func prefersTheAdapterDeclaredModelNameOverGuessingFromTheId() {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        session.availableModels = [ACPModelInfo(id: "provider:gpt-5-fable-5", name: "Fable 5")]
+        session.currentModel = "provider:gpt-5-fable-5"
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        #expect(rollup.active.first?.model == "Fable 5")
+    }
+
+    @Test @MainActor
+    func disconnectedLiveSessionUsesThePersistedRowsLastActivityNotItsOwnCreationTime() {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        session.agentState = .disconnected
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a",
+            persistedACP: [makeRow(id: "acp-a")],
+            liveACP: [session], terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        let row = try! #require(rollup.history.first)
+        #expect(row.state == .detached)
+        #expect(row.activityAt == Date(timeIntervalSince1970: 2))
     }
 
     @Test @MainActor

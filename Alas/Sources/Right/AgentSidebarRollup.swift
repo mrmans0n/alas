@@ -47,7 +47,10 @@ struct AgentSidebarRow: Identifiable, Equatable {
     let contextUsage: ACPUsageInfo?
     let plan: AgentSidebarPlanProgress?
     let host: String?
-    let createdAt: Date
+    /// The timestamp shown in the metadata caption: creation time for active
+    /// rows, last-activity time for history rows (`.distantPast` for
+    /// terminal rows, which hide the segment entirely).
+    let activityAt: Date
     let isLiveACP: Bool
     var delegation: AgentSidebarDelegation?
 
@@ -60,7 +63,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
         contextUsage: ACPUsageInfo? = nil,
         plan: AgentSidebarPlanProgress? = nil,
         host: String? = nil,
-        createdAt: Date,
+        activityAt: Date,
         isLive: Bool,
         delegation: AgentSidebarDelegation? = nil
     ) -> Self {
@@ -73,7 +76,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
             contextUsage: contextUsage,
             plan: plan,
             host: host,
-            createdAt: createdAt,
+            activityAt: activityAt,
             isLiveACP: isLive,
             delegation: delegation
         )
@@ -96,7 +99,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
             contextUsage: nil,
             plan: nil,
             host: host,
-            createdAt: .distantPast,
+            activityAt: .distantPast,
             isLiveACP: false,
             delegation: nil
         )
@@ -134,8 +137,11 @@ struct AgentSidebarRollupBuilder {
     static func build(_ input: Input) -> AgentSidebarRollup {
         let liveSessions = input.liveACP.filter { $0.worktreeId == input.worktreeID }
         let liveIDs = Set(liveSessions.map(\.id))
+        let persistedByID = Dictionary(uniqueKeysWithValues: input.persistedACP.map { ($0.id, $0) })
 
-        let liveRows = liveSessions.map { liveRow(for: $0, remoteHost: input.remoteHost) }
+        let liveRows = liveSessions.map {
+            liveRow(for: $0, remoteHost: input.remoteHost, persisted: persistedByID[$0.id])
+        }
         let persistedRows = input.persistedACP
             .filter { !liveIDs.contains($0.id) }
             .map { persistedRow($0, remoteHost: input.remoteHost) }
@@ -221,17 +227,31 @@ struct AgentSidebarRollupBuilder {
         return ordered
     }
 
-    private static func liveRow(for session: ACPSession, remoteHost: String?) -> AgentSidebarRow {
-        .acp(
+    private static func liveRow(
+        for session: ACPSession,
+        remoteHost: String?,
+        persisted: ACPSessionRow?
+    ) -> AgentSidebarRow {
+        let resolvedState = state(for: session)
+        // A session that disconnects renders in History like any persisted
+        // row, so it needs the same "last activity" semantics; its own
+        // creation time would otherwise misdescribe the accessibility label.
+        let activityAt: Date
+        if resolvedState == .detached, let updatedAt = persisted?.updatedAt {
+            activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
+        } else {
+            activityAt = session.createdAt
+        }
+        return .acp(
             id: session.id,
             agentID: session.agentId,
             title: session.title,
-            model: session.currentModel,
-            state: state(for: session),
+            model: modelDisplay(currentModel: session.currentModel, availableModels: session.availableModels),
+            state: resolvedState,
             contextUsage: session.contextUsage,
             plan: planProgress(for: session.transcript.currentPlan),
             host: remoteHost,
-            createdAt: session.createdAt,
+            activityAt: activityAt,
             isLive: true
         )
     }
@@ -241,12 +261,28 @@ struct AgentSidebarRollupBuilder {
             id: row.id,
             agentID: row.agentId,
             title: row.title,
-            model: row.currentModel,
+            // Persisted rows never carry the adapter's model list, so this
+            // always falls through to the heuristic shortener.
+            model: modelDisplay(currentModel: row.currentModel, availableModels: []),
             state: .detached,
             host: remoteHost,
-            createdAt: Date(timeIntervalSince1970: TimeInterval(row.createdAt)),
+            activityAt: Date(timeIntervalSince1970: TimeInterval(row.updatedAt)),
             isLive: false
         )
+    }
+
+    /// Prefers the adapter's own declared name for the active model — it
+    /// already knows composite/provider-specific shapes (e.g. Cursor's
+    /// "provider:gpt-5-fable-5" advertised as "Fable 5") that no
+    /// id-shortening heuristic can reliably reconstruct — falling back to
+    /// `AgentSidebarModelDisplay.shortName` only when the id isn't found in
+    /// the advertised list (unknown/stale id, or no list yet).
+    private static func modelDisplay(currentModel: String?, availableModels: [ACPModelInfo]) -> String? {
+        guard let currentModel else { return nil }
+        if let declared = availableModels.first(where: { $0.id == currentModel })?.name {
+            return declared
+        }
+        return AgentSidebarModelDisplay.shortName(for: currentModel)
     }
 
     private static func terminalRows(
