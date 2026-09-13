@@ -228,10 +228,7 @@ struct ToolbarBtn: View {
     var body: some View {
         Button(action: action) {
             Icon(name: icon, size: 13, color: iconColor)
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
-                .background(hovering || isActive ? theme.color("bg-3") : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .toolbarControlSurface(isLit: hovering || isActive)
         }
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }

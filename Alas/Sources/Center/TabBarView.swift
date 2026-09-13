@@ -96,15 +96,9 @@ struct TabBarView: View {
                     NotificationCenter.default.post(name: .alasSplitDown, object: nil)
                 }
             }
-            Button(action: onNewTerminal) {
-                Icon(name: "plus", size: 13)
-                    .frame(width: 26, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("New terminal")
-            .padding(.leading, 8)
-            .padding(.trailing, 2)
+            ToolbarIconButton(iconName: "plus", tooltip: "New terminal", action: onNewTerminal)
+                .padding(.leading, 8)
+                .padding(.trailing, 2)
             AgentSparkleMenu(
                 agents: enabledAgents,
                 acpAgents: acpAgents,
@@ -383,12 +377,12 @@ private struct ToolbarIconButton: View {
         Button(action: action) {
             Icon(name: iconName, size: 13,
                  color: hovering ? theme.color("fg") : theme.color("fg-faint"))
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
+                .toolbarControlSurface(isLit: hovering)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
         .help(tooltip)
+        .accessibilityLabel(tooltip)
     }
 }
 
@@ -398,6 +392,7 @@ private struct AgentSparkleMenu: View {
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
     @Environment(\.theme) var theme
+    @State private var hovering = false
 
     var body: some View {
         Menu {
@@ -436,13 +431,14 @@ private struct AgentSparkleMenu: View {
                 }
             }
         } label: {
-            Icon(name: "sparkle", size: 13, color: theme.color("fg-faint"))
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
+            Icon(name: "sparkle", size: 13,
+                 color: hovering ? theme.color("fg") : theme.color("fg-faint"))
+                .toolbarControlSurface(isLit: hovering)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .onHover { hovering = $0 }
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
     }
 }
@@ -455,6 +451,7 @@ private struct RunScriptMenu: View {
     let onNew: (RunScriptScope) -> Void
     let onEdit: () -> Void
     @Environment(\.theme) var theme
+    @State private var hovering = false
 
     var body: some View {
         Menu {
@@ -491,13 +488,14 @@ private struct RunScriptMenu: View {
             Button("New Global Script…") { onNew(.global) }
             Button("Edit Scripts…") { onEdit() }
         } label: {
-            Icon(name: "play", size: 13, color: theme.color("fg-faint"))
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
+            Icon(name: "play", size: 13,
+                 color: hovering ? theme.color("fg") : theme.color("fg-faint"))
+                .toolbarControlSurface(isLit: hovering)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .onHover { hovering = $0 }
         .help("Run script (⌘R)")
     }
 }

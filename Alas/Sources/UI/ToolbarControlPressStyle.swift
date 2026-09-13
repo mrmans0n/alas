@@ -19,3 +19,29 @@ struct ToolbarControlPressStyle: ButtonStyle {
 extension ButtonStyle where Self == ToolbarControlPressStyle {
     static var toolbarControl: ToolbarControlPressStyle { ToolbarControlPressStyle() }
 }
+
+/// The shared toolbar-button surface: a fixed 26x22 hit area that fills with
+/// `bg-3` once lit.
+///
+/// `ToolbarBtn` wraps its own icon in it, and the tab bar's menu-backed
+/// controls borrow it directly — a `Menu` cannot take a `ButtonStyle`, so
+/// wrapping the label is the only way for them to look like their `Button`
+/// neighbours.
+private struct ToolbarControlSurface: ViewModifier {
+    let isLit: Bool
+    @Environment(\.theme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: 26, height: 22)
+            .contentShape(Rectangle())
+            .background(isLit ? theme.color("bg-3") : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+extension View {
+    func toolbarControlSurface(isLit: Bool) -> some View {
+        modifier(ToolbarControlSurface(isLit: isLit))
+    }
+}
