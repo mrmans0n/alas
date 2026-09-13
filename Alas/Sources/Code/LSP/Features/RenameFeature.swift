@@ -206,26 +206,33 @@ final class RenameFeature {
         })
     }
 
+    func makePreviewModel(plan: WorkspaceEditPlan, context: EditorRequestContext) -> WorkspaceEditPreviewModel {
+        let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: context.document.worktreeID, worktreeRoot: root)
+        return WorkspaceEditPreviewModel(plan: plan) { [isCurrent] plan in
+            guard isCurrent(context) else { return .conflict([context.document]) }
+            let outcome = await coordinator.executor.apply(plan)
+            if case .applied(let id) = outcome {
+                // The initiating editor owns an accessible undo entry even
+                // when every edited target is unopened. Inverse writes still
+                // come exclusively from the confirmed plan journal.
+                let owners = Set(plan.steps.flatMap { [$0.document, $0.destination].compactMap { $0 } }).union([context.document])
+                coordinator.register(operationID: id, affectedDocuments: owners)
+            }
+            return outcome
+        }
+    }
+
     private func presentOrApply(_ plan: WorkspaceEditPlan, context: EditorRequestContext) async {
         guard plan.steps.contains(where: { $0.before.content != $0.after.content || $0.kind != .text }) else {
             showStatus("No changes")
             return
         }
-        let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: context.document.worktreeID, worktreeRoot: root)
-        let apply: (WorkspaceEditPlan) async -> WorkspaceEditOutcome = { [isCurrent] plan in
-            guard isCurrent(context) else { return .conflict([context.document]) }
-            let outcome = await coordinator.executor.apply(plan)
-            if case .applied(let id) = outcome {
-                coordinator.register(operationID: id, affectedDocuments: Set(plan.steps.flatMap { [$0.document, $0.destination].compactMap { $0 } }))
-            }
-            return outcome
-        }
+        let model = makePreviewModel(plan: plan, context: context)
         if plan.requiresPreview {
             guard let parent = textView?.window, parent.attachedSheet == nil else {
                 showStatus("Close the current sheet and run the command again.")
                 return
             }
-            let model = WorkspaceEditPreviewModel(plan: plan, apply: apply)
             let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceEditPreview(model: model) { [weak self, weak parent] in
                 guard let window = parent?.attachedSheet else { return }
                 parent?.endSheet(window)
@@ -234,8 +241,8 @@ final class RenameFeature {
             sheet = window
             parent.beginSheet(window, completionHandler: nil)
         } else {
-            let outcome = await apply(plan)
-            showStatus(WorkspaceEditPreviewModel.message(for: outcome) ?? "Changes applied")
+            _ = await model.apply()
+            showStatus(model.errorMessage ?? "Changes applied")
         }
     }
 }

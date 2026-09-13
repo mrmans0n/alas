@@ -145,4 +145,64 @@ struct RenameFeatureTests {
         }
         #expect(buffer.storage.string == original)
     }
+
+    @Test(arguments: [false, true])
+    func unopenedPreviewTargetsHaveNormalUndoInInitiatingEditor(resourceOnly: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rename-undo-owner-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originURL = root.appendingPathComponent("origin.txt")
+        let targetURL = root.appendingPathComponent("target.txt")
+        let movedURL = root.appendingPathComponent("moved.txt")
+        try Data("origin".utf8).write(to: originURL)
+        try Data("old".utf8).write(to: targetURL)
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
+        let tab = tabs.openEditor(worktreeId: "w", relativePath: "origin.txt", revealLine: nil, revealCharacter: nil)
+        let buffer = tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: root, relativePath: "origin.txt")
+        defer { buffer.close(persistDirtySnapshot: false) }
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        let origin = EditorDocumentID(host: nil, worktreeID: "w", uri: originURL.lspURI)
+        let target = EditorDocumentID(host: nil, worktreeID: "w", uri: targetURL.lspURI)
+        let moved = EditorDocumentID(host: nil, worktreeID: "w", uri: movedURL.lspURI)
+        let context = EditorRequestContext(document: origin, version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let changes: [LSPDocumentChange] = resourceOnly
+            ? [.rename(oldURI: target.uri, newURI: moved.uri, options: .init(), annotationID: nil)]
+            : [.textDocument(document: .init(uri: target.uri, version: nil), edits: [.init(range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 3)), newText: "new")])]
+        let targetSnapshot = try await access.snapshot(target)
+        let movedSnapshot = try await access.snapshot(moved)
+        let plan = try WorkspaceEditPlanner.plan(edit: .init(documentChanges: changes), context: context, snapshots: [
+            target: targetSnapshot, moved: movedSnapshot
+        ])
+        #expect(plan.requiresPreview)
+        #expect(tabs.workspaceEditBuffer(for: target) == nil)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        buffer.storage.addLayoutManager(layout)
+        let view = CodeTextView(frame: .zero, textContainer: container)
+        view.bindUndo(to: buffer)
+        let feature = RenameFeature(textView: view, tabs: tabs, root: root, synchronize: { _ in nil }, isCurrent: { $0 == context })
+        let model = feature.makePreviewModel(plan: plan, context: context)
+        #expect(await model.apply())
+        #expect(try String(contentsOf: resourceOnly ? movedURL : targetURL, encoding: .utf8) == (resourceOnly ? "old" : "new"))
+        #expect(buffer.storage.string == "origin")
+        #expect(!buffer.dirty)
+        try #require(buffer.undoManager.canUndo)
+        #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        let undo = tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: root)
+        for _ in 0..<200 {
+            if undo.lastOutcome != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard case .applied = undo.lastOutcome else { Issue.record("Expected normal Undo to restore the unopened target")
+        return }
+        #expect(try String(contentsOf: targetURL, encoding: .utf8) == "old")
+        #expect(!FileManager.default.fileExists(atPath: movedURL.path))
+        #expect(buffer.undoManager.canRedo)
+        #expect(try journal.records().filter { $0.status == .applied }.count == 2)
+        #expect(!buffer.undoManager.canUndo)
+    }
 }
