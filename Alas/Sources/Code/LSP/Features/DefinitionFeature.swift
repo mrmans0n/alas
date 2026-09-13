@@ -8,6 +8,11 @@ import Foundation
 /// inline `DefinitionPicker` anchored at the click point.
 @MainActor
 final class DefinitionFeature {
+    private enum RequestMethod {
+        case definition
+        case typeDefinition
+        case implementation
+    }
     typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
@@ -41,6 +46,14 @@ final class DefinitionFeature {
     func notifyCaretChanged() { dismiss() }
     func notifyWindowResized() { dismiss() }
 
+    func goToTypeDefinition(range: NSRange) {
+        requestFromCommand(.typeDefinition, range: range)
+    }
+
+    func goToImplementation(range: NSRange) {
+        requestFromCommand(.implementation, range: range)
+    }
+
     private func dismiss() {
         requestID += 1
         inFlight?.cancel()
@@ -53,6 +66,31 @@ final class DefinitionFeature {
         guard let textView, let uri = getURI(),
               let position = textView.lspPosition(at: point),
               let offset = textView.utf16Offset(at: point) else { return }
+        request(.definition, uri: uri, position: position, offset: offset, anchorPoint: point)
+    }
+
+    private func requestFromCommand(_ method: RequestMethod, range: NSRange) {
+        guard let textView,
+              let uri = getURI(),
+              let position = TextEditCoordinates.lspPosition(utf16Offset: range.location, in: textView.string),
+              let rect = textView.firstRect(for: position)
+        else { return }
+        request(
+            method,
+            uri: uri,
+            position: position,
+            offset: range.location,
+            anchorPoint: NSPoint(x: rect.midX, y: rect.midY)
+        )
+    }
+
+    private func request(
+        _ method: RequestMethod,
+        uri: String,
+        position: LSPPosition,
+        offset: Int,
+        anchorPoint: NSPoint
+    ) {
         let fallbackClient = getClient()
         inFlight?.cancel()
         requestID += 1
@@ -69,9 +107,23 @@ final class DefinitionFeature {
             let context = bound?.1
             let locations: [LSPLocation]
             if let bound {
-                locations = (try? await bound.0.definition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+                switch method {
+                case .definition:
+                    locations = (try? await bound.0.definition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+                case .typeDefinition:
+                    locations = (try? await bound.0.typeDefinition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+                case .implementation:
+                    locations = (try? await bound.0.implementation(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+                }
             } else if let fallbackClient {
-                locations = (try? await fallbackClient.definition(uri: uri, position: position)) ?? []
+                switch method {
+                case .definition:
+                    locations = (try? await fallbackClient.definition(uri: uri, position: position)) ?? []
+                case .typeDefinition:
+                    locations = (try? await fallbackClient.typeDefinition(uri: uri, position: position)) ?? []
+                case .implementation:
+                    locations = (try? await fallbackClient.implementation(uri: uri, position: position)) ?? []
+                }
             } else {
                 locations = []
             }
@@ -81,9 +133,9 @@ final class DefinitionFeature {
                       self.requestID == currentRequestID,
                       self.getURI() == uri,
                       context.map(self.isContextCurrent) ?? true,
-                      self.textView?.lspPosition(at: point) == position
+                      self.textView?.lspPosition(at: anchorPoint) == position
                 else { return }
-                self.handle(locations: locations, anchorPoint: point)
+                self.handle(locations: locations, anchorPoint: anchorPoint)
             }
         }
     }

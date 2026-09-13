@@ -108,6 +108,10 @@ final class EditorNavigationStore {
         isPresented = true
     }
 
+    func cancelLoading() {
+        isLoading = false
+    }
+
     func close() {
         isPresented = false
         isLoading = false

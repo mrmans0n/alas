@@ -177,21 +177,14 @@ final class CodeEditorCoordinator {
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
+        let initialNavigationStore = appState.tabs.navigationStore(forWorktreeId: worktreeId)
         navigation = NavigationFeature(
-            store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
+            store: { [weak self, initialNavigationStore] in
+                guard let self else { return initialNavigationStore }
+                return self.appState.tabs.navigationStore(forWorktreeId: self.currentWorktreeId ?? worktreeId)
+            },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
-            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
-            openTarget: { [weak self] target in
-                guard let self, let root = self.currentOriginatingWorktreeRoot ?? self.currentRoot else { return }
-                self.appState.tabs.openNavigationTarget(
-                    target,
-                    worktreeRoot: root,
-                    originatingRelativePath: self.currentExternalAbsolutePath == nil
-                        ? self.currentRelativePath
-                        : self.currentOriginatingRelativePath,
-                    language: self.currentLanguage
-                )
-            }
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
@@ -700,14 +693,17 @@ final class CodeEditorCoordinator {
 
     private func installEditorCommands(on textView: CodeTextView) {
         let router = EditorCommandRouter()
-        router.register(.definition) { [weak textView] range in
+        router.register(.definition) { [weak self, weak textView] range in
+            self?.navigation?.cancelPendingRequest()
             textView?.triggerCommandClick(atUTF16Offset: range.location)
         }
         router.register(.typeDefinition) { [weak self] range in
-            self?.navigation?.perform(.typeDefinition, range: range)
+            self?.navigation?.cancelPendingRequest()
+            self?.definition?.goToTypeDefinition(range: range)
         }
         router.register(.implementation) { [weak self] range in
-            self?.navigation?.perform(.implementation, range: range)
+            self?.navigation?.cancelPendingRequest()
+            self?.definition?.goToImplementation(range: range)
         }
         router.register(.references) { [weak self] range in
             self?.navigation?.perform(.references, range: range)

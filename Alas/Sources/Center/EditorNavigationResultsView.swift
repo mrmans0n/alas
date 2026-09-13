@@ -77,7 +77,7 @@ struct EditorNavigationResultsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(grouped, id: \.document) { group in
-                        Text(group.document.uri)
+                        Text(documentLabel(group.document))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(theme.color("fg-muted"))
                             .padding(.top, 5)
@@ -113,6 +113,11 @@ struct EditorNavigationResultsView: View {
         store.groupedResults
             .map { (document: $0.key, targets: $0.value.sorted { $0.position.line < $1.position.line }) }
             .sorted { $0.document.uri < $1.document.uri }
+    }
+
+    private func documentLabel(_ document: EditorDocumentID) -> String {
+        guard let host = document.host else { return document.uri }
+        return "\(host): \(document.uri)"
     }
 
     private var resizeGesture: some Gesture {

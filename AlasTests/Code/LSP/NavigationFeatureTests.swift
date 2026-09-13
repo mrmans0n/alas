@@ -4,6 +4,73 @@ import Testing
 
 @Suite("LSP navigation", .serialized)
 struct NavigationFeatureTests {
+    @Test @MainActor func referenceRequestsFollowTheCurrentWorktreeStoreAndClearCancelledLoading() async {
+        let firstStore = EditorNavigationStore()
+        let secondStore = EditorNavigationStore()
+        var activeStore = firstStore
+        var continuations: [CheckedContinuation<(LSPClient, EditorRequestContext)?, Never>] = []
+        let feature = NavigationFeature(
+            store: { activeStore },
+            synchronizeRequest: { _ in
+                await withCheckedContinuation { continuations.append($0) }
+            },
+            isContextCurrent: { _ in true }
+        )
+
+        feature.perform(.references, range: NSRange(location: 0, length: 0))
+        await Task.yield()
+        #expect(firstStore.isLoading)
+
+        activeStore = secondStore
+        feature.perform(.references, range: NSRange(location: 0, length: 0))
+        await Task.yield()
+        #expect(!firstStore.isLoading)
+        #expect(secondStore.isLoading)
+
+        continuations.last?.resume(returning: nil)
+        await waitUntil { !secondStore.isLoading }
+        #expect(!secondStore.isLoading)
+        continuations.first?.resume(returning: nil)
+    }
+
+    @Test @MainActor func staleReferenceResponsesClearLoading() async {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        let document = EditorDocumentID(host: nil, worktreeID: "worktree", uri: "file:///tmp/current.swift")
+        let context = EditorRequestContext(
+            document: document,
+            version: 1,
+            serverGeneration: UUID(),
+            range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 0))
+        )
+        let store = EditorNavigationStore()
+        transport.onSend = { _ in
+            transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":[]}"#)
+        }
+        let feature = NavigationFeature(
+            store: { store },
+            synchronizeRequest: { _ in (client, context) },
+            isContextCurrent: { _ in false }
+        )
+
+        feature.perform(.references, range: NSRange(location: 0, length: 0))
+        await waitUntil { !store.isLoading }
+
+        #expect(!store.isLoading)
+        transport.finish()
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ condition: @escaping @MainActor () -> Bool,
+        timeout: Int = 100
+    ) async {
+        for _ in 0 ..< timeout {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
     @Test @MainActor func equalPathsOnDifferentHostsStaySeparate() {
         let store = EditorNavigationStore()
         let position = LSPPosition(line: 0, character: 0)

@@ -605,6 +605,38 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func navigationTargetWithMatchingRemoteHostOpensWorktreeRelativeEditor() {
+        let root = URL(fileURLWithPath: "/srv/navigation-target-\(UUID().uuidString)")
+        let worktreeID = "navigation-remote-worktree"
+        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: "devbox",
+                worktreeID: worktreeID,
+                uri: root.appendingPathComponent("Sources/Remote.swift").lspURI
+            ),
+            position: LSPPosition(line: 8, character: 3)
+        )
+
+        manager.openNavigationTarget(
+            target,
+            worktreeRoot: root,
+            originatingRelativePath: "Sources/Caller.swift",
+            language: "swift"
+        )
+
+        guard case .editor(let tab)? = manager.tabs(forWorktree: worktreeID).first else {
+            Issue.record("expected remote navigation to open an editor tab")
+            return
+        }
+        #expect(tab.relativePath == "Sources/Remote.swift")
+        #expect(tab.externalAbsolutePath == nil)
+        #expect(tab.revealLine == 8)
+        #expect(tab.revealCharacter == 3)
+    }
+
     @Test func activeEditorContextExcludesExternalTabs() {
         let worktreeId = "tabs-manager-active-context-external"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

@@ -102,3 +102,73 @@ Passed. SwiftFormat changed no files on the final run.
 ## Residual verification gap
 
 Automated coverage validates store grouping and protocol decoding plus focused definition/diff regressions. The AppKit/SwiftUI surface's visual resizing and first-responder behavior were compile- and code-path-verified, but not manually exercised in a running GUI during this task.
+
+## Fix round 1: navigation ownership, cancellation, and typed picker behavior
+
+### Changes
+
+- `NavigationFeature` now resolves its `EditorNavigationStore` immediately before a references request rather than retaining the setup worktree's store. A coordinator reused for another worktree therefore publishes into the same worktree-owned store rendered by `EditorTabView`.
+- Cancelling a pending references request immediately clears its owning store's loading state. Nil synchronization, cancellation after the LSP call, and stale binding-context responses also clear the current request's loading state, guarded by request generation.
+- Type definition and implementation now share `DefinitionFeature`'s established zero/single/multiple-target behavior. Multiple targets use the existing `DefinitionPicker`; only references populate the persistent References surface.
+- Added host prefixes to remote result-group labels, so otherwise identical URIs are distinguishable.
+- Added regression coverage for worktree-store selection and cancellation cleanup, stale-response loading cleanup, and a matching remote-host target opening through `TabsManager` as a worktree-relative editor tab.
+
+### Red / green evidence
+
+The initial store-switch test was intentionally written against the old static-store initializer and failed to compile as expected:
+
+```text
+Cannot convert value of type '() -> EditorNavigationStore' to expected argument type 'EditorNavigationStore'
+```
+
+After the implementation and focused test fixture correction, the requested final focused command is awaiting the existing full-suite Xcode process that holds `/private/tmp/alas-code-editor-lsp-dd/Build/Intermediates.noindex/XCBuildData/build.db`. An overlapping retry correctly failed as infrastructure contention, not as a test result:
+
+```text
+error: unable to attach DB: error: accessing build database ... build.db: database is locked
+Testing cancelled because the build failed.
+```
+
+Final focused command to rerun after the lock releases:
+
+```bash
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
+  -derivedDataPath /private/tmp/alas-code-editor-lsp-dd \
+  -only-testing:AlasTests/NavigationFeatureTests \
+  -only-testing:AlasTests/TabsManagerTests test -quiet
+```
+
+`swiftformat` completed with no formatting changes for the seven changed Swift files, and `git diff --check` passed before the final test retry.
+
+### Fix-round files changed
+
+- `Alas/Sources/Center/EditorNavigationResultsView.swift`
+- `Alas/Sources/Code/Editor/CodeEditorCoordinator.swift`
+- `Alas/Sources/Code/Editor/EditorNavigationStore.swift`
+- `Alas/Sources/Code/LSP/Features/DefinitionFeature.swift`
+- `Alas/Sources/Code/LSP/Features/NavigationFeature.swift`
+- `AlasTests/Code/LSP/NavigationFeatureTests.swift`
+- `AlasTests/TabsManagerTests.swift`
+
+### Fix-round self-review
+
+- The store resolver reads the coordinator's current worktree ID at request start, while the captured initial store remains only a safe fallback after coordinator teardown.
+- Request IDs prevent obsolete completions from mutating either results or loading state; cancellation clears the captured owning store before a later action begins.
+- The typed navigation paths retain the existing definition picker’s target-opening closure, which routes each selected target through host-qualified `TabsManager.openNavigationTarget`.
+- The remote routing regression verifies a remote-root target becomes a relative editor tab without requiring a local file to exist.
+
+### Fix-round residual verification gap
+
+The new target-opening regression verifies the remote in-worktree routing branch. The AppKit picker presentation and external-target branch remain code-path reviewed rather than UI-automated; this avoids brittle popover tests while preserving focused unit coverage of the routing contract.
+
+### Fix-round final verification
+
+After the full-suite process released the required DerivedData lock and the asynchronous test assertions were made deterministic, the focused regression command completed successfully:
+
+```bash
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
+  -derivedDataPath /private/tmp/alas-code-editor-lsp-dd \
+  -only-testing:AlasTests/NavigationFeatureTests \
+  -only-testing:AlasTests/TabsManagerTests test -quiet
+```
+
+Passed (exit 0). The test bundle emitted existing Swift 6-concurrency warnings in unrelated test sources, with no task-specific warnings or failures.

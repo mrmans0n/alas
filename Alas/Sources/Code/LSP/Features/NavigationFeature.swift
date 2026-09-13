@@ -7,61 +7,56 @@ import Foundation
 @MainActor
 final class NavigationFeature {
     enum Action {
-        case typeDefinition
-        case implementation
         case references
     }
     typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
 
     private let synchronizeRequest: SynchronizeRequest
     private let isContextCurrent: (EditorRequestContext) -> Bool
-    private let store: EditorNavigationStore
-    private let openTarget: (EditorNavigationTarget) -> Void
+    private let currentStore: () -> EditorNavigationStore
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
+    private weak var inFlightReferenceStore: EditorNavigationStore?
 
     init(
-        store: EditorNavigationStore,
+        store: @escaping () -> EditorNavigationStore,
         synchronizeRequest: @escaping SynchronizeRequest,
-        isContextCurrent: @escaping (EditorRequestContext) -> Bool,
-        openTarget: @escaping (EditorNavigationTarget) -> Void
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool
     ) {
-        self.store = store
+        currentStore = store
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
-        self.openTarget = openTarget
     }
 
     func perform(_ action: Action, range: NSRange) {
+        cancelPendingRequest()
         requestID += 1
         let currentRequestID = requestID
-        inFlight?.cancel()
-        if action == .references { store.beginLoading() }
+        let requestStore = currentStore()
+        requestStore.beginLoading()
+        inFlightReferenceStore = requestStore
         inFlight = Task { [weak self] in
-            guard let self,
-                  let (client, context) = await synchronizeRequest(range),
-                  !Task.isCancelled
-            else { return }
+            guard let self else { return }
+            guard let (client, context) = await synchronizeRequest(range), !Task.isCancelled else {
+                await MainActor.run { [weak self] in self?.finishLoading(requestID: currentRequestID, store: requestStore) }
+                return
+            }
             do {
-                let locations: [LSPLocation]
-                switch action {
-                case .typeDefinition:
-                    locations = try await client.typeDefinition(uri: context.document.uri, position: context.range.start)
-                case .implementation:
-                    locations = try await client.implementation(uri: context.document.uri, position: context.range.start)
-                case .references:
-                    locations = try await client.references(
-                        uri: context.document.uri,
-                        position: context.range.start,
-                        includeDeclaration: true
-                    )
+                let locations = try await client.references(
+                    uri: context.document.uri,
+                    position: context.range.start,
+                    includeDeclaration: true
+                )
+                guard !Task.isCancelled else {
+                    await MainActor.run { [weak self] in self?.finishLoading(requestID: currentRequestID, store: requestStore) }
+                    return
                 }
-                guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
-                    guard let self,
-                          self.requestID == currentRequestID,
-                          self.isContextCurrent(context)
-                    else { return }
+                    guard let self, self.requestID == currentRequestID else { return }
+                    guard self.isContextCurrent(context) else {
+                        self.finishLoading(requestID: currentRequestID, store: requestStore)
+                        return
+                    }
                     let targets = locations.map {
                         EditorNavigationTarget(
                             document: EditorDocumentID(
@@ -72,21 +67,34 @@ final class NavigationFeature {
                             position: $0.range.start
                         )
                     }
-                    if action == .references || targets.count != 1 {
-                        self.store.replaceResults(targets)
-                    } else if let target = targets.first {
-                        self.openTarget(target)
-                    }
+                    requestStore.replaceResults(targets)
+                    self.inFlightReferenceStore = nil
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self,
-                          self.requestID == currentRequestID,
-                          self.isContextCurrent(context)
-                    else { return }
-                    self.store.fail(error)
+                    guard let self, self.requestID == currentRequestID else { return }
+                    guard self.isContextCurrent(context) else {
+                        self.finishLoading(requestID: currentRequestID, store: requestStore)
+                        return
+                    }
+                    requestStore.fail(error)
+                    self.inFlightReferenceStore = nil
                 }
             }
         }
+    }
+
+    func cancelPendingRequest() {
+        requestID += 1
+        inFlight?.cancel()
+        inFlight = nil
+        inFlightReferenceStore?.cancelLoading()
+        inFlightReferenceStore = nil
+    }
+
+    private func finishLoading(requestID: UInt64, store: EditorNavigationStore) {
+        guard self.requestID == requestID else { return }
+        store.cancelLoading()
+        inFlightReferenceStore = nil
     }
 }
