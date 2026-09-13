@@ -1,4 +1,37 @@
 import Foundation
+import Observation
+
+@MainActor
+@Observable
+final class EditorCommandAvailability {
+    static let shared = EditorCommandAvailability()
+
+    private weak var activeRouter: EditorCommandRouter?
+    private(set) var activeEditor = false
+    private(set) var available: Set<EditorCommandID> = []
+
+    func activate(_ router: EditorCommandRouter) {
+        activeRouter = router
+        activeEditor = true
+        refresh(router)
+    }
+
+    func deactivate(_ router: EditorCommandRouter) {
+        guard activeRouter === router else { return }
+        activeRouter = nil
+        activeEditor = false
+        available = []
+    }
+
+    func refresh(_ router: EditorCommandRouter) {
+        guard activeRouter === router else { return }
+        available = Set(router.availableCommands())
+    }
+
+    func isAvailable(_ command: EditorCommandID) -> Bool {
+        available.contains(command)
+    }
+}
 
 @MainActor
 final class EditorCommandRouter {
@@ -21,10 +54,12 @@ final class EditorCommandRouter {
     func update(capabilities: LSPCapabilities, isServerReady: Bool) {
         self.capabilities = capabilities
         self.isServerReady = isServerReady
+        EditorCommandAvailability.shared.refresh(self)
     }
 
     func register(_ command: EditorCommandID, handler: @escaping Handler) {
         handlers[command] = handler
+        EditorCommandAvailability.shared.refresh(self)
     }
 
     func availableCommands() -> [EditorCommandID] {

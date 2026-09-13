@@ -103,6 +103,22 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         refreshWarningToolTip()
     }
 
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder, let editorCommandRouter {
+            EditorCommandAvailability.shared.activate(editorCommandRouter)
+        }
+        return becameFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resignedFirstResponder = super.resignFirstResponder()
+        if resignedFirstResponder, let editorCommandRouter {
+            EditorCommandAvailability.shared.deactivate(editorCommandRouter)
+        }
+        return resignedFirstResponder
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let nativeMenu = super.menu(for: event) ?? NSMenu()
         guard let editorCommandRouter else { return nativeMenu }

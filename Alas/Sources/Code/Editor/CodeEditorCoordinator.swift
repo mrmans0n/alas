@@ -709,6 +709,9 @@ final class CodeEditorCoordinator {
         }
         editorCommandRouter = router
         textView.editorCommandRouter = router
+        if textView.window?.firstResponder === textView {
+            EditorCommandAvailability.shared.activate(router)
+        }
         refreshEditorCommandCapabilities()
     }
 
