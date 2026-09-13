@@ -37,6 +37,13 @@ struct AgentSidebarFormattingTests {
     }
 
     @Test
+    func preservesTokenOrderForNonClaudeIdsWithMultipleNumericSegments() {
+        // Two independent name+version pairs; reordering the digits would
+        // fabricate a "5.5" version that describes neither.
+        #expect(AgentSidebarModelDisplay.shortName(for: "provider:gpt-5-fable-5") == "Provider:Gpt 5 Fable 5")
+    }
+
+    @Test
     func stripsACursorVariantSuffixBeforeShorteningTheBaseModelId() {
         let variantID = "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]"
         #expect(AgentSidebarModelDisplay.shortName(for: variantID) == "Opus 4.6")

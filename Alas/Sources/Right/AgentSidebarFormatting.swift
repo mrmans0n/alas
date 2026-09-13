@@ -25,27 +25,41 @@ enum AgentSidebarModelDisplay {
         }
         // The logo tile already identifies the "Claude" family; the prefix is
         // redundant in the caption.
+        var isClaudeFamily = false
         if let first = tokens.first, first.lowercased() == "claude", tokens.count > 1 {
             tokens.removeFirst()
+            isClaudeFamily = true
         }
         guard !tokens.isEmpty else { return base }
 
         // Anthropic ids place the version both after the family (the current
-        // "sonnet-4-5" scheme) and before it (older ids like "3-5-sonnet"),
-        // so pure-integer tokens are pulled out by type rather than only
-        // from one end, then dot-joined in their original order, e.g.
-        // ["4", "5"] -> "4.5". Tokens that already contain a dot (as in
-        // "2.5") are left as ordinary name tokens instead of being merged.
+        // "sonnet-4-5" scheme) and before it (older ids like "3-5-sonnet"), so
+        // for Claude only, pure-integer tokens are pulled out by type rather
+        // than from one end, then dot-joined in their original order, e.g.
+        // ["4", "5"] -> "4.5". Reordering isn't safe for other ids: a
+        // provider-composed id can legitimately carry two independent
+        // name+version pairs (e.g. "gpt-5-fable-5"), and merging their
+        // digits would fabricate a version neither pair has. Those ids keep
+        // only a trailing run merged, preserving token order otherwise.
+        // Tokens that already contain a dot (as in "2.5") are always left as
+        // ordinary name tokens instead of being merged.
         var versionParts: [String] = []
-        var nameTokens: [String] = []
-        for token in tokens {
-            if !token.isEmpty, token.allSatisfy(\.isNumber) {
-                versionParts.append(token)
-            } else {
-                nameTokens.append(token)
+        if isClaudeFamily {
+            var nameTokens: [String] = []
+            for token in tokens {
+                if !token.isEmpty, token.allSatisfy(\.isNumber) {
+                    versionParts.append(token)
+                } else {
+                    nameTokens.append(token)
+                }
+            }
+            tokens = nameTokens
+        } else {
+            while let last = tokens.last, !last.isEmpty, last.allSatisfy(\.isNumber) {
+                versionParts.insert(last, at: 0)
+                tokens.removeLast()
             }
         }
-        tokens = nameTokens
 
         let nameParts = tokens.map { token -> String in
             acronyms.contains(token.lowercased()) ? token.uppercased() : token.capitalized

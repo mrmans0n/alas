@@ -51,6 +51,20 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func prefersTheAdapterDeclaredModelNameOverGuessingFromTheId() {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        session.availableModels = [ACPModelInfo(id: "provider:gpt-5-fable-5", name: "Fable 5")]
+        session.currentModel = "provider:gpt-5-fable-5"
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        #expect(rollup.active.first?.model == "Fable 5")
+    }
+
+    @Test @MainActor
     func disconnectedLiveSessionUsesThePersistedRowsLastActivityNotItsOwnCreationTime() {
         let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
         session.agentState = .disconnected

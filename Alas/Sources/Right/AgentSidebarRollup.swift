@@ -246,7 +246,7 @@ struct AgentSidebarRollupBuilder {
             id: session.id,
             agentID: session.agentId,
             title: session.title,
-            model: session.currentModel.map(AgentSidebarModelDisplay.shortName(for:)),
+            model: modelDisplay(currentModel: session.currentModel, availableModels: session.availableModels),
             state: resolvedState,
             contextUsage: session.contextUsage,
             plan: planProgress(for: session.transcript.currentPlan),
@@ -261,12 +261,28 @@ struct AgentSidebarRollupBuilder {
             id: row.id,
             agentID: row.agentId,
             title: row.title,
-            model: row.currentModel.map(AgentSidebarModelDisplay.shortName(for:)),
+            // Persisted rows never carry the adapter's model list, so this
+            // always falls through to the heuristic shortener.
+            model: modelDisplay(currentModel: row.currentModel, availableModels: []),
             state: .detached,
             host: remoteHost,
             activityAt: Date(timeIntervalSince1970: TimeInterval(row.updatedAt)),
             isLive: false
         )
+    }
+
+    /// Prefers the adapter's own declared name for the active model — it
+    /// already knows composite/provider-specific shapes (e.g. Cursor's
+    /// "provider:gpt-5-fable-5" advertised as "Fable 5") that no
+    /// id-shortening heuristic can reliably reconstruct — falling back to
+    /// `AgentSidebarModelDisplay.shortName` only when the id isn't found in
+    /// the advertised list (unknown/stale id, or no list yet).
+    private static func modelDisplay(currentModel: String?, availableModels: [ACPModelInfo]) -> String? {
+        guard let currentModel else { return nil }
+        if let declared = availableModels.first(where: { $0.id == currentModel })?.name {
+            return declared
+        }
+        return AgentSidebarModelDisplay.shortName(for: currentModel)
     }
 
     private static func terminalRows(
