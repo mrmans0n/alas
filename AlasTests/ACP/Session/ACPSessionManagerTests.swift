@@ -227,6 +227,32 @@ struct ACPSessionManagerTests {
         #expect(row?.autoRun == true)
     }
 
+    @Test("noteMessageActivity bumps the cached row's updatedAt without a store round-trip")
+    func noteMessageActivityBumpsCachedRow() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-activity-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let s = mgr.createSession(agentId: "claude")
+        let created = mgr.sessionRows.first(where: { $0.id == s.id })?.updatedAt
+
+        mgr.noteMessageActivity(sessionId: s.id, at: (created ?? 0) + 100)
+
+        #expect(mgr.sessionRows.first(where: { $0.id == s.id })?.updatedAt == (created ?? 0) + 100)
+    }
+
+    @Test("noteMessageActivity never moves the cached updatedAt backward")
+    func noteMessageActivityNeverRegresses() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-activity-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let s = mgr.createSession(agentId: "claude")
+        let created = mgr.sessionRows.first(where: { $0.id == s.id })?.updatedAt
+
+        mgr.noteMessageActivity(sessionId: s.id, at: (created ?? 0) - 100)
+
+        #expect(mgr.sessionRows.first(where: { $0.id == s.id })?.updatedAt == created)
+    }
+
     @Test("createSession defaults autoRun to false")
     func createSessionDefaultsAutoRunFalse() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-autorun-off-\(UUID()).sqlite")
