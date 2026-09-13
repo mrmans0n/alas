@@ -64,3 +64,16 @@ against the same isolated DerivedData to restore that product; its active
 `xcodebuild`/`SWBBuildService` owner was inspected, and no lock or build state
 was removed. The app build above is the completed verification for this review
 fix; focused test execution remains pending that existing build process.
+
+Completed focused test evidence:
+
+```text
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -derivedDataPath /private/tmp/alas-code-editor-lsp-dd -quiet test-without-building -only-testing:AlasTests/LSPPositionCodecTests -only-testing:AlasTests/EditorLSPBindingTests -only-testing:AlasTests/LSPClientLifecycleTests -only-testing:AlasTests/EditorBufferTests
+Testing started completed in 21.281 seconds.
+
+xcresult summary
+result: Passed
+passedTests: 100
+failedTests: 0
+skippedTests: 0
+```
