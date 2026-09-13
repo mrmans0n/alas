@@ -384,6 +384,7 @@ jobs:
       - name: Tap and validate published cask
         run: |
           brew update
+          brew trust --tap mrmans0n/tap
           brew tap mrmans0n/tap https://github.com/mrmans0n/homebrew-tap.git
           tap_dir="$(brew --repo mrmans0n/tap)"
           git -C "$tap_dir" fetch origin main
