@@ -5,6 +5,7 @@ import SwiftUI
 /// Project/Worktree affordance or reorder projects around Workspace peers.
 struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @Bindable var state: AppState
+    var spaceID: String? = nil
     let projectRow: (ProjectConfig) -> ProjectRow
     @State private var editingWorkspace: Workspace?
     @State private var creatingCheckout: Workspace?
@@ -21,8 +22,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var plusHoveringWorkspaceID: UUID?
 
     var body: some View {
-        let members = state.spacesManager.activeSpace?.members
-            ?? state.spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
+        let space = state.spacesManager.space(id: spaceID ?? state.spacesManager.activeSpaceId)
+        let members = space?.members
+            ?? space?.projectIds.map(SpaceMemberReference.project)
             ?? []
         let rows = WorkspaceSidebarLayout.rows(
             members: members,

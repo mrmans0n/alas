@@ -15,30 +15,101 @@ enum SpacePagingIntent {
         guard abs(deltaX) >= 24,
               abs(deltaX) > abs(deltaY) * 1.4
         else { return nil }
-        return deltaX > 0 ? 1 : -1
+        return deltaX < 0 ? 1 : -1
     }
 }
 
 struct SpacePagingScrollGate {
-    private static let quietInterval: TimeInterval = 0.34
-
+    struct Result {
+        var page: Int?
+        var capturesScroll: Bool
+    }
+    private enum Axis { case horizontal, vertical }
     private var lastEventAt: TimeInterval?
-    private var didAcceptInCurrentBurst = false
+    private var axis: Axis?
+    private var deltaX: CGFloat = 0
+    private var deltaY: CGFloat = 0
+    private var didPage = false
+    private var gestureInProgress = false
 
-    mutating func consume(offset: Int, now: TimeInterval) -> Int? {
-        let startsNewBurst = lastEventAt.map { now - $0 > Self.quietInterval } ?? true
+    mutating func consume(
+        deltaX: CGFloat, deltaY: CGFloat, phase: NSEvent.Phase,
+        momentumPhase: NSEvent.Phase, now: TimeInterval
+    ) -> Result {
+        // Momentum belongs to the completed gesture, regardless of its duration.
+        guard momentumPhase.isEmpty else {
+            return Result(capturesScroll: axis == .horizontal)
+        }
+        let unphased = phase.isEmpty
+        if phase.contains(.began) { gestureInProgress = true }
+        if phase.contains(.began) || (unphased && (lastEventAt.map { now - $0 > 0.34 } ?? true)) {
+            axis = nil
+            self.deltaX = 0
+            self.deltaY = 0
+            didPage = false
+        }
         lastEventAt = now
-
-        if startsNewBurst {
-            didAcceptInCurrentBurst = false
+        if phase.contains(.ended) || phase.contains(.cancelled) {
+            gestureInProgress = false
+            return Result(capturesScroll: axis == .horizontal)
         }
-
-        guard !didAcceptInCurrentBurst else {
-            return nil
+        guard !phase.contains(.mayBegin), unphased || gestureInProgress else {
+            return Result(capturesScroll: false)
         }
+        self.deltaX += deltaX
+        self.deltaY += deltaY
+        if axis == nil {
+            if abs(self.deltaY) >= 8, abs(self.deltaY) > abs(self.deltaX) {
+                axis = .vertical
+            } else if abs(self.deltaX) >= 8, abs(self.deltaX) > abs(self.deltaY) * 1.4 {
+                axis = .horizontal
+            }
+        }
+        guard axis == .horizontal else { return Result(capturesScroll: false) }
+        guard !didPage,
+              let page = SpacePagingIntent.offset(deltaX: self.deltaX, deltaY: 0)
+        else { return Result(capturesScroll: true) }
+        didPage = true
+        return Result(page: page, capturesScroll: true)
+    }
+}
 
-        didAcceptInCurrentBurst = true
-        return offset
+enum SpacePagerNavigation {
+    static func destination(current: Int, offset: Int, count: Int) -> Int? {
+        guard (0..<count).contains(current), offset == -1 || offset == 1 else { return nil }
+        let next = current + offset
+        return (0..<count).contains(next) ? next : nil
+    }
+}
+
+/// Only the page contents move; the header and page controls stay anchored.
+struct SpacePagerContent<Content: View>: View {
+    let spaces: [SpaceConfig]
+    let selection: String
+    @ViewBuilder let content: (String) -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var displayedSelection: String?
+    @State private var movesForward = true
+
+    var body: some View {
+        ZStack {
+            content(displayedSelection ?? selection)
+                .id(displayedSelection ?? selection)
+                .transition(reduceMotion ? .opacity : .asymmetric(
+                    insertion: .move(edge: movesForward ? .trailing : .leading),
+                    removal: .move(edge: movesForward ? .leading : .trailing)
+                ))
+        }
+        .clipped()
+        .onAppear { displayedSelection = selection }
+        .onChange(of: selection) { old, new in
+            let oldIndex = spaces.firstIndex { $0.id == old } ?? 0
+            let newIndex = spaces.firstIndex { $0.id == new } ?? 0
+            movesForward = newIndex > oldIndex
+            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .smooth(duration: 0.25)) {
+                displayedSelection = new
+            }
+        }
     }
 }
 
@@ -50,14 +121,17 @@ struct SpacePagerIndicator: View {
     let onEditSpaces: () -> Void
     let onScrollPage: (Int) -> Void
     @Environment(\.theme) var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionHighlight
 
     var body: some View {
         VStack(spacing: 6) {
-            if titleVisible, let active = spaces.first(where: { $0.id == activeSpaceId }) {
+            if let active = spaces.first(where: { $0.id == activeSpaceId }) {
                 Text(active.name)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
-                    .transition(.opacity)
+                    .lineLimit(1)
+                    .opacity(titleVisible ? 1 : 0)
             }
             HStack(spacing: 10) {
                 ForEach(spaces) { space in
@@ -69,6 +143,13 @@ struct SpacePagerIndicator: View {
                             .opacity(style.opacity)
                             .saturation(style.isGrayscale ? 0 : 1)
                             .frame(width: 22, height: 22)
+                            .background {
+                                if space.id == activeSpaceId {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(theme.color("fg-muted").opacity(0.15))
+                                        .matchedGeometryEffect(id: "selection", in: selectionHighlight)
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
                     .help(space.name)
@@ -84,10 +165,18 @@ struct SpacePagerIndicator: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .animation(.easeInOut(duration: 0.18), value: titleVisible)
-        .accessibilityElement(children: .combine)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: activeSpaceId)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Spaces")
         .accessibilityValue(accessibilityValue)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: onScrollPage(1)
+            case .decrement: onScrollPage(-1)
+            @unknown default: break
+            }
+        }
     }
 
     private var accessibilityValue: String {
@@ -144,17 +233,11 @@ struct SpacePagerScrollCaptureView: NSViewRepresentable {
             super.scrollWheel(with: event)
         }
 
-        override func swipe(with event: NSEvent) {
-            if handle(event: event) {
-                return
-            }
-            super.swipe(with: event)
-        }
-
         private func installMonitor() {
             guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .swipe]) { [weak self] event in
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self,
+                      !isHiddenOrHasHiddenAncestor,
                       let window,
                       event.window === window
                 else { return event }
@@ -167,13 +250,12 @@ struct SpacePagerScrollCaptureView: NSViewRepresentable {
         }
 
         private func handle(event: NSEvent) -> Bool {
-            let deltaX = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : event.deltaX
-            let deltaY = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.deltaY
-            guard let offset = SpacePagingIntent.offset(deltaX: deltaX, deltaY: deltaY),
-                  let page = gate.consume(offset: offset, now: Date().timeIntervalSinceReferenceDate)
-            else { return false }
-            onPage?(page)
-            return true
+            let result = gate.consume(
+                deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY,
+                phase: event.phase, momentumPhase: event.momentumPhase, now: event.timestamp
+            )
+            if let page = result.page { onPage?(page) }
+            return result.capturesScroll
         }
 
         private func removeMonitor() {
@@ -181,6 +263,7 @@ struct SpacePagerScrollCaptureView: NSViewRepresentable {
                 NSEvent.removeMonitor(monitor)
             }
             monitor = nil
+            gate = SpacePagingScrollGate()
         }
     }
 }
