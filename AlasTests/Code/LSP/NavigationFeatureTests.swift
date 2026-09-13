@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -44,20 +45,57 @@ struct NavigationFeatureTests {
             range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 0))
         )
         let store = EditorNavigationStore()
-        transport.onSend = { _ in
-            transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":[]}"#)
-        }
+        let existing = EditorNavigationTarget(document: document, position: LSPPosition(line: 9, character: 2))
+        store.replaceResults([existing])
+        var didCheckStaleContext = false
+        transport.onSend = { _ in }
         let feature = NavigationFeature(
             store: { store },
             synchronizeRequest: { _ in (client, context) },
-            isContextCurrent: { _ in false }
+            isContextCurrent: { _ in
+                didCheckStaleContext = true
+                return false
+            }
         )
 
         feature.perform(.references, range: NSRange(location: 0, length: 0))
-        await waitUntil { !store.isLoading }
+        await waitUntil { !transport.sent.isEmpty }
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":[{"uri":"file:///tmp/stale.swift","range":{"start":{"line":2,"character":0},"end":{"line":2,"character":3}}}]}"#)
+        await waitUntil { didCheckStaleContext }
 
         #expect(!store.isLoading)
+        #expect(store.results == [existing])
         transport.finish()
+    }
+
+    @Test @MainActor func directCommandClickDefinitionSupersedesPendingReferences() async {
+        let store = EditorNavigationStore()
+        var continuation: CheckedContinuation<(LSPClient, EditorRequestContext)?, Never>?
+        let navigation = NavigationFeature(
+            store: { store },
+            synchronizeRequest: { _ in
+                await withCheckedContinuation { continuation = $0 }
+            },
+            isContextCurrent: { _ in true }
+        )
+        navigation.perform(.references, range: NSRange(location: 0, length: 0))
+        await Task.yield()
+        #expect(store.isLoading)
+
+        let textView = makeTextView("symbol")
+        let definition = DefinitionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/current.swift" },
+            openTarget: { _, _, _ in },
+            cancelPendingNavigation: { navigation.cancelPendingRequest() }
+        )
+
+        textView.triggerCommandClick(atUTF16Offset: 0)
+
+        #expect(!store.isLoading)
+        continuation?.resume(returning: nil)
+        _ = definition
     }
 
     @MainActor
@@ -69,6 +107,21 @@ struct NavigationFeatureTests {
             if condition() { return }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    @MainActor
+    private func makeTextView(_ text: String) -> CodeTextView {
+        let storage = NSTextStorage(string: text)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        let textView = CodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
+            textContainer: container
+        )
+        _ = layoutManager.glyphRange(for: container)
+        return textView
     }
 
     @Test @MainActor func equalPathsOnDifferentHostsStaySeparate() {

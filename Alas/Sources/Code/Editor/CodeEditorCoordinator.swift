@@ -174,6 +174,9 @@ final class CodeEditorCoordinator {
                     language: self.currentLanguage
                 )
             },
+            cancelPendingNavigation: { [weak self] in
+                self?.navigation?.cancelPendingRequest()
+            },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )

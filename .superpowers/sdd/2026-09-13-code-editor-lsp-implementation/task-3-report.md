@@ -172,3 +172,51 @@ xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
 ```
 
 Passed (exit 0). The test bundle emitted existing Swift 6-concurrency warnings in unrelated test sources, with no task-specific warnings or failures.
+
+## Fix round 2: direct Cmd-click supersession and stale-result protection
+
+### Changes
+
+- Added `DefinitionFeature.cancelPendingNavigation`, wired by `CodeEditorCoordinator` to `NavigationFeature.cancelPendingRequest()`. The direct `commandClickHandler` now invokes it before starting definition resolution, so direct Cmd-click and menu commands consistently supersede an in-flight references request.
+- Strengthened the stale-context regression to deliver a non-empty references response after an existing result is present. It verifies the stale response does not replace that result.
+- Added a direct Cmd-click regression using the real `CodeTextView` command-click handler, a pending `NavigationFeature` request, and `DefinitionFeature`; it verifies the references store exits loading when Cmd-click definition begins.
+
+### Red / green evidence
+
+The direct-Cmd-click regression was first added against the intended injection point and failed before implementation:
+
+```text
+NavigationFeatureTests.swift:91:38: error: extra argument 'cancelPendingNavigation' in call
+Testing cancelled because the build failed.
+```
+
+Command:
+
+```bash
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
+  -derivedDataPath /private/tmp/alas-code-editor-lsp-dd \
+  -only-testing:AlasTests/NavigationFeatureTests test -quiet
+```
+
+After the callback was wired and the stale non-empty fixture was added, the same focused command passed (exit 0). It printed existing unrelated Swift 6-concurrency warnings only.
+
+```bash
+swiftformat Alas/Sources/Code/Editor/CodeEditorCoordinator.swift \
+  Alas/Sources/Code/LSP/Features/DefinitionFeature.swift \
+  AlasTests/Code/LSP/NavigationFeatureTests.swift
+git diff --check
+```
+
+Passed; SwiftFormat changed no files. Its local cache write was unavailable, but formatting completed normally.
+
+### Fix-round files changed
+
+- `Alas/Sources/Code/Editor/CodeEditorCoordinator.swift`
+- `Alas/Sources/Code/LSP/Features/DefinitionFeature.swift`
+- `AlasTests/Code/LSP/NavigationFeatureTests.swift`
+
+### Fix-round self-review
+
+- The cancellation closure is optional with a no-op default for isolated feature consumers, and production injects the current coordinator navigation feature weakly.
+- The callback runs at the direct command-click entry point, before the definition request is launched, covering the path that bypasses the editor command router.
+- The stale-result test asserts a hand-created pre-existing target remains unchanged after the non-empty stale response reaches the context-current gate.

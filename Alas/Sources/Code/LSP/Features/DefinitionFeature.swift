@@ -18,6 +18,7 @@ final class DefinitionFeature {
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
     private let openTarget: (URL, Int, Int) -> Void
+    private let cancelPendingNavigation: () -> Void
     private let synchronizeRequest: SynchronizeRequest?
     private let isContextCurrent: (EditorRequestContext) -> Bool
     private var popover: NSPopover?
@@ -30,6 +31,7 @@ final class DefinitionFeature {
         getClient: @escaping () -> LSPClient?,
         getURI: @escaping () -> String?,
         openTarget: @escaping (URL, Int, Int) -> Void,
+        cancelPendingNavigation: @escaping () -> Void = {},
         synchronizeRequest: SynchronizeRequest? = nil,
         isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
     ) {
@@ -37,6 +39,7 @@ final class DefinitionFeature {
         self.getClient = getClient
         self.getURI = getURI
         self.openTarget = openTarget
+        self.cancelPendingNavigation = cancelPendingNavigation
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
         textView.commandClickHandler = { [weak self] p in self?.onClick(at: p) }
@@ -62,6 +65,7 @@ final class DefinitionFeature {
     }
 
     private func onClick(at point: NSPoint) {
+        cancelPendingNavigation()
         popover?.close()
         guard let textView, let uri = getURI(),
               let position = textView.lspPosition(at: point),
