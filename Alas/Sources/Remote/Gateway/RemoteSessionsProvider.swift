@@ -47,8 +47,8 @@ protocol RemoteSessionsProvider: AnyObject {
     /// the item is gone or already `.sending` (mid-RPC, must not be duplicated).
     func queueEdit(for id: String, itemId: UUID) async -> String?
     func queueClear(for id: String) async
-    func queueSteerUndo(for id: String) async
-    /// Cancel the in-flight turn, discard the queue, send this prompt instead.
+    /// Cancel the in-flight turn, send this prompt instead, without
+    /// disturbing pending queued items.
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.

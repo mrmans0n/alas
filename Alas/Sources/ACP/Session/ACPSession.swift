@@ -238,14 +238,6 @@ final class ACPSession: ObservableObject, Identifiable {
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
     var pendingQueuePersistenceCount = 0
-    @Published var steerUndo: SteerUndoState?
-    struct SteerUndoState: Equatable {
-        /// Unique per-snapshot id used by SwiftUI for view diffing — letting
-        /// us reset the 5s timer-task whenever a new steer happens before
-        /// the previous toast has expired.
-        let id: UUID
-        let snapshot: [QueuedPrompt]
-    }
 
     struct ContextRestoreWarning: Equatable {
         var message: String
@@ -1491,16 +1483,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Reorder within the queue. Refuses to move a `.sending` head — the
     /// UI hides the grip on `.sending` items, this is the belt-and-
-    /// suspenders guard.
+    /// suspenders guard. Eligibility is shared with the row's "Move up" /
+    /// "Move down" affordances via `ACPTranscriptQueuePolicy.canMoveQueueItem`
+    /// so the two never disagree about what's allowed.
     func moveInQueue(from src: Int, to dst: Int) {
-        guard src >= 0, src < queue.count, dst >= 0, dst <= queue.count else { return }
-        if queue.indices.contains(src), queue[src].status == .sending { return }
-        // If moving across the .sending head (index 0 when sending), refuse.
-        if !queue.isEmpty, queue[0].status == .sending, dst == 0 { return }
-        if let firstScheduled = queue.firstIndex(where: { $0.status == .pending && $0.scheduledAt != nil }),
-           (queue[src].scheduledAt != nil || dst >= firstScheduled) {
-            return
-        }
+        guard ACPTranscriptQueuePolicy.canMoveQueueItem(from: src, to: dst, queue: queue) else { return }
         let item = queue.remove(at: src)
         queue.insert(item, at: min(dst, queue.count))
     }
@@ -1549,33 +1536,14 @@ final class ACPSession: ObservableObject, Identifiable {
         queue[idx].advanceBrokerOperationAttempt()
     }
 
-    /// Remove all `.pending` items; return the snapshot in original order so
-    /// the steer-undo toast (or the "Clear queue" header button) can restore
-    /// them. A `.sending` item is left in place — it's mid-RPC.
+    /// Remove all `.pending` items. A `.sending` item is left in place —
+    /// it's mid-RPC.
     @discardableResult
     func clearPendingQueue() -> [QueuedPrompt] {
         let snapshot = queue.filter { $0.status == .pending }
         queue.removeAll { $0.status == .pending }
         forceSendAfterSendingHeadId = nil
         return snapshot
-    }
-
-    /// Re-prepend a previously-cleared snapshot. Used by the steer-undo
-    /// toast. If a `.sending` head exists (e.g. the steer redirect already
-    /// completed and the flusher promoted a follow-up to in-flight before
-    /// the user tapped Undo), the restored items go AFTER it — otherwise
-    /// the in-flight `sendNow`'s `popQueueHead` would key off the wrong
-    /// item and the `.sending` head would stay stranded in the queue.
-    func restorePendingSnapshot(_ snapshot: [QueuedPrompt]) {
-        let insertAt = (queue.first?.status == .sending) ? 1 : 0
-        queue.insert(contentsOf: snapshot.filter { $0.scheduledAt == nil }, at: insertAt)
-        for item in snapshot {
-            guard let scheduledAt = item.scheduledAt else { continue }
-            let index = queue.firstIndex {
-                $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
-            } ?? queue.endIndex
-            queue.insert(item, at: index)
-        }
     }
 
     /// Number of pending queue items. The transcript UI may render additional

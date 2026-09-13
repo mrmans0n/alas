@@ -29,6 +29,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onDismissElicitationURLWait: (String) -> Void
     let onQueueEdit: (QueuedPrompt) -> Void
     let onQueueForceSend: (UUID) -> Void
+    let onQueuePromote: (UUID) -> Void
     let onQueueRemove: (UUID) -> Void
     let onQueueRetry: (UUID) -> Void
     let onQueueReorder: (Int, Int) -> Void
@@ -390,7 +391,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// `contentMaxWidth`, `wrapRow` never reads it, and most synthetic
         /// rows below never capture it either, so folding it generically
         /// would rebuild rows that don't use it on every typography change.
-        /// Specs whose build closures do capture it (the queue bubble) fold
+        /// Specs whose build closures do capture it (the queue row) fold
         /// it into their own token explicitly instead.
         private static func token<T: Equatable>(_ base: T, host: ACPTranscriptScroller) -> ACPRowEqualityToken {
             ACPRowEqualityToken(ThemedToken(theme: host.theme, contentMaxWidth: host.contentMaxWidth, base: base))
@@ -409,6 +410,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let item: QueuedPrompt
             let idx: Int
             let typography: ACPChatTypography
+            let position: Int
+            let canMoveUp: Bool
+            let canMoveDown: Bool
         }
 
         /// Message rows from the render window + synthetic tail rows, in the
@@ -671,7 +675,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
 
             let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(statuses: session.queue.map(\.status))
-            if queueHeaderCount > 1 {
+            if queueHeaderCount > 0 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_header__",
                     equalityToken: token(queueHeaderCount, host: host),
@@ -685,32 +689,52 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
             for (idx, item) in session.queue.enumerated()
             where ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: item.status) {
+                let position = ACPTranscriptQueuePolicy.queuePosition(
+                    at: idx, statuses: session.queue.map(\.status)
+                )
+                let canMoveUp = ACPTranscriptQueuePolicy.canMoveQueueItem(
+                    from: idx, to: idx - 1, queue: session.queue
+                )
+                let canMoveDown = ACPTranscriptQueuePolicy.canMoveQueueItem(
+                    from: idx, to: idx + 1, queue: session.queue
+                )
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
                     // Beyond `item` (and theme/contentMaxWidth folded by
                     // `token(_:host:)`), this row's build closure also
                     // captures `host.typography` (passed straight into
-                    // `ACPQueuedBubble`) and `idx` (captured by the
+                    // `ACPQueueItemRow`) and `idx` (captured by the
                     // `.dropDestination` handler below as the reorder
-                    // target). Both must be in the token: a typography
-                    // change would otherwise leave the mounted bubble
-                    // measured with stale text metrics, and a stale `idx`
-                    // after the queue reorders would send a subsequent drag
-                    // on this retained bubble to the wrong slot.
+                    // target). All of these — plus the derived `position`,
+                    // `canMoveUp`, `canMoveDown` — must be in the token: a
+                    // typography change would otherwise leave the mounted
+                    // row measured with stale text metrics, and a stale
+                    // `idx` (or derived value) after the queue reorders
+                    // would send a subsequent action on this retained row
+                    // to the wrong slot or show a stale affordance.
                     equalityToken: token(
-                        QueueBubbleTokenInputs(item: item, idx: idx, typography: host.typography),
+                        QueueBubbleTokenInputs(
+                            item: item, idx: idx, typography: host.typography,
+                            position: position, canMoveUp: canMoveUp, canMoveDown: canMoveDown
+                        ),
                         host: host
                     ),
                     build: {
                         wrapRow(host: host) {
-                            ACPQueuedBubble(
+                            ACPQueueItemRow(
                                 item: item,
+                                position: position,
                                 contentMaxWidth: host.contentMaxWidth,
                                 typography: host.typography,
-                                onForceSend: { host.onQueueForceSend(item.id) },
+                                canMoveUp: canMoveUp,
+                                canMoveDown: canMoveDown,
+                                onPromote: { host.onQueuePromote(item.id) },
+                                onSendNow: { host.onQueueForceSend(item.id) },
                                 onEdit: { host.onQueueEdit(item) },
                                 onRemove: { host.onQueueRemove(item.id) },
-                                onRetry: { host.onQueueRetry(item.id) }
+                                onRetry: { host.onQueueRetry(item.id) },
+                                onMoveUp: { host.onQueueReorder(idx, idx - 1) },
+                                onMoveDown: { host.onQueueReorder(idx, idx + 1) }
                             )
                             .dropDestination(for: String.self) { items, _ in
                                 guard let s = items.first,

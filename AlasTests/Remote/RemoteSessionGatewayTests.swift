@@ -44,7 +44,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var queueRetries: [(id: String, itemId: UUID)] = []
     var queueEdits: [(id: String, itemId: UUID)] = []
     var queueClears: [String] = []
-    var queueSteerUndos: [String] = []
     var steerPrompts: [(id: String, text: String)] = []
     var queueEditText: String?            // what queueEdit hands back
     /// When set, `queueEdit` delegates to this real manager instead of
@@ -321,7 +320,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return queueEditText
     }
     func queueClear(for id: String) { queueClears.append(id) }
-    func queueSteerUndo(for id: String) { queueSteerUndos.append(id) }
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && steerPromptAccepts
         if accepted { steerPrompts.append((id, text)) }
@@ -2412,7 +2410,7 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.subscribe(sessionId: id))
 
         let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items, _) = message { return items }
+            if case .queueState(_, let items) = message { return items }
             return nil
         }
         #expect(states == [[]])
@@ -2430,7 +2428,7 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.subscribe(sessionId: id))
 
         let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items, _) = message { return items }
+            if case .queueState(_, let items) = message { return items }
             return nil
         }.first
         #expect(items?.count == 1)
@@ -2453,7 +2451,7 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.subscribe(sessionId: id))
 
         let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items, _) = message { return items }
+            if case .queueState(_, let items) = message { return items }
             return nil
         }
         #expect(states == [[], []])
@@ -2479,7 +2477,7 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items, _) = message { return items }
+            if case .queueState(_, let items) = message { return items }
             return nil
         }.last
         let queued = try #require(items, "expected a queueState after mutating session.queue")
@@ -2513,42 +2511,6 @@ struct RemoteSessionGatewayTests {
         #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
     }
 
-    @Test func steerUndoAvailableFlipEmitsQueueStateWithQueueUnchanged() async throws {
-        // Regression guard for RemoteQueueSnapshot: steerUndoAvailable can
-        // flip (a steer discards the queue, then the 5s undo window expires)
-        // while `items` stays exactly as-is (already emptied by the steer
-        // itself). Both transitions must independently reach the wire, or
-        // the client is left showing a stale "undo available" affordance.
-        // session.queue is never touched here, so a dedupe key that only
-        // looked at items would swallow both sends.
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions[id] = session
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gateway.handle(.subscribe(sessionId: id))
-        sent.removeAll()
-
-        let discardedSnapshot = [QueuedPrompt(blocks: [.text("discarded by steer")])]
-        session.steerUndo = .init(id: UUID(), snapshot: discardedSnapshot)
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let afterSet = sent.compactMap { message -> Bool? in
-            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
-            return nil
-        }
-        #expect(afterSet.last == true, "expected a queueState with steerUndoAvailable=true after arming the undo window")
-
-        session.steerUndo = nil   // the window expires; session.queue is untouched throughout
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let afterClear = sent.compactMap { message -> Bool? in
-            if case .queueState(_, _, let steerUndoAvailable) = message { return steerUndoAvailable }
-            return nil
-        }
-        #expect(afterClear.last == false, "expected a second queueState with steerUndoAvailable=false after the window closed")
-        #expect(afterClear.count == afterSet.count + 1, "both the arm and the clear must independently reach the wire")
-    }
-
     @Test func allQueueVerbsRequireWriterLease() async {
         let provider = FakeSessionsProvider()
         let id = "s1"
@@ -2559,13 +2521,11 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
         await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
         await gateway.handle(.queueClear(sessionId: id))
-        await gateway.handle(.queueSteerUndo(sessionId: id))
 
         #expect(provider.queueRemoves.isEmpty)
         #expect(provider.queueRetries.isEmpty)
         #expect(provider.queueEdits.isEmpty)
         #expect(provider.queueClears.isEmpty)
-        #expect(provider.queueSteerUndos.isEmpty)
     }
 
     @Test func queueVerbsReachProviderForWriter() async {
@@ -2578,12 +2538,10 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
         await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
         await gateway.handle(.queueClear(sessionId: id))
-        await gateway.handle(.queueSteerUndo(sessionId: id))
 
         #expect(provider.queueRemoves.map(\.itemId) == [itemId])
         #expect(provider.queueRetries.map(\.itemId) == [itemId])
         #expect(provider.queueClears == [id])
-        #expect(provider.queueSteerUndos == [id])
     }
 
     @Test func malformedItemIdIsIgnored() async {

@@ -56,7 +56,6 @@ final class ACPSessionRunner {
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
     private var seq: Int64 = 0
-    private var steerUndoExpiryTask: Task<Void, Never>?
     private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
     /// from main / PR #338). Reused by the queue's sendNow path:
@@ -106,10 +105,10 @@ final class ACPSessionRunner {
     private var loadReplaySuppressionTarget: Int?
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
-    /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
-    /// Undo tapped during the cancel round-trip can't drain the just-
-    /// restored snapshot ahead of the steer's replacement prompt. Once
-    /// the redirect is in flight, normal drain semantics resume.
+    /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so a queue
+    /// mutation racing the cancel round-trip can't drain a pending item
+    /// ahead of the steer's replacement prompt. Once the redirect is in
+    /// flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
     private var pendingForceSendQueuedItemID: UUID?
     /// Holds an idle source session at its persisted remote head while
@@ -1621,8 +1620,9 @@ extension ACPSessionRunner {
 
     /// User clicked the row-local "send now" affordance for a queued item.
     /// While idle this just promotes the item to the drainable head. While a
-    /// turn is active, it behaves like steering: cancel the current turn,
-    /// discard the remaining queue, and send the selected queued prompt.
+    /// turn is active, it behaves like steering: cancel the current turn and
+    /// send the selected queued prompt, leaving every other pending item
+    /// untouched (same non-destructive contract as a composer steer).
     func forceSendQueuedItem(id: UUID) {
         guard holdsLeaseForWrite() else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
@@ -1656,20 +1656,12 @@ extension ACPSessionRunner {
             return
         }
 
-        guard session.agentState == .ready else {
-            guard session.forceQueueItem(id: id) else { return }
-            persistQueue()
-            flushQueueIfIdle()
-            return
-        }
-
         let item = session.queue.remove(at: idx)
         persistQueue()
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
-            recordUserPrompt: !item.transcriptRecorded,
-            discardQueue: true
+            recordUserPrompt: !item.transcriptRecorded
         )
     }
 
@@ -1692,28 +1684,19 @@ extension ACPSessionRunner {
 
     /// Cancel the in-flight turn (if any), then send the new prompt as a
     /// fresh turn without disturbing pending queued prompts. A `.sending`
-    /// queue head is still removed because it is the prompt being cancelled.
-    /// `forceSendQueuedItem` opts into discarding the remaining queue and
-    /// snapshots its pending items for undo.
+    /// queue head is still removed because it is the prompt being
+    /// cancelled — every other pending item is left exactly where it is,
+    /// whether the redirect came from the composer (⌥⏎) or from a queued
+    /// item's row-local "Send now".
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
-        discardQueue: Bool = false,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        if discardQueue {
-            let snapshot = session.queue.filter { $0.status == .pending }
-            session.queue.removeAll()
-            if !snapshot.isEmpty {
-                session.steerUndo = .init(id: UUID(), snapshot: snapshot)
-                armSteerUndoExpiry()
-            }
-        } else {
-            session.queue.removeAll { $0.status == .sending }
-        }
+        session.queue.removeAll { $0.status == .sending }
         persistQueue()
         // Invalidate the in-flight prompt NOW (before awaiting userCancel)
         // so its completion can't race the redirect during the cancel
@@ -1727,10 +1710,9 @@ extension ACPSessionRunner {
             activePromptID = nil
         }
         // Suppress queue flushing until the redirect is installed: while
-        // userCancel awaits the cancel notification, an Undo tap would
-        // re-prepend the snapshot to the queue and userCancel's own
-        // trailing flushQueueIfIdle would then dispatch the "discarded"
-        // item ahead of the steer's replacement prompt.
+        // userCancel awaits the cancel notification, userCancel's own
+        // trailing flushQueueIfIdle would otherwise be free to dispatch a
+        // pending head ahead of the steer's replacement prompt.
         steerInProgress = true
 
         Task { [weak self] in
@@ -1768,21 +1750,6 @@ extension ACPSessionRunner {
         }
     }
 
-    /// Re-prepend the most-recent steer-undo snapshot to the queue and
-    /// clear the buffer. Called when the user taps "Undo" on the toast.
-    func steerUndo() {
-        guard let undo = session.steerUndo, !undo.snapshot.isEmpty else { return }
-        session.restorePendingSnapshot(undo.snapshot)
-        session.steerUndo = nil
-        steerUndoExpiryTask?.cancel()
-        steerUndoExpiryTask = nil
-        persistQueue()
-        flushQueueIfIdle()
-    }
-
-    /// Exposed for tests + the toast view so it can show / hide.
-    func steerUndoSnapshot() -> [QueuedPrompt]? { session.steerUndo?.snapshot }
-
     var hasRetainedCleanupPromptWork: Bool {
         steerInProgress
             || activePromptID != nil
@@ -1796,17 +1763,6 @@ extension ACPSessionRunner {
 
     var hasRetainedCleanupForkBarrierWork: Bool {
         nativeForkBarrierActive
-    }
-
-    private func armSteerUndoExpiry() {
-        steerUndoExpiryTask?.cancel()
-        steerUndoExpiryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            await MainActor.run {
-                self?.session.steerUndo = nil
-                self?.steerUndoExpiryTask = nil
-            }
-        }
     }
 
     /// Direct prompt RPC path. `queuedItemId` is set when called by the

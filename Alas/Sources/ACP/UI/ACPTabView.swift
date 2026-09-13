@@ -349,21 +349,6 @@ private struct ACPSessionView: View {
                     typography: chatTypography
                 )
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
-
-                if let undo = session.steerUndo, !undo.snapshot.isEmpty {
-                    VStack {
-                        Spacer()
-                        ACPSteerUndoToast(
-                            discardedCount: undo.snapshot.count,
-                            onUndo: { manager.runners[sessionId]?.steerUndo() },
-                            onDismiss: { session.steerUndo = nil }
-                        )
-                        .id(undo.id)
-                        .padding(.bottom, 200)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .transition(.opacity)
-                }
             }
         }
     }
@@ -421,6 +406,16 @@ private struct ACPSessionView: View {
             onQueueForceSend: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
                 Task { await manager.queueForceSend(for: sessionId, itemId: id) }
+            },
+            onQueuePromote: { id in
+                // Non-interrupting reorder: never touches an in-flight
+                // turn, so unlike `onQueueForceSend` this runs synchronously
+                // against the local session rather than through the
+                // manager's writer-lease/reattach dance.
+                guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
+                guard session.forceQueueItem(id: id) else { return }
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
             },
             onQueueRemove: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }

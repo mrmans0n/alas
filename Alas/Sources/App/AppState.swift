@@ -11686,13 +11686,6 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func queueSteerUndo(for id: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueSteerUndo(for: id)
-            return
-        }
-    }
-
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.steerPrompt(for: id, text: text, attachments: attachments, onResult: onResult)

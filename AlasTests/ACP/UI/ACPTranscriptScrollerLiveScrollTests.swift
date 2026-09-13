@@ -275,6 +275,7 @@ private func makeLiveScrollHost(session: ACPSession) -> ACPTranscriptScroller {
         onDismissElicitationURLWait: { _ in },
         onQueueEdit: { _ in },
         onQueueForceSend: { _ in },
+        onQueuePromote: { _ in },
         onQueueRemove: { _ in },
         onQueueRetry: { _ in },
         onQueueReorder: { _, _ in },

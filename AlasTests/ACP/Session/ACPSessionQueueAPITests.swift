@@ -320,53 +320,6 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("a")], [.text("b")]])
     }
 
-    @Test("restorePendingSnapshot keeps a .sending head at index 0")
-    func restoreSnapshotPreservesSendingHead() {
-        // Regression: undo-clicked-while-already-flushing scenario. The
-        // restored items must NOT displace an in-flight .sending head; if
-        // they did, the in-flight sendNow's popQueueHead would pop the
-        // wrong item and the .sending item would be stuck in the queue.
-        let s = mkSession()
-        s.enqueue(blocks: [.text("in-flight")])
-        s.markQueueHeadSending()
-        s.restorePendingSnapshot([
-            QueuedPrompt(blocks: [.text("restored-a")], status: .pending),
-            QueuedPrompt(blocks: [.text("restored-b")], status: .pending),
-        ])
-        #expect(s.queue.count == 3)
-        #expect(s.queue[0].status == .sending)
-        #expect(s.queue[0].blocks == [.text("in-flight")])
-        #expect(s.queue[1].blocks == [.text("restored-a")])
-        #expect(s.queue[2].blocks == [.text("restored-b")])
-    }
-
-    @Test("restorePendingSnapshot inserts at the head when no .sending item exists")
-    func restoreSnapshotPrependsWhenIdle() {
-        let s = mkSession()
-        s.enqueue(blocks: [.text("existing-pending")])
-        s.restorePendingSnapshot([
-            QueuedPrompt(blocks: [.text("restored")], status: .pending),
-        ])
-        #expect(s.queue.count == 2)
-        #expect(s.queue[0].blocks == [.text("restored")])
-        #expect(s.queue[1].blocks == [.text("existing-pending")])
-    }
-
-    @Test("restorePendingSnapshot keeps restored schedules behind normal prompts")
-    func restoreSnapshotKeepsSchedulesBehindNormalPrompts() {
-        let s = mkSession()
-        s.enqueue(blocks: [.text("queued while undo was available")])
-
-        s.restorePendingSnapshot([
-            QueuedPrompt(blocks: [.text("restored schedule")], scheduledAt: .distantFuture),
-        ])
-
-        #expect(s.queue.map(\.blocks) == [
-            [.text("queued while undo was available")],
-            [.text("restored schedule")],
-        ])
-    }
-
     @Test("enqueue(blocks:draft:) stores the structured draft on the item")
     func enqueueWithDraft() {
         let s = mkSession()

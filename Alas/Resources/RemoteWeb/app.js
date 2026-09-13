@@ -10,7 +10,6 @@ let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for th
 let olderFetchInFlight = false;
 let stopPending = false;
 let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError, scheduledAt}] from queueState
-let steerUndoAvailable = false;
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let listedSessions = new Map();
@@ -518,7 +517,7 @@ function openSession(id) {
   $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances();
-  queueItems = []; steerUndoAvailable = false; renderQueue();
+  queueItems = []; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], staged: [], unstaged: [], commits: [], truncated: false, loaded: false };
@@ -1336,7 +1335,6 @@ function applyDelta(msg) {
 function applyQueueState(msg) {
   if (msg.sessionId !== currentSession) return;
   queueItems = msg.items || [];
-  steerUndoAvailable = !!msg.steerUndoAvailable;
   renderQueue();
   renderDriveBar(lastStreamingState);
 }
@@ -1351,18 +1349,6 @@ function applyQueueEditRestored(msg) {
   autoGrowPrompt();
   renderDriveBar(lastStreamingState);
   ta.focus();
-}
-
-// The server owns the snapshot and its expiry (ACPSession.steerUndo +
-// ACPSessionRunner.armSteerUndoExpiry), so this is render-and-dispatch only:
-// the toast disappears when the next queueState reports the window closed.
-function steerUndoToast() {
-  const toast = el("div", "steer-undo");
-  toast.appendChild(el("span", null, "Queue cleared by steer"));
-  const undo = el("button", "steer-undo-btn", "Undo");
-  undo.onclick = () => queueAction("queueSteerUndo", null);
-  toast.appendChild(undo);
-  return toast;
 }
 
 let openQueuedId = null;   // which bubble has its actions revealed (tap-to-reveal)
@@ -1392,8 +1378,7 @@ function renderQueue() {
   // text: once as the transcript's user bubble, once as a ghosted queued
   // one, for the entire duration of the turn.
   const visible = queueItems.filter(i => i.status !== "sending");
-  box.classList.toggle("hidden", visible.length === 0 && !steerUndoAvailable);
-  if (steerUndoAvailable) box.appendChild(steerUndoToast());
+  box.classList.toggle("hidden", visible.length === 0);
   if (visible.length === 0) return;
 
   const waiting = queueBadgeCount();
