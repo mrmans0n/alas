@@ -18,6 +18,10 @@ final class EditorCommandAvailability {
 
     func deactivate(_ router: EditorCommandRouter) {
         guard activeRouter === router else { return }
+        clear()
+    }
+
+    func clear() {
         activeRouter = nil
         activeEditor = false
         available = []

@@ -607,6 +607,9 @@ final class CodeEditorCoordinator {
         lspBinding = nil
         editorCommandStatusTask?.cancel()
         editorCommandStatusTask = nil
+        if let editorCommandRouter {
+            EditorCommandAvailability.shared.deactivate(editorCommandRouter)
+        }
         editorCommandRouter = nil
         textView?.editorCommandRouter = nil
         textView?.hoverHandler = nil

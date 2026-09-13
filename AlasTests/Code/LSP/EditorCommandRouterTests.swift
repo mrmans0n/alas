@@ -60,18 +60,32 @@ struct EditorCommandRouterTests {
 
         #expect(availability.isAvailable(.definition))
         #expect(!availability.isAvailable(.rename))
+
+        availability.clear()
+
+        #expect(!availability.activeEditor)
+        #expect(!availability.isAvailable(.definition))
     }
 
     @Test("opening the editor menu preserves native commands without LSP traffic")
-    func menuOpeningDoesNotSendLSPRequests() throws {
+    func menuOpeningDoesNotSendLSPRequests() async throws {
         let transport = FakeTransport()
         let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
         defer { transport.finish() }
         let capabilities = try LSPCapabilities(json: Data(#"{"hoverProvider":true}"#.utf8))
+        var handlerInvocations = 0
         let router = EditorCommandRouter(
             capabilities: capabilities,
             isServerReady: true,
-            handlers: [.hover: { _ in }]
+            handlers: [.hover: { _ in
+                handlerInvocations += 1
+                Task {
+                    _ = try? await client.hover(
+                        uri: "file:///tmp/value.swift",
+                        position: LSPPosition(line: 0, character: 0)
+                    )
+                }
+            }]
         )
         let textView = makeTextView("value")
         let nativeMenu = NSMenu()
@@ -96,8 +110,9 @@ struct EditorCommandRouterTests {
         #expect(menu?.items.contains { $0.action == #selector(NSText.copy(_:)) } == true)
         #expect(menu?.items.contains { $0.action == #selector(NSText.selectAll(_:)) } == true)
         #expect(menu?.items.contains { $0.title == "Show Hover" } == true)
+        #expect(handlerInvocations == 0)
+        await Task.yield()
         #expect(transport.sent.isEmpty)
-        withExtendedLifetime(client) {}
     }
 
     private func makeTextView(_ text: String) -> CodeTextView {
