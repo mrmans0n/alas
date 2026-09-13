@@ -19,8 +19,16 @@ final class EditorBufferUndoManager: UndoManager {
     private var segments: [Segment] = [Segment()]
     private var markers: [Marker] = []
     private var cursor = 0
-    var workspaceActionInFlight = false
+    private var typingGroupOpen = false
+    private var lastTypingRange: NSRange?
+    private var lastTypingReplacementLength = 0
+    var workspaceActionInFlight = false {
+        didSet { if workspaceActionInFlight { breakTypingCoalescing() } }
+    }
     private var current: UndoManager { segments[cursor].manager }
+    private var sharedRedoReady: Bool {
+        cursor < markers.count && isAtMarker(markers[cursor].id, redo: true)
+    }
 
     override init() {
         super.init()
@@ -30,16 +38,19 @@ final class EditorBufferUndoManager: UndoManager {
     }
 
     override var canUndo: Bool { !workspaceActionInFlight && (current.canUndo || cursor > 0) }
-    override var canRedo: Bool { !workspaceActionInFlight && (current.canRedo || cursor < markers.count) }
+    override var canRedo: Bool { !workspaceActionInFlight && (current.canRedo || sharedRedoReady) }
     override var isUndoing: Bool { current.isUndoing }
     override var isRedoing: Bool { current.isRedoing }
     override var groupingLevel: Int { current.groupingLevel }
     override var undoActionName: String { current.canUndo ? current.undoActionName : cursor > 0 ? "Workspace Edit" : "" }
-    override var redoActionName: String { current.canRedo ? current.redoActionName : cursor < markers.count ? "Workspace Edit" : "" }
+    override var redoActionName: String { sharedRedoReady ? "Workspace Edit" : current.redoActionName }
     override var undoMenuItemTitle: String { canUndo ? "Undo \(undoActionName)" : "Undo" }
     override var redoMenuItemTitle: String { canRedo ? "Redo \(redoActionName)" : "Redo" }
 
-    override func beginUndoGrouping() { current.beginUndoGrouping() }
+    override func beginUndoGrouping() {
+        breakTypingCoalescing()
+        current.beginUndoGrouping()
+    }
     override func endUndoGrouping() { current.endUndoGrouping() }
     override func setActionName(_ actionName: String) {
         guard current.groupingLevel > 0 || current.canUndo || current.canRedo else { return }
@@ -48,24 +59,47 @@ final class EditorBufferUndoManager: UndoManager {
 
     override func undo() {
         guard !workspaceActionInFlight else { return }
+        breakTypingCoalescing()
         if current.canUndo { current.undo() }
         else if cursor > 0 { markers[cursor - 1].activate(false) }
     }
 
     override func redo() {
         guard !workspaceActionInFlight else { return }
-        if current.canRedo { current.redo() }
-        else if cursor < markers.count { markers[cursor].activate(true) }
+        breakTypingCoalescing()
+        if sharedRedoReady { markers[cursor].activate(true) }
+        else if current.canRedo { current.redo() }
     }
 
     override func removeAllActions() {
+        breakTypingCoalescing()
         segments = [Segment()]
         markers.removeAll()
         cursor = 0
         super.removeAllActions()
     }
 
-    func registerBufferUndo(target: EditorBuffer, actionName: String, handler: @escaping (EditorBuffer) -> Void) {
+    func registerBufferUndo(target: EditorBuffer, actionName: String, coalescingRange: NSRange? = nil,
+                            replacementLength: Int = 0, handler: @escaping (EditorBuffer) -> Void) {
+        if let range = coalescingRange, !current.isUndoing, !current.isRedoing,
+           typingGroupOpen || current.groupingLevel == 0 {
+            let adjacent = lastTypingRange.map { previous in
+                if replacementLength > 0 {
+                    return lastTypingReplacementLength > 0 && range.location == previous.location + lastTypingReplacementLength
+                }
+                return lastTypingReplacementLength == 0
+                    && (NSMaxRange(range) == previous.location || range.location == previous.location)
+            } ?? false
+            if !adjacent { breakTypingCoalescing() }
+            if !typingGroupOpen {
+                current.beginUndoGrouping()
+                typingGroupOpen = true
+            }
+            lastTypingRange = range
+            lastTypingReplacementLength = replacementLength
+        } else {
+            breakTypingCoalescing()
+        }
         // Count reciprocal registrations synchronously. Shared redo stays
         // available after an intervening local edit is itself undone.
         segments[cursor].position += current.isUndoing ? -1 : 1
@@ -76,7 +110,18 @@ final class EditorBufferUndoManager: UndoManager {
         if needsGroup { current.endUndoGrouping() }
     }
 
+    /// Only this manager's automatic typing group is closed here. Explicit
+    /// completion/multi-cursor groups and reciprocal undo groups stay intact.
+    func breakTypingCoalescing() {
+        if typingGroupOpen {
+            current.endUndoGrouping()
+            typingGroupOpen = false
+        }
+        lastTypingRange = nil
+    }
+
     func installMarker(_ id: UUID, activate: @escaping (Bool) -> Void) {
+        breakTypingCoalescing()
         guard !markers.contains(where: { $0.id == id }), current.groupingLevel == 0 else { return }
         if cursor < markers.count {
             markers.removeSubrange(cursor...)

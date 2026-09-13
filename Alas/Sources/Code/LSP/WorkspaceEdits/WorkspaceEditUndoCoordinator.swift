@@ -5,7 +5,8 @@ final class WorkspaceEditUndoCoordinator {
     private final class Operation {
         var recordID: UUID
         let documents: Set<EditorDocumentID>
-        let buffers: [EditorDocumentID: EditorBuffer]
+        var buffers: [EditorDocumentID: EditorBuffer]
+        var reopenedWatchGenerations: [EditorDocumentID: Int] = [:]
         var undone = false
         var pendingRecovery: UUID?
 
@@ -46,13 +47,47 @@ final class WorkspaceEditUndoCoordinator {
         operations[operationID] = Operation(recordID: operationID, documents: documents, buffers: buffers)
         retainedJournalIDs.insert(operationID)
         for buffer in buffers.values {
-            buffer.undoManager.installMarker(operationID) { [weak self] redo in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.lastOutcome = await self.perform(operationID: operationID, redo: redo)
-                }
+            installMarker(operationID, in: buffer, undone: false)
+        }
+    }
+
+    /// Closing a clean tab ends its local typing history. A new buffer may
+    /// recover the confirmed shared boundary, never inverses targeting the
+    /// closed storage or unsaved text that the user explicitly discarded.
+    func reattachCleanBuffer(_ buffer: EditorBuffer, document: EditorDocumentID) {
+        guard !isRunning, buffer.initialLoadFinished, buffer.loadKind == .loaded,
+              !buffer.dirty, !buffer.workspaceEditDeleted,
+              !buffer.undoManager.canUndo, !buffer.undoManager.canRedo else { return }
+        for (id, operation) in operations {
+            guard operation.pendingRecovery == nil,
+                  let participant = operation.buffers.first(where: { key, old in
+                      key.worktreeID == document.worktreeID && old.workspaceEditHost == document.host
+                          && old.worktreeRoot.appendingPathComponent(old.relativePath).lspURI == document.uri
+                  }), participant.value !== buffer, !participant.value.dirty,
+                  participant.value.undoManager.isAtMarker(id, redo: operation.undone),
+                  let record = try? journal.record(operation.recordID), record.status == .applied,
+                  let expected = record.entries.reversed().lazy.compactMap({ entry in
+                      entry.observedAfter?.first { $0.document == document }
+                  }).first,
+                  expected.isOpen, !expected.isDirty, expected.tombstoneContent == nil,
+                  expected.content == expected.diskContent,
+                  expected.content == Data(buffer.storage.string.utf8),
+                  expected.diskContent == Data(buffer.originalText.utf8) else { continue }
+            operation.buffers[participant.key] = buffer
+            operation.reopenedWatchGenerations[document] = buffer.fileWatchGeneration
+            installMarker(id, in: buffer, undone: operation.undone)
+            return
+        }
+    }
+
+    private func installMarker(_ id: UUID, in buffer: EditorBuffer, undone: Bool) {
+        buffer.undoManager.installMarker(id) { [weak self] redo in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.lastOutcome = await self.perform(operationID: id, redo: redo)
             }
         }
+        if undone { buffer.undoManager.completeMarker(id, redo: false) }
     }
 
     func undo(operationID: UUID) async -> WorkspaceEditOutcome {
@@ -119,7 +154,10 @@ final class WorkspaceEditUndoCoordinator {
                 // Returning to a marker through ordinary undo changes the
                 // buffer version. Capture a fresh generation for the executor,
                 // but still require the complete original content/ownership.
-                if let before = expected[document], !Self.sameBoundary(snapshot, before) { conflicts.append(document) }
+                if let before = expected[document],
+                   !Self.sameBoundary(snapshot, before, reopenedWatchGeneration: operation.reopenedWatchGenerations[document]) {
+                    conflicts.append(document)
+                }
             }
             guard conflicts.isEmpty else { return .conflict(conflicts) }
             let plan = try Self.inversePlan(record, snapshots: actual)
@@ -128,6 +166,7 @@ final class WorkspaceEditUndoCoordinator {
             case .applied(let id):
                 retainedJournalIDs.insert(id)
                 operation.recordID = id
+                operation.reopenedWatchGenerations.removeAll()
                 operation.undone.toggle()
                 managers.forEach { $0.completeMarker(operationID, redo: redo) }
                 return .applied(operationID)
@@ -145,13 +184,13 @@ final class WorkspaceEditUndoCoordinator {
         }
     }
 
-    private static func sameBoundary(_ actual: WorkspaceFileSnapshot, _ expected: WorkspaceFileSnapshot) -> Bool {
+    private static func sameBoundary(_ actual: WorkspaceFileSnapshot, _ expected: WorkspaceFileSnapshot, reopenedWatchGeneration: Int?) -> Bool {
         actual.document == expected.document && actual.content == expected.content
             && actual.isOpen == expected.isOpen && actual.isDirectory == expected.isDirectory
             && actual.isSymbolicLink == expected.isSymbolicLink
             && (!expected.isOpen || actual.diskContent == expected.diskContent)
             && actual.tombstoneContent == expected.tombstoneContent
-            && actual.fileWatchGeneration == expected.fileWatchGeneration
+            && actual.fileWatchGeneration == (reopenedWatchGeneration ?? expected.fileWatchGeneration)
     }
 
     /// Reverse the last confirmed transaction. Redo reverses that inverse,

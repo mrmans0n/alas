@@ -133,13 +133,17 @@ final class EditorBuffer {
     @ObservationIgnored let undoManager = EditorBufferUndoManager()
 
     /// The inverse targets stable storage, never a text view reused by a tab.
-    func registerTextUndo(range: NSRange, replacement: String, actionName: String = "Typing") {
+    func registerTextUndo(range: NSRange, replacement: String, actionName: String = "Typing", coalescing: Bool = false) {
         guard programmaticEditDepth == 0, !workspaceEditMutationInFlight,
               range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return }
         let previous = (storage.string as NSString).substring(with: range)
         guard previous != replacement else { return }
         let inverseRange = NSRange(location: range.location, length: (replacement as NSString).length)
-        undoManager.registerBufferUndo(target: self, actionName: actionName) { buffer in
+        let simpleTyping = coalescing && actionName == "Typing"
+            && (previous.isEmpty && replacement.count == 1 && replacement.rangeOfCharacter(from: .newlines) == nil
+                || replacement.isEmpty && previous.count == 1)
+        undoManager.registerBufferUndo(target: self, actionName: actionName,
+                                       coalescingRange: simpleTyping ? range : nil, replacementLength: inverseRange.length) { buffer in
             guard NSMaxRange(inverseRange) <= buffer.storage.length,
                   (buffer.storage.string as NSString).substring(with: inverseRange) == replacement else { return }
             buffer.registerTextUndo(range: inverseRange, replacement: previous, actionName: actionName)

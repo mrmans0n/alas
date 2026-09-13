@@ -86,17 +86,20 @@ final class TabsManager {
     /// Runtime-only display titles for terminal pane leaves. Key = leafId.
     var terminalRuntimeTitles: [String: String] = [:]
     private let lsp: WorkspaceLSPManager?
+    private let workspaceEditJournal: WorkspaceEditJournal
 
     init(
         bufferStore: EditorBufferStore = EditorBufferStore(),
         lsp: WorkspaceLSPManager? = nil,
         store: any PersistenceStoreProtocol = PersistenceStore(),
-        tabsDirectory: URL = Paths.tabsDir
+        tabsDirectory: URL = Paths.tabsDir,
+        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal()
     ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
         self.store = store
         self.tabsDirectory = tabsDirectory
+        self.workspaceEditJournal = workspaceEditJournal
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
@@ -113,7 +116,7 @@ final class TabsManager {
     func workspaceEditUndoCoordinator(forWorktreeId worktreeId: String, worktreeRoot: URL) -> WorkspaceEditUndoCoordinator {
         if let coordinator = workspaceUndoCoordinators[worktreeId] { return coordinator }
         let access = TabsWorkspaceEditUndoAccess(tabs: self, worktreeID: worktreeId, root: worktreeRoot)
-        let coordinator = WorkspaceEditUndoCoordinator(access: access, journal: WorkspaceEditJournal()) { [weak self] document in
+        let coordinator = WorkspaceEditUndoCoordinator(access: access, journal: workspaceEditJournal) { [weak self] document in
             self?.workspaceEditBuffer(for: document)
         }
         workspaceUndoCoordinators[worktreeId] = coordinator
@@ -2005,6 +2008,7 @@ final class TabsManager {
         buffer.onInitialLoadFinished = { [weak self, weak buffer] in
             guard let self, let buffer else { return }
             self.indexRestoredPathBufferIfAvailable(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+            self.reattachWorkspaceUndo(buffer, worktreeId: worktreeId)
         }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
             guard let buffer else { return }
@@ -2029,7 +2033,15 @@ final class TabsManager {
             buffers[key] = buffer
             bufferKeys[tabId] = key
         }
+        if buffer.initialLoadFinished { reattachWorkspaceUndo(buffer, worktreeId: worktreeId) }
         return buffer
+    }
+
+    private func reattachWorkspaceUndo(_ buffer: EditorBuffer, worktreeId: String) {
+        let document = EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: worktreeId,
+                                        uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
+        guard workspaceEditBuffer(for: document) === buffer else { return }
+        workspaceUndoCoordinators[worktreeId]?.reattachCleanBuffer(buffer, document: document)
     }
 
     /// Returns (or creates) a read-only external buffer keyed by absolute URL.

@@ -14,6 +14,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     func bindUndo(to buffer: EditorBuffer?) {
+        undoBuffer?.undoManager.breakTypingCoalescing()
         // Disable view-targeted AppKit inverses before exposing live history.
         // Toggling allowsUndo after installing the replacement can clear it.
         undoBuffer = nil
@@ -503,7 +504,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         suppressViewUndo = false
         if shouldChange {
             pendingCompletionEditRange = affectedCharRange
-            if let replacementString { undoBuffer?.registerTextUndo(range: affectedCharRange, replacement: replacementString) }
+            if let replacementString { undoBuffer?.registerTextUndo(range: affectedCharRange, replacement: replacementString, coalescing: true) }
         }
         return shouldChange
     }
@@ -1100,6 +1101,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func notifyCompletionSelectionChanged() {
         guard !suppressCompletionSelectionNotifications else { return }
+        undoBuffer?.undoManager.breakTypingCoalescing()
         completionSelectionChangeHandler?()
     }
 

@@ -5,6 +5,121 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct WorkspaceEditUndoTests {
+    @Test func localRedoPrecedesAnEarlierSharedBoundary() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        f.type("earlier", in: f.a)
+        _ = try await f.rename()
+        f.a.undoManager.undo()
+        for _ in 0..<100 where f.a.storage.string != "earlier" { try await Task.sleep(nanoseconds: 10_000_000) }
+        f.a.undoManager.undo()
+        #expect(f.a.storage.string == "old")
+        #expect(f.a.undoManager.redoActionName == "Typing")
+        f.a.undoManager.redo()
+        #expect(f.a.storage.string == "earlier")
+        #expect(f.b.storage.string == "old")
+        f.a.undoManager.redo()
+        for _ in 0..<100 where f.a.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(f.a.storage.string == "new")
+        #expect(f.b.storage.string == "new")
+    }
+
+    @Test func typingCoalescesUntilCaretMovementAndGroupsBackwardDeletion() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let view = f.view(for: f.a)
+        view.insertText("x", replacementRange: NSRange(location: 3, length: 0))
+        view.insertText("y", replacementRange: NSRange(location: 4, length: 0))
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        view.insertText("z", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.undoManager?.undo()
+        #expect(f.a.storage.string == "oldxy")
+        view.undoManager?.undo()
+        #expect(f.a.storage.string == "old")
+        view.undoManager?.redo()
+        #expect(f.a.storage.string == "oldxy")
+        view.undoManager?.redo()
+        #expect(f.a.storage.string == "oldxyz")
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.deleteBackward(nil)
+        view.deleteBackward(nil)
+        #expect(f.a.storage.string == "oldx")
+        view.undoManager?.undo()
+        #expect(f.a.storage.string == "oldxyz")
+        view.undoManager?.redo()
+        #expect(f.a.storage.string == "oldx")
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func cleanParticipatingTabReopenChecksContentBeforeRestoringMarker(outsideEdit: Bool, undoneBeforeClose: Bool) async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let a = f.documents[0]
+        let d = EditorDocumentID(host: nil, worktreeID: "w", uri: f.root.appendingPathComponent("d.txt").lspURI)
+        let source = try await f.access.snapshot(a)
+        let missing = try await f.access.snapshot(d)
+        let plan = WorkspaceEditPlan(steps: [
+            .init(kind: .rename, document: a, destination: d, before: source, after: source.replacing(document: d, content: source.content), destinationBefore: missing, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        ], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        guard case .applied(let id) = await f.undo.executor.apply(plan) else { Issue.record("Apply failed")
+        return }
+        f.undo.register(operationID: id, affectedDocuments: [a, d])
+        if undoneBeforeClose { #expect(await f.undo.undo(operationID: id) == .applied(id)) }
+        #expect(!f.a.dirty)
+        let closedDocument = undoneBeforeClose ? a : d
+        let closedPath = undoneBeforeClose ? "a.txt" : "d.txt"
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        if outsideEdit { try Data("outside".utf8).write(to: f.root.appendingPathComponent(closedPath)) }
+        let reopened = f.tabs.buffer(worktreeId: "w", tabId: "reopened", worktreeRoot: f.root, relativePath: closedPath)
+        await reopened.awaitLoadForTesting()
+        defer { reopened.close(persistDirtySnapshot: false) }
+        #expect(reopened !== f.a)
+        if outsideEdit {
+            #expect(!reopened.undoManager.canUndo)
+            #expect(!reopened.undoManager.canRedo)
+            let outcome = undoneBeforeClose ? await f.undo.redo(operationID: id) : await f.undo.undo(operationID: id)
+            #expect(outcome == .conflict([closedDocument]))
+            #expect(reopened.storage.string == "outside")
+            #expect(undoneBeforeClose ? f.a.undoManager.canRedo : f.a.undoManager.canUndo)
+        } else {
+            #expect(undoneBeforeClose ? reopened.undoManager.canRedo : reopened.undoManager.canUndo)
+            if undoneBeforeClose { reopened.undoManager.redo() } else { reopened.undoManager.undo() }
+            let inversePath = undoneBeforeClose ? "d.txt" : "a.txt"
+            for _ in 0..<100 where reopened.relativePath != inversePath { try await Task.sleep(nanoseconds: 10_000_000) }
+            #expect(reopened.relativePath == inversePath)
+            #expect(try String(contentsOf: f.root.appendingPathComponent(inversePath), encoding: .utf8) == "old")
+            if undoneBeforeClose { reopened.undoManager.undo() } else { reopened.undoManager.redo() }
+            for _ in 0..<100 where reopened.relativePath != closedPath { try await Task.sleep(nanoseconds: 10_000_000) }
+            #expect(reopened.relativePath == closedPath)
+            #expect(try String(contentsOf: f.root.appendingPathComponent(closedPath), encoding: .utf8) == "old")
+        }
+    }
+
+    @Test func normalRedoReachesSharedBoundaryAfterUndoingLaterTyping() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        _ = try await f.rename()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        f.a.storage.addLayoutManager(layout)
+        let view = CodeTextView(frame: .zero, textContainer: container)
+        view.bindUndo(to: f.a)
+        #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        for _ in 0..<100 where f.a.storage.string != "old" { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(f.a.storage.string == "old")
+        view.insertText("later", replacementRange: NSRange(location: 0, length: 3))
+        #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        #expect(f.a.storage.string == "old")
+        #expect(view.undoManager?.redoActionName == "Workspace Edit")
+        #expect(view.tryToPerform(NSSelectorFromString("redo:"), with: nil))
+        for _ in 0..<100 where f.a.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(f.a.storage.string == "new")
+        #expect(f.b.storage.string == "new")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "new")
+    }
+
     @Test func oneAsyncInverseRunsAtATime() async throws {
         let f = try WorkspaceEditFixture(host: "ssh-host")
         defer { f.remove() }
@@ -157,6 +272,12 @@ struct WorkspaceEditUndoTests {
         #expect(f.b.storage.string == "new")
         #expect(try String(contentsOf: f.root.appendingPathComponent("a.txt"), encoding: .utf8) == "old")
         #expect(f.b.undoManager.canUndo)
+        let reopened = f.tabs.buffer(worktreeId: "w", tabId: "reopened", worktreeRoot: f.root, relativePath: "a.txt")
+        await reopened.awaitLoadForTesting()
+        defer { reopened.close(persistDirtySnapshot: false) }
+        #expect(!reopened.undoManager.canUndo)
+        #expect(await f.undo.undo(operationID: id) == .conflict([f.documents[0]]))
+        #expect(reopened.storage.string == "old")
     }
 
     @Test func unknownSSHUndoRetainsOriginalMarkerAndRecoveryJournal() async throws {
@@ -221,9 +342,10 @@ struct WorkspaceEditUndoTests {
         let view = CodeTextView(frame: .zero, textContainer: container)
         let coordinator = CodeEditorCoordinator(appState: appState)
         coordinator.attach(textView: view, buffer: a, layoutManager: layout, worktreeId: "undo-test", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
-        view.undoManager?.beginUndoGrouping()
-        view.insertText("new", replacementRange: NSRange(location: 0, length: 3))
-        view.undoManager?.endUndoGrouping()
+        for (offset, character) in ["n", "e", "w"].enumerated() {
+            view.insertText(character, replacementRange: NSRange(location: 3 + offset, length: 0))
+        }
+        #expect(a.storage.string == "oldnew")
         view.allowsUndo = true
         coordinator.updateIfNeeded(worktreeId: "undo-test", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
         coordinator.updateIfNeeded(worktreeId: "undo-test", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
@@ -234,7 +356,7 @@ struct WorkspaceEditUndoTests {
         coordinator.detach()
         coordinator.attach(textView: view, buffer: a, layoutManager: layout, worktreeId: "undo-test", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
         view.undoManager?.redo()
-        #expect(a.storage.string == "new")
+        #expect(a.storage.string == "oldnew")
         coordinator.detach()
     }
 }
@@ -254,7 +376,8 @@ private struct UndoFixture {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-undo-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for name in ["a", "b", "c"] { try Data("old".utf8).write(to: root.appendingPathComponent("\(name).txt")) }
-        tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), tabsDirectory: root.appendingPathComponent("tabs"))
+        journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
         a = tabs.buffer(worktreeId: "w", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
         b = tabs.buffer(worktreeId: "w", tabId: "b", worktreeRoot: root, relativePath: "b.txt")
         await a.awaitLoadForTesting()
@@ -263,9 +386,7 @@ private struct UndoFixture {
         b.stopWatching()
         let directory = root
         access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in directory })
-        journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
-        let owner = tabs
-        undo = WorkspaceEditUndoCoordinator(access: access, journal: journal, bufferForDocument: { owner.workspaceEditBuffer(for: $0) })
+        undo = tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: root)
         documents = ["a", "b", "c"].map { EditorDocumentID(host: nil, worktreeID: "w", uri: directory.appendingPathComponent("\($0).txt").lspURI) }
     }
 
@@ -286,6 +407,16 @@ private struct UndoFixture {
         let range = NSRange(location: 0, length: buffer.storage.length)
         buffer.registerTextUndo(range: range, replacement: value)
         buffer.storage.replaceCharacters(in: range, with: value)
+    }
+
+    func view(for buffer: EditorBuffer) -> CodeTextView {
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        buffer.storage.addLayoutManager(layout)
+        let view = CodeTextView(frame: .zero, textContainer: container)
+        view.bindUndo(to: buffer)
+        return view
     }
 
     func remove() {
