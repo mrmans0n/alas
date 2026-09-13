@@ -62,7 +62,8 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
             bufferVersion: tabs.workspaceEditVersion(for: document, buffer: buffer),
             isOpen: true, isDirty: buffer.dirty, isDirectory: disk.isDirectory, isSymbolicLink: disk.isSymbolicLink,
             diskContent: disk.content, originalContent: Data(buffer.originalText.utf8), permissions: disk.permissions,
-            bufferGeneration: buffer.editGeneration, fileWatchGeneration: buffer.fileWatchGeneration
+            bufferGeneration: buffer.editGeneration, fileWatchGeneration: buffer.fileWatchGeneration,
+            tombstoneContent: buffer.workspaceEditDeleted ? Data(buffer.storage.string.utf8) : nil
         )
     }
 
@@ -86,8 +87,10 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
         }
         // Open deletion/restoration changes the disk as well as the buffer's
         // tombstone. The journal retains both unsaved bytes and disk bytes.
-        let diskBefore = WorkspaceFileSnapshot(document: document, content: before.isOpen ? before.diskContent : before.content, permissions: before.permissions)
-        let diskAfter = WorkspaceFileSnapshot(document: document, content: after.isOpen ? after.diskContent : after.content, permissions: after.permissions)
+        let diskBefore = WorkspaceFileSnapshot(document: document, content: current.isOpen ? current.diskContent : current.content, permissions: current.permissions)
+        // Simulated ownership may describe an earlier resource location. Only
+        // an actual buffer at this URI owns a separate saved disk baseline.
+        let diskAfter = WorkspaceFileSnapshot(document: document, content: buffer != nil ? after.diskContent : after.content, permissions: after.permissions)
         let effectiveAfter = after.content == nil ? diskAfter.replacing(content: nil) : diskAfter
         let modifiedAt = try await replaceDisk(diskBefore, with: effectiveAfter) {
             guard self.tabs.workspaceEditBuffer(for: document) === buffer,

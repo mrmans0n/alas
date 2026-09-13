@@ -178,18 +178,27 @@ final class WorkspaceEditExecutor {
             && (expected.bufferGeneration == nil || actual.bufferGeneration == expected.bufferGeneration)
             && (expected.fileWatchGeneration == nil || actual.fileWatchGeneration == expected.fileWatchGeneration)
             && (!expected.isOpen || actual.diskContent == expected.diskContent)
+            && actual.tombstoneContent == expected.tombstoneContent
     }
 
     private static func isPostState(_ actual: [WorkspaceFileSnapshot], of step: WorkspaceEditPlanStep) -> Bool {
         if step.kind == .rename, step.after.document != step.document {
             return actual.count == 2 && actual[0].content == nil && actual[1].content == step.after.content
         }
-        return actual.first?.content == step.after.content
+        guard let source = actual.first, source.content == step.after.content else { return false }
+        if step.after.content == nil, step.before.isOpen {
+            // An unconfirmed deletion can lose its post-snapshot while LSP
+            // shutdown suspends. Never adopt later tombstone edits as ours.
+            return source.isOpen && source.diskContent == nil
+                && source.tombstoneContent == (step.before.tombstoneContent ?? step.before.content)
+        }
+        return true
     }
 
     private static func isBeforeState(_ actual: [WorkspaceFileSnapshot], of step: WorkspaceEditPlanStep) -> Bool {
         guard let source = actual.first, source.content == step.before.content,
               source.isOpen == step.before.isOpen,
+              source.tombstoneContent == step.before.tombstoneContent,
               !step.before.isOpen || source.diskContent == step.before.diskContent else { return false }
         guard let destination = step.destinationBefore else { return true }
         return actual.last?.content == destination.content && actual.last?.isOpen == destination.isOpen

@@ -4,6 +4,113 @@ import Testing
 
 @MainActor
 struct WorkspaceEditExecutorTests {
+    @Test func unconfirmedDeletionPreservesRecreatedDiskContent() async throws {
+        let fixture = try WorkspaceEditFixture()
+        defer { fixture.remove() }
+        let before = try #require(fixture.access.files[fixture.a])
+        let step = WorkspaceEditPlanStep(kind: .delete, document: fixture.a, destination: nil, before: before, after: before.replacing(content: nil), destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        fixture.access.failBeforeWrite = fixture.a
+        fixture.access.onFailure = {
+            fixture.access.files[fixture.a] = WorkspaceFileSnapshot(document: fixture.a, content: nil, isOpen: true, isDirty: true, diskContent: Data("recreated".utf8), tombstoneContent: before.content)
+        }
+        guard case .recoveryRequired = await fixture.executor.apply(plan) else { Issue.record("Expected recreated disk content to block recovery")
+        return }
+        #expect(fixture.access.files[fixture.a]?.diskContent == Data("recreated".utf8))
+        #expect(fixture.access.calls.filter { $0 == "write:a" }.count == 1)
+    }
+
+    @Test func renameThenRecreateSourceUsesEmptyDiskContentAndRecovers() async throws {
+        let fixture = try await LocalWorkspaceEditFixture()
+        defer { fixture.remove() }
+        let destination = EditorDocumentID(host: nil, worktreeID: "w", uri: fixture.root.appendingPathComponent("b").lspURI)
+        let before = try await fixture.access.snapshot(fixture.document)
+        let missing = try await fixture.access.snapshot(destination)
+        let context = EditorRequestContext(document: fixture.document, version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        let plan = try WorkspaceEditPlanner.plan(edit: .init(documentChanges: [
+            .rename(oldURI: fixture.document.uri, newURI: destination.uri, options: .init(), annotationID: nil),
+            .create(uri: fixture.document.uri, options: .init(), annotationID: nil)
+        ]), context: context, snapshots: [fixture.document: before, destination: missing])
+        #expect(!plan.steps[1].before.isOpen)
+        #expect(plan.steps[1].before.diskContent == nil)
+        let outcome = await fixture.executor.apply(plan)
+        guard case .applied(let id) = outcome else { Issue.record("Expected rename and recreate, got \(outcome)")
+        return }
+        #expect(try Data(contentsOf: fixture.file).isEmpty)
+        #expect(try String(contentsOf: fixture.root.appendingPathComponent("b"), encoding: .utf8) == "saved")
+        #expect(fixture.buffer.relativePath == "b")
+        #expect(fixture.buffer.storage.string == "dirty")
+        #expect(fixture.buffer.dirty)
+        guard case .recovered = await fixture.executor.recover(id) else { Issue.record("Expected compound resource recovery")
+        return }
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == "saved")
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("b").path))
+        #expect(fixture.buffer.relativePath == "a")
+        #expect(fixture.buffer.storage.string == "dirty")
+        #expect(fixture.buffer.dirty)
+    }
+
+    @Test func deletionRecoveryPreservesTextEnteredDuringLSPShutdown() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-edit-delete-race-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("a.swift")
+        try Data("saved".utf8).write(to: file)
+        var transports: [FakeTransport] = []
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
+        ]), makeClient: { _, _, _, language, rootURI in
+            let transport = FakeTransport()
+            transport.onSend = { sent in
+                if sent.contains(#""method":"initialize""#) {
+                    transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+                }
+            }
+            transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let tabs = TabsManager(lsp: lsp, tabsDirectory: root.appendingPathComponent("tabs"))
+        let tab = tabs.openEditor(worktreeId: "w", relativePath: "a.swift", revealLine: nil, revealCharacter: nil)
+        let buffer = tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: root, relativePath: "a.swift")
+        defer { buffer.close(persistDirtySnapshot: false)
+        transports.forEach { $0.finish() } }
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "dirty")
+        let document = EditorDocumentID(host: nil, worktreeID: "w", uri: file.lspURI)
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let before = try await access.snapshot(document)
+        let transport = try #require(transports.first)
+        let step = WorkspaceEditPlanStep(kind: .delete, document: document, destination: nil, before: before, after: before.replacing(content: nil), destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let executor = WorkspaceEditExecutor(access: access, journal: journal)
+        var completedOutcome: WorkspaceEditOutcome?
+        let operation = Task { completedOutcome = await executor.apply(plan) }
+        defer { operation.cancel() }
+        for _ in 0..<100 where !transport.sent.contains(where: { $0.contains(#""method":"shutdown""#) }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let shutdown = try #require(transport.sent.first(where: { $0.contains(#""method":"shutdown""#) }))
+        let request = try #require(JSONSerialization.jsonObject(with: Data(shutdown.utf8)) as? [String: Any])
+        let requestID = try #require(request["id"] as? Int)
+        #expect(buffer.workspaceEditDeleted)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "later edit")
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(requestID),"result":null}"#)
+        for _ in 0..<300 where completedOutcome == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        let outcome = try #require(completedOutcome, "Deletion apply/recovery must finish after releasing LSP shutdown")
+        #expect(buffer.storage.string == "later edit")
+        #expect(buffer.workspaceEditDeleted)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        guard case .recoveryRequired(let id, let detail) = outcome else { Issue.record("Expected unresolved deletion recovery, got \(outcome)")
+        return }
+        #expect(detail.contains(document.uri))
+        #expect(try journal.record(id).entries.first?.state == .unknown)
+        guard case .recoveryRequired = await executor.recover(id) else { Issue.record("Expected later text to remain protected")
+        return }
+        #expect(buffer.storage.string == "later edit")
+    }
+
     @Test func retiredWatcherDeliveryDoesNotInvalidateCurrentBuffer() async throws {
         let fixture = try await LocalWorkspaceEditFixture()
         defer { fixture.remove() }

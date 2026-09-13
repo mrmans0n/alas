@@ -13,6 +13,8 @@ struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
     let permissions: Int?
     let bufferGeneration: Int?
     let fileWatchGeneration: Int?
+    /// Live storage retained after resource deletion, separate from absent file content.
+    let tombstoneContent: Data?
 
     init(
         document: EditorDocumentID,
@@ -26,7 +28,8 @@ struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
         originalContent: Data? = nil,
         permissions: Int? = nil,
         bufferGeneration: Int? = nil,
-        fileWatchGeneration: Int? = nil
+        fileWatchGeneration: Int? = nil,
+        tombstoneContent: Data? = nil
     ) {
         self.document = document
         self.content = content
@@ -40,6 +43,7 @@ struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
         self.permissions = permissions
         self.bufferGeneration = bufferGeneration
         self.fileWatchGeneration = fileWatchGeneration
+        self.tombstoneContent = tombstoneContent
     }
 
     func replacing(document: EditorDocumentID? = nil, content: Data?) -> WorkspaceFileSnapshot {
@@ -55,7 +59,17 @@ struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
             originalContent: originalContent,
             permissions: permissions,
             bufferGeneration: bufferGeneration,
-            fileWatchGeneration: fileWatchGeneration
+            fileWatchGeneration: fileWatchGeneration,
+            tombstoneContent: isOpen && content == nil ? tombstoneContent ?? self.content : nil
+        )
+    }
+
+    func removingResource(keepingBuffer: Bool) -> WorkspaceFileSnapshot {
+        guard keepingBuffer, isOpen else { return WorkspaceFileSnapshot(document: document, content: nil) }
+        return WorkspaceFileSnapshot(
+            document: document, content: nil, bufferVersion: bufferVersion, isOpen: true, isDirty: isDirty,
+            originalContent: originalContent, bufferGeneration: bufferGeneration, fileWatchGeneration: fileWatchGeneration,
+            tombstoneContent: tombstoneContent ?? content
         )
     }
 }
@@ -189,7 +203,7 @@ enum WorkspaceEditPlanner {
                     continue
                 }
                 let destinationAfter = before.replacing(document: destination, content: before.content)
-                let sourceAfter = before.replacing(content: nil)
+                let sourceAfter = before.removingResource(keepingBuffer: false)
                 state[source] = sourceAfter
                 state[destination] = destinationAfter
                 if destinationExists && destinationBefore.isOpen && destinationBefore.isDirty {
@@ -207,7 +221,7 @@ enum WorkspaceEditPlanner {
                 if before.content == nil && !options.ignoreIfNotExists { throw Error.sourceDoesNotExist }
                 try validate(snapshot: before)
                 if before.isDirectory { throw Error.unboundedDirectoryDelete }
-                let after = before.replacing(content: nil)
+                let after = before.removingResource(keepingBuffer: true)
                 state[document] = after
                 if before.content != nil && before.isOpen && before.isDirty {
                     warnings.append(.deleteWithUnsavedContent(document))
