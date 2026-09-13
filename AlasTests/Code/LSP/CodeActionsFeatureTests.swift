@@ -1,9 +1,136 @@
-import Foundation
+import AppKit
 import Testing
 @testable import Alas
 
 @Suite("Code actions", .serialized)
 struct CodeActionsFeatureTests {
+    @Test @MainActor func lateSheetCompletionCannotAcceptTheNextPreview() async throws {
+        let fixture = try WorkspaceEditFixture()
+        defer { fixture.remove() }
+        var closes: [() -> Void] = []
+        var completions: [() -> Void] = []
+        let started = AsyncStream<Void>.makeStream()
+        defer { started.continuation.finish() }
+        let presentation = CodeActionEditPresentation { _, _, close, completion in
+            closes.append(close)
+            completions.append(completion)
+            started.continuation.yield(())
+            return {}
+        }
+        let parent = NSWindow()
+        let first = WorkspaceEditPreviewModel(plan: fixture.plan) { _ in .applied(UUID()) }
+        let a = Task { await presentation.present(first, parent: parent, forcePreview: true) }
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(await first.apply())
+        closes[0]()
+        #expect(await a.value)
+
+        var secondApplyCount = 0
+        let second = WorkspaceEditPreviewModel(plan: fixture.plan) { _ in
+            secondApplyCount += 1
+            return .applied(UUID())
+        }
+        let b = Task { await presentation.present(second, parent: parent, forcePreview: true) }
+        _ = await iterator.next()
+        completions[0]()
+        closes[0]()
+        #expect(presentation.isPresenting)
+        #expect(secondApplyCount == 0)
+        presentation.cancel()
+        #expect(await b.value == false)
+        #expect(!second.didApply)
+    }
+
+    @Test(arguments: ["native", "explicit", "task"])
+    @MainActor func cancellationNeverAcceptsAnAppliedModel(source: String) async throws {
+        let fixture = try WorkspaceEditFixture()
+        defer { fixture.remove() }
+        let started = AsyncStream<Void>.makeStream()
+        defer { started.continuation.finish() }
+        var completion: (() -> Void)?
+        let presentation = CodeActionEditPresentation { _, _, _, cancelled in
+            completion = cancelled
+            started.continuation.yield(())
+            return {}
+        }
+        let model = WorkspaceEditPreviewModel(plan: fixture.plan) { _ in .applied(UUID()) }
+        let parent = NSWindow()
+        let task = Task { await presentation.present(model, parent: parent, forcePreview: true) }
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(await model.apply())
+        switch source {
+        case "native": completion?()
+        case "explicit": presentation.cancel()
+        default: task.cancel()
+        }
+        #expect(await task.value == false)
+        #expect(!presentation.isPresenting)
+    }
+
+    @Test(arguments: ["none", "untouchedBefore", "untouchedAfter", "editedAfter"])
+    @MainActor func postPreviewRebindingValidatesCapturedBuffers(change: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("action-generation-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"))
+        var buffers: [EditorBuffer] = []
+        for path in ["a", "b"] {
+            try Data("old".utf8).write(to: root.appendingPathComponent(path))
+            let tab = tabs.openEditor(worktreeId: "w", relativePath: path, revealLine: nil, revealCharacter: nil)
+            let buffer = tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: root, relativePath: path)
+            await buffer.awaitLoadForTesting()
+            buffer.stopWatching()
+            buffers.append(buffer)
+        }
+        defer { buffers.forEach { $0.close(persistDirtySnapshot: false) } }
+        let a = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("a").lspURI)
+        let captured = tabs.workspaceEditGenerations(host: nil, worktreeID: "w")
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let before = try await access.snapshot(a)
+        let range = LSPRange(start: .init(line: 0, character: 0), end: .init(line: 0, character: 3))
+        let edit = LSPWorkspaceEdit(changes: [a.uri: [.init(range: range, newText: "new")]])
+        let after = before.replacing(content: Data("new".utf8))
+        let step = WorkspaceEditPlanStep(kind: .text, document: a, destination: nil, before: before, after: after,
+                                         destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [a: after], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let executor = WorkspaceEditExecutor(access: access, journal: journal)
+        let action = try LSPCodeAction(wireValue: .object([
+            "title": .string("Fix"), "edit": LSPJSONValue.decode(from: JSONEncoder().encode(edit)),
+            "command": .object(["title": .string("Run"), "command": .string("run")])
+        ]))
+        var commandRan = false
+        let result = try await CodeActionsFeature.perform(action, isCurrent: { true }, apply: { _ in
+            // The initiating file is unchanged while another open buffer is edited during preview.
+            if change == "untouchedBefore" {
+                buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "user text")
+            }
+            guard case .applied(let id) = await executor.apply(plan) else { return .cancelled }
+            let record = try! journal.record(id)
+            let observed = record.entries.flatMap { $0.observedAfter ?? [] }
+            let applied = Dictionary(uniqueKeysWithValues: observed.map { ($0.document, $0) })
+            if change == "untouchedAfter" {
+                buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "later user text")
+            } else if change == "editedAfter" {
+                // Restoring identical text must not hide intervening edits to an applied buffer.
+                buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "temporary")
+                buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 9), with: "new")
+            }
+            do {
+                let actual = try await access.snapshot(a)
+                _ = try CodeActionsFeature.validatedGenerations(captured: captured,
+                    current: tabs.workspaceEditGenerations(host: nil, worktreeID: "w"), applied: applied, actual: [a: actual])
+                return .init(applied: true)
+            } catch { return .init(applied: false, failureReason: "Captured buffer changed") }
+        }, execute: { _ in commandRan = true })
+        #expect(buffers[0].storage.string == "new")
+        #expect(result.applied == (change == "none"))
+        #expect(commandRan == (change == "none"))
+        #expect(change == "none" || result.failureReason != nil)
+    }
+
     @Test func retainsDisabledActionReason() throws {
         let action = try JSONDecoder().decode(LSPCodeAction.self, from: Data(#"{"title":"Extract method","disabled":{"reason":"Select an expression"}}"#.utf8))
         #expect(action.disabled?.reason == "Select an expression")

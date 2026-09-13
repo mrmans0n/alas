@@ -6,6 +6,7 @@ import SwiftUI
 final class CodeActionsFeature {
     private weak var textView: CodeTextView?
     private let tabs: TabsManager
+    private let root: URL
     private let edits: RenameFeature
     private let synchronize: (NSRange) async -> (LSPClient, EditorRequestContext)?
     private let isCurrent: (EditorRequestContext) -> Bool
@@ -21,6 +22,7 @@ final class CodeActionsFeature {
          diagnostics: @escaping () -> [LSPDiagnostic]) {
         self.textView = textView
         self.tabs = tabs
+        self.root = root
         self.synchronize = synchronize
         self.isCurrent = isCurrent
         self.diagnostics = diagnostics
@@ -127,6 +129,31 @@ final class CodeActionsFeature {
             && tabs.workspaceEditGenerations(host: session.context.document.host, worktreeID: session.context.document.worktreeID) == session.generations
     }
 
+    static func validatedGenerations(
+        captured: [EditorDocumentID: WorkspaceEditBufferGeneration],
+        current: [EditorDocumentID: WorkspaceEditBufferGeneration],
+        applied: [EditorDocumentID: WorkspaceFileSnapshot],
+        actual: [EditorDocumentID: WorkspaceFileSnapshot]
+    ) throws -> [EditorDocumentID: WorkspaceEditBufferGeneration] {
+        let edited = Set(applied.keys)
+        let untouched = captured.filter { !edited.contains($0.key) }
+        guard current.filter({ !edited.contains($0.key) }) == untouched else { throw RenameFeature.Error.stale }
+        let editedOwners = Set(captured.filter { edited.contains($0.key) }.values.map(\.identity))
+        var refreshed = untouched
+        for (document, expected) in applied {
+            guard let snapshot = actual[document], WorkspaceEditExecutor.matches(snapshot, expected) else {
+                throw WorkspaceEditAccessError.conflict(document)
+            }
+            if let generation = current[document] {
+                guard expected.isOpen, editedOwners.contains(generation.identity),
+                      generation.edit == expected.bufferGeneration,
+                      generation.watch == expected.fileWatchGeneration else { throw WorkspaceEditAccessError.conflict(document) }
+                refreshed[document] = generation
+            } else if expected.isOpen { throw WorkspaceEditAccessError.conflict(document) }
+        }
+        return refreshed
+    }
+
     private func apply(_ edit: LSPWorkspaceEdit, session: CodeActionContext, client: LSPClient, id: UUID) async -> LSPApplyEditResult {
         guard !Task.isCancelled, isCurrent(session, id: id), !session.isApplying else { return .cancelled }
         session.isApplying = true
@@ -139,14 +166,32 @@ final class CodeActionsFeature {
             let model = edits.makePreviewModel(plan: plan, context: original)
             let accepted = await presentation.present(model, parent: textView.window, forcePreview: true)
             guard accepted else { return .init(applied: false, failureReason: model.errorMessage ?? "Workspace edit preview cancelled.") }
-            // Our edit may have advanced the initiating buffer. Rebind only to the same server/document
-            // and only while its content still equals the plan we just applied.
+            guard let operationID = model.appliedOperationID else { return .cancelled }
+            let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: original.document.worktreeID, worktreeRoot: root)
+            let record = try coordinator.journal.record(operationID)
+            guard record.status == .applied else { return .cancelled }
+            var applied: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
+            for entry in record.entries {
+                guard entry.state == .confirmed, let observed = entry.observedAfter else { return .cancelled }
+                for snapshot in observed { applied[snapshot.document] = snapshot }
+            }
+            let generations = tabs.workspaceEditGenerations(host: original.document.host, worktreeID: original.document.worktreeID)
+            let access = HostWorkspaceEditFileAccess(tabs: tabs) { [root] document in
+                document.host == original.document.host && document.worktreeID == original.document.worktreeID ? root : nil
+            }
+            var actual: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
+            for document in applied.keys { actual[document] = try await access.snapshot(document) }
+            let refreshedGenerations = try Self.validatedGenerations(captured: session.generations, current: generations,
+                                                                     applied: applied, actual: actual)
+            // Only executor-confirmed edits may advance captured generations. Preserve every
+            // untouched owner and reject changes during snapshots or synchronization as well.
             guard !Task.isCancelled, id == generation, Data(textView.string.utf8) == expectedText,
                   let refreshed = await synchronize(NSRange(location: 0, length: 0)), refreshed.0 === client,
                   refreshed.1.document == original.document, refreshed.1.serverGeneration == original.serverGeneration,
-                  Data(textView.string.utf8) == expectedText, isCurrent(refreshed.1) else { return .cancelled }
+                  Data(textView.string.utf8) == expectedText, isCurrent(refreshed.1),
+                  tabs.workspaceEditGenerations(host: original.document.host, worktreeID: original.document.worktreeID) == refreshedGenerations else { return .cancelled }
             session.context = refreshed.1
-            session.generations = tabs.workspaceEditGenerations(host: original.document.host, worktreeID: original.document.worktreeID)
+            session.generations = refreshedGenerations
             return .init(applied: true)
         } catch { return .init(applied: false, failureReason: RenameFeature.message(for: error)) }
     }
@@ -165,46 +210,75 @@ private final class CodeActionContext {
 
 @MainActor
 final class CodeActionEditPresentation {
+    typealias ShowSheet = (WorkspaceEditPreviewModel, NSWindow, @escaping () -> Void, @escaping () -> Void) -> (() -> Void)
+    private let showSheet: ShowSheet
     private var continuation: CheckedContinuation<Bool, Never>?
-    private var window: NSWindow?
-    private var closeObserver: NSObjectProtocol?
+    private var dismissSheet: (() -> Void)?
     private var model: WorkspaceEditPreviewModel?
+    private var activeID: UUID?
 
-    func cancel() { model?.cancel()
-    finish(false) }
+    var isPresenting: Bool { continuation != nil }
+
+    init(showSheet: @escaping ShowSheet = CodeActionEditPresentation.showNativeSheet) {
+        self.showSheet = showSheet
+    }
+
+    func cancel() {
+        guard let id = activeID else { return }
+        cancel(id: id)
+    }
+
+    private func cancel(id: UUID) {
+        guard activeID == id else { return }
+        model?.cancel()
+        finish(id: id, applied: false)
+    }
 
     func present(_ model: WorkspaceEditPreviewModel, parent: NSWindow?, forcePreview: Bool) async -> Bool {
         guard !Task.isCancelled else { return false }
         if !forcePreview, !model.plan.requiresPreview { return await model.apply() }
         guard continuation == nil, let parent, parent.attachedSheet == nil else { return false }
+        let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: false)
+                return }
+                activeID = id
                 self.continuation = continuation
                 self.model = model
-                let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceEditPreview(model: model) { [weak self] in
-                    self?.finish(model.didApply)
-                }))
-                self.window = window
-                closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: parent, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.cancel() }
-                }
-                parent.beginSheet(window) { [weak self] _ in self?.finish(model.didApply) }
+                let dismiss = showSheet(model, parent, { [weak self] in
+                    self?.finish(id: id, applied: model.didApply)
+                }, { [weak self] in self?.cancel(id: id) })
+                if activeID == id { dismissSheet = dismiss } else { dismiss() }
             }
         } onCancel: {
-            Task { @MainActor [weak self] in self?.cancel() }
+            Task { @MainActor [weak self] in self?.cancel(id: id) }
         }
     }
 
-    private func finish(_ applied: Bool) {
+    private func finish(id: UUID, applied: Bool) {
+        guard activeID == id else { return }
+        activeID = nil
         let pending = continuation
         continuation = nil
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        closeObserver = nil
         model = nil
-        let sheet = window
-        window = nil
-        if let sheet { sheet.sheetParent?.endSheet(sheet) }
+        let dismiss = dismissSheet
+        dismissSheet = nil
+        dismiss?()
         pending?.resume(returning: applied)
+    }
+
+    private static func showNativeSheet(model: WorkspaceEditPreviewModel, parent: NSWindow,
+                                        close: @escaping () -> Void, cancelled: @escaping () -> Void) -> () -> Void {
+        let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceEditPreview(model: model, close: close, cancel: cancelled)))
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: parent, queue: .main) { _ in
+            MainActor.assumeIsolated { cancelled() }
+        }
+        parent.beginSheet(window) { _ in cancelled() }
+        return {
+            NotificationCenter.default.removeObserver(observer)
+            window.sheetParent?.endSheet(window)
+        }
     }
 }
 

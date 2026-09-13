@@ -9,7 +9,8 @@ final class WorkspaceEditPreviewModel {
     private(set) var isApplying = false
     private(set) var errorMessage: String?
     private(set) var requiresRecovery = false
-    private(set) var didApply = false
+    private(set) var appliedOperationID: UUID?
+    var didApply: Bool { appliedOperationID != nil }
     private var applicationTask: Task<WorkspaceEditOutcome, Never>?
     private var isCancelled = false
 
@@ -75,7 +76,7 @@ final class WorkspaceEditPreviewModel {
         } onCancel: { task.cancel() }
         errorMessage = Self.message(for: outcome)
         if case .recoveryRequired = outcome { requiresRecovery = true }
-        if case .applied = outcome { didApply = true
+        if case .applied(let id) = outcome { appliedOperationID = id
         return true }
         return false
     }
@@ -100,6 +101,7 @@ final class WorkspaceEditPreviewModel {
 struct WorkspaceEditPreview: View {
     let model: WorkspaceEditPreviewModel
     let close: () -> Void
+    var cancel: (() -> Void)? = nil
     @State private var selectedStep: Int = 0
 
     private struct StepRow: Identifiable {
@@ -168,7 +170,7 @@ struct WorkspaceEditPreview: View {
                 Text("All changes apply together. Open text buffers are not saved.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if model.isApplying { ProgressView().controlSize(.small) }
-                Button("Cancel", action: close).keyboardShortcut(.cancelAction).disabled(model.isApplying)
+                Button("Cancel", action: cancel ?? close).keyboardShortcut(.cancelAction).disabled(model.isApplying)
                 Button("Apply all") { Task { if await model.apply() { close() } } }
                     .keyboardShortcut(.defaultAction).disabled(model.isApplying || model.requiresRecovery)
             }
