@@ -730,6 +730,11 @@ extension AppState {
             schedulePendingHarnessAttention(transition)
             return
         }
+        // A busy/idle transition means the parked awaiting never happened.
+        // Cancel the timer, pending entry, and any pre-acknowledgment marker
+        // before applying it, so the acknowledgement this transition emits
+        // can't leak onto a transition that is still waiting to land.
+        cancelPendingHarnessAttention(for: transition.sessionID)
         applyHarnessAttention(transition)
     }
 

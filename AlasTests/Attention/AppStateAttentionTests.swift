@@ -1431,6 +1431,29 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 1)
     }
 
+    @Test func preAcknowledgementDoesNotLeakAcrossAwaitingFlurries() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // Focus while pending, then the agent resumes and waits again — all
+        // inside the settle window. The second waiting spell is genuinely
+        // new and must badge normally.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Again")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
     @MainActor private struct Fixture {
         let now = Date()
         let url: URL
