@@ -1519,6 +1519,48 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 
+    @Test func bodyReplacingStateNameFingerprintIsANewOccurrence() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // A bodyless awaiting has the state-name fingerprint; a follow-up
+        // whose literal body equals the state name must still be a distinct
+        // occurrence, per the producer's hashing.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: nil)
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "awaitingInput")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func acknowledgementSuppressedWhileInboxOpenDoesNotPreAcknowledge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        state.openAttentionInbox()
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.closeAttentionInbox()
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
     @Test func repeatedBodyUpdatesCannotStarveTheBadge() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

@@ -537,6 +537,10 @@ extension AppState {
     }
 
     private func acknowledgeSessionTarget(worktreeID: String, owner: SessionOwnerID, sessionID: String) {
+        // Mirrors the suppression guards in the acknowledge helpers below;
+        // without this an interaction while the inbox is open would record a
+        // pre-acknowledgment the helpers themselves refuse to apply.
+        guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
         let target = AttentionJumpTarget.session(sessionID: sessionID)
         if let pending = pendingHarnessAttention[sessionID] {
             // The awaiting event doesn't exist yet — it's parked in the
@@ -817,12 +821,11 @@ extension AppState {
         harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
     }
 
-    /// The attention fingerprint a pending transition will produce — the
-    /// trimmed body when present, the state name otherwise (mirrors
-    /// `AttentionProducer.harness`).
+    /// The attention fingerprint a pending transition will produce (mirrors
+    /// `AttentionProducer.harnessFingerprint`).
     private func fingerprint(for transition: HarnessActivityTransition) -> String {
-        let trimmed = transition.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? (transition.state?.rawValue ?? "") : trimmed
+        guard let state = transition.state else { return "" }
+        return AttentionProducer.harnessFingerprint(state: state, body: transition.body)
     }
 
     private func applyHarnessAttention(_ transition: HarnessActivityTransition) {
