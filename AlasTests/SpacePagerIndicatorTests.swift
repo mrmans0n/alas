@@ -92,6 +92,8 @@ struct SpacePagerIndicatorTests {
     @Test func pagerStripExposesOnlyTheActiveSpace() {
         #expect(SpacePagerLayout.isActive(spaceID: "first", activeSpaceID: "first"))
         #expect(!SpacePagerLayout.isActive(spaceID: "second", activeSpaceID: "first"))
+        #expect(SpacePagerLayout.allowsKeyboardFocus(spaceID: "first", activeSpaceID: "first"))
+        #expect(!SpacePagerLayout.allowsKeyboardFocus(spaceID: "second", activeSpaceID: "first"))
     }
 
     @Test func spaceIconRejectsNerdFontPrivateUseGlyphs() {

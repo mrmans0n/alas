@@ -87,6 +87,10 @@ enum SpacePagerLayout {
         spaceID == activeSpaceID
     }
 
+    static func allowsKeyboardFocus(spaceID: String, activeSpaceID: String) -> Bool {
+        isActive(spaceID: spaceID, activeSpaceID: activeSpaceID)
+    }
+
     static func offset(activeSpaceID: String, spaces: [SpaceConfig], pageWidth: CGFloat) -> CGFloat {
         guard let index = spaces.firstIndex(where: { $0.id == activeSpaceID }) else { return 0 }
         return -CGFloat(index) * pageWidth
@@ -108,7 +112,7 @@ struct SpacePagerContent<Content: View>: View {
                     content(space.id)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .allowsHitTesting(isActive)
-                        .disabled(!isActive)
+                        .focusable(SpacePagerLayout.allowsKeyboardFocus(spaceID: space.id, activeSpaceID: selection))
                         .accessibilityHidden(!isActive)
                 }
             }
