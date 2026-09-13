@@ -1842,7 +1842,7 @@ final class EditorBuffer {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let text = storage.string
         await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
-        let options = LSPFormattingOptions(tabSize: 4, insertSpaces: true)
+        let options = RenameFeature.formattingOptions(text: text)
         let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
         guard editGeneration == generation else {
             try await saveAwaitingRemote()
@@ -1892,33 +1892,16 @@ final class EditorBuffer {
     /// buffer untouched.
     private func applyFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
         guard !undoManager.workspaceActionInFlight else { return false }
-        let text = storage.string
-        var nsEdits: [(range: NSRange, newText: String)] = []
-        for edit in edits {
-            guard let start = TextEditCoordinates.utf16Offset(from: edit.range.start, in: text),
-                  let end = TextEditCoordinates.utf16Offset(from: edit.range.end, in: text),
-                  start <= end, end <= (text as NSString).length else { return false }
-            nsEdits.append((NSRange(location: start, length: end - start), edit.newText))
-        }
-        let ascending = nsEdits.sorted { first, second in
-            if first.range.location == second.range.location {
-                return first.range.length < second.range.length
-            }
-            return first.range.location < second.range.location
-        }
-        for index in ascending.indices.dropFirst() {
-            guard NSMaxRange(ascending[index - 1].range) <= ascending[index].range.location else {
-                return false
-            }
-        }
-        let formatted = NSMutableString(string: text)
-        for edit in ascending.reversed() { formatted.replaceCharacters(in: edit.range, with: edit.newText) }
-        registerTextUndo(range: NSRange(location: 0, length: storage.length), replacement: formatted as String, actionName: "Format Document")
+        let snapshot = WorkspaceFileSnapshot(
+            document: .init(host: workspaceEditHost, worktreeID: "", uri: worktreeRoot.appendingPathComponent(relativePath).lspURI),
+            content: Data(storage.string.utf8)
+        )
+        guard let result = try? WorkspaceEditPlanner.applying(edits, to: snapshot),
+              let data = result.content, let formatted = String(data: data, encoding: .utf8) else { return false }
+        registerTextUndo(range: NSRange(location: 0, length: storage.length), replacement: formatted, actionName: "Format Document")
         withLoadEditTrackingSuppressed {
             storage.beginEditing()
-            for edit in ascending.reversed() {
-                storage.replaceCharacters(in: edit.range, with: edit.newText)
-            }
+            storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: formatted)
             storage.endEditing()
         }
         editGeneration &+= 1

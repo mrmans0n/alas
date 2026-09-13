@@ -19,6 +19,7 @@ actor LSPClient {
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
     private(set) var capabilities: LSPCapabilities = .empty
     private(set) var supportsDocumentFormatting: Bool = false
+    private(set) var supportsPrepareRename = false
     private(set) var supportsPullDiagnostics: Bool = false
     private(set) var completionTriggerCharacters: [String] = []
     // `AsyncStream` is single-consumer — values are delivered to whichever
@@ -74,6 +75,12 @@ actor LSPClient {
         textDocumentSyncKind = caps.syncKind
         capabilities = LSPCapabilities.fromInitializeResult(rawResult)
         supportsDocumentFormatting = capabilities.supports(.formatDocument)
+        if let rawResult,
+           let result = try? JSONSerialization.jsonObject(with: rawResult) as? [String: Any],
+           let providers = result["capabilities"] as? [String: Any],
+           let rename = providers["renameProvider"] as? [String: Any] {
+            supportsPrepareRename = rename["prepareProvider"] as? Bool == true
+        }
         supportsPullDiagnostics = caps.supportsPullDiagnostics
         completionTriggerCharacters = caps.completionTriggerCharacters
         try sendNotification(method: "initialized", params: [String: Any]())
@@ -201,6 +208,36 @@ actor LSPClient {
         let raw = try await sendRequest(method: "textDocument/formatting", params: params)
         guard let raw, raw.count > 4 else { return [] }
         return (try? JSONDecoder().decode([LSPTextEdit].self, from: raw)) ?? []
+    }
+
+    func prepareRename(uri: String, position: LSPPosition) async throws -> LSPPrepareRenameResult? {
+        let raw = try await sendRequest(method: "textDocument/prepareRename", params: [
+            "textDocument": ["uri": uri], "position": ["line": position.line, "character": position.character]
+        ])
+        guard let raw, raw != Data("null".utf8) else { return nil }
+        return try JSONDecoder().decode(LSPPrepareRenameResult.self, from: raw)
+    }
+
+    func rename(uri: String, position: LSPPosition, newName: String) async throws -> LSPWorkspaceEdit? {
+        let raw = try await sendRequest(method: "textDocument/rename", params: [
+            "textDocument": ["uri": uri], "position": ["line": position.line, "character": position.character],
+            "newName": newName
+        ])
+        guard let raw, raw != Data("null".utf8) else { return nil }
+        return try JSONDecoder().decode(LSPWorkspaceEdit.self, from: raw)
+    }
+
+    func rangeFormatting(uri: String, range: LSPRange, options: LSPFormattingOptions) async throws -> [LSPTextEdit] {
+        struct Params: Encodable {
+            let textDocument: LSPTextDocumentIdentifier
+            let range: LSPRange
+            let options: LSPFormattingOptions
+        }
+        let raw = try await sendRequest(method: "textDocument/rangeFormatting", params: Params(
+            textDocument: .init(uri: uri), range: range, options: options
+        ))
+        guard let raw, raw != Data("null".utf8) else { return [] }
+        return try JSONDecoder().decode([LSPTextEdit].self, from: raw)
     }
 
     /// Sends `textDocument/diagnostic` (LSP 3.17 pull diagnostics).
@@ -429,7 +466,7 @@ actor LSPClient {
         }
         let rootUri = try jsonString(params.rootUri)
         let json = """
-        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
         """
         return Data(json.utf8)
     }

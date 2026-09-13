@@ -263,7 +263,7 @@ enum WorkspaceEditPlanner {
         if let content = snapshot.content, String(data: content, encoding: .utf8) == nil { throw Error.nonTextInput }
     }
 
-    private static func applying(_ edits: [LSPTextEdit], to snapshot: WorkspaceFileSnapshot) throws -> WorkspaceFileSnapshot {
+    static func applying(_ edits: [LSPTextEdit], to snapshot: WorkspaceFileSnapshot) throws -> WorkspaceFileSnapshot {
         guard let content = snapshot.content, let text = String(data: content, encoding: .utf8) else {
             throw Error.nonTextInput
         }

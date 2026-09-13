@@ -41,6 +41,7 @@ final class CodeEditorCoordinator {
     private var lspBinding: EditorLSPBinding?
     private var editorCommandRouter: EditorCommandRouter?
     private var editorCommandStatusTask: Task<Void, Never>?
+    private var renameFeature: RenameFeature?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -606,6 +607,8 @@ final class CodeEditorCoordinator {
         completion = nil
         lspBinding = nil
         editorCommandStatusTask?.cancel()
+        renameFeature?.cancel()
+        renameFeature = nil
         editorCommandStatusTask = nil
         if let editorCommandRouter {
             EditorCommandAvailability.shared.deactivate(editorCommandRouter)
@@ -699,6 +702,12 @@ final class CodeEditorCoordinator {
     // MARK: - Editor commands
 
     private func installEditorCommands(on textView: CodeTextView) {
+        renameFeature?.cancel()
+        if let root = currentOriginatingWorktreeRoot ?? currentRoot {
+            renameFeature = RenameFeature(textView: textView, tabs: appState.tabs, root: root,
+                                          synchronize: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+                                          isCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) == true })
+        }
         let router = EditorCommandRouter()
         router.register(.definition) { [weak self, weak textView] range in
             self?.navigation?.cancelPendingRequest()
@@ -728,8 +737,21 @@ final class CodeEditorCoordinator {
         router.register(.hover) { [weak textView] range in
             textView?.triggerHover(atUTF16Offset: range.location)
         }
-        router.register(.formatDocument) { [weak self] range in
-            self?.formatDocument(range: range)
+        let canEdit: () -> Bool = { [weak self] in
+            guard let buffer = self?.buffer else { return false }
+            return !buffer.readOnly && (!buffer.isExternal || buffer.externalEditable) && !buffer.undoManager.workspaceActionInFlight
+        }
+        router.register(.rename, isAvailable: canEdit) { [weak self] range in
+            self?.renameFeature?.rename(range: range)
+        }
+        router.register(.formatSelection, isAvailable: { [weak textView] in
+            canEdit() && (textView?.selectedRange().length ?? 0) > 0
+        }) { [weak self] range in
+            guard range.length > 0 else { return }
+            self?.renameFeature?.format(range: range, selectionOnly: true)
+        }
+        router.register(.formatDocument, isAvailable: canEdit) { [weak self] range in
+            self?.renameFeature?.format(range: range, selectionOnly: false)
         }
         editorCommandRouter = router
         currentNavigationStore?.setHistoryChangeHandler { [weak router] in
@@ -771,41 +793,6 @@ final class CodeEditorCoordinator {
                 }
                 guard isReady else { return }
                 try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-        }
-    }
-
-    private func formatDocument(range: NSRange) {
-        guard let textView, let buffer else { return }
-        Task { [weak self, weak textView, weak buffer] in
-            guard let self,
-                  let textView,
-                  let buffer,
-                  let request = await self.synchronizeLSPRequest(range: range)
-            else {
-                await MainActor.run { textView?.showCommandStatus("Language server unavailable") }
-                return
-            }
-            do {
-                let edits = try await request.0.formatting(
-                    uri: request.1.document.uri,
-                    options: LSPFormattingOptions(tabSize: 4, insertSpaces: true)
-                )
-                guard self.isLSPRequestCurrent(request.1) else { return }
-                await MainActor.run {
-                    guard self.isLSPRequestCurrent(request.1) else { return }
-                    guard !edits.isEmpty else {
-                        textView.showCommandStatus("No formatting changes")
-                        return
-                    }
-                    guard buffer.applyExplicitFormattingEdits(edits) else {
-                        textView.showCommandStatus("Could not apply formatting")
-                        return
-                    }
-                    self.scheduleEditPropagation(edit: nil)
-                }
-            } catch {
-                await MainActor.run { textView.showCommandStatus("Formatting failed") }
             }
         }
     }
