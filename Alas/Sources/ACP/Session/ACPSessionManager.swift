@@ -1866,6 +1866,20 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    /// Mirrors the SQLite-side activity bump (`ACPSessionStore.upsertMessages`)
+    /// into the in-memory cache the sidebar reads. Ordinary message
+    /// persistence only posts `changeNotifier` (a cross-process/lease
+    /// signal), so without this a session that disconnects in the same app
+    /// run would keep showing whatever `updatedAt` its last title/model/mode
+    /// change left behind until the next `refreshRecentNow()`. Never moves
+    /// the timestamp backward.
+    func noteMessageActivity(sessionId: ACPSession.ID, at timestamp: Int64 = Int64(Date().timeIntervalSince1970)) {
+        guard var row = persistedRows[sessionId], row.updatedAt < timestamp else { return }
+        row.updatedAt = timestamp
+        persistedRows[sessionId] = row
+        replaceRecentRow(row)
+    }
+
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
         guard !row.archived else { return }
@@ -3506,6 +3520,9 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onMessageActivity: { [weak self] in
+                                              self?.noteMessageActivity(sessionId: sessionId)
+                                          },
                                           onPromptWorkChanged: { [weak self] in
                                               self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
                                           },

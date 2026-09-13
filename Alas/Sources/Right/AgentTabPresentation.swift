@@ -186,26 +186,76 @@ struct AgentSidebarRowView: View {
 
     private var metadata: some View {
         HStack(spacing: 5) {
-            Text(agentName)
-                .fontWeight(.medium)
-            if let model = row.model {
-                Text("·")
-                Text(model)
-            }
-            if row.createdAt != .distantPast {
-                Text("·")
-                Text(row.createdAt, style: .relative)
-            }
-            if let host = row.host {
-                Text("·")
-                Image(systemName: "network")
-                    .accessibilityHidden(true)
-                Text(host)
+            ForEach(Array(metadataSegments.enumerated()), id: \.offset) { index, segment in
+                if index > 0 {
+                    Text("·")
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                segment
             }
         }
         .font(.system(size: 10))
         .foregroundStyle(theme.color("fg-muted"))
         .lineLimit(1)
+    }
+
+    /// Only present segments make it into the line, so separators (added by
+    /// `metadata` between array entries) never appear before the first one —
+    /// a registered agent without an advertised model, or a terminal row
+    /// whose harness is recognized, would otherwise open with a stray "·".
+    private var metadataSegments: [AnyView] {
+        var segments: [AnyView] = []
+        // A distinctive logo already identifies the harness, so the name
+        // would just repeat it. A custom agent has no logo asset — its tile
+        // renders the same generic sparkle as every other custom agent, so
+        // its name still needs the caption to tell cards apart.
+        var hasDistinctiveLogo = false
+        if let agent, case .asset = AgentLogoPresentation.resolve(for: agent) {
+            hasDistinctiveLogo = true
+        }
+        if !hasDistinctiveLogo {
+            // A removed custom agent falls back to its raw (UUID) id here,
+            // which is far longer than anything else on the line, so this
+            // needs the same truncate-as-fallback treatment as the host.
+            segments.append(AnyView(
+                Text(agentName)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+            ))
+        }
+        if let model = row.model {
+            segments.append(AnyView(
+                Text(model)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            ))
+        }
+        if row.activityAt != .distantPast {
+            segments.append(AnyView(
+                TimelineView(.periodic(from: row.activityAt, by: 60)) { context in
+                    Text(AgentSidebarRelativeTime.compact(from: row.activityAt, to: context.date))
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            ))
+        }
+        if let host = row.host {
+            segments.append(AnyView(
+                HStack(spacing: 3) {
+                    Image(systemName: "network")
+                        .accessibilityHidden(true)
+                    Text(AgentSidebarHostDisplay.shortName(for: host))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                // Preferred over the model (which absorbs compression
+                // first), but — unlike the fixed-size segments above — a
+                // long FQDN can still truncate rather than overflow the card.
+                .layoutPriority(1)
+            ))
+        }
+        return segments
     }
 
     /// A nested child needs no caption — its connector already says who owns
@@ -382,11 +432,12 @@ struct AgentSidebarRowView: View {
         if let model = row.model {
             values.append(model)
         }
-        if row.createdAt != .distantPast {
-            values.append("created \(row.createdAt.formatted(.relative(presentation: .named)))")
+        if row.activityAt != .distantPast {
+            let verb = row.state == .detached ? "last active" : "created"
+            values.append("\(verb) \(row.activityAt.formatted(.relative(presentation: .named)))")
         }
         if let host = row.host {
-            values.append("host \(host)")
+            values.append("host \(AgentSidebarHostDisplay.shortName(for: host))")
         }
         switch row.delegation {
         case .parent(let childCount):

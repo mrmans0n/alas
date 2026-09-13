@@ -49,6 +49,12 @@ final class ACPSessionRunner {
     private let leaseFenceProvider: () -> ACPSessionLeaseFence?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    /// Fires only when a message row was actually written (a normal
+    /// `persistIndices`/`persistFromIndex` commit, or a takeover-salvaged
+    /// insert) — unlike `onPersist`, which also fires unconditionally on
+    /// `stop()` for cross-process/lease notification even when nothing was
+    /// written. Callers that track "last activity" want this one.
+    private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
@@ -140,6 +146,7 @@ final class ACPSessionRunner {
          onUserCancel: (() -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
@@ -165,6 +172,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
@@ -2388,15 +2396,28 @@ extension ACPSessionRunner {
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
             let id = "msg-\(sessionId)-\(i)"
+            // Both writes below are best-effort salvage attempts that can
+            // legitimately lose the race — a CAS whose base payload no
+            // longer matches, or an insert onto a row the new owner already
+            // wrote. onMessageActivity must only fire once the completion
+            // confirms the write actually landed; onPersist keeps firing
+            // unconditionally, matching its established cross-process/lease
+            // notification contract.
             if let basePayload = snapshot.basePayload {
                 let payload = snapshot.payload
-                enqueuePersistence { persistence in
-                    _ = try await persistence.compareAndSwapMessagePayload(
+                let sid = sessionId
+                enqueuePersistence({ persistence in
+                    try await persistence.compareAndSwapMessagePayload(
                         id: id,
+                        sessionId: sid,
                         payload: payload,
                         expectedPayload: basePayload
                     )
-                }
+                }, completion: { [weak self] succeeded in
+                    if succeeded == true {
+                        self?.onMessageActivity?()
+                    }
+                })
             } else {
                 let row = ACPStoredMessage(
                     id: id,
@@ -2406,9 +2427,13 @@ extension ACPSessionRunner {
                     payload: snapshot.payload,
                     createdAt: createdAt(forMessageAt: i)
                 )
-                enqueuePersistence { persistence in
-                    _ = try await persistence.insertMessageIfMissing(row)
-                }
+                enqueuePersistence({ persistence in
+                    try await persistence.insertMessageIfMissing(row)
+                }, completion: { [weak self] inserted in
+                    if inserted == true {
+                        self?.onMessageActivity?()
+                    }
+                })
                 persistedMessageCount = max(persistedMessageCount, i + 1)
             }
             lastPersistedPayloads[i] = snapshot.payload
@@ -2492,6 +2517,7 @@ extension ACPSessionRunner {
         }
         trimLastPersistedPayloads()
         onPersist?()
+        onMessageActivity?()
     }
 
     private func effectiveRemoteHost() -> String? {
