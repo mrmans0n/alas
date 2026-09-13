@@ -31,6 +31,12 @@ struct AgentSidebarFormattingTests {
     }
 
     @Test
+    func handlesFamilyLastAnthropicModelIds() {
+        #expect(AgentSidebarModelDisplay.shortName(for: "claude-3-5-sonnet-20241022") == "Sonnet 3.5")
+        #expect(AgentSidebarModelDisplay.shortName(for: "claude-3-opus-20240229") == "Opus 3")
+    }
+
+    @Test
     func stripsACursorVariantSuffixBeforeShorteningTheBaseModelId() {
         let variantID = "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]"
         #expect(AgentSidebarModelDisplay.shortName(for: variantID) == "Opus 4.6")

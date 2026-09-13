@@ -30,14 +30,22 @@ enum AgentSidebarModelDisplay {
         }
         guard !tokens.isEmpty else { return base }
 
-        // Pull a trailing run of pure-integer tokens into a dotted version,
-        // e.g. ["4", "5"] -> "4.5". Tokens that already contain a dot (as in
+        // Anthropic ids place the version both after the family (the current
+        // "sonnet-4-5" scheme) and before it (older ids like "3-5-sonnet"),
+        // so pure-integer tokens are pulled out by type rather than only
+        // from one end, then dot-joined in their original order, e.g.
+        // ["4", "5"] -> "4.5". Tokens that already contain a dot (as in
         // "2.5") are left as ordinary name tokens instead of being merged.
         var versionParts: [String] = []
-        while let last = tokens.last, !last.isEmpty, last.allSatisfy(\.isNumber) {
-            versionParts.insert(last, at: 0)
-            tokens.removeLast()
+        var nameTokens: [String] = []
+        for token in tokens {
+            if !token.isEmpty, token.allSatisfy(\.isNumber) {
+                versionParts.append(token)
+            } else {
+                nameTokens.append(token)
+            }
         }
+        tokens = nameTokens
 
         let nameParts = tokens.map { token -> String in
             acronyms.contains(token.lowercased()) ? token.uppercased() : token.capitalized
