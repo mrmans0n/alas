@@ -205,9 +205,15 @@ struct AgentSidebarRowView: View {
     /// whose harness is recognized, would otherwise open with a stray "·".
     private var metadataSegments: [AnyView] {
         var segments: [AnyView] = []
-        // The logo tile already identifies the harness, so the name would
-        // just repeat it; only the SF-symbol fallback needs the caption.
-        if agent == nil {
+        // A distinctive logo already identifies the harness, so the name
+        // would just repeat it. A custom agent has no logo asset — its tile
+        // renders the same generic sparkle as every other custom agent, so
+        // its name still needs the caption to tell cards apart.
+        var hasDistinctiveLogo = false
+        if let agent, case .asset = AgentLogoPresentation.resolve(for: agent) {
+            hasDistinctiveLogo = true
+        }
+        if !hasDistinctiveLogo {
             // A removed custom agent falls back to its raw (UUID) id here,
             // which is far longer than anything else on the line, so this
             // needs the same truncate-as-fallback treatment as the host.
