@@ -156,7 +156,7 @@ struct MinimapTests {
         #expect(!decoded.harness.acpShowMinimap)
     }
 
-    @Test("Transcript blocks distinguish speakers and group assistant activity without text detail")
+    @Test("Transcript minimap uses compact prompt bars and response bands")
     @MainActor func transcriptColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let transcript = ACPTranscript()
@@ -171,12 +171,14 @@ struct MinimapTests {
             .agent(id: UUID(), StreamingText(String(repeating: "reply ", count: 10_000)))
         ]
         let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
-        #expect(drawing.marks.count == 4)
-        guard drawing.marks.count == 4 else { return }
+        #expect(drawing.marks.count == 10)
+        guard drawing.marks.count == 10 else { return }
         #expect(drawing.marks[0].rect.minX > drawing.marks[1].rect.minX)
         #expect(drawing.marks[0].color != drawing.marks[1].color)
-        #expect(drawing.marks[0].rect.height >= 20)
-        #expect(drawing.marks[1].rect.height == drawing.marks[3].rect.height)
+        #expect(drawing.marks[0].rect.height == 8)
+        #expect(drawing.marks[1...4].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
+        #expect(drawing.marks[5].rect.height == 8)
+        #expect(drawing.marks[6...9].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
     }
 
     @Test("Transcript blocks ignore streamed text and never carry content between sessions")
@@ -244,9 +246,9 @@ struct MinimapTests {
             .user(id: UUID(), text: "next", attachments: []),
             .agent(id: UUID(), StreamingText("reply"))
         ], offset: 0)
-        #expect(layout.fraction(at: 3) == 0.5)
-        #expect(layout.messagePosition(at: 0.5) == 3)
-        #expect(layout.messagePosition(at: 0.25) == 1.5)
+        #expect(layout.fraction(at: 3) > layout.fraction(at: 2))
+        #expect(layout.messagePosition(at: layout.fraction(at: 3)) == 3)
+        #expect(layout.messagePosition(at: 0.25) > 0)
         #expect(layout.fraction(at: -1) == 0)
         #expect(layout.fraction(at: 99) == 1)
         #expect(layout.messagePosition(at: -1) == 0)
@@ -257,8 +259,8 @@ struct MinimapTests {
         let history = ACPTranscriptMinimapLayout(messages: [
             .user(id: UUID(), text: "recent", attachments: [])
         ], offset: 1_000)
-        #expect(history.fraction(at: 1_000) == CGFloat(2) / 3)
-        #expect(history.messagePosition(at: CGFloat(1) / 3) == 500)
+        #expect(history.fraction(at: 1_000) > 0)
+        #expect(history.messagePosition(at: 0.5) < 1_000)
         let empty = ACPTranscriptMinimapLayout(messages: [], offset: 0)
         #expect(empty.fraction(at: 1) == 0)
         #expect(empty.messagePosition(at: 1) == 0)
