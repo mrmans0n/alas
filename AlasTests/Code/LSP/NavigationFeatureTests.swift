@@ -68,6 +68,42 @@ struct NavigationFeatureTests {
         transport.finish()
     }
 
+    @Test @MainActor func staleResultsRemainMarkedUntilRerunReplacesThem() async {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        let document = EditorDocumentID(host: nil, worktreeID: "worktree", uri: "file:///tmp/current.swift")
+        let context = EditorRequestContext(
+            document: document,
+            version: 2,
+            serverGeneration: UUID(),
+            range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 0))
+        )
+        let store = EditorNavigationStore()
+        let stale = EditorNavigationTarget(document: document, position: LSPPosition(line: 9, character: 2))
+        let refreshed = EditorNavigationTarget(document: document, position: LSPPosition(line: 3, character: 1))
+        store.replaceResults([stale])
+        store.markResultsStale()
+        let feature = NavigationFeature(
+            store: { store },
+            synchronizeRequest: { _ in (client, context) },
+            isContextCurrent: { _ in true }
+        )
+
+        feature.perform(.references, range: NSRange(location: 0, length: 0))
+        await waitUntil { !transport.sent.isEmpty }
+
+        #expect(store.isLoading)
+        #expect(store.results == [stale])
+        #expect(store.resultsAreStale)
+
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":[{"uri":"file:///tmp/current.swift","range":{"start":{"line":3,"character":1},"end":{"line":3,"character":4}}}]}"#)
+        await waitUntil { !store.isLoading }
+
+        #expect(store.results == [refreshed])
+        #expect(!store.resultsAreStale)
+        transport.finish()
+    }
+
     @Test @MainActor func directCommandClickDefinitionSupersedesPendingReferences() async {
         let store = EditorNavigationStore()
         var continuation: CheckedContinuation<(LSPClient, EditorRequestContext)?, Never>?

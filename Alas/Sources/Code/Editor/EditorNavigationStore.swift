@@ -64,7 +64,6 @@ final class EditorNavigationStore {
         isLoading = true
         errorMessage = nil
         statusMessage = nil
-        resultsAreStale = false
         isPresented = true
     }
 

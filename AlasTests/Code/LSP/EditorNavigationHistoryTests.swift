@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -68,6 +69,29 @@ struct EditorNavigationHistoryTests {
 
         #expect(store.goForward() == nil)
         #expect(store.goBack() == a)
+    }
+
+    @Test @MainActor func failedHostQualifiedActivationKeepsCurrentHistoryLocation() {
+        let store = EditorNavigationStore()
+        let unavailable = EditorNavigationTarget(
+            document: EditorDocumentID(host: "other-host", worktreeID: "w", uri: "file:///tmp/unavailable.swift"),
+            position: LSPPosition(line: 0, character: 0)
+        )
+        let current = target(line: 8)
+        store.recordJump(from: unavailable, to: current)
+
+        #expect(store.goBack() == unavailable)
+        let didOpen = TabsManager().openNavigationTarget(
+            unavailable,
+            worktreeRoot: URL(fileURLWithPath: "/tmp/navigation-history"),
+            originatingRelativePath: nil,
+            language: "swift"
+        )
+        #expect(!didOpen)
+        store.recordActivationFailure(for: unavailable)
+
+        #expect(store.goForward() == nil)
+        #expect(store.goBack() == unavailable)
     }
 
     @Test @MainActor func historiesAreIndependentForEachWorktreeStore() {
