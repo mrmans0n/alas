@@ -9,10 +9,26 @@ import SwiftUI
 /// it opens a popover instead of changing the button's own appearance.
 struct ToolbarControlPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.65 : 1)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+        Surface(configuration: configuration)
+    }
+
+    /// The body lives in a `View` rather than in `makeBody` because
+    /// `@Environment` is only resolved for views.
+    private struct Surface: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.65 : 1)
+                // Reduce Motion keeps the dim — it still reads as a press —
+                // but drops the dip and the tween, so a routine click stops
+                // moving. Every toolbar in the app runs through this style,
+                // so the unconditional version animated a lot of clicks.
+                .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.95)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.08),
+                           value: configuration.isPressed)
+        }
     }
 }
 
