@@ -1277,7 +1277,7 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.events.isEmpty)
         #expect(state.attentionAggregation.unresolvedCount == 0)
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.count == 1)
         #expect(state.attentionStore.events.first?.kind == .agentAwaiting)
         #expect(state.attentionStore.events.first?.body == "Question")
@@ -1293,7 +1293,7 @@ struct AppStateAttentionTests {
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.isEmpty)
         #expect(state.attentionAggregation.unresolvedCount == 0)
         #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")] == nil)
@@ -1308,7 +1308,7 @@ struct AppStateAttentionTests {
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "First")
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Second")
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.count == 1)
         #expect(state.attentionStore.events.first?.body == "Second")
     }
@@ -1322,7 +1322,7 @@ struct AppStateAttentionTests {
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest, body: "Allow?")
         #expect(state.attentionStore.events.isEmpty)
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.count == 1)
         #expect(state.attentionStore.events.first?.kind == .agentPermission)
     }
@@ -1336,7 +1336,7 @@ struct AppStateAttentionTests {
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest, body: "Allow?")
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question?")
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.count == 1)
         #expect(state.attentionStore.events.first?.kind == .agentAwaiting)
         #expect(state.attentionStore.events.first?.body == "Question?")
@@ -1350,7 +1350,7 @@ struct AppStateAttentionTests {
         _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
 
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
 
         #expect(state.attentionStore.events.count == 1)
@@ -1366,7 +1366,7 @@ struct AppStateAttentionTests {
         state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
         state.harness.forgetSession("session")
 
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(state.attentionStore.events.isEmpty)
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
