@@ -47,12 +47,17 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Run tab. This remains off until the
     /// command lifecycle UI has completed preview testing.
     var runTabEnabled: Bool = false
-    /// Preview gate for the worktree Agent tab. This remains off until the
-    /// per-worktree rollup has completed preview testing.
-    var agentTabEnabled: Bool = false
-    /// Preview gate for the right pane icon rail. This remains off until the
-    /// rail presentation has completed preview testing.
-    var rightPaneRailEnabled: Bool = false
+    /// The right pane icon rail is the default presentation. This stays as a
+    /// fallback switch so a user can revert to the legacy tab bar; it is not
+    /// gating an in-progress feature the way the flags above are.
+    var rightPaneRailEnabled: Bool = true
+    /// One-time migration marker for `rightPaneRailEnabled` graduating from
+    /// preview to default. A config saved during #1200's preview window
+    /// already has an explicit `false` on disk from the old default, which
+    /// is indistinguishable from a deliberate opt-out — this flag lets the
+    /// decoder force the new default exactly once, then respect whatever the
+    /// user sets afterward. See `init(from:)`.
+    var rightPaneRailDefaultApplied: Bool = true
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
@@ -523,8 +528,8 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         workspacesEnabled: false,
         runTabEnabled: false,
-        agentTabEnabled: false,
-        rightPaneRailEnabled: false,
+        rightPaneRailEnabled: true,
+        rightPaneRailDefaultApplied: true,
         needsAttentionEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
@@ -619,9 +624,9 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              runTabEnabled,
-             agentTabEnabled,
              rightPaneRailEnabled,
              needsAttentionEnabled,
+             rightPaneRailDefaultApplied,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -861,10 +866,21 @@ extension AppConfig {
         // The Run tab preview is opt-in. Configs written before it existed
         // continue to load without exposing unfinished command controls.
         runTabEnabled = (try? c.decode(Bool.self, forKey: .runTabEnabled)) ?? false
-        // The Agent tab preview is opt-in. Configs written before it existed
-        // continue to load without exposing the sidebar rollup.
-        agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
-        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
+        // The rail is on by default now. A config saved during #1200's
+        // preview window has an explicit `rightPaneRailEnabled: false` on
+        // disk from the old default — indistinguishable, on its own, from a
+        // deliberate opt-out. `rightPaneRailDefaultApplied` disambiguates:
+        // its absence means this config predates the migration, so force the
+        // new default once and record that the migration ran. Once present,
+        // later loads respect whatever the user has set.
+        let hasMigratedRailDefault =
+            (try? c.decode(Bool.self, forKey: .rightPaneRailDefaultApplied)) ?? false
+        if hasMigratedRailDefault {
+            rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? true
+        } else {
+            rightPaneRailEnabled = true
+        }
+        rightPaneRailDefaultApplied = true
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []

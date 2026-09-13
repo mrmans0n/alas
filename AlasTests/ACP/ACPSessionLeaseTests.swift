@@ -63,6 +63,16 @@ import Foundation
         #expect(try store.loadLease(sessionId: "s1")?.ownerInstance == "B")
     }
 
+    @Test("stale-heartbeat lease is not active even with a reused live pid")
+    func staleHeartbeatNotCountedActive() throws {
+        let store = try tempStore()
+        try seedSession(store, id: "s1")
+        let now = Int64(Date().timeIntervalSince1970)
+        _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: Int64(getpid()), now: now - 100, staleAfter: 15)
+
+        #expect(try store.activeLeaseCount(now: now, staleAfter: 15) == 0)
+    }
+
     @Test("dead-pid lease is reclaimed immediately even with fresh heartbeat")
     func deadPidReclaim() throws {
         let store = try tempStore()

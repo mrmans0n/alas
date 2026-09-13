@@ -38,6 +38,10 @@ struct CommitEditorTabView: View {
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
+    private var checkpointLeaseActive: Bool {
+        appState.checkpointFileWritesDisabled(worktreeId: worktreeId)
+    }
+
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
             appState: appState,
@@ -114,6 +118,9 @@ struct CommitEditorTabView: View {
         }
         .task(id: tabState.currentSha) {
             await loadDetails()
+        }
+        .task(id: worktreeId) {
+            _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
         }
         .task(id: diffTaskKey) {
             guard !loadingDetails else { return }
@@ -375,6 +382,10 @@ struct CommitEditorTabView: View {
 
     private func runEdit(action: CommitEditAction) {
         guard !busy else { return }
+        guard !checkpointLeaseActive else {
+            error = "Recover the interrupted checkpoint restore before editing commits."
+            return
+        }
         let targetSha = tabState.currentSha
         let tabId = tabState.id
         let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? tabState.baseRef
@@ -383,8 +394,16 @@ struct CommitEditorTabView: View {
         error = nil
 
         Task<Void, Never> { @MainActor in
-            defer { busy = false }
+            defer {
+                busy = false
+            }
             do {
+                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
+                    error = "Recover the interrupted checkpoint restore before editing commits."
+                    return
+                }
+                appState.beginCenterGitMutation(worktreeId: worktreeId)
+                defer { appState.endCenterGitMutation(worktreeId: worktreeId) }
                 let result = try await git.editCommit(
                     worktreePath: worktreePath,
                     baseRef: baseRef,

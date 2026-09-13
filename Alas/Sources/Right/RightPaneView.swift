@@ -39,7 +39,6 @@ struct RightPaneView: View {
         let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         initialState?.activeTab = RightPaneTab.visible(
             initialState?.activeTab ?? .changes,
-            agentTabEnabled: state.config.agentTabEnabled,
             runTabEnabled: state.config.runTabEnabled
         )
         _rps = State(initialValue: initialState)
@@ -72,94 +71,10 @@ struct RightPaneView: View {
                 .onChange(of: state.config.runTabEnabled) {
                     rps.activeTab = RightPaneTab.visible(
                         rps.activeTab,
-                        agentTabEnabled: state.config.agentTabEnabled,
                         runTabEnabled: state.config.runTabEnabled
                     )
                 }
-                .onChange(of: state.config.agentTabEnabled) {
-                    rps.activeTab = RightPaneTab.visible(
-                        rps.activeTab,
-                        agentTabEnabled: state.config.agentTabEnabled,
-                        runTabEnabled: state.config.runTabEnabled
-                    )
-                }
-                // Host the discard confirmation here (not on ChangesTabView) so
-                // diff-tab Discard actions still present the alert when the right
-                // pane is on the Files tab — `requestDiscardFile` sets pending state
-                // regardless of which child view is mounted.
-                .alert(
-                    PendingDiscard.alertTitle(for: rps.pendingDiscard ?? .placeholder),
-                    isPresented: Binding(
-                        get: { rps.pendingDiscard != nil },
-                        set: { if !$0 { rps.cancelDiscard() } }
-                    ),
-                    presenting: rps.pendingDiscard,
-                    actions: { _ in
-                        Button("Discard", role: .destructive) {
-                            if let pending = rps.pendingDiscard {
-                                rps.pendingDiscard = nil
-                                Task { @MainActor in await rps.confirmDiscard(pending) }
-                            }
-                        }
-                        Button("Cancel", role: .cancel) {
-                            rps.cancelDiscard()
-                        }
-                    },
-                    message: { p in
-                        Text(PendingDiscard.alertMessage(for: p))
-                    }
-                )
-                .alert(
-                    "Cherry-pick commit?",
-                    isPresented: Binding(
-                        get: { rps.pendingCherryPickSHA != nil },
-                        set: { if !$0 { rps.cancelCherryPick() } }
-                    ),
-                    presenting: rps.pendingCherryPickSHA,
-                    actions: { sha in
-                        Button("Cherry-pick \(sha.prefix(7))") {
-                            rps.confirmCherryPick()
-                        }
-                        Button("Cancel", role: .cancel) {
-                            rps.cancelCherryPick()
-                        }
-                    },
-                    message: { _ in
-                        Text("Apply this commit to the current branch.")
-                    }
-                )
-                .sheet(
-                    isPresented: Binding(
-                        get: { rps.pendingStashChanges },
-                        set: { if !$0 { rps.cancelStashChanges() } }
-                    )
-                ) {
-                    StashChangesSheet(
-                        onStash: { message, includeUntracked in
-                            rps.stashChanges(message: message, includeUntracked: includeUntracked)
-                        },
-                        onCancel: { rps.cancelStashChanges() }
-                    )
-                }
-                .alert(
-                    PendingStashDrop.alertTitle(for: rps.pendingStashDrop ?? .placeholder),
-                    isPresented: Binding(
-                        get: { rps.pendingStashDrop != nil },
-                        set: { if !$0 { rps.cancelDropStash() } }
-                    ),
-                    presenting: rps.pendingStashDrop,
-                    actions: { pending in
-                        Button("Drop", role: .destructive) {
-                            rps.confirmDropStash(pending)
-                        }
-                        Button("Cancel", role: .cancel) {
-                            rps.cancelDropStash()
-                        }
-                    },
-                    message: { pending in
-                        Text(PendingStashDrop.alertMessage(for: pending))
-                    }
-                )
+                .modifier(RightPaneDialogs(rps: rps))
             } else {
                 RightPaneLoadingSkeletonView(activeTab: .changes)
                     .sidebarChromeTheme(textContrast: override.textContrast)
@@ -201,7 +116,7 @@ struct RightPaneView: View {
 
     @ViewBuilder
     private func tabContent(rps: RightPaneState) -> some View {
-        if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
+        if rps.hasLoadedSnapshot || rps.activeTab == .agent {
             switch rps.activeTab {
             case .changes:
                 ChangesTabView(
@@ -298,7 +213,6 @@ struct RightPaneView: View {
                     changesCount: rps.displayChanges.count,
                     activeAgentCount: agentRollup.active.count,
                     activeRunCount: runningScriptNames.count,
-                    showAgentTab: state.config.agentTabEnabled,
                     showRunTab: state.config.runTabEnabled,
                     onAction: { action in handle(action, rps: rps) }
                 )
@@ -322,7 +236,6 @@ struct RightPaneView: View {
                         state.config.files.showIgnored.toggle()
                         state.saveConfig()
                     },
-                    showAgentTab: state.config.agentTabEnabled,
                     showRunTab: state.config.runTabEnabled,
                     activeRunCount: state.runRecords
                         .records(worktreeID: worktree.id)
@@ -396,5 +309,136 @@ private struct AgentSidebarManagerObserver: View {
             .onReceive(sessionChanges) { _ in
                 onChange()
             }
+    }
+}
+
+private struct RightPaneDialogs: ViewModifier {
+    let rps: RightPaneState
+
+    func body(content: Content) -> some View {
+        content
+            // Host the discard confirmation here (not on ChangesTabView) so
+            // diff-tab Discard actions still present the alert when the right
+            // pane is on the Files tab — `requestDiscardFile` sets pending state
+            // regardless of which child view is mounted.
+            .alert(
+                PendingDiscard.alertTitle(for: rps.pendingDiscard ?? .placeholder),
+                isPresented: Binding(
+                    get: { rps.pendingDiscard != nil },
+                    set: { if !$0 { rps.cancelDiscard() } }
+                ),
+                presenting: rps.pendingDiscard,
+                actions: { _ in
+                    Button("Discard", role: .destructive) {
+                        if let pending = rps.pendingDiscard {
+                            rps.pendingDiscard = nil
+                            Task { @MainActor in await rps.confirmDiscard(pending) }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        rps.cancelDiscard()
+                    }
+                },
+                message: { pending in
+                    Text(PendingDiscard.alertMessage(for: pending))
+                }
+            )
+            .alert(
+                "Cherry-pick commit?",
+                isPresented: Binding(
+                    get: { rps.pendingCherryPickSHA != nil },
+                    set: { if !$0 { rps.cancelCherryPick() } }
+                ),
+                presenting: rps.pendingCherryPickSHA,
+                actions: { sha in
+                    Button("Cherry-pick \(sha.prefix(7))") {
+                        rps.confirmCherryPick()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        rps.cancelCherryPick()
+                    }
+                },
+                message: { _ in
+                    Text("Apply this commit to the current branch.")
+                }
+            )
+            .modifier(RightPaneSheets(rps: rps))
+            .modifier(RightPaneCheckpointDeletionDialog(rps: rps))
+            .alert(
+                PendingStashDrop.alertTitle(for: rps.pendingStashDrop ?? .placeholder),
+                isPresented: Binding(
+                    get: { rps.pendingStashDrop != nil },
+                    set: { if !$0 { rps.cancelDropStash() } }
+                ),
+                presenting: rps.pendingStashDrop,
+                actions: { pending in
+                    Button("Drop", role: .destructive) {
+                        rps.confirmDropStash(pending)
+                    }
+                    Button("Cancel", role: .cancel) {
+                        rps.cancelDropStash()
+                    }
+                },
+                message: { pending in
+                    Text(PendingStashDrop.alertMessage(for: pending))
+                }
+            )
+    }
+}
+
+private struct RightPaneSheets: ViewModifier {
+    let rps: RightPaneState
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(
+                isPresented: Binding(
+                    get: { rps.pendingStashChanges },
+                    set: { if !$0 { rps.cancelStashChanges() } }
+                )
+            ) {
+                StashChangesSheet(
+                    onStash: { message, includeUntracked in
+                        rps.stashChanges(message: message, includeUntracked: includeUntracked)
+                    },
+                    onCancel: { rps.cancelStashChanges() }
+                )
+            }
+            .sheet(item: Binding(
+                get: { rps.pendingCheckpointCreation },
+                set: { if $0 == nil { rps.cancelCheckpointCreation() } }
+            )) { _ in
+                CreateCheckpointSheet(rps: rps)
+            }
+            .sheet(item: Binding(
+                get: { rps.checkpointRestorePreview },
+                set: { if $0 == nil { rps.checkpointRestorePreview = nil } }
+            )) { preview in
+                RestoreCheckpointSheet(rps: rps, preview: preview)
+            }
+    }
+}
+
+private struct RightPaneCheckpointDeletionDialog: ViewModifier {
+    let rps: RightPaneState
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Delete checkpoint \(rps.pendingCheckpointDeletion?.label ?? "")?",
+            isPresented: Binding(
+                get: { rps.pendingCheckpointDeletion != nil },
+                set: { if !$0 { rps.pendingCheckpointDeletion = nil } }
+            ),
+            presenting: rps.pendingCheckpointDeletion,
+            actions: { checkpoint in
+                Button("Delete", role: .destructive) {
+                    Task { await rps.deleteCheckpoint(id: checkpoint.id) }
+                }
+                Button("Cancel", role: .cancel) { rps.pendingCheckpointDeletion = nil }
+            },
+            message: { _ in
+                Text("This removes the checkpoint only. Your worktree is unchanged.")
+            }
+        )
     }
 }

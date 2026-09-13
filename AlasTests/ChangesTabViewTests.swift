@@ -81,6 +81,57 @@ struct ChangesTabViewTests {
             != ChangesTabView.commitRowTerminalToken(isLast: false))
     }
 
+    @Test func appKitCheckpointSummaryRowsTrackLeaseAndAvailability() {
+        let id = UUID()
+        let available = WorktreeCheckpointSummary(
+            id: id,
+            kind: .manual,
+            label: "Before refactor",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: 12,
+            stagedFileCount: 1,
+            unstagedFileCount: 2,
+            untrackedFileCount: 3,
+            unavailableReason: nil
+        )
+        let unavailable = WorktreeCheckpointSummary(
+            id: id,
+            kind: .manual,
+            label: "Before refactor",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: 12,
+            stagedFileCount: 1,
+            unstagedFileCount: 2,
+            untrackedFileCount: 3,
+            unavailableReason: "blob missing"
+        )
+
+        let enabled = ChangesTabView.checkpointSummaryRowToken(
+            summary: available,
+            expanded: false,
+            loading: false,
+            manifestError: nil,
+            mutationsDisabled: false
+        )
+        let disabled = ChangesTabView.checkpointSummaryRowToken(
+            summary: available,
+            expanded: false,
+            loading: false,
+            manifestError: nil,
+            mutationsDisabled: true
+        )
+        let nowUnavailable = ChangesTabView.checkpointSummaryRowToken(
+            summary: unavailable,
+            expanded: false,
+            loading: false,
+            manifestError: nil,
+            mutationsDisabled: false
+        )
+
+        #expect(enabled != disabled)
+        #expect(enabled != nowUnavailable)
+    }
+
     @Test func appKitCommitRowsTrackPrimaryRemote() {
         let primaryRemote = CodeHostRemote(
             kind: .github,

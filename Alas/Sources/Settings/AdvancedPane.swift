@@ -30,18 +30,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Agent tab preview",
-                        desc: "Shows the worktree Agent tab for preview testing."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.agentTabEnabled },
-                            set: { enabled in
-                                state.config.agentTabEnabled = enabled
-                                state.saveConfig()
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Run tab preview",
                         desc: "Shows the worktree Run tab for preview testing."
                     ) {
@@ -55,7 +43,7 @@ struct AdvancedPane: View {
                     }
                     SettingsRow(
                         name: "Right pane icon rail",
-                        desc: "Replaces the right pane tab bar with a vertical icon rail (preview)."
+                        desc: "Uses a vertical icon rail for the right pane. Turn off to use the classic tab bar."
                     ) {
                         AlasToggle(on: Binding(
                             get: { state.config.rightPaneRailEnabled },

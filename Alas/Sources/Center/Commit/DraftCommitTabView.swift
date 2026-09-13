@@ -49,7 +49,8 @@ struct DraftCommitTabView: View {
         guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
-    private var canCommit: Bool { presentation.commit.isEnabled }
+    private var checkpointLeaseActive: Bool { Self.checkpointLeaseActiveForRecovery(rightPane: rightPane) }
+    private var canCommit: Bool { !checkpointLeaseActive && presentation.commit.isEnabled }
     private var busy: Bool { localBusy || publishSession?.isRunning == true }
     private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
     private var publishError: String? { publishSession?.lastError?.localizedDescription }
@@ -57,8 +58,12 @@ struct DraftCommitTabView: View {
         if let publishSession { return publishSession.checkpoint }
         return tabState.publishCheckpoint
     }
-    private var mutationsDisabled: Bool { presentation.mutationsDisabled }
+    private var mutationsDisabled: Bool { checkpointLeaseActive || presentation.mutationsDisabled }
     private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
+
+    static func checkpointLeaseActiveForRecovery(rightPane: RightPaneState?) -> Bool {
+        rightPane?.checkpointMutationsDisabled ?? true
+    }
 
     private var publicationProbeKey: String {
         guard let rps = rightPane else { return "" }
@@ -100,7 +105,7 @@ struct DraftCommitTabView: View {
 
     private var publishAction: CommitPrimaryAction? {
         guard let action = presentation.publish else { return nil }
-        return .init(label: action.label, isEnabled: action.isEnabled,
+        return .init(label: action.label, isEnabled: !checkpointLeaseActive && action.isEnabled,
             help: action.help, accessibilityIdentifier: "commit-composer-publish", handler: runPublish)
     }
 
@@ -543,6 +548,7 @@ struct DraftCommitTabView: View {
 
     private func runCommit() {
         guard canCommit else { return }
+        guard !checkpointLeaseActive else { return }
         let subjectSnapshot = trimmedSubject
         let bodySnapshot = bodyText
         let amendSnapshot = amend
@@ -596,7 +602,9 @@ struct DraftCommitTabView: View {
     }
 
     private func runPublish() {
-        guard presentation.publish?.isEnabled == true, let rps = rightPane
+        guard !checkpointLeaseActive,
+              presentation.publish?.isEnabled == true,
+              let rps = rightPane
         else { return }
         let subjectSnapshot = subject
         let bodySnapshot = bodyText

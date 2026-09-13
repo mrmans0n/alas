@@ -60,6 +60,9 @@ struct DiffTabView: View {
     #endif
 
     private let git = GitService()
+    private var checkpointLeaseActive: Bool {
+        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+    }
 
     var body: some View {
         if ImageFileType.isSupported(currentPath: relativePath, originalPath: originalPath) {
@@ -402,7 +405,10 @@ struct DiffTabView: View {
     }
 
     private func stageHunk(_ hunk: ParsedDiff.Hunk) {
+        guard !checkpointLeaseActive else { return }
         Task {
+            guard !checkpointLeaseActive else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             let tracked = isFileTracked
             // For untracked files we need the real file mode so `git apply
             // --cached` doesn't drop the +x bit or rewrite a symlink as a
@@ -434,6 +440,7 @@ struct DiffTabView: View {
 
     private func stagedHunkActions(hunk: ParsedDiff.Hunk) -> (stage: (() -> Void)?, discard: (() -> Void)?) {
         if compareWithHEAD { return (nil, nil) }
+        if checkpointLeaseActive { return (nil, nil) }
         // Staged view: no per-hunk actions for now (out of scope).
         if staged { return (nil, nil) }
         // Unstaged tracked, file exists: stage + discard.
@@ -449,7 +456,10 @@ struct DiffTabView: View {
     }
 
     private func performDiscardHunk(_ hunk: ParsedDiff.Hunk) {
+        guard !checkpointLeaseActive else { return }
         Task {
+            guard !checkpointLeaseActive else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
             var didFail = false
             do {

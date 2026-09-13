@@ -55,7 +55,6 @@ struct RightPaneTransitionalView: View {
                             collapsed: collapsed,
                             changesCount: 0,
                             activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
-                            showAgentTab: state.config.agentTabEnabled,
                             showRunTab: state.config.runTabEnabled,
                             onAction: { handle($0) }
                         )
@@ -70,7 +69,6 @@ struct RightPaneTransitionalView: View {
                             onHidePane: {},
                             showIgnored: state.config.files.showIgnored,
                             onToggleShowIgnored: {},
-                            showAgentTab: state.config.agentTabEnabled,
                             showRunTab: state.config.runTabEnabled,
                             activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                         )

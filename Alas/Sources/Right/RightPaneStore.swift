@@ -289,6 +289,12 @@ final class RightPaneStore {
                 result.start()
             }
         }
+        result.checkpointCoordinationProvider = { [weak self] selectedPaths in
+            self?.appState?.checkpointCoordination(for: worktree, selectedPaths: selectedPaths) ?? .clear
+        }
+        result.checkpointTargetProvider = { [weak self] in
+            self?.appState?.checkpointTarget(for: worktree)
+        }
         return result
     }
 
