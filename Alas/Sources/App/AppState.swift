@@ -332,6 +332,10 @@ final class AppState {
     var harnessAttentionDebouncers: [String: DebounceTimer] = [:]
     @ObservationIgnored
     var pendingHarnessAttention: [String: HarnessActivityTransition] = [:]
+    /// Sessions acknowledged while their awaiting transition was still
+    /// parked in the settle window; the transition must land pre-acknowledged.
+    @ObservationIgnored
+    var harnessAttentionPreAcknowledgedSessions: Set<String> = []
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
     let mcpHTTPSupervisor = AlasMCPHTTPSupervisor()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()

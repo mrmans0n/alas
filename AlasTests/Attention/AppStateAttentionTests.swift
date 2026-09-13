@@ -1371,6 +1371,41 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 
+    @Test func acknowledgeDuringSettleWindowKeepsLandedEventAcknowledged() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId!)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func acknowledgeAfterTransitionLandsStillAcknowledges() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let eventID = try #require(state.attentionStore.events.first?.id)
+        #expect(state.attentionStore.acknowledgments[eventID] == nil)
+
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId!)
+        #expect(state.attentionStore.acknowledgments[eventID] != nil)
+    }
+
     @MainActor private struct Fixture {
         let now = Date()
         let url: URL

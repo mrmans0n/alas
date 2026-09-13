@@ -538,6 +538,12 @@ extension AppState {
 
     private func acknowledgeSessionTarget(worktreeID: String, owner: SessionOwnerID, sessionID: String) {
         let target = AttentionJumpTarget.session(sessionID: sessionID)
+        if pendingHarnessAttention[sessionID] != nil {
+            // The awaiting event doesn't exist yet — it's parked in the
+            // settle window. Remember the intent so the badge never appears
+            // for a session the user has already looked at.
+            harnessAttentionPreAcknowledgedSessions.insert(sessionID)
+        }
         if case .workspaceCheckout = owner {
             acknowledgeAttentionTarget(target)
         } else {
@@ -764,12 +770,25 @@ extension AppState {
     private func applyPendingHarnessAttention(_ transition: HarnessActivityTransition) {
         guard let current = harness.activityBySession[transition.sessionID]?.state,
               current == transition.state else { return }
+        let wasPreAcknowledged = harnessAttentionPreAcknowledgedSessions.remove(transition.sessionID) != nil
         applyHarnessAttention(transition)
+        guard wasPreAcknowledged else { return }
+        // The user already viewed this session while the transition was
+        // parked; acknowledge the freshly-landed event so the badge doesn't
+        // surface for it.
+        if let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner) {
+            acknowledgeSessionTarget(
+                worktreeID: resolution.worktree.id,
+                owner: resolution.owner,
+                sessionID: transition.sessionID
+            )
+        }
     }
 
     private func cancelPendingHarnessAttention(for sessionID: String) {
         harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
         pendingHarnessAttention.removeValue(forKey: sessionID)
+        harnessAttentionPreAcknowledgedSessions.remove(sessionID)
     }
 
     private func applyHarnessAttention(_ transition: HarnessActivityTransition) {
