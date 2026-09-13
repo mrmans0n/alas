@@ -31,6 +31,12 @@ struct AgentSidebarFormattingTests {
     }
 
     @Test
+    func stripsACursorVariantSuffixBeforeShorteningTheBaseModelId() {
+        let variantID = "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]"
+        #expect(AgentSidebarModelDisplay.shortName(for: variantID) == "Opus 4.6")
+    }
+
+    @Test
     func rendersUnderAMinuteAsNow() {
         let now = Date(timeIntervalSince1970: 1_000)
         #expect(AgentSidebarRelativeTime.compact(from: Date(timeIntervalSince1970: 970), to: now) == "now")

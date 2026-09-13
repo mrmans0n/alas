@@ -12,7 +12,12 @@ enum AgentSidebarModelDisplay {
 
     static func shortName(for rawID: String) -> String {
         guard !rawID.isEmpty else { return rawID }
-        var tokens = rawID.split(separator: "-").map(String.init)
+        // Cursor encodes thinking/effort/context as a bracket-suffixed variant,
+        // e.g. "claude-opus-4-6[thinking=true,context=200k]"; that payload
+        // belongs in the dedicated thinking chip, not this caption, so only
+        // the base id gets tokenized.
+        let base = CursorModelVariants.parse(rawID).base
+        var tokens = base.split(separator: "-").map(String.init)
 
         // Drop a trailing snapshot date stamp, e.g. "-20250929".
         if let last = tokens.last, last.count == 8, last.allSatisfy(\.isNumber) {
@@ -23,7 +28,7 @@ enum AgentSidebarModelDisplay {
         if let first = tokens.first, first.lowercased() == "claude", tokens.count > 1 {
             tokens.removeFirst()
         }
-        guard !tokens.isEmpty else { return rawID }
+        guard !tokens.isEmpty else { return base }
 
         // Pull a trailing run of pure-integer tokens into a dotted version,
         // e.g. ["4", "5"] -> "4.5". Tokens that already contain a dot (as in
@@ -44,7 +49,7 @@ enum AgentSidebarModelDisplay {
         case (false, false): return "\(name) \(version)"
         case (false, true): return name
         case (true, false): return version
-        case (true, true): return rawID
+        case (true, true): return base
         }
     }
 }
