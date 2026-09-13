@@ -19,11 +19,18 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
     ) -> [ACPTranscriptVisibleRow] {
         let head = min(visibleHead, messages.count)
         let tail = max(head, min(visibleTail, messages.count))
-        return (head..<tail).compactMap { index in
+        // Replayed history can contain several snapshots of the same message.
+        // Match the lookup's last-snapshot policy so the tiler receives one row
+        // per identity, without changing the stored transcript.
+        var seen = Set<String>()
+        let rows: [ACPTranscriptVisibleRow] = (head..<tail).reversed().compactMap { index in
             let message = messages[index]
             if case .plan = message { return nil }
-            return ACPTranscriptVisibleRow(index: index, stableId: stableId(message))
+            let id = stableId(message)
+            guard seen.insert(id).inserted else { return nil }
+            return ACPTranscriptVisibleRow(index: index, stableId: id)
         }
+        return rows.reversed()
     }
 }
 
