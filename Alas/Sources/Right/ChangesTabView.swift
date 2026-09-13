@@ -381,7 +381,7 @@ struct ChangesTabView: View {
 
         rows.append(appKitRow(
             id: "working-tree-header",
-            token: "\(workingGroupsSignature)-\(rps.workingTreeExpanded)-\(rps.mergeOp.current != nil)-\(rps.stashOperationInFlight)",
+            token: "\(workingGroupsSignature)-\(rps.workingTreeExpanded)-\(rps.mergeOp.current != nil)-\(rps.stashOperationInFlight)-\(rps.checkpointMutationsDisabled)-\(String(reflecting: rps.checkpointLoadError))",
             estimatedHeight: 32,
             retention: .sticky
         ) { workingTree.headerRow })
@@ -425,8 +425,31 @@ struct ChangesTabView: View {
         return AppKitDiffRowPlan(rows: rows)
     }
 
+    static func shouldShowCheckpointsSection(
+        summaryCount: Int,
+        nonterminalJournalCount: Int,
+        lastStatus: String?,
+        operationInFlight: CheckpointOperationKind?,
+        hasVisibleLoadError: Bool
+    ) -> Bool {
+        summaryCount > 0
+            || nonterminalJournalCount > 0
+            || lastStatus != nil
+            || operationInFlight != nil
+            || hasVisibleLoadError
+    }
+
     private func appendCheckpointRows(to rows: inout [AppKitDiffRowSpec]) {
         let summaries = rps.checkpointSummaries
+        let hasVisibleLoadError = rps.checkpointLoadError != nil && !rps.worktree.path.isRemoteAlasPath
+        guard Self.shouldShowCheckpointsSection(
+            summaryCount: summaries.count,
+            nonterminalJournalCount: rps.nonterminalCheckpointJournals.count,
+            lastStatus: rps.lastCheckpointStatus,
+            operationInFlight: rps.checkpointOperationInFlight,
+            hasVisibleLoadError: hasVisibleLoadError
+        ) else { return }
+
         rows.append(appKitRow(
             id: "checkpoints-header",
             token: "\(String(reflecting: summaries))\(rps.checkpointsExpanded)\(rps.checkpointMutationsDisabled)\(String(reflecting: rps.checkpointLoadError))\(String(reflecting: rps.nonterminalCheckpointJournals))\(String(reflecting: rps.lastCheckpointStatus))",
@@ -841,6 +864,8 @@ struct ChangesTabView: View {
             onDiscardFile: { rps.requestDiscardFile(path: $0.path) },
             onStashChanges: { rps.requestStashChanges() },
             stashChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
+            onCreateCheckpoint: { rps.requestCheckpointCreation() },
+            createCheckpointDisabled: rps.checkpointMutationsDisabled || rps.checkpointLoadError != nil,
             isOpenFileEnabled: { file in
                 DiffOpenFileAvailability.isAvailable(
                     worktreePath: rps.worktree.path,
