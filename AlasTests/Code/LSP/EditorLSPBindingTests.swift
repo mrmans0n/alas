@@ -64,6 +64,38 @@ struct EditorLSPBindingTests {
         #expect(!manager.isCurrent(context))
     }
 
+    @Test func bindingRejectsCapturedRequestAfterHolderRestart() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("alas-binding-buffer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("main.swift")
+        try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        let manager = Self.makeReadyManager()
+        let buffer = EditorBuffer(
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            store: EditorBufferStore(rootOverride: root.appendingPathComponent("state")),
+            worktreeId: "worktree",
+            tabId: "tab",
+            lsp: manager
+        )
+        defer { buffer.close(persistDirtySnapshot: false) }
+        await buffer.awaitLoadForTesting()
+
+        let deadline = Date().addingTimeInterval(2)
+        while !manager.isDocumentOpen(fileURL: file, worktreeRoot: root), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let binding = EditorLSPBinding(manager: manager, buffer: buffer, worktreeID: "worktree")
+        let request = try #require(await binding.synchronizeRequest(
+            range: NSRange(location: 0, length: 0), language: "swift"
+        ))
+        #expect(binding.isCurrent(request.1))
+
+        await manager.restartHolder(forFile: file, worktreeRoot: root, languageId: "swift")
+        #expect(!binding.isCurrent(request.1))
+    }
+
     @Test func remoteDocumentHasOneOpenChangeRequestCloseLifecycle() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("alas-remote-lsp-\(UUID().uuidString)")
@@ -136,5 +168,32 @@ struct EditorLSPBindingTests {
             return nil
         }
         return object["id"] as? Int
+    }
+
+    private static func makeReadyManager() -> WorkspaceLSPManager {
+        WorkspaceLSPManager(
+            registry: LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(
+                    language: "swift", extensions: ["swift"], command: "/usr/bin/true",
+                    args: [], env: [:], rootMarkers: [], enabled: true
+                )
+            ]),
+            makeAvailability: { LanguageServerAvailability(
+                environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [],
+                gatekeeperAssessor: { _ in .allowed }
+            ) },
+            makeClient: { _, _, _, language, rootURI in
+                let transport = FakeTransport()
+                transport.onSend = { message in
+                    guard let id = Self.requestID(in: message) else { return }
+                    if message.contains(#""method":"initialize""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{}}}"#)
+                    } else if message.contains(#""method":"shutdown""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
+                    }
+                }
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
     }
 }

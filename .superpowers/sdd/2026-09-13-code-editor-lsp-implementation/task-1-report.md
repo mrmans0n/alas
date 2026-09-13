@@ -77,3 +77,33 @@ passedTests: 100
 failedTests: 0
 skippedTests: 0
 ```
+
+## Review fix round 2
+
+Status: DONE_WITH_TEST_RUNNER_BLOCKER
+
+- `reopenLSPDocument()` now selects the same remote lifecycle owner used by
+  the successful remote-read path. It cannot create a duplicate while an open
+  task is active, and a failed open leaves the state retryable.
+- Added a serialized `EditorBufferTests` integration test that registers a
+  remote root, forces the initial remote LSP availability check to fail, then
+  enables it and verifies normal reopen attaches the document.
+- Added an `EditorLSPBindingTests` integration test that obtains a request
+  through a real buffer/binding, restarts its holder, and verifies the captured
+  context becomes stale.
+
+Commands and output:
+
+```text
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -derivedDataPath /private/tmp/alas-code-editor-lsp-dd -quiet build-for-testing
+Completed with existing Swift 6-mode warnings; no compile errors.
+
+xcodebuild ... -quiet test-without-building -only-testing:AlasTests/EditorLSPBindingTests -only-testing:AlasTests/EditorBufferTests
+TEST EXECUTE FAILED before any test ran:
+IDELaunchErrorDomain Code=20; RBSRequestErrorDomain Code=5;
+NSPOSIXErrorDomain Code=163 (Launchd job spawn failed).
+The identical rerun failed with the same launch error.
+
+xcrun xctest .../AlasTests.xctest
+Blocked by the expected app-host dependency: Library not loaded: @rpath/Alas.debug.dylib.
+```

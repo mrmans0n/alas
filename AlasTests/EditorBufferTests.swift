@@ -115,6 +115,62 @@ struct EditorBufferTests {
         #expect(notifications > 0, "Remote content arrival must notify edit observers so the coordinator can re-apply editor styling")
     }
 
+    @Test func remoteFailedLSPOpenRetriesThroughNormalReopen() async throws {
+        let root = tempWorktree()
+        let file = root.appendingPathComponent("main.swift")
+        RemoteHostRegistry.shared.register(root: root.path, host: "retry-host")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+
+        var remoteAvailable = false
+        let manager = WorkspaceLSPManager(
+            registry: LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(
+                    language: "swift", extensions: ["swift"], command: "/usr/bin/true",
+                    args: [], env: [:], rootMarkers: [], enabled: true
+                )
+            ]),
+            remoteLSPAvailable: { _, _, _ in remoteAvailable },
+            makeClient: { _, _, _, language, rootURI in
+                let transport = FakeTransport()
+                transport.onSend = { message in
+                    guard let data = message.data(using: .utf8),
+                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let id = object["id"] as? Int else { return }
+                    if message.contains(#""method":"initialize""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{}}}"#)
+                    } else if message.contains(#""method":"shutdown""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
+                    }
+                }
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
+        EditorBuffer.remoteReadResultForTesting = { _, _ in
+            .file(data: Data("let value = 1\n".utf8), mtime: .now)
+        }
+        defer { EditorBuffer.remoteReadResultForTesting = nil }
+
+        let buffer = EditorBuffer(
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            store: EditorBufferStore(rootOverride: tempWorktree()),
+            worktreeId: "remote-worktree",
+            tabId: "remote-tab",
+            lsp: manager
+        )
+        defer { buffer.close(persistDirtySnapshot: false) }
+        await buffer.awaitLoadForTesting()
+        #expect(!manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
+
+        remoteAvailable = true
+        buffer.reopenLSPDocument()
+        let deadline = Date().addingTimeInterval(2)
+        while !manager.isDocumentOpen(fileURL: file, worktreeRoot: root), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
+    }
+
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "hello\nworld\n", perms: 0o644)

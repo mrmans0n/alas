@@ -491,7 +491,11 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        openLSPDocumentIfReady()
+        if remoteHost != nil {
+            openRemoteLSPIfNeeded()
+        } else {
+            openLSPDocumentIfReady()
+        }
     }
 
     private func openLSPDocumentIfReady() {
