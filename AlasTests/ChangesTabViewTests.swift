@@ -132,6 +132,63 @@ struct ChangesTabViewTests {
         #expect(enabled != nowUnavailable)
     }
 
+    @Test func checkpointsSectionHiddenWhenThereIsNothingToShow() {
+        #expect(!ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 0,
+            nonterminalJournalCount: 0,
+            lastStatus: nil,
+            operationInFlight: nil,
+            hasVisibleLoadError: false
+        ))
+    }
+
+    @Test func checkpointsSectionVisibleWithSummaries() {
+        #expect(ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 1,
+            nonterminalJournalCount: 0,
+            lastStatus: nil,
+            operationInFlight: nil,
+            hasVisibleLoadError: false
+        ))
+    }
+
+    @Test func checkpointsSectionVisibleForRecoveryJournalWithNoSummaries() {
+        #expect(ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 0,
+            nonterminalJournalCount: 1,
+            lastStatus: nil,
+            operationInFlight: nil,
+            hasVisibleLoadError: false
+        ))
+    }
+
+    @Test func checkpointsSectionVisibleForInFlightStatusOrOperation() {
+        #expect(ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 0,
+            nonterminalJournalCount: 0,
+            lastStatus: "Checkpoint created",
+            operationInFlight: nil,
+            hasVisibleLoadError: false
+        ))
+        #expect(ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 0,
+            nonterminalJournalCount: 0,
+            lastStatus: nil,
+            operationInFlight: .capture,
+            hasVisibleLoadError: false
+        ))
+    }
+
+    @Test func checkpointsSectionVisibleForVisibleLoadError() {
+        #expect(ChangesTabView.shouldShowCheckpointsSection(
+            summaryCount: 0,
+            nonterminalJournalCount: 0,
+            lastStatus: nil,
+            operationInFlight: nil,
+            hasVisibleLoadError: true
+        ))
+    }
+
     @Test func appKitCommitRowsTrackPrimaryRemote() {
         let primaryRemote = CodeHostRemote(
             kind: .github,
