@@ -82,34 +82,36 @@ enum SpacePagerNavigation {
     }
 }
 
+enum SpacePagerLayout {
+    static func offset(activeSpaceID: String, spaces: [SpaceConfig], pageWidth: CGFloat) -> CGFloat {
+        guard let index = spaces.firstIndex(where: { $0.id == activeSpaceID }) else { return 0 }
+        return -CGFloat(index) * pageWidth
+    }
+}
+
 /// Only the page contents move; the header and page controls stay anchored.
 struct SpacePagerContent<Content: View>: View {
     let spaces: [SpaceConfig]
     let selection: String
     @ViewBuilder let content: (String) -> Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var displayedSelection: String?
-    @State private var movesForward = true
 
     var body: some View {
-        ZStack {
-            content(displayedSelection ?? selection)
-                .id(displayedSelection ?? selection)
-                .transition(reduceMotion ? .opacity : .asymmetric(
-                    insertion: .move(edge: movesForward ? .trailing : .leading),
-                    removal: .move(edge: movesForward ? .leading : .trailing)
-                ))
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                ForEach(spaces) { space in
+                    content(space.id)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+            }
+            .offset(x: SpacePagerLayout.offset(
+                activeSpaceID: selection,
+                spaces: spaces,
+                pageWidth: geometry.size.width
+            ))
+            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: selection)
         }
         .clipped()
-        .onAppear { displayedSelection = selection }
-        .onChange(of: selection) { old, new in
-            let oldIndex = spaces.firstIndex { $0.id == old } ?? 0
-            let newIndex = spaces.firstIndex { $0.id == new } ?? 0
-            movesForward = newIndex > oldIndex
-            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .smooth(duration: 0.25)) {
-                displayedSelection = new
-            }
-        }
     }
 }
 

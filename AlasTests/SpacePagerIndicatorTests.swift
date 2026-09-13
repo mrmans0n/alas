@@ -81,11 +81,31 @@ struct SpacePagerIndicatorTests {
         #expect(SpacePagerNavigation.destination(current: 0, offset: 1, count: 0) == nil)
     }
 
+    @Test func pagerStripKeepsEverySpaceAtAStablePosition() {
+        let spaces = [space(id: "first"), space(id: "second"), space(id: "third")]
+
+        #expect(SpacePagerLayout.offset(activeSpaceID: "first", spaces: spaces, pageWidth: 240) == 0)
+        #expect(SpacePagerLayout.offset(activeSpaceID: "second", spaces: spaces, pageWidth: 240) == -240)
+        #expect(SpacePagerLayout.offset(activeSpaceID: "third", spaces: spaces, pageWidth: 240) == -480)
+    }
+
     @Test func spaceIconRejectsNerdFontPrivateUseGlyphs() {
         #expect(SpaceIcon.sanitized("\u{F015}", fallback: "🏠") == "🏠")
     }
 
     @Test func spaceIconAcceptsMultiScalarEmoji() {
         #expect(SpaceIcon.sanitized("🙈", fallback: "🏠") == "🙈")
+    }
+
+    private func space(id: String) -> SpaceConfig {
+        SpaceConfig(
+            id: id,
+            name: id,
+            emoji: "🏠",
+            projectIds: [],
+            members: nil,
+            lastSelectedWorktreeId: nil,
+            createdAt: .distantPast
+        )
     }
 }
