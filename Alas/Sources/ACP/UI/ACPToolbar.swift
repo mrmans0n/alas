@@ -37,18 +37,14 @@ struct ACPToolbar: View {
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
             Spacer(minLength: 0)
-            Button {
+            ToolbarBtn(
+                icon: "rectangle.trailingthird.inset.filled",
+                tooltip: state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap",
+                isActive: state.config.harness.acpShowMinimap
+            ) {
                 state.config.harness.acpShowMinimap.toggle()
                 state.saveConfig()
-            } label: {
-                Image(systemName: "rectangle.trailingthird.inset.filled")
-                    .foregroundStyle(state.config.harness.acpShowMinimap ? theme.color("accent") : theme.color("fg-muted"))
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.plain)
-            .help(state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap")
-            .accessibilityLabel("Transcript minimap")
-            .accessibilityValue(state.config.harness.acpShowMinimap ? "On" : "Off")
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)

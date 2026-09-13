@@ -11,6 +11,11 @@ struct ACPMCPStatusControl: View {
     var onReconnect: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
+    @State private var hovering = false
+
+    /// Lit while the pointer is over the pill or its popover is up, so the
+    /// trigger stays visibly tied to the surface it opened.
+    private var isLit: Bool { hovering || popoverOpen }
 
     private var status: ACPMCPStatusState? {
         ACPMCPStatusState(
@@ -50,10 +55,11 @@ struct ACPMCPStatusControl: View {
                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(foregroundColor(for: status).opacity(0.28), lineWidth: 0.5)
+                        .strokeBorder(foregroundColor(for: status).opacity(isLit ? 0.5 : 0.28), lineWidth: 0.5)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.toolbarControl)
+            .onHover { hovering = $0 }
             .help(status.accessibilitySummary)
             .accessibilityLabel(status.accessibilitySummary)
             .popover(isPresented: $popoverOpen, arrowEdge: .top) {
@@ -75,7 +81,7 @@ struct ACPMCPStatusControl: View {
     }
 
     private func backgroundColor(for status: ACPMCPStatusState) -> Color {
-        foregroundColor(for: status).opacity(0.10)
+        foregroundColor(for: status).opacity(isLit ? 0.22 : 0.10)
     }
 }
 

@@ -218,20 +218,27 @@ private struct AttentionToolbarButton<Content: View>: View {
 struct ToolbarBtn: View {
     let icon: String
     let tooltip: String
+    /// Renders the button as switched on: accent icon over the same filled
+    /// surface hover uses. Toolbar toggles adopt it so their state reads
+    /// without needing a second control next to them.
+    var isActive: Bool = false
     let action: () -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     var body: some View {
         Button(action: action) {
-            Icon(name: icon, size: 13, color: hovering ? theme.color("fg") : theme.color("fg-muted"))
-                .frame(width: 26, height: 22)
-                .contentShape(Rectangle())
-                .background(hovering ? theme.color("bg-3") : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+            Icon(name: icon, size: 13, color: iconColor)
+                .toolbarControlSurface(isLit: hovering || isActive)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
         .help(tooltip)
         .accessibilityLabel(tooltip)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private var iconColor: Color {
+        if isActive { return theme.color("accent") }
+        return hovering ? theme.color("fg") : theme.color("fg-muted")
     }
 }
