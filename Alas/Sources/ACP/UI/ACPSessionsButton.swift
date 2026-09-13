@@ -18,6 +18,11 @@ struct ACPSessionsButton: View {
     let agentLookup: (String) -> AgentDefinition?
     @Environment(\.theme) private var theme
     @State private var open = false
+    @State private var hovering = false
+
+    /// Lit while the pointer is over the button or its popover is up, so the
+    /// trigger stays visibly tied to the surface it opened.
+    private var isLit: Bool { hovering || open }
 
     var body: some View {
         Button {
@@ -27,9 +32,9 @@ struct ACPSessionsButton: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 12))
-                    .foregroundStyle(theme.color("fg-muted"))
+                    .foregroundStyle(theme.color(isLit ? "fg" : "fg-muted"))
                     .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(theme.color("bg-3").opacity(0.5))
+                    .background(theme.color("bg-3").opacity(isLit ? 1 : 0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 if session.agentState == .disconnected {
@@ -41,7 +46,8 @@ struct ACPSessionsButton: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.toolbarControl)
+        .onHover { hovering = $0 }
         .help("Session menu")
         .popover(isPresented: $open, arrowEdge: .top) {
             SessionsPopover(

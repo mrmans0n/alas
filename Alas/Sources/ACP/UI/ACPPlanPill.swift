@@ -12,6 +12,11 @@ struct ACPPlanPill: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var popoverOpen = false
+    @State private var hovering = false
+
+    /// Lit while the pointer is over the pill or its popover is up, so the
+    /// trigger stays visibly tied to the surface it opened.
+    private var isLit: Bool { hovering || popoverOpen }
 
     var body: some View {
         Group {
@@ -51,13 +56,14 @@ struct ACPPlanPill: View {
             .padding(.horizontal, 8)
             .frame(minWidth: 300, alignment: .leading)
             .frame(height: 24)
-            .background(theme.color("accent").opacity(0.10))
+            .background(theme.color("accent").opacity(isLit ? 0.22 : 0.10))
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             .overlay {
                 taskOutline(state: state)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.toolbarControl)
+        .onHover { hovering = $0 }
         .help(state.accessibilityLabel)
         .accessibilityLabel(state.accessibilityLabel)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
@@ -73,7 +79,7 @@ struct ACPPlanPill: View {
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         shape
             .strokeBorder(
-                theme.color("accent").opacity(state.isAnimating ? 0.48 : 0.28),
+                theme.color("accent").opacity(isLit ? 0.55 : (state.isAnimating ? 0.48 : 0.28)),
                 lineWidth: state.isAnimating ? 0.75 : 0.5
             )
 
