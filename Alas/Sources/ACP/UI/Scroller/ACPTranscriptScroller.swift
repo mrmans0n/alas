@@ -331,6 +331,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let host, host.showMinimap, let scroller, scroller.showsMinimap,
                   minimapGestureRange == nil else { return }
             if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
+            // Keep the cached map during a scroll gesture, including momentum.
+            // Its viewport indicator still updates on every scroll tick.
+            if minimapRenderer != nil, scroller.isUserScrollActive {
+                updateMinimap()
+                return
+            }
             if minimapRenderer == nil { minimapRenderer = ACPTranscriptMinimap() }
             if let drawing = minimapRenderer?.drawing(transcript: host.transcript, theme: host.theme) {
                 scroller.minimap.update(drawing: drawing)

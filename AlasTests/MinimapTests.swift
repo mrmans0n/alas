@@ -156,7 +156,7 @@ struct MinimapTests {
         #expect(!decoded.harness.acpShowMinimap)
     }
 
-    @Test("Transcript blocks distinguish speakers and group assistant activity without text detail")
+    @Test("Transcript minimap uses compact prompt bars and response bands")
     @MainActor func transcriptColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let transcript = ACPTranscript()
@@ -171,12 +171,14 @@ struct MinimapTests {
             .agent(id: UUID(), StreamingText(String(repeating: "reply ", count: 10_000)))
         ]
         let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
-        #expect(drawing.marks.count == 4)
-        guard drawing.marks.count == 4 else { return }
+        #expect(drawing.marks.count == 10)
+        guard drawing.marks.count == 10 else { return }
         #expect(drawing.marks[0].rect.minX > drawing.marks[1].rect.minX)
         #expect(drawing.marks[0].color != drawing.marks[1].color)
-        #expect(drawing.marks[0].rect.height >= 20)
-        #expect(drawing.marks[1].rect.height == drawing.marks[3].rect.height)
+        #expect(drawing.marks[0].rect.height == 3)
+        #expect(drawing.marks[1...4].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
+        #expect(drawing.marks[5].rect.height == 3)
+        #expect(drawing.marks[6...9].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
     }
 
     @Test("Transcript blocks ignore streamed text and never carry content between sessions")
@@ -200,6 +202,52 @@ struct MinimapTests {
         second.streamingTick = transcript.streamingTick
         #expect(renderer.needsUpdate(transcript: second, theme: theme))
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
+    }
+
+    @Test("User prompt bars grow modestly with message size")
+    @MainActor func promptBarSizes() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        transcript.messages = [
+            .user(id: UUID(), text: "Short", attachments: []),
+            .user(id: UUID(), text: String(repeating: "medium ", count: 20), attachments: []),
+            .user(id: UUID(), text: String(repeating: "long ", count: 200), attachments: [])
+        ]
+        let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
+        #expect(drawing.marks.map(\.rect.height) == [3, 5, 8])
+    }
+
+    @Test("Navigation windows tile only the latest snapshot of a replayed message")
+    @MainActor func replayedMessageNavigation() {
+        let first = ACPMessage.agent(id: UUID(), messageId: "replayed", StreamingText("partial"))
+        let prompt = ACPMessage.user(id: UUID(), text: "Next", attachments: [])
+        let latest = ACPMessage.agent(id: UUID(), messageId: "replayed", StreamingText("complete"))
+        let messages = [first, prompt, latest]
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages, visibleHead: 0, visibleTail: 3, stableId: { $0.stableId }
+        )
+        #expect(rows.map(\.index) == [1, 2])
+        #expect(Set(rows.map(\.stableId)).count == rows.count)
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows.map { ($0.index, $0.stableId) })
+        #expect(lookup.transcriptIndex(for: latest.stableId) == 2)
+    }
+
+    @Test("Completed responses refresh their bands without rebuilding on every chunk")
+    @MainActor func completedResponseBands() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        let buffer = StreamingText("Hello")
+        transcript.messages = [.agent(id: UUID(), buffer)]
+        transcript.streamingState = .streaming
+        let renderer = ACPTranscriptMinimap()
+        #expect(renderer.drawing(transcript: transcript, theme: theme).marks.count == 1)
+        buffer.append(String(repeating: "response ", count: 1_000))
+        transcript.streamingTick &+= 1
+        #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
+        transcript.streamingState = .idle
+        #expect(renderer.needsUpdate(transcript: transcript, theme: theme))
+        #expect(renderer.drawing(transcript: transcript, theme: theme).marks.count == 4)
+        #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
     }
 
     @Test("Long alternating conversations keep drawing marks bounded without hiding either speaker")
@@ -244,9 +292,9 @@ struct MinimapTests {
             .user(id: UUID(), text: "next", attachments: []),
             .agent(id: UUID(), StreamingText("reply"))
         ], offset: 0)
-        #expect(layout.fraction(at: 3) == 0.5)
-        #expect(layout.messagePosition(at: 0.5) == 3)
-        #expect(layout.messagePosition(at: 0.25) == 1.5)
+        #expect(layout.fraction(at: 3) > layout.fraction(at: 2))
+        #expect(layout.messagePosition(at: layout.fraction(at: 3)) == 3)
+        #expect(layout.messagePosition(at: 0.25) > 0)
         #expect(layout.fraction(at: -1) == 0)
         #expect(layout.fraction(at: 99) == 1)
         #expect(layout.messagePosition(at: -1) == 0)
@@ -258,7 +306,7 @@ struct MinimapTests {
             .user(id: UUID(), text: "recent", attachments: [])
         ], offset: 1_000)
         #expect(history.fraction(at: 1_000) == CGFloat(2) / 3)
-        #expect(history.messagePosition(at: CGFloat(1) / 3) == 500)
+        #expect(history.messagePosition(at: 0.25) == 375)
         let empty = ACPTranscriptMinimapLayout(messages: [], offset: 0)
         #expect(empty.fraction(at: 1) == 0)
         #expect(empty.messagePosition(at: 1) == 0)

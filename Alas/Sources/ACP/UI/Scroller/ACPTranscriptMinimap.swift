@@ -10,12 +10,14 @@ struct ACPTranscriptMinimapLayout {
         let role: Role
         var messages: Range<Int>
         let y: CGFloat
-        let height: CGFloat
+        var height: CGFloat
+        var bandCount: Int
     }
 
     private(set) var blocks: [Block] = []
     private(set) var height: CGFloat = 0
 
+    @MainActor
     init(messages: [ACPMessage], offset: Int) {
         if offset > 0 {
             append(role: .history, messages: 0..<offset)
@@ -29,17 +31,60 @@ struct ACPTranscriptMinimapLayout {
             }
             let globalIndex = offset + index
             if role != .user, let last = blocks.last, last.role == role {
+                let count = min(4, last.bandCount + bandCount(for: message))
                 blocks[blocks.count - 1].messages = last.messages.lowerBound..<(globalIndex + 1)
+                blocks[blocks.count - 1].bandCount = count
+                let newHeight = extent(for: role, bandCount: count)
+                height += newHeight - last.height
+                blocks[blocks.count - 1].height = newHeight
             } else {
-                append(role: role, messages: globalIndex..<(globalIndex + 1))
+                append(role: role, messages: globalIndex..<(globalIndex + 1), bandCount: bandCount(for: message))
             }
         }
     }
 
-    private mutating func append(role: Role, messages: Range<Int>) {
-        let extent: CGFloat = role == .user || role == .notice ? 24 : 48
-        blocks.append(Block(role: role, messages: messages, y: height, height: extent))
-        height += extent
+    private mutating func append(role: Role, messages: Range<Int>, bandCount: Int = 0) {
+        let blockHeight = extent(for: role, bandCount: bandCount)
+        blocks.append(Block(role: role, messages: messages, y: height, height: blockHeight, bandCount: bandCount))
+        height += blockHeight
+    }
+
+    @MainActor
+    private func bandCount(for message: ACPMessage) -> Int {
+        switch message {
+        case .agent(_, _, let text):
+            switch text.utf8Length {
+            case 0..<320: return 1
+            case 320..<1_600: return 2
+            case 1_600..<6_400: return 3
+            default: return 4
+            }
+        case .thought, .toolCall, .fileEdit, .plan:
+            return 1
+        case .user(_, _, let text, _, _):
+            switch text.utf8.count {
+            case 0..<80: return 1
+            case 80..<400: return 2
+            default: return 3
+            }
+        case .systemNotice:
+            return 0
+        }
+    }
+
+    private func extent(for role: Role, bandCount: Int) -> CGFloat {
+        switch role {
+        case .assistant:
+            return CGFloat(max(1, bandCount) * 5 - 2)
+        case .user:
+            switch bandCount {
+            case 1: return 5
+            case 2: return 7
+            default: return 10
+            }
+        case .notice, .history:
+            return 10
+        }
     }
 
     /// Convert a fractional global message index to a fraction of the turn map.
@@ -75,6 +120,7 @@ struct ACPTranscriptMinimapLayout {
 final class ACPTranscriptMinimap {
     private var theme: Theme?
     private var generation: UInt64?
+    private var streamingState: ACPSession.StreamingState?
     private var offset: Int?
     private var transcriptID: ObjectIdentifier?
     private var cachedDrawing = MinimapDrawing()
@@ -82,6 +128,7 @@ final class ACPTranscriptMinimap {
 
     func needsUpdate(transcript: ACPTranscript, theme: Theme) -> Bool {
         self.theme != theme || generation != transcript.messagesGeneration
+            || streamingState != transcript.streamingState
             || offset != transcript.messageIndexOffset
             || transcriptID != ObjectIdentifier(transcript)
     }
@@ -91,6 +138,7 @@ final class ACPTranscriptMinimap {
         transcriptID = ObjectIdentifier(transcript)
         self.theme = theme
         generation = transcript.messagesGeneration
+        streamingState = transcript.streamingState
         offset = transcript.messageIndexOffset
         layout = ACPTranscriptMinimapLayout(messages: transcript.messages, offset: transcript.messageIndexOffset)
         let userColor = NSColor(theme.color("accent")).withAlphaComponent(0.65)
@@ -98,11 +146,19 @@ final class ACPTranscriptMinimap {
         let noticeColor = NSColor(theme.color("fg-faint")).withAlphaComponent(0.2)
         var drawing = MinimapDrawing(height: layout.height)
         // Dense histories share drawing buckets while navigation retains every turn.
-        // Keep both speaker lanes instead of sampling away short user prompts.
         let bucketSize = max(1, Int(ceil(Double(layout.blocks.count) / 512)))
         let roles: [ACPTranscriptMinimapLayout.Role] = [.history, .notice, .assistant, .user]
         for start in stride(from: 0, to: layout.blocks.count, by: bucketSize) {
             let bucket = layout.blocks[start..<min(layout.blocks.count, start + bucketSize)]
+            if bucketSize == 1, let block = bucket.first, block.role == .assistant {
+                for band in 0..<block.bandCount {
+                    drawing.marks.append(.init(
+                        rect: CGRect(x: 0, y: block.y + CGFloat(band * 5), width: 64, height: 3),
+                        color: assistantColor
+                    ))
+                }
+                continue
+            }
             for role in roles {
                 guard let first = bucket.first(where: { $0.role == role }),
                       let last = bucket.last(where: { $0.role == role }) else { continue }
@@ -111,20 +167,21 @@ final class ACPTranscriptMinimap {
                 let color: NSColor
                 switch role {
                 case .user:
-                    x = bucketSize > 1 ? 48 : 24
-                    width = bucketSize > 1 ? 40 : 64
+                    x = bucketSize > 1 ? 56 : 64
+                    width = bucketSize > 1 ? 32 : 24
                     color = userColor
                 case .assistant:
                     x = 0
-                    width = bucketSize > 1 ? 40 : 64
+                    width = bucketSize > 1 ? 48 : 64
                     color = assistantColor
                 case .notice, .history:
                     x = 0
                     width = 88
                     color = noticeColor
                 }
+                let inset: CGFloat = role == .assistant ? 0 : 1
                 drawing.marks.append(.init(
-                    rect: CGRect(x: x, y: first.y + 2, width: width, height: last.y + last.height - first.y - 4),
+                    rect: CGRect(x: x, y: first.y + inset, width: width, height: last.y + last.height - first.y - (inset * 2)),
                     color: color
                 ))
             }
