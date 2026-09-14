@@ -285,6 +285,24 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         return size
     }
 
+    /// Forward vertical scrolling to the transcript's AppKit scroller.
+    /// Markdown cells are NSTextViews, so without this override they consume
+    /// wheel events even though they cannot scroll vertically themselves.
+    override func scrollWheel(with event: NSEvent) {
+        if Self.shouldForwardVerticalScroll(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY
+        ) {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    static func shouldForwardVerticalScroll(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
+        abs(deltaY) > abs(deltaX)
+    }
+
     /// Measure the current text wrapped at `width`, as a pure function of the
     /// attributed content and the width.
     ///

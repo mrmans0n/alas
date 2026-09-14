@@ -2,6 +2,15 @@ import AppKit
 import Testing
 @testable import Alas
 
+@MainActor
+private final class ACPMarkdownScrollRecordingResponder: NSResponder {
+    var receivedEvent: NSEvent?
+
+    override func scrollWheel(with event: NSEvent) {
+        receivedEvent = event
+    }
+}
+
 /// The transcript scroll beachball came from `ACPMarkdownInlineNSTextView`
 /// re-running full TextKit layout on every `sizeThatFits` probe (SwiftUI's
 /// StackLayout probes each row at several widths per placement pass and
@@ -92,5 +101,30 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         // The earlier width was evicted, so it now recomputes.
         _ = textView.fittingSize(for: 100)
         #expect(textView.fittingComputationCountForTests == 18)
+    }
+
+    @Test("only vertical-dominant wheel events are forwarded")
+    func onlyVerticalDominantWheelEventsAreForwarded() {
+        #expect(ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 0, deltaY: 20))
+        #expect(!ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 20, deltaY: 0))
+        #expect(!ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 20, deltaY: 20))
+    }
+
+    @Test("vertical wheel events over Markdown text reach the transcript")
+    func verticalWheelEventsReachTranscript() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+        let cgEvent = try #require(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 20,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        let event = try #require(NSEvent(cgEvent: cgEvent))
+
+        textView.scrollWheel(with: event)
     }
 }
