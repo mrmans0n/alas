@@ -10,6 +10,7 @@ enum EditorCommandID: String, CaseIterable, Sendable {
     case formatSelection
     case formatDocument
     case hover
+    case signatureHelp
     case back
     case forward
     case nextProblem
@@ -56,6 +57,7 @@ struct LSPCapabilities: Equatable, Sendable {
         if providers.documentRangeFormattingProvider?.isSupported == true { commands.insert(.formatSelection) }
         if providers.documentFormattingProvider?.isSupported == true { commands.insert(.formatDocument) }
         if providers.hoverProvider?.isSupported == true { commands.insert(.hover) }
+        if providers.signatureHelpProvider?.isSupported == true { commands.insert(.signatureHelp) }
         if providers.inlayHintProvider?.isSupported == true { commands.insert(.toggleInlayHints) }
         self.init(supportedCommands: commands)
     }
@@ -66,6 +68,7 @@ struct LSPCapabilities: Equatable, Sendable {
 
     private struct Providers: Decodable {
         let hoverProvider: Provider?
+        let signatureHelpProvider: Provider?
         let definitionProvider: Provider?
         let typeDefinitionProvider: Provider?
         let implementationProvider: Provider?

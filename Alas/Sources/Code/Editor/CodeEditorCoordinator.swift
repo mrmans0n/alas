@@ -61,6 +61,7 @@ final class CodeEditorCoordinator {
     private var navigation: NavigationFeature?
     private var hoverHighlight: HoverHighlightFeature?
     private var completion: CompletionFeature?
+    private var signatureHelp: SignatureHelpFeature?
     private var reportedInitialHighlightReady = false
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
@@ -242,6 +243,30 @@ final class CodeEditorCoordinator {
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
+        signatureHelp = SignatureHelpFeature(
+            textView: textView,
+            getClient: { [weak self] in self?.currentLSPClient() },
+            getURI: { [weak self] in
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return root.appendingPathComponent(rel).lspURI
+            },
+            isEnabled: { [weak self] in
+                guard let self,
+                      self.currentLanguage != nil,
+                      self.buffer?.readOnly == false,
+                      self.buffer?.isExternal != true else { return false }
+                return true
+            },
+            prepareForSignatureHelpRequest: { [weak self] in
+                await self?.flushPendingLSPDidChangeForSignatureHelp()
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+        )
         installEditorCommands(on: textView)
 
         // LSP open/close for external buffers is managed by TabsManager
@@ -322,6 +347,7 @@ final class CodeEditorCoordinator {
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
+            signatureHelp?.tearDown()
             reportedInitialHighlightReady = false
             didChangeTask?.cancel()
             hasPendingDidChange = false
@@ -606,6 +632,8 @@ final class CodeEditorCoordinator {
         hoverHighlight = nil
         completion?.cancelAndDismiss()
         completion = nil
+        signatureHelp?.tearDown()
+        signatureHelp = nil
         lspBinding = nil
         editorCommandStatusTask?.cancel()
         renameFeature?.cancel()
@@ -626,6 +654,9 @@ final class CodeEditorCoordinator {
         textView?.completionChangeHandler = nil
         textView?.completionSelectionChangeHandler = nil
         textView?.completionKeyHandler = nil
+        textView?.signatureHelpManualTriggerHandler = nil
+        textView?.signatureHelpChangeHandler = nil
+        textView?.signatureHelpSelectionChangeHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
@@ -657,6 +688,7 @@ final class CodeEditorCoordinator {
             ) { [weak self] _ in
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
+                self?.signatureHelp?.notifyScrolled()
             }
             hoverObservers.append(token)
         }
@@ -668,6 +700,7 @@ final class CodeEditorCoordinator {
         ) { [weak self] _ in
             self?.hover?.notifyCaretChanged()
             self?.definition?.notifyCaretChanged()
+            self?.signatureHelp?.notifyScrolled()
         }
         hoverObservers.append(selectionToken)
 
@@ -685,11 +718,12 @@ final class CodeEditorCoordinator {
                   window === self.textView?.window else { return }
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
+            self.signatureHelp?.notifyWindowResized()
         }
         hoverObservers.append(resizeToken)
 
         textView.escapeHandler = { [weak self] in
-            self?.hover?.handleEscape() ?? false
+            self?.signatureHelp?.handleEscape() ?? self?.hover?.handleEscape() ?? false
         }
     }
 
@@ -748,6 +782,9 @@ final class CodeEditorCoordinator {
         let canEdit: () -> Bool = { [weak self] in
             guard let buffer = self?.buffer else { return false }
             return !buffer.readOnly && (!buffer.isExternal || buffer.externalEditable) && !buffer.undoManager.workspaceActionInFlight
+        }
+        router.register(.signatureHelp, isAvailable: canEdit) { [weak self] _ in
+            self?.signatureHelp?.triggerManual()
         }
         router.register(.rename, isAvailable: canEdit) { [weak self] range in
             self?.renameFeature?.rename(range: range)
@@ -954,6 +991,10 @@ final class CodeEditorCoordinator {
         pendingTextEdits.removeAll()
         guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
         await sendLSPDidChange(payload, awaitPullDiagnostics: false)
+    }
+
+    private func flushPendingLSPDidChangeForSignatureHelp() async {
+        await flushPendingLSPDidChangeForCompletion()
     }
 
     private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {

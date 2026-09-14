@@ -31,6 +31,8 @@ struct EditorCommands: Commands {
             Divider()
             Button("Show Hover") { send(.hover) }
                 .disabled(!availability.isAvailable(.hover))
+            Button("Show Signature Help") { send(.signatureHelp) }
+                .disabled(!availability.isAvailable(.signatureHelp))
             Button("Trigger Completion") {
                 NSApp.sendAction(#selector(NSResponder.complete(_:)), to: nil, from: nil)
             }

@@ -32,6 +32,8 @@ actor LSPClient {
     private(set) var supportsPrepareRename = false
     private(set) var supportsPullDiagnostics: Bool = false
     private(set) var completionTriggerCharacters: [String] = []
+    private(set) var signatureHelpTriggerCharacters: [String] = []
+    private(set) var signatureHelpRetriggerCharacters: [String] = []
     // `AsyncStream` is single-consumer — values are delivered to whichever
     // iterator races to read first, not broadcast. Multiple coordinators
     // sharing one client (two tabs in the same worktree/language) used to
@@ -96,6 +98,8 @@ actor LSPClient {
         }
         supportsPullDiagnostics = caps.supportsPullDiagnostics
         completionTriggerCharacters = caps.completionTriggerCharacters
+        signatureHelpTriggerCharacters = caps.signatureHelpTriggerCharacters
+        signatureHelpRetriggerCharacters = caps.signatureHelpRetriggerCharacters
         try sendNotification(method: "initialized", params: [String: Any]())
         state = .ready
     }
@@ -210,6 +214,17 @@ actor LSPClient {
         }
         return (try? JSONDecoder().decode(LSPCompletionResult.self, from: raw))
             ?? LSPCompletionResult(isIncomplete: false, items: [])
+    }
+
+    func signatureHelp(uri: String, position: LSPPosition, context: LSPSignatureHelpContext?) async throws -> LSPSignatureHelp? {
+        let params = LSPSignatureHelpParams(
+            textDocument: LSPTextDocumentIdentifier(uri: uri),
+            position: position,
+            context: context
+        )
+        let raw = try await sendRequest(method: "textDocument/signatureHelp", params: params)
+        guard let raw, raw != Data("null".utf8) else { return nil }
+        return try JSONDecoder().decode(LSPSignatureHelp.self, from: raw)
     }
 
     func formatting(uri: String, options: LSPFormattingOptions) async throws -> [LSPTextEdit] {
@@ -415,9 +430,11 @@ actor LSPClient {
         supportsFormatting: Bool,
         supportsPullDiagnostics: Bool,
         completionTriggerCharacters: [String],
+        signatureHelpTriggerCharacters: [String],
+        signatureHelpRetriggerCharacters: [String],
         positionEncoding: String?
     ) {
-        guard let data else { return (.full, false, false, [], nil) }
+        guard let data else { return (.full, false, false, [], [], [], nil) }
         struct InitializeResult: Decodable {
             let capabilities: ServerCapabilities
         }
@@ -426,6 +443,7 @@ actor LSPClient {
             let documentFormattingProvider: DocumentFormattingProvider?
             let diagnosticProvider: DiagnosticProvider?
             let completionProvider: CompletionProvider?
+            let signatureHelpProvider: SignatureHelpProvider?
             let positionEncoding: String?
         }
         struct DiagnosticProvider: Decodable {
@@ -435,6 +453,10 @@ actor LSPClient {
         }
         struct CompletionProvider: Decodable {
             let triggerCharacters: [String]?
+        }
+        struct SignatureHelpProvider: Decodable {
+            let triggerCharacters: [String]?
+            let retriggerCharacters: [String]?
         }
         enum DocumentFormattingProvider: Decodable {
             case unsupported
@@ -477,7 +499,7 @@ actor LSPClient {
         }
 
         guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data) else {
-            return (.full, false, false, [], nil)
+            return (.full, false, false, [], [], [], nil)
         }
         let syncKind: TextDocumentSyncKind = {
             guard let sync = result.capabilities.textDocumentSync else { return .full }
@@ -488,7 +510,9 @@ actor LSPClient {
         let supportsFormatting = result.capabilities.documentFormattingProvider?.isSupported ?? false
         let supportsPullDiagnostics = result.capabilities.diagnosticProvider != nil
         let triggerCharacters = result.capabilities.completionProvider?.triggerCharacters ?? []
-        return (syncKind, supportsFormatting, supportsPullDiagnostics, triggerCharacters, result.capabilities.positionEncoding)
+        let signatureTriggers = result.capabilities.signatureHelpProvider?.triggerCharacters ?? []
+        let signatureRetriggers = result.capabilities.signatureHelpProvider?.retriggerCharacters ?? []
+        return (syncKind, supportsFormatting, supportsPullDiagnostics, triggerCharacters, signatureTriggers, signatureRetriggers, result.capabilities.positionEncoding)
     }
 
     private static func fullRange(for text: String) -> LSPRange {
@@ -541,7 +565,7 @@ actor LSPClient {
         }
         let rootUri = try jsonString(params.rootUri)
         let json = """
-        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true},"signatureHelp":{"dynamicRegistration":false,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}}}}}}
         """
         let workspace = #""workspace":{"applyEdit":true,"configuration":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"changeAnnotationSupport":{"groupsOnLabel":false}},"executeCommand":{"dynamicRegistration":false}},"#
         let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#

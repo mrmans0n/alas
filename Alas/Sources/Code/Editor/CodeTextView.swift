@@ -37,6 +37,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var completionManualTriggerHandler: (() -> Void)?
     var completionChangeHandler: ((NSRange?) -> Void)?
     var completionSelectionChangeHandler: (() -> Void)?
+    var signatureHelpManualTriggerHandler: (() -> Void)?
+    var signatureHelpChangeHandler: (() -> Void)?
+    var signatureHelpSelectionChangeHandler: (() -> Void)?
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
     var indentationMode: IndentationMode = .plain
@@ -91,6 +94,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     @objc func formatSelection(_ sender: Any?) { invokeEditorCommand(.formatSelection) }
     @objc func formatDocument(_ sender: Any?) { invokeEditorCommand(.formatDocument) }
     @objc func showHover(_ sender: Any?) { invokeEditorCommand(.hover) }
+    @objc func showSignatureHelp(_ sender: Any?) { invokeEditorCommand(.signatureHelp) }
     @objc func goBack(_ sender: Any?) { invokeEditorCommand(.back) }
     @objc func goForward(_ sender: Any?) { invokeEditorCommand(.forward) }
     @objc func nextProblem(_ sender: Any?) { invokeEditorCommand(.nextProblem) }
@@ -163,7 +167,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         nativeMenu.addItem(.separator())
         appendCommandGroup([.definition, .typeDefinition, .implementation, .references], to: nativeMenu, available: commands)
         appendCommandGroup([.rename, .codeActions, .formatSelection, .formatDocument], to: nativeMenu, available: commands)
-        appendCommandGroup([.hover, .nextProblem, .previousProblem], to: nativeMenu, available: commands)
+        appendCommandGroup([.hover, .signatureHelp, .nextProblem, .previousProblem], to: nativeMenu, available: commands)
         return nativeMenu
     }
 
@@ -241,6 +245,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         case .formatSelection: #selector(formatSelection(_:))
         case .formatDocument: #selector(formatDocument(_:))
         case .hover: #selector(showHover(_:))
+        case .signatureHelp: #selector(showSignatureHelp(_:))
         case .back: #selector(goBack(_:))
         case .forward: #selector(goForward(_:))
         case .nextProblem: #selector(nextProblem(_:))
@@ -260,6 +265,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         case .formatSelection: "Format Selection"
         case .formatDocument: "Format Document"
         case .hover: "Show Hover"
+        case .signatureHelp: "Show Signature Help"
         case .back: "Back"
         case .forward: "Forward"
         case .nextProblem: "Next Problem"
@@ -1097,12 +1103,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         pendingCompletionEditRange = nil
         guard !suppressCompletionChangeNotifications else { return }
         completionChangeHandler?(editRange)
+        signatureHelpChangeHandler?()
     }
 
     private func notifyCompletionSelectionChanged() {
         guard !suppressCompletionSelectionNotifications else { return }
         undoBuffer?.undoManager.breakTypingCoalescing()
         completionSelectionChangeHandler?()
+        signatureHelpSelectionChangeHandler?()
     }
 
     private func setSelectedRangeAfterTextEdit(_ range: NSRange) {
