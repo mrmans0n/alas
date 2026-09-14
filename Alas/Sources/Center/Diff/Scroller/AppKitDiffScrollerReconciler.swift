@@ -190,7 +190,7 @@ final class AppKitDiffScrollerReconciler {
 
     func scroll(
         to request: AppKitDiffScrollRequest,
-        isCurrent: @escaping @Sendable () -> Bool = { true },
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true },
         completion: (@MainActor @Sendable () -> Void)? = nil
     ) {
         let targetID: String?
