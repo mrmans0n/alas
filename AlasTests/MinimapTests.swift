@@ -48,6 +48,21 @@ struct MinimapTests {
         #expect(scroll.wheelEvent === event)
     }
 
+    @Test("Editor minimap draws above a content-background material rail")
+    @MainActor func editorMaterialRail() throws {
+        let scroll = CodeEditorScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        let container = MinimapContainerView(scrollView: scroll)
+        scroll.showsMinimap = true
+        container.layoutSubtreeIfNeeded()
+
+        let material = try #require(container.subviews.first { $0 is NSVisualEffectView } as? NSVisualEffectView)
+        #expect(material.material == .contentBackground)
+        #expect(material.blendingMode == .withinWindow)
+        #expect(!material.isHidden)
+        #expect(material.frame == scroll.minimap.frame)
+        #expect(container.subviews.last === scroll.minimap)
+    }
+
     @Test("Drag release does not navigate twice when the viewport changes")
     @MainActor func dragRelease() throws {
         let view = MinimapView(frame: CGRect(x: 0, y: 0, width: 96, height: 600))
