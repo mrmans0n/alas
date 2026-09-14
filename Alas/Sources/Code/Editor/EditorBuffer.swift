@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 import Observation
 
+struct EditorSourceScrollAnchor {
+    let sourceLine: Int
+    let delta: CGFloat
+    let x: CGFloat
+}
+
 struct RemoteConflictCheckCoalescer {
     private var isChecking = false
     private var hasPendingCheck = false
@@ -245,7 +251,7 @@ final class EditorBuffer {
     }
 
     @ObservationIgnored
-    var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint)] = [:]
+    var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint, sourceScrollAnchor: EditorSourceScrollAnchor?)] = [:]
 
     private(set) var originalText: String = ""
     private(set) var originalMtime: Date = .distantPast

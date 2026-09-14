@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -66,6 +67,7 @@ struct EditorDisplayIntegrationTests {
         var definitionRequest: LSPJSONValue?
         var signatureRequest: LSPJSONValue?
         var renameRequest: LSPJSONValue?
+        var renameEditRequest: LSPJSONValue?
         var actionsRequest: LSPJSONValue?
         transport.onSend = { sent in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
@@ -80,9 +82,11 @@ struct EditorDisplayIntegrationTests {
             case "textDocument/signatureHelp": signatureRequest = request
                 result = .null
             case "textDocument/prepareRename": renameRequest = request
-                result = .null
+                result = try! LSPJSONValue.decode(from: Data(#"{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":2}},"placeholder":"renamed"}"#.utf8))
+            case "textDocument/rename": renameEditRequest = request
+                result = .object(["changes": .object([file.lspURI: .array([Self.edit(line: 1, start: 0, end: 2, text: "renamed")])])])
             case "textDocument/codeAction": actionsRequest = request
-                result = .array([])
+                result = .array([.object(["title": .string("Replace source symbol"), "edit": .object(["changes": .object([file.lspURI: .array([Self.edit(line: 1, start: 0, end: 2, text: "fixed")])])])])])
             default: result = .null
             }
             let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": id, "result": result])
@@ -100,9 +104,14 @@ struct EditorDisplayIntegrationTests {
         let container = NSTextContainer(size: CGSize(width: 800, height: 600))
         layout.addTextContainer(container)
         let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
+        window.contentView = view
+        window.orderFront(nil)
         let coordinator = CodeEditorCoordinator(appState: app)
         coordinator.attach(textView: view, buffer: buffer, layoutManager: layout, worktreeId: "projection", worktreeRoot: root, tabId: "tab", revealLine: nil, revealCharacter: nil, theme: try ThemeStore().current)
         defer { coordinator.detach()
+            window.orderOut(nil)
+            window.contentView = nil
             buffer.close(persistDirtySnapshot: false)
             transport.finish()
         }
@@ -118,7 +127,9 @@ struct EditorDisplayIntegrationTests {
         let item = try LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}]}"#.utf8))
         let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": try #require(request["id"]), "result": .array([item])])
         transport.deliverFrame(String(decoding: try response.encodedData(), as: UTF8.self))
-        try await Task.sleep(for: .milliseconds(150))
+        try await Self.eventually {
+            window.childWindows?.contains(where: { ($0.contentViewController as? NSHostingController<CompletionPopup>)?.rootView.rows.contains(where: { $0.label == "print" }) == true }) == true
+        }
         view.insertTab(nil)
         for _ in 0..<200 where buffer.storage.string == "\npr" { try await Task.sleep(for: .milliseconds(10)) }
         #expect(buffer.storage.string == "import Foo\n\nprint")
@@ -137,11 +148,66 @@ struct EditorDisplayIntegrationTests {
         #expect(signatureRequest?["params"]?["position"]?["character"] == .number("2"))
         view.setSourceSelectedRange(NSRange(location: 1, length: 2))
         view.renameSymbol(nil)
-        view.showCodeActions(nil)
-        for _ in 0..<200 where renameRequest == nil || actionsRequest == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let rename: RenameFeature = try #require(Self.stored("renameFeature", in: coordinator))
+        try await Self.eventually { Self.popover(in: rename)?.isShown == true }
+        let renamePopover = try #require(Self.popover(in: rename))
+        let renameView = try #require(renamePopover.contentViewController as? NSHostingController<RenameNameView>).rootView
+        #expect(renameView.model.name == "renamed")
+        renameView.submit()
+        try await Self.eventually("rename applied with undo registered") { buffer.storage.string == "\nrenamed" && buffer.undoManager.canUndo }
         #expect(renameRequest?["params"]?["position"]?["character"] == .number("0"))
+        #expect(renameEditRequest?["params"]?["newName"] == .string("renamed"))
+        #expect(renameEditRequest?["params"]?["position"]?["line"] == .number("1"))
+        #expect(renameEditRequest?["params"]?["position"]?["character"] == .number("0"))
+        buffer.undoManager.undo()
+        try await Self.eventually { buffer.storage.string == "\npr" }
+        #expect(!buffer.undoManager.canUndo)
+        view.setSourceSelectedRange(NSRange(location: 1, length: 2))
+        try view.displayAdapter?.updateHints([.init(id: "action", sourceOffset: 1, label: "action", size: CGSize(width: 200, height: 30))], revision: buffer.editGeneration)
+        view.showCodeActions(nil)
+        let actions: CodeActionsFeature = try #require(Self.stored("codeActionsFeature", in: coordinator))
+        try await Self.eventually { Self.popover(in: actions)?.isShown == true }
+        let actionsPopover = try #require(Self.popover(in: actions))
+        let picker = try #require(actionsPopover.contentViewController as? NSHostingController<CodeActionPicker>).rootView
+        let action = try #require(picker.model.filtered.first?.action)
+        #expect(action.title == "Replace source symbol")
+        picker.select(action)
+        try await Self.eventually { window.attachedSheet != nil }
+        let preview = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
+        #expect(preview.model.plan.steps.count == 1)
+        #expect(preview.model.plan.steps.first?.document.uri == file.lspURI)
+        #expect(buffer.storage.string == "\npr")
+        #expect(await preview.model.apply())
+        preview.close()
+        try await Self.eventually { buffer.storage.string == "\nfixed" && window.attachedSheet == nil }
         #expect(actionsRequest?["params"]?["range"]?["start"]?["character"] == .number("0"))
         #expect(actionsRequest?["params"]?["range"]?["end"]?["character"] == .number("2"))
+        buffer.undoManager.undo()
+        try await Self.eventually { buffer.storage.string == "\npr" }
+        #expect(!buffer.undoManager.canUndo)
+
+        let diagnostic = try JSONDecoder().decode(LSPDiagnostic.self, from: Data("""
+        {"range":{"start":{"line":1,"character":1},"end":{"line":1,"character":2}},"severity":1,"message":"Problem","relatedInformation":[{"location":{"uri":"\(file.lspURI)","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}},"message":"Related source"}]}
+        """.utf8))
+        coordinator.diagnosticsFeature.apply([diagnostic], to: buffer.storage, theme: try ThemeStore().current)
+        view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        try view.displayAdapter?.updateHints([.init(id: "diagnostic", sourceOffset: 1, label: "diagnostic", size: CGSize(width: 90, height: 16))], revision: buffer.editGeneration)
+        view.nextProblem(nil)
+        #expect(view.sourceSelectedRange == NSRange(location: 2, length: 1))
+        #expect(view.selectedRange() == NSRange(location: 3, length: 1))
+        try await Self.eventually { Self.documentationView(in: window) != nil }
+        let documentation = try #require(Self.documentationView(in: window))
+        let link = URL(string: "alas-diagnostic://related/0")!
+        #expect(documentation.delegate?.textView?(documentation, clickedOnLink: link, at: 0) == true)
+        let history = tabs.navigationStore(forWorktreeId: "projection")
+        #expect(history.goBack()?.position == LSPPosition(line: 1, character: 1))
+        #expect(history.goForward()?.position == LSPPosition(line: 1, character: 0))
+        if case .editor(let target) = tabs.activeTab(forWorktree: "projection") {
+            #expect(target.revealLine == 1)
+            #expect(target.revealCharacter == 0)
+        } else { Issue.record("Diagnostic link did not activate an editor tab") }
+        #expect(buffer.storage.string == "\npr")
+        #expect(!buffer.undoManager.canUndo)
     }
 
     @Test(arguments: ["e\u{301} office", "👩‍👩‍👧‍👦 office", "abc אבג office", "office\n"]) func unicodeGeometryAndAccessibilityKeepSourceBoundaries(_ source: String) async throws {
@@ -240,6 +306,282 @@ struct EditorDisplayIntegrationTests {
         #expect(f.view.accessibilityString(for: NSRange(location: 1, length: 3)) == "\u{FFFC}🙂")
         f.view.setAccessibilitySelectedTextRange(NSRange(location: 4, length: 1))
         #expect(f.view.sourceSelectedRange == NSRange(location: 4, length: 1))
+    }
+
+    @Test(arguments: [
+        ("e\u{301} office", NSRange(location: 0, length: 2)),
+        ("👩‍👩‍👧‍👦 office", NSRange(location: 0, length: 11)),
+        ("abc אבג office", NSRange(location: 4, length: 3)),
+        ("office\n", NSRange(location: 0, length: 6))
+    ]) func unicodeRectsOccupyTheMappedGlyphs(_ source: String, _ range: NSRange) async throws {
+        let f = try await Fixture(source)
+        defer { f.remove() }
+        Self.configureLayout(f.view, buffer: f.buffer, width: 160, fontSize: 20)
+        f.buffer.storage.addAttribute(.font, value: try #require(NSFont(name: source == "office\n" ? "Hoefler Text" : "Times New Roman", size: 20)), range: NSRange(location: 0, length: source.utf16.count))
+        let window = NSWindow(contentRect: f.view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = f.view
+        defer { window.contentView = nil }
+        try f.view.displayAdapter?.updateHints([
+            .init(id: "leading", sourceOffset: 0, label: "leading", size: CGSize(width: 150, height: 30)),
+            .init(id: "eof", sourceOffset: source.utf16.count, label: "eof", size: CGSize(width: 110, height: 22))
+        ], revision: f.buffer.editGeneration)
+        let layout = try #require(f.view.layoutManager)
+        let container = try #require(f.view.textContainer)
+        layout.ensureLayout(for: container)
+        // The one leading attachment adds exactly one native UTF-16 unit.
+        let native = NSRange(location: range.location + 1, length: range.length)
+        if source == "office\n" {
+            // TextKit retains null slots for the characters absorbed by ffi.
+            let glyphs = layout.glyphRange(forCharacterRange: native, actualCharacterRange: nil)
+            let visible = (glyphs.location..<NSMaxRange(glyphs)).filter { !layout.propertyForGlyph(at: $0).contains(.null) }
+            #expect(visible.count == 4)
+        }
+        let expected = Self.nativeRects(native, in: f.view)
+        #expect(f.view.sourceRects(inViewFor: range) == expected)
+        let expectedFrame = window.convertToScreen(f.view.convert(expected.dropFirst().reduce(try #require(expected.first)) { $0.union($1) }, to: nil))
+        #expect(f.view.accessibilityFrame(for: range) == expectedFrame)
+        #expect((f.view.accessibilityAttributeValue(.boundsForRange, forParameter: NSValue(range: range)) as? NSValue)?.rectValue == expectedFrame)
+        let hint = layout.boundingRect(forGlyphRange: layout.glyphRange(forCharacterRange: NSRange(location: 0, length: 1), actualCharacterRange: nil), in: container)
+        #expect(expected.allSatisfy { !$0.intersects(hint) })
+        let glyph = layout.glyphIndexForCharacter(at: native.location)
+        let glyphRect = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+        var point = NSPoint(x: glyphRect.midX, y: glyphRect.midY)
+        if source == "abc אבג office" {
+            // Times' conservative glyph box includes neighboring characters.
+            // Place the hit inside this Hebrew glyph's actual ink instead.
+            let font = try #require(f.view.textStorage?.attribute(.font, at: native.location, effectiveRange: nil) as? NSFont)
+            let ink = font.boundingRect(forGlyph: layout.glyph(at: glyph))
+            let origin = layout.location(forGlyphAt: glyph)
+            let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            point = NSPoint(x: line.minX + origin.x + ink.midX, y: line.minY + origin.y - ink.midY)
+            #expect(layout.glyphIndex(for: point, in: container) == glyph)
+        }
+        let sourceHit = try #require(f.view.utf16Offset(at: point))
+        #expect(NSLocationInRange(sourceHit, range))
+        let screenPoint = window.convertPoint(toScreen: f.view.convert(point, to: nil))
+        let axHit = f.view.accessibilityRange(for: screenPoint)
+        #expect(NSLocationInRange(axHit.location, range))
+        #expect(f.view.accessibilityString(for: axHit) == (source as NSString).substring(with: axHit))
+    }
+
+    @Test func accessibilityHintActionsNavigateAndRejectStaleOwners() async throws {
+        let f = try await Fixture("alpha\nbeta")
+        let other = try await Fixture("alpha\nbeta")
+        defer { f.remove()
+        other.remove() }
+        try f.hints(offset: 6)
+        let child = try #require(f.view.accessibilityChildren()?.first as? NSAccessibilityElement)
+        let action = try #require(child.accessibilityCustomActions()?.first)
+        f.view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        #expect(action.handler?() == true)
+        #expect(f.view.sourceSelectedRange == NSRange(location: 6, length: 0))
+        #expect(f.view.sourceString == "alpha\nbeta")
+        #expect(!f.buffer.undoManager.canUndo)
+        try f.hints(offset: 1)
+        f.view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        #expect(action.handler?() == false)
+        #expect(f.view.sourceSelectedRange.location == 0)
+        try f.hints(offset: 6)
+        let beforeEdit = try #require((f.view.accessibilityChildren()?.first as? NSAccessibilityElement)?.accessibilityCustomActions()?.first)
+        #expect(f.view.replaceSource(range: NSRange(location: 0, length: 0), with: "x"))
+        #expect(beforeEdit.handler?() == false)
+        f.buffer.undoManager.undo()
+        try f.hints(offset: 6)
+        let beforeRebind = try #require((f.view.accessibilityChildren()?.first as? NSAccessibilityElement)?.accessibilityCustomActions()?.first)
+        try f.view.bindDisplay(to: other.buffer)
+        try f.view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 6, label: "type:", size: CGSize(width: 50, height: 16))], revision: other.buffer.editGeneration)
+        f.view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        #expect(beforeRebind.handler?() == false)
+        #expect(f.view.sourceSelectedRange.location == 0)
+        #expect(other.buffer.storage.string == "alpha\nbeta")
+        #expect(!other.buffer.undoManager.canUndo)
+    }
+
+    @Test func minimapNavigationAndViewportFollowWrappedSourceLines() async throws {
+        let f = try await Fixture(String(repeating: "line\n", count: 25))
+        defer { f.remove() }
+        Self.configureLayout(f.view, buffer: f.buffer, width: 140, fontSize: 20)
+        try f.view.displayAdapter?.updateHints([
+            .init(id: "leading", sourceOffset: 0, label: "wide", size: CGSize(width: 300, height: 50)),
+            .init(id: "eof", sourceOffset: 125, label: "end", size: CGSize(width: 120, height: 24))
+        ], revision: f.buffer.editGeneration)
+        let layout = try #require(f.view.layoutManager)
+        let container = try #require(f.view.textContainer)
+        layout.ensureLayout(for: container)
+        func y(_ native: Int) -> CGFloat { layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: native), effectiveRange: nil).minY }
+        let lineHeight = y(11) - y(6)
+        let scroll = CodeEditorScrollView(frame: NSRect(x: 0, y: 0, width: 140, height: lineHeight * 4))
+        f.view.setFrameSize(NSSize(width: 140, height: layout.usedRect(for: container).height))
+        scroll.documentView = f.view
+        scroll.configureMinimap(shown: true, theme: try ThemeStore().current)
+        #expect(f.view.sourceLineY(0) == y(0))
+        #expect(f.view.sourceLineY(1) == y(6))
+        #expect(f.view.sourceLineY(25) == y(126))
+        #expect(y(1) > y(0))
+        let maxY = f.view.frame.height - scroll.contentView.bounds.height
+        // Source line 22 begins at native 111 after the leading attachment.
+        let maxPosition = 22 + Double((maxY - y(111)) / lineHeight)
+        scroll.minimap.onNavigate?(10 / maxPosition)
+        #expect(abs(scroll.contentView.bounds.minY - y(51)) < 0.01)
+        #expect(abs(scroll.minimap.value - 10 / maxPosition) < 0.001)
+        #expect(abs(scroll.minimap.proportion - 4.0 / 26.0) < 0.001)
+        scroll.minimap.onNavigate?(1)
+        #expect(abs(scroll.contentView.bounds.minY - maxY) < 0.01)
+        scroll.minimap.onNavigate?(0)
+        #expect(abs(scroll.contentView.bounds.minY) < 0.01)
+        let oldLineOne = y(6)
+        f.buffer.storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 30, weight: .regular), range: NSRange(location: 0, length: 125))
+        layout.ensureLayout(for: container)
+        #expect(f.view.sourceLineY(1) == y(6))
+        #expect(y(6) > oldLineOne)
+    }
+
+    @Test func projectionRefreshKeepsTheLeadingFragmentScrollAnchor() async throws {
+        let f = try await Fixture(String(repeating: "line\n", count: 40))
+        defer { f.remove() }
+        Self.configureLayout(f.view, buffer: f.buffer, width: 140, fontSize: 20)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 140, height: 80))
+        f.view.setFrameSize(NSSize(width: 140, height: 2000))
+        scroll.documentView = f.view
+        try f.view.displayAdapter?.updateHints([.init(id: "leading", sourceOffset: 50, label: "wide", size: CGSize(width: 300, height: 50))], revision: f.buffer.editGeneration)
+        let y = try #require(f.view.sourceLineY(10))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y + 2))
+        try f.view.displayAdapter?.updateHints([.init(id: "leading", sourceOffset: 50, label: "narrow", size: CGSize(width: 20, height: 16))], revision: f.buffer.editGeneration)
+        #expect(abs(scroll.contentView.bounds.minY - (try #require(f.view.sourceLineY(10)) + 2)) < 0.01)
+    }
+
+    @Test func tabSwitchRestoresSourceSelectionAndScrollWithoutOldHints() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(String(repeating: "line\n", count: 40).utf8).write(to: root.appendingPathComponent("first.txt"))
+        try Data("other\n".utf8).write(to: root.appendingPathComponent("second.txt"))
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
+        let app = AppState(tabsManager: tabs, lspManager: manager)
+        let first = tabs.buffer(worktreeId: "tabs", tabId: "first", worktreeRoot: root, relativePath: "first.txt")
+        let second = tabs.buffer(worktreeId: "tabs", tabId: "second", worktreeRoot: root, relativePath: "second.txt")
+        for buffer in [first, second] { await buffer.awaitLoadForTesting()
+        await buffer.awaitWorkspaceEditLifecycle()
+        buffer.stopWatching() }
+        let layout = CodeEditorLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 140, height: CGFloat.greatestFiniteMagnitude))
+        layout.addTextContainer(container)
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 140, height: 2000), textContainer: container)
+        let scroll = CodeEditorScrollView(frame: NSRect(x: 0, y: 0, width: 140, height: 80))
+        scroll.documentView = view
+        let coordinator = CodeEditorCoordinator(appState: app)
+        let theme = try ThemeStore().current
+        coordinator.attach(textView: view, buffer: first, layoutManager: layout, worktreeId: "tabs", worktreeRoot: root, tabId: "first", revealLine: nil, revealCharacter: nil, theme: theme)
+        defer { coordinator.detach()
+        first.close(persistDirtySnapshot: false)
+        second.close(persistDirtySnapshot: false) }
+        Self.configureLayout(view, buffer: first, width: 140, fontSize: 20)
+        try view.displayAdapter?.updateHints([.init(id: "leading", sourceOffset: 0, label: "wide", size: CGSize(width: 300, height: 50)), .init(id: "end", sourceOffset: 200, label: "end", size: CGSize(width: 160, height: 40))], revision: first.editGeneration)
+        view.setSourceSelectedRange(NSRange(location: 52, length: 2))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: try #require(view.sourceLineY(10)) + 2))
+        coordinator.updateIfNeeded(worktreeId: "tabs", worktreeRoot: root, relativePath: "second.txt", tabId: "second", revealLine: nil, revealCharacter: nil, theme: theme)
+        #expect(view.sourceString == "other\n")
+        #expect(view.sourceSelectedRange == NSRange(location: 0, length: 0))
+        #expect(scroll.contentView.bounds.minY == 0)
+        coordinator.updateIfNeeded(worktreeId: "tabs", worktreeRoot: root, relativePath: "first.txt", tabId: "first", revealLine: nil, revealCharacter: nil, theme: theme)
+        #expect(view.sourceSelectedRange == NSRange(location: 52, length: 2))
+        #expect(view.displayAdapter?.document.map.hintRuns.isEmpty == true)
+        #expect(abs(scroll.contentView.bounds.minY - (try #require(view.sourceLineY(10)) + 2)) < 0.01)
+        try view.displayAdapter?.updateHints([.init(id: "leading", sourceOffset: 0, label: "narrow", size: CGSize(width: 20, height: 16))], revision: first.editGeneration)
+        #expect(view.sourceSelectedRange == NSRange(location: 52, length: 2))
+        #expect(abs(scroll.contentView.bounds.minY - (try #require(view.sourceLineY(10)) + 2)) < 0.01)
+    }
+
+    @Test func rulerNumbersFirstFragmentsAndEOFFromSourceLines() async throws {
+        let f = try await Fixture("alpha beta gamma delta\nz\n")
+        defer { f.remove() }
+        Self.configureLayout(f.view, buffer: f.buffer, width: 90, fontSize: 20)
+        try f.view.displayAdapter?.updateHints([.init(id: "leading", sourceOffset: 0, label: "wide", size: CGSize(width: 120, height: 36)), .init(id: "end", sourceOffset: 25, label: "eof", size: CGSize(width: 80, height: 30))], revision: f.buffer.editGeneration)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 134, height: 400))
+        scroll.documentView = f.view
+        let theme = try ThemeStore().current
+        let ruler = CodeEditorLineNumberRulerView(scrollView: scroll, textView: f.view, theme: theme)
+        scroll.verticalRulerView = ruler
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+        scroll.tile()
+        let layout = try #require(f.view.layoutManager)
+        let container = try #require(f.view.textContainer)
+        layout.ensureLayout(for: container)
+        func raster(_ draw: () -> Void) throws -> Data {
+            let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 44, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 176, bitsPerPixel: 32))
+            let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            draw()
+            NSGraphicsContext.restoreGraphicsState()
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let actual = try raster { ruler.drawHashMarksAndLabels(in: ruler.bounds) }
+        let expected = try raster {
+            NSColor(theme.color("bg-1")).setFill()
+            ruler.bounds.fill()
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .right
+            let attributes: [NSAttributedString.Key: Any] = [.font: f.view.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: NSColor(theme.color("fg-faint")), .paragraphStyle: paragraph]
+            // Hand-counted source starts 0, 23, 25 become native 0, 24, 26.
+            for (number, native) in [(1, 0), (2, 24), (3, 26)] {
+                let fragment = layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: native), effectiveRange: nil)
+                let origin = ruler.convert(NSPoint(x: 0, y: fragment.minY), from: f.view)
+                let label = "\(number)" as NSString
+                let height = label.size(withAttributes: attributes).height
+                label.draw(in: NSRect(x: 0, y: origin.y + (fragment.height - height) / 2, width: ruler.ruleThickness - 10, height: height), withAttributes: attributes)
+            }
+        }
+        #expect(actual == expected)
+    }
+
+    private static func configureLayout(_ view: CodeTextView, buffer: EditorBuffer, width: CGFloat, fontSize: CGFloat) {
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        view.setFrameSize(NSSize(width: width, height: 2000))
+        buffer.storage.addAttributes([.font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular), .ligature: 1], range: NSRange(location: 0, length: buffer.storage.length))
+    }
+
+    private static func nativeRects(_ native: NSRange, in view: CodeTextView) -> [NSRect] {
+        guard let layout = view.layoutManager, let container = view.textContainer else { return [] }
+        var rects: [NSRect] = []
+        layout.enumerateEnclosingRects(forGlyphRange: layout.glyphRange(forCharacterRange: native, actualCharacterRange: nil), withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in rects.append(rect) }
+        return rects
+    }
+
+    @MainActor
+    private static func edit(line: Int, start: Int, end: Int, text: String) -> LSPJSONValue {
+        .object(["range": .object(["start": .object(["line": .number(String(line)), "character": .number(String(start))]), "end": .object(["line": .number(String(line)), "character": .number(String(end))])]), "newText": .string(text)])
+    }
+
+    private static func eventually(_ description: String = "editor state", _ condition: () -> Bool) async throws {
+        for _ in 0..<300 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition(), "Timed out waiting for \(description)")
+    }
+
+    private static func stored<T>(_ name: String, in owner: Any) -> T? {
+        Mirror(reflecting: owner).children.first(where: { $0.label == name })?.value as? T
+    }
+
+    private static func popover(in owner: Any) -> NSPopover? { stored("popover", in: owner) }
+
+    private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+
+    private static func documentationView(in window: NSWindow) -> NSTextView? {
+        (window.childWindows ?? []).compactMap(\.contentView).flatMap(descendants).compactMap { $0 as? NSTextView }.first { view in
+            guard let storage = view.textStorage else { return false }
+            var found = false
+            storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+                if String(describing: value).contains("alas-diagnostic://related") { found = true }
+            }
+            return found
+        }
     }
 
     @MainActor

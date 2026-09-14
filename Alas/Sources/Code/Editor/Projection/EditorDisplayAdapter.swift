@@ -172,11 +172,7 @@ final class EditorDisplayAdapter {
         NotificationCenter.default.post(name: .editorDisplayProjectionDidChange, object: view)
     }
 
-    struct ScrollAnchor { let sourceLine: Int
-    let delta: CGFloat
-    let x: CGFloat }
-
-    func captureScrollAnchor() -> ScrollAnchor? {
+    func captureScrollAnchor() -> EditorSourceScrollAnchor? {
         guard let view, let scroll = view.enclosingScrollView, let manager = view.layoutManager,
               let container = view.textContainer, document.storage.length > 0 else { return nil }
         let origin = scroll.contentView.bounds.origin
@@ -187,21 +183,22 @@ final class EditorDisplayAdapter {
         let oldSource = sourceSnapshot as NSString
         guard source <= oldSource.length else { return nil }
         let line = oldSource.lineRange(for: NSRange(location: source, length: 0)).location
-        guard let lineDisplay = try? document.map.displayOffset(forSource: line, affinity: .afterHints),
+        guard let lineDisplay = try? document.map.displayOffset(forSource: line, affinity: .beforeHints),
               lineDisplay < document.storage.length else { return nil }
         let lineGlyph = manager.glyphIndexForCharacter(at: lineDisplay)
         let lineY = manager.lineFragmentRect(forGlyphAt: lineGlyph, effectiveRange: nil).minY
         // Measure from the source line's first fragment, including any wrapped
         // fragments above the viewport in its saved pixel displacement.
-        return ScrollAnchor(sourceLine: line, delta: origin.y - lineY - view.textContainerOrigin.y, x: origin.x)
+        return EditorSourceScrollAnchor(sourceLine: line, delta: origin.y - lineY - view.textContainerOrigin.y, x: origin.x)
     }
 
-    func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
+    func restoreScrollAnchor(_ anchor: EditorSourceScrollAnchor?) {
         guard let anchor, let view, let scroll = view.enclosingScrollView, let manager = view.layoutManager,
-              let container = view.textContainer, let range = displayRange(forSource: NSRange(location: min(anchor.sourceLine, buffer.storage.length), length: 0)),
-              range.location < document.storage.length else { return }
+              let container = view.textContainer,
+              let offset = try? document.map.displayOffset(forSource: min(anchor.sourceLine, buffer.storage.length), affinity: .beforeHints),
+              offset < document.storage.length else { return }
         manager.ensureLayout(for: container)
-        let glyph = manager.glyphIndexForCharacter(at: range.location)
+        let glyph = manager.glyphIndexForCharacter(at: offset)
         let y = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + view.textContainerOrigin.y + anchor.delta
         scroll.contentView.scroll(to: NSPoint(x: anchor.x, y: max(0, y)))
         scroll.reflectScrolledClipView(scroll.contentView)

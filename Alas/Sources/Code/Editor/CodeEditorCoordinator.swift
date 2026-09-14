@@ -552,7 +552,8 @@ final class CodeEditorCoordinator {
         guard let textView, let buffer, let currentTabId else { return }
         buffer.viewStates[currentTabId] = (
             textView.sourceSelectedRanges,
-            textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
+            textView.enclosingScrollView?.contentView.bounds.origin ?? .zero,
+            textView.displayAdapter?.captureScrollAnchor()
         )
     }
 
@@ -582,7 +583,7 @@ final class CodeEditorCoordinator {
     }
 
     private func applyViewState(
-        _ viewState: (selectedRanges: [NSValue], scrollOrigin: NSPoint),
+        _ viewState: (selectedRanges: [NSValue], scrollOrigin: NSPoint, sourceScrollAnchor: EditorSourceScrollAnchor?),
         for buffer: EditorBuffer?,
         textView: CodeTextView?,
         tabId: TabID
@@ -599,6 +600,7 @@ final class CodeEditorCoordinator {
         }
         textView.setSourceSelectedRanges(ranges)
         scroll(textView, to: viewState.scrollOrigin)
+        textView.displayAdapter?.restoreScrollAnchor(viewState.sourceScrollAnchor)
     }
 
     private func scroll(_ textView: CodeTextView, to origin: NSPoint) {

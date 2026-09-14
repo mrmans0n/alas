@@ -286,7 +286,7 @@ final class CodeActionEditPresentation {
 }
 
 @MainActor @Observable
-private final class CodeActionPickerModel {
+final class CodeActionPickerModel {
     struct Row: Identifiable {
         let id = UUID()
         let action: LSPCodeAction
@@ -299,7 +299,7 @@ private final class CodeActionPickerModel {
     }
 }
 
-private struct CodeActionPicker: View {
+struct CodeActionPicker: View {
     @Bindable var model: CodeActionPickerModel
     let select: (LSPCodeAction) -> Void
     let organizeImports: () -> Void

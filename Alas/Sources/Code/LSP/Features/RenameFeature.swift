@@ -248,14 +248,14 @@ final class RenameFeature {
 }
 
 @MainActor @Observable
-private final class RenameNameModel {
+final class RenameNameModel {
     var name: String
     var errorMessage: String?
     var isRequesting = false
     init(name: String) { self.name = name }
 }
 
-private struct RenameNameView: View {
+struct RenameNameView: View {
     @Bindable var model: RenameNameModel
     let cancel: () -> Void
     let submit: () -> Void
