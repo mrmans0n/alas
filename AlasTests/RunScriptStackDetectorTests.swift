@@ -258,12 +258,38 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.flutter]?.usesFlutter == false)
     }
 
+    /// A word-mention of Flutter — in a description, or a `flutter_lints`
+    /// dev dependency — is not the same as depending on the Flutter SDK.
+    @Test func flutterDoesNotFireOnAWordMentionOrLintsPackage() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pubspec.yaml",
+            "name: tool\ndescription: A CLI used by Flutter clients.\ndependencies:\n  args: ^2.0.0\ndev_dependencies:\n  flutter_lints: ^3.0.0\n",
+            in: root
+        )
+        #expect(detect(root)[.flutter]?.usesFlutter == false)
+    }
+
     @Test func elixirReadsMixForPhoenix() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("mix.exs", "defp deps do\n  [{:phoenix, \"~> 1.7\"}]\nend\n", in: root)
         #expect(detect(root)[.elixir]?.usesPhoenix == true)
         try write("mix.exs", "defp deps do\n  []\nend\n", in: root)
+        #expect(detect(root)[.elixir]?.usesPhoenix == false)
+    }
+
+    /// `:phoenix_pubsub` and `:phoenix_live_view` share a prefix with
+    /// `:phoenix` but are not the Phoenix web framework itself.
+    @Test func elixirDoesNotTreatPhoenixPrefixedPackagesAsPhoenix() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "mix.exs",
+            "defp deps do\n  [{:phoenix_pubsub, \"~> 2.1\"}, {:phoenix_live_view, \"~> 0.20\"}]\nend\n",
+            in: root
+        )
         #expect(detect(root)[.elixir]?.usesPhoenix == false)
     }
 

@@ -132,10 +132,10 @@ enum RunScriptStackDetector {
                 add(stack)
             case .flutter:
                 guard let pubspec = contents("pubspec.yaml") else { continue }
-                add(stack, .init(usesFlutter: pubspec.contains("flutter")))
+                add(stack, .init(usesFlutter: pubspecDeclaresFlutterSDK(pubspec)))
             case .elixir:
                 guard let mix = contents("mix.exs") else { continue }
-                add(stack, .init(usesPhoenix: mix.contains(":phoenix")))
+                add(stack, .init(usesPhoenix: mixDeclaresPhoenixDependency(mix)))
             case .deno:
                 guard has("deno.json", "deno.jsonc") else { continue }
                 add(stack)
@@ -151,6 +151,28 @@ enum RunScriptStackDetector {
             }
         }
         return detections
+    }
+
+    /// A `dependencies:` entry that pins the Flutter SDK, e.g.
+    /// ```yaml
+    /// dependencies:
+    ///   flutter:
+    ///     sdk: flutter
+    /// ```
+    /// A bare substring check would also fire on a Dart-only package whose
+    /// description mentions Flutter, or a `flutter_lints` dev dependency.
+    private static func pubspecDeclaresFlutterSDK(_ pubspec: String) -> Bool {
+        pubspec.range(
+            of: #"(?m)^\s*flutter:\s*\r?\n\s*sdk:\s*flutter\s*$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    /// A `{:phoenix, ...}` dependency atom in mix.exs's deps list. A bare
+    /// substring check on ":phoenix" also matches unrelated packages that
+    /// share the prefix, like `:phoenix_pubsub` or `:phoenix_live_view`.
+    private static func mixDeclaresPhoenixDependency(_ mix: String) -> Bool {
+        mix.range(of: #":phoenix(?![A-Za-z0-9_])"#, options: .regularExpression) != nil
     }
 
     /// The parts of package.json creation cares about. A manifest that fails

@@ -71,7 +71,7 @@ struct AppStateRunScriptCreationTests {
         #expect(state.runScriptCatalogGeneration == 1)
         let scriptsDir = root.appendingPathComponent(".alas/scripts")
         let dev = try String(contentsOf: scriptsDir.appendingPathComponent("rails-dev.sh"), encoding: .utf8)
-        #expect(dev.contains("# alas-name: Dev server"))
+        #expect(dev.contains("# alas-name: Dev server (Rails)"))
         #expect(dev.contains("# alas-on-exit: keep"))
         #expect(dev.contains("# alas-url: http://localhost:3000"))
         #expect(dev.hasSuffix("set -euo pipefail\n\nbin/rails server\n"))

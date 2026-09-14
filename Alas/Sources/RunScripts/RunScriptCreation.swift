@@ -116,7 +116,10 @@ enum RunScriptCreator {
     ///
     /// Filenames are namespaced by stack (`cargo-build.sh`, not `build.sh`) so
     /// bootstrapping two stacks in the same repository — a Cargo/JS hybrid,
-    /// say — never has one stack's "Build" silently skip another's.
+    /// say — never has one stack's "Build" silently skip another's. The
+    /// display name gets the same treatment ("Build (Cargo)"), since the
+    /// toolbar and palette render only that name and "Build" would otherwise
+    /// be ambiguous between two stacks' scripts.
     static func createBundle(
         scope: RunScriptScope,
         stack: RunScriptStack,
@@ -131,7 +134,7 @@ enum RunScriptCreator {
             do {
                 result.created.append(try create(
                     scope: scope,
-                    name: action.displayName,
+                    name: "\(action.displayName) (\(stack.displayName))",
                     onExit: action.onExit,
                     body: action.body,
                     endpoint: action.endpoint,
