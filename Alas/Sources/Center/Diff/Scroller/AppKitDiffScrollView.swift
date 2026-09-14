@@ -101,7 +101,7 @@ final class AppKitDiffScrollView: NSScrollView {
         }
     }
 
-    func setScrollY(_ y: CGFloat, animated: Bool, completion: (@MainActor () -> Void)? = nil) {
+    func setScrollY(_ y: CGFloat, animated: Bool, completion: (@MainActor @Sendable () -> Void)? = nil) {
         let point = NSPoint(x: contentView.bounds.origin.x, y: clampedScrollY(y))
         guard abs(point.y - scrollY) > 0.01 else {
             completion?()
@@ -124,14 +124,10 @@ final class AppKitDiffScrollView: NSScrollView {
                     context.duration = 0.25
                     contentView.animator().setBoundsOrigin(point)
                 } completionHandler: { [weak self] in
-                    // `runAnimationGroup`'s completion handler is `@Sendable`, so it
-                    // cannot directly capture `completion` (a `@MainActor` closure,
-                    // which is not itself `Sendable`). Hop back onto the main actor
-                    // with a `Task` instead — its operation parameter accepts a
-                    // `sending` value, which `completion` satisfies here since this
-                    // is its only use. AppKit always invokes this handler on the
-                    // main thread, so the hop is immediate in practice.
-                    Task { @MainActor in
+                    // `runAnimationGroup`'s completion handler type is `@Sendable`,
+                    // but AppKit always invokes it on the main thread, where the
+                    // main actor runs.
+                    MainActor.assumeIsolated {
                         self?.programmaticAnimationDidComplete()
                         completion?()
                     }

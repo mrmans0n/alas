@@ -190,8 +190,8 @@ final class AppKitDiffScrollerReconciler {
 
     func scroll(
         to request: AppKitDiffScrollRequest,
-        isCurrent: @escaping () -> Bool = { true },
-        completion: (() -> Void)? = nil
+        isCurrent: @escaping @Sendable () -> Bool = { true },
+        completion: (@MainActor @Sendable () -> Void)? = nil
     ) {
         let targetID: String?
         if tiling.row(withID: request.targetID) != nil {
