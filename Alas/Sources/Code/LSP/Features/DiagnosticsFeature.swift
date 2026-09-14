@@ -144,7 +144,8 @@ final class DiagnosticsFeature {
     /// our metadata and navigation links.
     nonisolated private static func markdownLiteral(_ value: String) -> String {
         let syntax = CharacterSet(charactersIn: "\\`*_{}[]<>()#+-.!|")
-        return String(value.unicodeScalars.reduce(into: "") { result, scalar in
+        let entitySafe = value.replacingOccurrences(of: "&", with: "&amp;")
+        return String(entitySafe.unicodeScalars.reduce(into: "") { result, scalar in
             if syntax.contains(scalar) { result.append("\\") }
             result.unicodeScalars.append(scalar)
         })

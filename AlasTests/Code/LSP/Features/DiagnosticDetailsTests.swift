@@ -143,6 +143,29 @@ struct DiagnosticDetailsTests {
         #expect(result.attributedString.attribute(.link, at: relatedRange.location, effectiveRange: nil) != nil)
     }
 
+    @Test @MainActor func detailRenderingPreservesNamedAndNumericEntitiesInMessagesAndRelatedLabels() throws {
+        let message = "Server sent &lt;T&gt; and &#91;literal&#93;"
+        let related = "Related &amp; &#x3C;U&#x3E;"
+        let diagnostic = try #require(LSPDiagnostic.decodeWire([LSPJSONValue.decode(from: Data("""
+        {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"\(message)","relatedInformation":[{"location":{"uri":"file:///tmp/related.ts","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}},"message":"\(related)"}]}
+        """.utf8))]).first)
+
+        let result = MarkdownRenderer().render(
+            document: Document(parsing: DiagnosticsFeature.detailMarkdown(for: diagnostic)),
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: URL(fileURLWithPath: "/")
+        )
+
+        #expect(result.attributedString.string.contains(message))
+        #expect(result.attributedString.string.contains(related))
+        let relatedRange = (result.attributedString.string as NSString).range(of: related)
+        if relatedRange.location != NSNotFound {
+            #expect(result.attributedString.attribute(.link, at: relatedRange.location, effectiveRange: nil) != nil)
+        }
+    }
+
     private func diagnostic(message: String, severity: Int, start: Int, end: Int) -> LSPDiagnostic {
         try! JSONDecoder().decode(LSPDiagnostic.self, from: Data("""
         {"range":{"start":{"line":0,"character":\(start)},"end":{"line":0,"character":\(end)}},"message":"\(message)","severity":\(severity)}
