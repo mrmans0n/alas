@@ -1328,17 +1328,10 @@ final class DiffPaneCodeTextView: NSTextView {
         fatalError("not used")
     }
 
-    deinit {
-        let lspController = lspController
-        let observers = scrollBoundsObservers
-        let workItem = scheduledRebindWorkItem
-        Task { @MainActor in
-            for observer in observers {
-                NotificationCenter.default.removeObserver(observer)
-            }
-            workItem?.cancel()
-            lspController?.tearDown()
-        }
+    isolated deinit {
+        scheduledRebindWorkItem?.cancel()
+        lspController?.tearDown()
+        for observer in scrollBoundsObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     override func viewDidMoveToWindow() {
@@ -2691,13 +2684,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
-    deinit {
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        if let boundsObserver {
-            NotificationCenter.default.removeObserver(boundsObserver)
-        }
+    isolated deinit {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
     }
 }
 

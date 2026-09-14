@@ -59,7 +59,7 @@ final class AppKitDiffScrollView: NSScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    deinit {
+    isolated deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }

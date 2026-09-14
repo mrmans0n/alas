@@ -746,6 +746,7 @@ final class EditorBuffer {
               let lsp,
               let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
+        let worktreeRoot = self.worktreeRoot
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
         lspOpenGeneration &+= 1
@@ -1802,7 +1803,7 @@ final class EditorBuffer {
         originalVolumeIdentifier = volume as AnyObject
     }
 
-    private static let movedFileSearchSkippedDirectoryNames: Set<String> = [
+    nonisolated private static let movedFileSearchSkippedDirectoryNames: Set<String> = [
         ".build",
         ".git",
         ".gradle",

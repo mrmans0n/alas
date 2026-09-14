@@ -66,7 +66,9 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     weak var delegate: MermaidTextAttachmentCellDelegate?
 
     private(set) var outcome: MermaidRenderOutcome?
-    private(set) var showsSource = false
+    // Mirrors the deliberate nonisolated storage on `measuredWidth`/`sizingState`:
+    // TextKit sizing callbacks are not guaranteed main-thread.
+    nonisolated(unsafe) private(set) var showsSource = false
     private var theme: MermaidDiagramTheme?
     private var customAccessibilityActions: [NSAccessibilityCustomAction] = []
     nonisolated(unsafe) private var measuredWidth: CGFloat = 600

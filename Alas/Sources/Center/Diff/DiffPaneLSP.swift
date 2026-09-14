@@ -131,7 +131,7 @@ final class DiffPaneLSPDocumentRetain {
         }.value
     }
 
-    deinit {
+    isolated deinit {
         guard !didClose else { return }
         let worktreeRoot = worktreeRoot
         let fileURL = fileURL

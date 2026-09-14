@@ -502,7 +502,7 @@ private final class MermaidDiagramViewerBackingScaleView: NSView {
         publishScale()
     }
 
-    deinit {
+    isolated deinit {
         if let backingPropertiesObserver {
             NotificationCenter.default.removeObserver(backingPropertiesObserver)
         }

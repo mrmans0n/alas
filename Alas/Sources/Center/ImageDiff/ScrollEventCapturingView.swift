@@ -40,7 +40,7 @@ struct ScrollEventCapturingView: NSViewRepresentable {
             installEventMonitor()
         }
 
-        deinit {
+        isolated deinit {
             if let eventMonitor {
                 NSEvent.removeMonitor(eventMonitor)
             }
