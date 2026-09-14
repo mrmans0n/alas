@@ -247,7 +247,9 @@ enum RunScriptStackDetector {
             guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
             return String(decoding: data, as: UTF8.self)
         }
-        if rootEntries.contains(where: { $0.hasSuffix(".go") && goFileDeclaresPackageMain(fileText($0)) }) {
+        if rootEntries.contains(where: {
+            goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0))
+        }) {
             return "."
         }
         guard let cmdEntries = try? fileManager.contentsOfDirectory(
@@ -260,7 +262,9 @@ enum RunScriptStackDetector {
                   isDirectory.boolValue,
                   let files = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent(subdir).path)
             else { continue }
-            if files.contains(where: { $0.hasSuffix(".go") && goFileDeclaresPackageMain(fileText("\(subdir)/\($0)")) }) {
+            if files.contains(where: {
+                goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText("\(subdir)/\($0)"))
+            }) {
                 return "./\(subdir)"
             }
         }
@@ -273,12 +277,68 @@ enum RunScriptStackDetector {
     private static func cargoHasUnambiguousBinary(
         cargoToml: String, hasRootMain: Bool, binDirectoryFiles: [String]?
     ) -> Bool {
-        var binCount = hasRootMain ? 1 : 0
-        binCount += (binDirectoryFiles ?? []).filter { $0.hasSuffix(".rs") }.count
-        binCount += cargoToml.components(separatedBy: "[[bin]]").count - 1
-        guard binCount > 0 else { return false }
-        guard binCount > 1 else { return true }
-        return cargoToml.range(of: #"(?m)^\s*default-run\s*="#, options: .regularExpression) != nil
+        var binaryPaths = Set<String>()
+        if hasRootMain { binaryPaths.insert("src/main.rs") }
+        let binFiles = (binDirectoryFiles ?? []).filter { $0.hasSuffix(".rs") }
+        binaryPaths.formUnion(binFiles.map { "src/bin/\($0)" })
+
+        for declaredBin in cargoDeclaredBins(cargoToml) {
+            if let path = declaredBin.path {
+                binaryPaths.insert(path)
+            } else if binFiles.contains("\(declaredBin.name).rs") {
+                binaryPaths.insert("src/bin/\(declaredBin.name).rs")
+            } else if hasRootMain, cargoPackageName(cargoToml) == declaredBin.name {
+                binaryPaths.insert("src/main.rs")
+            } else {
+                // A declared target without an inferred source path still is
+                // a distinct binary target from Cargo's perspective.
+                binaryPaths.insert("declared:\(declaredBin.name)")
+            }
+        }
+
+        guard !binaryPaths.isEmpty else { return false }
+        guard binaryPaths.count == 1 else {
+            return cargoToml.range(of: #"(?m)^\s*default-run\s*="#, options: .regularExpression) != nil
+        }
+        return true
+    }
+
+    private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?)] {
+        guard let blockRegex = try? NSRegularExpression(
+            pattern: #"(?ms)^\s*\[\[bin\]\]\s*(.*?)(?=^\s*\[\[bin\]\]|\z)"#
+        ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#),
+           let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#)
+        else { return [] }
+        let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
+        return blockRegex.matches(in: cargoToml, range: fullRange).compactMap { block in
+            guard let blockRange = Range(block.range(at: 1), in: cargoToml) else { return nil }
+            let text = String(cargoToml[blockRange])
+            let range = NSRange(text.startIndex..., in: text)
+            guard let nameMatch = nameRegex.firstMatch(in: text, range: range),
+                  let nameRange = Range(nameMatch.range(at: 1), in: text)
+            else { return nil }
+            let path = pathRegex.firstMatch(in: text, range: range).flatMap { match in
+                Range(match.range(at: 1), in: text).map { String(text[$0]) }
+            }
+            return (String(text[nameRange]), path)
+        }
+    }
+
+    private static func cargoPackageName(_ cargoToml: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?ms)^\s*\[package\]\s*(.*?)(?=^\s*\[|\z)"#
+        ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#)
+        else { return nil }
+        let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
+        guard let packageMatch = regex.firstMatch(in: cargoToml, range: fullRange),
+              let packageRange = Range(packageMatch.range(at: 1), in: cargoToml)
+        else { return nil }
+        let package = String(cargoToml[packageRange])
+        let packageNSRange = NSRange(package.startIndex..., in: package)
+        guard let nameMatch = nameRegex.firstMatch(in: package, range: packageNSRange),
+              let nameRange = Range(nameMatch.range(at: 1), in: package)
+        else { return nil }
+        return String(package[nameRange])
     }
 
     /// The path (relative to the worktree root) of a project file declaring
@@ -336,12 +396,87 @@ enum RunScriptStackDetector {
         // is Swift source, so `//`/`/* */` comments are as valid here as
         // anywhere else.
         let uncommented = stripCStyleComments(manifest)
+        let executableProducts = countOccurrences(of: #"\.executable\s*\("#, in: uncommented)
+        if executableProducts > 0 { return executableProducts == 1 }
         let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: uncommented)
         if executableTargets > 0 { return executableTargets == 1 }
         // Older manifests declare an executable product via `type:
         // .executable` on a plain `.target` without a dedicated
         // .executableTarget entry; a single one is unambiguous the same way.
         return countOccurrences(of: #"type:\s*\.executable\b"#, in: uncommented) == 1
+    }
+
+    private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?) -> Bool {
+        guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
+              let contents, goFileDeclaresPackageMain(contents),
+              goFilenameSupportsCurrentHost(name), goBuildConstraintAllowsCurrentHost(contents)
+        else { return false }
+        return true
+    }
+
+    private static func goFilenameSupportsCurrentHost(_ name: String) -> Bool {
+        let base = String(name.dropLast(3))
+        let suffixes = base.split(separator: "_").dropFirst()
+        let operatingSystems: Set<Substring> = ["aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"]
+        let architectures: Set<Substring> = ["386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm"]
+#if arch(arm64)
+        let currentArchitecture: Substring = "arm64"
+#elseif arch(x86_64)
+        let currentArchitecture: Substring = "amd64"
+#else
+        let currentArchitecture: Substring = ""
+#endif
+        return suffixes.allSatisfy { suffix in
+            (!operatingSystems.contains(suffix) || suffix == "darwin")
+                && (!architectures.contains(suffix) || suffix == currentArchitecture)
+        }
+    }
+
+    private static func goBuildConstraintAllowsCurrentHost(_ contents: String) -> Bool {
+        guard let directive = contents.components(separatedBy: .newlines).first(where: { $0.hasPrefix("//go:build ") }) else {
+            return true
+        }
+        let expression = String(directive.dropFirst("//go:build ".count))
+        let tokens = expression.matches(of: /&&|\|\||!|\(|\)|[A-Za-z0-9_.]+/).map(\.output)
+        guard tokens.joined() == expression.filter({ !$0.isWhitespace }) else { return false }
+        var index = 0
+        let enabledTags: Set<Substring> = ["darwin", "unix", "arm64", "cgo"]
+        func parsePrimary() -> Bool? {
+            guard index < tokens.count else { return nil }
+            if tokens[index] == "!" {
+                index += 1
+                return parsePrimary().map(!)
+            }
+            if tokens[index] == "(" {
+                index += 1
+                guard let value = parseOr(), index < tokens.count, tokens[index] == ")" else { return nil }
+                index += 1
+                return value
+            }
+            let tag = tokens[index]
+            index += 1
+            return enabledTags.contains(tag)
+        }
+        func parseAnd() -> Bool? {
+            guard var value = parsePrimary() else { return nil }
+            while index < tokens.count, tokens[index] == "&&" {
+                index += 1
+                guard let right = parsePrimary() else { return nil }
+                value = value && right
+            }
+            return value
+        }
+        func parseOr() -> Bool? {
+            guard var value = parseAnd() else { return nil }
+            while index < tokens.count, tokens[index] == "||" {
+                index += 1
+                guard let right = parseAnd() else { return nil }
+                value = value || right
+            }
+            return value
+        }
+        guard let result = parseOr(), index == tokens.count else { return false }
+        return result
     }
 
     private static func countOccurrences(of pattern: String, in text: String) -> Int {

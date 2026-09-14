@@ -129,6 +129,20 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
+    @Test func cargoDoesNotDoubleCountAnExplicitRootMainBinary() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            "[package]\nname = \"tool\"\n\n[[bin]]\nname = \"tool\"\npath = \"src/main.rs\"\n",
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -265,6 +279,18 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
     }
 
+    @Test func swiftPackageRecognizesAnExecutableProductWithARegularTarget() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "products: [.executable(name: \"Tool\", targets: [\"Tool\"])], targets: [.target(name: \"Tool\")]",
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
+    }
+
     @Test func xcodePrefersWorkspaceOverProject() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -291,6 +317,17 @@ struct RunScriptStackDetectorTests {
 
         try write("main.go", "package main\n\nfunc main() {}\n", in: root)
         #expect(detect(root)[.go]?.goRunTarget == ".")
+    }
+
+    @Test func goIgnoresMainFilesExcludedFromTheCurrentHost() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main_linux.go", "package main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+
+        try write("main.go", "//go:build linux\n\npackage main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
     /// A root library with the command living under cmd/ is not itself
