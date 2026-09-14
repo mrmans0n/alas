@@ -33,6 +33,75 @@ struct WorkspaceEditBufferGeneration: Equatable {
     }
 }
 
+/// A descriptor fingerprint also detects replacement or modification while a
+/// bounded read is in flight. Final path checks still have an external-writer race.
+struct WorkspaceEditLocalSnapshot: Sendable {
+    struct Fingerprint: Equatable, Sendable {
+        let device: dev_t
+        let inode: ino_t
+        let size: off_t
+        let mode: mode_t
+        let modifiedSeconds: Int
+        let modifiedNanoseconds: Int
+        let changedSeconds: Int
+        let changedNanoseconds: Int
+
+        init(_ value: stat) {
+            device = value.st_dev
+            inode = value.st_ino
+            size = value.st_size
+            mode = value.st_mode
+            modifiedSeconds = value.st_mtimespec.tv_sec
+            modifiedNanoseconds = value.st_mtimespec.tv_nsec
+            changedSeconds = value.st_ctimespec.tv_sec
+            changedNanoseconds = value.st_ctimespec.tv_nsec
+        }
+    }
+
+    let snapshot: WorkspaceFileSnapshot
+    let fingerprint: Fingerprint?
+
+    static func fingerprint(at url: URL) throws -> Fingerprint? {
+        var value = stat()
+        guard lstat(url.path, &value) == 0 else {
+            if errno == ENOENT { return nil }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return Fingerprint(value)
+    }
+
+    func revalidate(at url: URL) throws {
+        guard try Self.fingerprint(at: url) == fingerprint else { throw WorkspaceEditAccessError.conflict(snapshot.document) }
+    }
+
+    static func read(_ url: URL, _ document: EditorDocumentID) throws -> Self {
+        guard let before = try fingerprint(at: url) else {
+            return Self(snapshot: WorkspaceFileSnapshot(document: document, content: nil), fingerprint: nil)
+        }
+        guard before.mode & S_IFMT == S_IFREG else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
+        try WorkspaceEditSnapshotBudget.validateSize(Int(before.size))
+        // O_NONBLOCK prevents a replaced FIFO from blocking open before fstat.
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var value = stat()
+        guard fstat(descriptor, &value) == 0, Fingerprint(value) == before else { throw WorkspaceEditAccessError.conflict(document) }
+        var data = Data()
+        let cap = WorkspaceEditSnapshotBudget.fileBytes + 1
+        while data.count < cap {
+            try Task.checkCancellation()
+            guard let chunk = try handle.read(upToCount: min(64 * 1024, cap - data.count)), !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        try WorkspaceEditSnapshotBudget.validateSize(data.count)
+        guard fstat(descriptor, &value) == 0, Fingerprint(value) == before else { throw WorkspaceEditAccessError.conflict(document) }
+        let result = Self(snapshot: WorkspaceFileSnapshot(document: document, content: data, permissions: Int(before.mode & 0o7777)), fingerprint: before)
+        try result.revalidate(at: url)
+        return result
+    }
+}
+
 /// Local replacements use a same-directory temporary and preserve permissions.
 /// Content guards cannot close the final check-to-rename race with unrelated
 /// writers. Neither local filesystems nor SSH provide a multi-file transaction.
@@ -40,9 +109,13 @@ struct WorkspaceEditBufferGeneration: Equatable {
 final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
     private let tabs: TabsManager
     private let rootForDocument: (EditorDocumentID) -> URL?
+    private let localRead: @Sendable (URL, EditorDocumentID) throws -> WorkspaceEditLocalSnapshot
 
-    init(tabs: TabsManager, rootForDocument: @escaping (EditorDocumentID) -> URL?) {
+    init(tabs: TabsManager,
+         localRead: @escaping @Sendable (URL, EditorDocumentID) throws -> WorkspaceEditLocalSnapshot = { try WorkspaceEditLocalSnapshot.read($0, $1) },
+         rootForDocument: @escaping (EditorDocumentID) -> URL?) {
         self.tabs = tabs
+        self.localRead = localRead
         self.rootForDocument = rootForDocument
     }
 
@@ -65,13 +138,16 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
               buffer.map(WorkspaceEditBufferGeneration.init) == generation else { throw WorkspaceEditAccessError.conflict(document) }
         guard let buffer else { return disk }
         guard buffer.initialLoadFinished, buffer.loadKind == .loaded else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
+        try WorkspaceEditSnapshotBudget.validateSize(buffer.storage.length)
+        let content = try WorkspaceEditSnapshotBudget.data(buffer.storage.string)
+        let original = try WorkspaceEditSnapshotBudget.data(buffer.originalText)
         return WorkspaceFileSnapshot(
-            document: document, content: buffer.workspaceEditDeleted ? nil : Data(buffer.storage.string.utf8),
+            document: document, content: buffer.workspaceEditDeleted ? nil : content,
             bufferVersion: tabs.workspaceEditVersion(for: document, buffer: buffer),
             isOpen: true, isDirty: buffer.dirty, isDirectory: disk.isDirectory, isSymbolicLink: disk.isSymbolicLink,
-            diskContent: disk.content, originalContent: Data(buffer.originalText.utf8), permissions: disk.permissions,
+            diskContent: disk.content, originalContent: original, permissions: disk.permissions,
             bufferGeneration: buffer.editGeneration, fileWatchGeneration: buffer.fileWatchGeneration,
-            tombstoneContent: buffer.workspaceEditDeleted ? Data(buffer.storage.string.utf8) : nil
+            tombstoneContent: buffer.workspaceEditDeleted ? content : nil
         )
     }
 
@@ -135,13 +211,25 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
         let destinationURL = try validatedURL(to)
         let sourceDisk = source.isOpen ? source.diskContent : source.content
         guard let sourceDisk else { throw WorkspaceEditAccessError.unsupportedTarget(from) }
+        func revalidateBuffer() throws {
+            guard tabs.workspaceEditBuffer(for: from) === sourceBuffer,
+                  tabs.workspaceEditBuffer(for: to) == nil,
+                  sourceBuffer?.editGeneration == source.bufferGeneration,
+                  sourceBuffer?.fileWatchGeneration == source.fileWatchGeneration else { throw WorkspaceEditAccessError.conflict(from) }
+        }
         if let host = from.host {
             try await executeRemote(host: host, document: from, command: RemoteFileOps.guardedMoveCommand(
                 from: sourceURL.path, to: destinationURL.path, expectedSource: sourceDisk, expectedDestination: destination.content
             ))
         } else {
-            guard try localSnapshot(from).content == sourceDisk,
-                  try localSnapshot(to).content == destination.content else { throw WorkspaceEditAccessError.conflict(from) }
+            let checkedSource = try await localSnapshot(from)
+            try revalidateBuffer()
+            let checkedDestination = try await localSnapshot(to)
+            try revalidateBuffer()
+            guard checkedSource.snapshot.content == sourceDisk,
+                  checkedDestination.snapshot.content == destination.content else { throw WorkspaceEditAccessError.conflict(from) }
+            try checkedSource.revalidate(at: validatedURL(from))
+            try checkedDestination.revalidate(at: validatedURL(to))
             guard Darwin.rename(sourceURL.path, destinationURL.path) == 0 else { throw POSIXError(.EIO) }
         }
         guard tabs.workspaceEditBuffer(for: from) === sourceBuffer,
@@ -152,10 +240,13 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
 
     private func diskSnapshot(_ document: EditorDocumentID) async throws -> WorkspaceFileSnapshot {
         let url = try validatedURL(document)
-        guard let host = document.host else { return try localSnapshot(document) }
+        guard let host = document.host else { return try await localSnapshot(document).snapshot }
         guard let root = rootForDocument(document) else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
         try await RemotePathContainment.verifyRemoteContainment(host: host, path: url.path, worktreeRoot: root.path)
-        switch try await RemoteFileAccess.read(host: host, path: url.path) {
+        let result: RemoteReadResult
+        do { result = try await RemoteFileAccess.read(host: host, path: url.path, maxBytes: WorkspaceEditSnapshotBudget.fileBytes) }
+        catch RemoteFileAccessError.fileTooLarge { throw WorkspaceEditSnapshotBudget.Error.oversizedFile }
+        switch result {
         case .file(let data, _):
             let permissions = try await RemoteFileAccess.permissions(host: host, path: url.path)
             return WorkspaceFileSnapshot(document: document, content: data, permissions: permissions)
@@ -166,21 +257,22 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
         }
     }
 
-    private func localSnapshot(_ document: EditorDocumentID) throws -> WorkspaceFileSnapshot {
+    private func localSnapshot(_ document: EditorDocumentID) async throws -> WorkspaceEditLocalSnapshot {
         let url = try validatedURL(document)
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            guard attributes[.type] as? FileAttributeType == .typeRegular else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
-            return WorkspaceFileSnapshot(document: document, content: try Data(contentsOf: url), permissions: (attributes[.posixPermissions] as? NSNumber)?.intValue)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-            return WorkspaceFileSnapshot(document: document, content: nil)
-        }
+        let read = localRead
+        let result = try await Task.detached { try read(url, document) }.value
+        try Task.checkCancellation()
+        return result
     }
 
     private func replaceDisk(_ before: WorkspaceFileSnapshot, with after: WorkspaceFileSnapshot, revalidateBuffer: @MainActor () throws -> Void) async throws -> Date? {
         let document = before.document
         let url = try validatedURL(document)
-        guard try await diskSnapshot(document).content == before.content else { throw WorkspaceEditAccessError.conflict(document) }
+        let checkedLocal = document.host == nil ? try await localSnapshot(document) : nil
+        let current: WorkspaceFileSnapshot
+        if let checkedLocal { current = checkedLocal.snapshot }
+        else { current = try await diskSnapshot(document) }
+        guard current.content == before.content else { throw WorkspaceEditAccessError.conflict(document) }
         try revalidateBuffer()
         if let host = document.host {
             if let content = after.content, let expected = before.content,
@@ -194,6 +286,7 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
             }
         }
         guard let content = after.content else {
+            try checkedLocal?.revalidate(at: validatedURL(document))
             if before.content != nil { try FileManager.default.removeItem(at: url) }
             return nil
         }
@@ -202,7 +295,10 @@ final class HostWorkspaceEditFileAccess: WorkspaceEditFileAccess {
         guard FileManager.default.createFile(atPath: temporary.path, contents: content, attributes: [.posixPermissions: after.permissions ?? before.permissions ?? 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        guard try localSnapshot(document).content == before.content else { throw WorkspaceEditAccessError.conflict(document) }
+        let checked = try await localSnapshot(document)
+        try revalidateBuffer()
+        guard checked.snapshot.content == before.content else { throw WorkspaceEditAccessError.conflict(document) }
+        try checked.revalidate(at: validatedURL(document))
         guard Darwin.rename(temporary.path, url.path) == 0 else { throw POSIXError(.EIO) }
         return (try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }

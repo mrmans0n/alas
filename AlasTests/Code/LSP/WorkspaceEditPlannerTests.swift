@@ -3,6 +3,57 @@ import Testing
 @testable import Alas
 
 struct WorkspaceEditPlannerTests {
+    @Test(arguments: [7, 8])
+    func sequentialEditsToOneTargetShareTheRetainedSnapshotBudget(count: Int) throws {
+        let owner = document("file:///workspace/a")
+        let original = snapshot(owner, content: String(repeating: "a", count: 8 * 1024 * 1024))
+        let changes: [LSPDocumentChange] = (0..<count).map { index in
+            .textDocument(document: .init(uri: owner.uri, version: nil), edits: [.init(range: range(0, 0, 0, 1), newText: String(index))])
+        }
+        do {
+            let plan = try WorkspaceEditPlanner.plan(edit: .init(documentChanges: changes), context: context(for: owner), snapshots: [owner: original])
+            #expect(count == 7, "Input plus every retained intermediate result must fit the operation budget")
+            #expect(plan.steps.count == count)
+            if count == 7 { #expect(plan.steps.last?.after.content?.first == 54) }
+        } catch {
+            #expect(count == 8)
+            #expect(error.localizedDescription.contains("64 MiB"))
+        }
+    }
+
+    @Test func snapshotBudgetCountsEveryRetainedByteField() throws {
+        let owner = document("file:///workspace/a")
+        let extra = document("file:///workspace/b")
+        let data = Data(repeating: 65, count: 16 * 1024 * 1024)
+        let full = WorkspaceFileSnapshot(document: owner, content: data, isOpen: true, diskContent: data, originalContent: data, tombstoneContent: data)
+        // Each field counts conservatively even when Data shares backing storage.
+        _ = try WorkspaceEditPlanner.plan(edit: .init(), context: context(for: owner), snapshots: [owner: full])
+        do {
+            _ = try WorkspaceEditPlanner.plan(edit: .init(), context: context(for: owner), snapshots: [owner: full, extra: .init(document: extra, content: Data([65]))])
+            Issue.record("All retained fields must count toward the aggregate budget")
+        } catch { #expect(error.localizedDescription.contains("64 MiB")) }
+    }
+
+    @Test(arguments: 0..<4)
+    func oversizedSnapshotFieldsAreRejected(field: Int) throws {
+        let owner = document("file:///workspace/a")
+        let data = Data(repeating: 65, count: 16 * 1024 * 1024 + 1)
+        let snapshot = WorkspaceFileSnapshot(document: owner, content: field == 0 ? data : nil, diskContent: field == 1 ? data : nil, originalContent: field == 2 ? data : nil, tombstoneContent: field == 3 ? data : nil)
+        do {
+            _ = try WorkspaceEditPlanner.plan(edit: .init(), context: context(for: owner), snapshots: [owner: snapshot])
+            Issue.record("Every retained byte field must respect the per-file cap")
+        } catch { #expect(error.localizedDescription.contains("16 MiB")) }
+    }
+
+    @Test func oversizedUTF8ReplacementIsRejectedBeforeSnapshotConversion() throws {
+        let owner = document("file:///workspace/a")
+        let edit = LSPTextEdit(range: range(0, 0, 0, 1), newText: String(repeating: "é", count: 8 * 1024 * 1024 + 1))
+        do {
+            _ = try WorkspaceEditPlanner.applying([edit], to: snapshot(owner, content: "a"))
+            Issue.record("UTF-8 byte size must limit replacement snapshots")
+        } catch { #expect(error.localizedDescription.contains("16 MiB")) }
+    }
+
     @Test func rejectsCreateOverOpenBufferBeforeExecution() {
         let owner = document("file:///workspace/a.swift")
         let edit = LSPWorkspaceEdit(documentChanges: [.create(uri: owner.uri, options: .init(overwrite: true), annotationID: nil)])

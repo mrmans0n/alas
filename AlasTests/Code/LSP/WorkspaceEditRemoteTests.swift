@@ -4,6 +4,52 @@ import Testing
 
 @MainActor
 struct WorkspaceEditRemoteTests {
+    @Test func boundedRemoteSnapshotsPreserveBytesAndRefuseOversizeAndNonfiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-edit-remote-cap-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("quoted ' file")
+        let bytes = Data([0, 255, 10, 65])
+        try bytes.write(to: file)
+        let command = RemoteFileAccess.boundedReadScript(path: file.path, maxBytes: 4)
+        let result = try await Process.runData("/bin/sh", args: ["-c", command])
+        guard case .file(let content, _) = try RemoteFileAccess.boundedReadResult(result, maxBytes: 4) else {
+            Issue.record("Expected the complete boundary-sized file")
+            return
+        }
+        #expect(content == bytes)
+        try Data(repeating: 65, count: 5).write(to: file)
+        let oversized = try await Process.runData("/bin/sh", args: ["-c", command])
+        #expect(oversized.stdout.isEmpty)
+        #expect(throws: RemoteFileAccessError.fileTooLarge) { try RemoteFileAccess.boundedReadResult(oversized, maxBytes: 4) }
+        try FileManager.default.removeItem(at: file)
+        let missing = try await Process.runData("/bin/sh", args: ["-c", command])
+        #expect(try RemoteFileAccess.boundedReadResult(missing, maxBytes: 4) == .missing)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        let directory = try await Process.runData("/bin/sh", args: ["-c", command])
+        #expect(try RemoteFileAccess.boundedReadResult(directory, maxBytes: 4) == .directory)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: root)
+        let symlink = try await Process.runData("/bin/sh", args: ["-c", command])
+        #expect(try RemoteFileAccess.boundedReadResult(symlink, maxBytes: 4) == .symlink)
+    }
+
+    @Test func remoteFileGrowthAfterStatIsBoundedAndNeverReturnsTruncatedSnapshot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-edit-remote-growth-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("growing")
+        try Data("abcd".utf8).write(to: file)
+        // A shell function grows the file after the real size probe completed.
+        // The subsequent mtime probe and read therefore observe the larger file.
+        let probe = "stat() { /usr/bin/stat \"$@\"; status=$?; case \"$*\" in *'%z'*) printf 'more bytes' >> \(SSHCommand.shellQuote(file.path));; esac; return $status; }; "
+        let result = try await Process.runData("/bin/sh", args: ["-c", probe + RemoteFileAccess.boundedReadScript(path: file.path, maxBytes: 4)])
+        #expect(result.exitCode == 0)
+        #expect(RemoteFileAccess.parseReadPayload(result.stdout)?.contents.count == 5)
+        #expect(throws: RemoteFileAccessError.fileTooLarge) { try RemoteFileAccess.boundedReadResult(result, maxBytes: 4) }
+        #expect(try Data(contentsOf: file).count > 5)
+    }
+
     @Test func ambiguousHelperWriteErrorsNeverAllowFallback() {
         #expect(!RemoteFileAccess.canFallbackAfterWriteError(.unavailable("lost response")))
         #expect(!RemoteFileAccess.canFallbackAfterWriteError(.notRunning))

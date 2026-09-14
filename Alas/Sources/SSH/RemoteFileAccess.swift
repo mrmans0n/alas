@@ -10,6 +10,7 @@ enum RemoteReadResult: Equatable {
 }
 
 enum RemoteFileAccessError: Error, Equatable {
+    case fileTooLarge
     case connectionFailed(String)
     case writeFailed(String)
     case saveConflict(RemoteSaveConflict)
@@ -109,6 +110,43 @@ enum RemoteFileAccess {
             }
         }
         return try await readViaExec(host: host, path: path)
+    }
+
+    /// Full snapshots must fit the limit; prefix data is never returned as a file.
+    /// The helper has no read cap, so bounded snapshots use the exec path.
+    static func read(host: String, path: String, maxBytes: Int) async throws -> RemoteReadResult {
+        let result = try await RemoteExec.runData(host: host, cwd: nil, command: boundedReadScript(path: path, maxBytes: maxBytes))
+        return try boundedReadResult(result, maxBytes: maxBytes)
+    }
+
+    static func boundedReadScript(path: String, maxBytes: Int) -> String {
+        precondition(maxBytes >= 0 && maxBytes < Int.max)
+        return "f=\(SSHCommand.shellQuote(path)); "
+            + "[ -L \"$f\" ] && exit 5; "
+            + "[ -d \"$f\" ] && exit 3; "
+            + "[ -e \"$f\" ] || exit 4; "
+            + "[ -f \"$f\" ] || exit 6; "
+            + "size=$(stat -c %s -- \"$f\" 2>/dev/null || stat -f %z \"$f\") || exit 6; "
+            + "[ \"$size\" -le \(maxBytes) ] || exit 7; "
+            + "(\(statMtime)) || exit 6; "
+            + "head -c \(maxBytes + 1) \"$f\""
+    }
+
+    static func boundedReadResult(_ result: ProcessResultData, maxBytes: Int) throws -> RemoteReadResult {
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        switch result.exitCode {
+        case 3: return .directory
+        case 4: return .missing
+        case 5: return .symlink
+        case 7: throw RemoteFileAccessError.fileTooLarge
+        case 0:
+            guard let parsed = parseReadPayload(result.stdout) else { return .unreadable("unexpected read payload") }
+            guard parsed.contents.count <= maxBytes else { throw RemoteFileAccessError.fileTooLarge }
+            return .file(data: parsed.contents, mtime: parsed.mtime)
+        default: return .unreadable(result.stderr)
+        }
     }
 
     static func readResult(from result: RemoteHelperFSReadResult) -> RemoteReadResult {

@@ -1,5 +1,46 @@
 import Foundation
 
+/// Transaction limits are separate from the editor's file-open limits.
+struct WorkspaceEditSnapshotBudget {
+    static let fileBytes = 16 * 1024 * 1024
+    static let totalBytes = 64 * 1024 * 1024
+    static let targets = 256
+    private var retainedBytes = 0
+
+    enum Error: LocalizedError {
+        case oversizedFile, totalBytes, targets
+
+        var errorDescription: String? {
+            switch self {
+            case .oversizedFile: "Workspace edits cannot include a file or snapshot larger than 16 MiB."
+            case .totalBytes: "Workspace edit snapshots exceed the 64 MiB operation limit."
+            case .targets: "Workspace edits cannot include more than 256 distinct targets."
+            }
+        }
+    }
+
+    static func validateSize(_ bytes: Int) throws {
+        guard bytes <= fileBytes else { throw Error.oversizedFile }
+    }
+
+    static func validateTargetCount(_ count: Int) throws {
+        guard count <= targets else { throw Error.targets }
+    }
+
+    static func data(_ text: String) throws -> Data {
+        try validateSize(text.utf8.count)
+        return Data(text.utf8)
+    }
+
+    mutating func retain(_ snapshot: WorkspaceFileSnapshot) throws {
+        for data in [snapshot.content, snapshot.diskContent, snapshot.originalContent, snapshot.tombstoneContent].compactMap({ $0 }) {
+            try Self.validateSize(data.count)
+            guard data.count <= Self.totalBytes - retainedBytes else { throw Error.totalBytes }
+            retainedBytes += data.count
+        }
+    }
+}
+
 struct WorkspaceFileSnapshot: Equatable, Sendable, Codable {
     let document: EditorDocumentID
     let content: Data?
@@ -128,6 +169,9 @@ enum WorkspaceEditPlanner {
         context: EditorRequestContext,
         snapshots: [EditorDocumentID: WorkspaceFileSnapshot]
     ) throws -> WorkspaceEditPlan {
+        try WorkspaceEditSnapshotBudget.validateTargetCount(snapshots.count)
+        var budget = WorkspaceEditSnapshotBudget()
+        for snapshot in snapshots.values { try budget.retain(snapshot) }
         if let changes = edit.changes, !changes.isEmpty,
            let documentChanges = edit.documentChanges, !documentChanges.isEmpty {
             throw Error.conflictingRepresentations
@@ -162,6 +206,7 @@ enum WorkspaceEditPlanner {
                 if let version = textDocument.version, before.bufferVersion != version { throw Error.staleVersion }
                 if document == context.document, before.bufferVersion != context.version { throw Error.staleVersion }
                 let after = try applying(edits, to: before)
+                try budget.retain(after)
                 state[document] = after
                 steps.append(.init(
                     kind: .text, document: document, destination: nil, before: before, after: after,
@@ -177,6 +222,7 @@ enum WorkspaceEditPlanner {
                 if exists && !options.overwrite && !options.ignoreIfExists { throw Error.targetAlreadyExists }
                 let after = options.ignoreIfExists && !options.overwrite && exists ? before : before.replacing(content: Data())
                 guard !before.isOpen || before.content == after.content else { throw Error.unsupportedResourceOwnership }
+                try budget.retain(after)
                 state[document] = after
                 if exists && options.overwrite && before.isOpen && before.isDirty {
                     warnings.append(.destinationOverwriteWithUnsavedContent(document))
@@ -198,6 +244,7 @@ enum WorkspaceEditPlanner {
                 let destinationExists = destinationBefore.content != nil
                 if destinationExists && !options.overwrite && !options.ignoreIfExists { throw Error.targetAlreadyExists }
                 if options.ignoreIfExists && !options.overwrite && destinationExists {
+                    try budget.retain(before)
                     steps.append(.init(
                         kind: .rename, document: source, destination: destination, before: before, after: before,
                         destinationBefore: destinationBefore, annotationID: annotationID, annotationIDs: annotationID.map { [$0] } ?? [], resourceOptions: options.jsonValue
@@ -207,6 +254,7 @@ enum WorkspaceEditPlanner {
                 let destinationAfter = before.replacing(document: destination, content: before.content)
                 guard !destinationBefore.isOpen else { throw Error.unsupportedResourceOwnership }
                 let sourceAfter = before.removingResource(keepingBuffer: false)
+                try budget.retain(destinationAfter)
                 state[source] = sourceAfter
                 state[destination] = destinationAfter
                 if destinationExists && destinationBefore.isOpen && destinationBefore.isDirty {
@@ -225,6 +273,7 @@ enum WorkspaceEditPlanner {
                 try validate(snapshot: before)
                 if before.isDirectory { throw Error.unboundedDirectoryDelete }
                 let after = before.removingResource(keepingBuffer: true)
+                try budget.retain(after)
                 state[document] = after
                 if before.content != nil && before.isOpen && before.isDirty {
                     warnings.append(.deleteWithUnsavedContent(document))
@@ -294,7 +343,7 @@ enum WorkspaceEditPlanner {
             let end = String.Index(utf16Offset: item.end, in: result)
             result.replaceSubrange(start..<end, with: item.edit.newText)
         }
-        return snapshot.replacing(content: Data(result.utf8))
+        return try snapshot.replacing(content: WorkspaceEditSnapshotBudget.data(result))
     }
 
     private static func validateOverlaps(_ edits: [(edit: LSPTextEdit, start: Int, end: Int, index: Int)]) throws {

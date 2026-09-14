@@ -5,6 +5,106 @@ import Testing
 @MainActor
 struct WorkspaceEditExecutorTests {
     @Test(arguments: [false, true])
+    func bufferChangesDuringLocalResourceReadPreventMutation(move: Bool) async throws {
+        let fixture = try await LocalWorkspaceEditFixture()
+        defer { fixture.remove() }
+        let before = try await fixture.access.snapshot(fixture.document)
+        let destination = EditorDocumentID(host: nil, worktreeID: "w", uri: fixture.root.appendingPathComponent("b").lspURI)
+        let missing = try await fixture.access.snapshot(destination)
+        // Move reads source, destination, then source again; deletion reads its
+        // buffer snapshot followed by the final disk guard.
+        let gate = WorkspaceSnapshotReadGate(pauseAt: move ? 3 : 2)
+        defer { gate.release() }
+        let access = HostWorkspaceEditFileAccess(tabs: fixture.tabs, localRead: { try gate.read($0, $1) }, rootForDocument: { _ in fixture.root })
+        let operation = Task {
+            if move {
+                try await access.move(from: fixture.document, to: destination, expectedSource: before, expectedDestination: missing)
+            } else {
+                try await access.replace(before, with: before.removingResource(keepingBuffer: true))
+            }
+        }
+        var started = gate.started.makeAsyncIterator()
+        _ = await started.next()
+        // This main-actor edit runs causally while the background read is paused.
+        fixture.buffer.storage.replaceCharacters(in: NSRange(location: 0, length: fixture.buffer.storage.length), with: "later edit")
+        gate.release()
+        do { try await operation.value
+            Issue.record("Changed buffer must reject the resource mutation")
+        } catch WorkspaceEditAccessError.conflict {}
+        #expect(fixture.buffer.storage.string == "later edit")
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == "saved")
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("b").path))
+    }
+
+    @Test(arguments: [false, true])
+    func ownershipOrDiskChangesDuringFinalReplacementReadPreventWrite(openBuffer: Bool) async throws {
+        let fixture = try await LocalWorkspaceEditFixture()
+        defer { fixture.remove() }
+        let file = fixture.root.appendingPathComponent("unopened")
+        try Data("original".utf8).write(to: file)
+        let document = EditorDocumentID(host: nil, worktreeID: "w", uri: file.lspURI)
+        let before = try await fixture.access.snapshot(document)
+        let gate = WorkspaceSnapshotReadGate(pauseAt: 3)
+        defer { gate.release() }
+        let access = HostWorkspaceEditFileAccess(tabs: fixture.tabs, localRead: { try gate.read($0, $1) }, rootForDocument: { _ in fixture.root })
+        let operation = Task { try await access.replace(before, with: before.replacing(content: Data("replacement".utf8))) }
+        var started = gate.started.makeAsyncIterator()
+        _ = await started.next()
+        var buffer: EditorBuffer?
+        defer { buffer?.close(persistDirtySnapshot: false) }
+        if openBuffer {
+            let tab = fixture.tabs.openEditor(worktreeId: "w", relativePath: "unopened", revealLine: nil, revealCharacter: nil)
+            buffer = fixture.tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: fixture.root, relativePath: "unopened")
+            await buffer?.awaitLoadForTesting()
+            buffer?.stopWatching()
+        } else {
+            try Data("later disk content".utf8).write(to: file)
+        }
+        gate.release()
+        do { try await operation.value
+            Issue.record("Changed ownership or disk content must reject the final replacement")
+        } catch WorkspaceEditAccessError.conflict {}
+        #expect(try String(contentsOf: file, encoding: .utf8) == (openBuffer ? "original" : "later disk content"))
+        if let buffer { #expect(buffer.storage.string == "original") }
+    }
+
+    @Test func localSnapshotPreservesFullBoundaryContentPermissionsAndMissingState() async throws {
+        let fixture = try await LocalWorkspaceEditFixture()
+        defer { fixture.remove() }
+        let file = fixture.root.appendingPathComponent("boundary")
+        let data = Data(repeating: 0x61, count: 16 * 1024 * 1024)
+        try data.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: file.path)
+        let document = EditorDocumentID(host: nil, worktreeID: "w", uri: file.lspURI)
+        let snapshot = try await fixture.access.snapshot(document)
+        #expect(snapshot.content == data)
+        #expect(snapshot.permissions == 0o640)
+        try FileManager.default.removeItem(at: file)
+        #expect(try await fixture.access.snapshot(document).content == nil)
+    }
+
+    @Test func oversizedUnopenedSnapshotIsRefused() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-edit-size-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("large.txt")
+        #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: 16 * 1024 * 1024 + 1)
+        try handle.close()
+        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"))
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let document = EditorDocumentID(host: nil, worktreeID: "w", uri: file.lspURI)
+        do {
+            _ = try await access.snapshot(document)
+            Issue.record("Oversized snapshot must be refused before reading its content")
+        } catch {
+            #expect(error.localizedDescription.contains("16 MiB"))
+        }
+        #expect((try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue == 16 * 1024 * 1024 + 1)
+    }
+
+    @Test(arguments: [false, true])
     func unsupportedLaterResourceOwnershipPerformsZeroWrites(rename: Bool) async throws {
         let f = try WorkspaceEditFixture()
         defer { f.remove() }
@@ -420,6 +520,31 @@ struct WorkspaceEditExecutorTests {
         #expect(fixture.access.files[fixture.a]?.content == Data("later edit".utf8))
         #expect(fixture.access.calls.filter { $0 == "write:a" }.count == 1)
     }
+}
+
+private final class WorkspaceSnapshotReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let permission = DispatchSemaphore(value: 0)
+    private var calls = 0
+    private let pauseAt: Int
+    private let signal = AsyncStream<Void>.makeStream()
+    var started: AsyncStream<Void> { signal.stream }
+
+    init(pauseAt: Int) { self.pauseAt = pauseAt }
+
+    func read(_ url: URL, _ document: EditorDocumentID) throws -> WorkspaceEditLocalSnapshot {
+        let snapshot = try WorkspaceEditLocalSnapshot.read(url, document)
+        let shouldPause = lock.withLock { calls += 1
+        return calls == pauseAt }
+        if shouldPause {
+            signal.continuation.yield(())
+            permission.wait()
+        }
+        return snapshot
+    }
+
+    func release() { permission.signal() }
+    deinit { signal.continuation.finish() }
 }
 
 @MainActor

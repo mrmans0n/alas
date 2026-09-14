@@ -5,6 +5,38 @@ import Testing
 
 @MainActor
 struct RenameFeatureTests {
+    @Test(arguments: [false, true])
+    func oversizedPreparationNeverCreatesPreviewOrJournal(tooManyTargets: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-edit-budget-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
+        let origin = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("origin").lspURI)
+        let context = EditorRequestContext(document: origin, version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        var changes: [LSPDocumentChange] = []
+        for index in 0..<(tooManyTargets ? 257 : 5) {
+            let file = root.appendingPathComponent("target-\(index)")
+            if !tooManyTargets {
+                #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
+                let handle = try FileHandle(forWritingTo: file)
+                try handle.truncate(atOffset: 16 * 1024 * 1024)
+                try handle.close()
+            }
+            changes.append(tooManyTargets ? .create(uri: file.lspURI, options: .init(), annotationID: nil) : .delete(uri: file.lspURI, options: .init(), annotationID: nil))
+        }
+        let view = CodeTextView(frame: .zero, textContainer: nil)
+        let feature = RenameFeature(textView: view, tabs: tabs, root: root, synchronize: { _ in nil }, isCurrent: { $0 == context })
+        do {
+            _ = try await feature.prepare(.init(documentChanges: changes), context: context, generations: [:])
+            Issue.record("Over-budget operation must be refused before preview")
+        } catch {
+            #expect(error.localizedDescription.contains(tooManyTargets ? "256" : "64 MiB"))
+        }
+        #expect(try journal.records().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("target-0").path) == !tooManyTargets)
+    }
+
     @Test(arguments: [
         #"{"start":{"line":0,"character":4},"end":{"line":0,"character":7}}"#,
         #"{"range":{"start":{"line":0,"character":4},"end":{"line":0,"character":7}},"placeholder":"old"}"#,

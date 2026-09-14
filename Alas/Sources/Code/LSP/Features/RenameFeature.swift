@@ -179,10 +179,13 @@ final class RenameFeature {
         }
         try access.validateRequestGenerations(generations)
         let documents = try Self.documents(in: edit, context: context)
+        try WorkspaceEditSnapshotBudget.validateTargetCount(documents.count)
+        var budget = WorkspaceEditSnapshotBudget()
         var snapshots: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
         for document in documents {
             let snapshot = try await access.snapshot(document)
             guard !snapshot.isOpen || generations[document] != nil else { throw Error.stale }
+            try budget.retain(snapshot)
             snapshots[document] = snapshot
         }
         guard !Task.isCancelled, isCurrent(context) else { throw Error.stale }
