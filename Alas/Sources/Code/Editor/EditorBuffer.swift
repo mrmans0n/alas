@@ -186,33 +186,38 @@ final class EditorBuffer {
     func recordSourceEditSelection(_ ranges: [NSValue]) { lastSourceEditSelection?.ranges = ranges }
 
     @discardableResult
-    func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil) -> Bool {
+    func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil, attributes: [NSAttributedString.Key: Any] = [:]) -> Bool {
         guard acceptsSourceInput, compositionOwner == composition,
               range.location >= 0, range.location <= storage.length, range.length >= 0, range.length <= storage.length - range.location,
               let map = try? EditorDisplayMap(source: storage.string, revision: editGeneration, hints: []),
               (try? map.displaySegments(forSource: range)) != nil else { return false }
         let previous = (storage.string as NSString).substring(with: range)
-        guard previous != replacement else { return true }
+        guard !EditorSourceText.exactlyEqual(previous, replacement) else { return true }
         if composition == nil {
             registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
                                   replacement: previous, selections: finalSelections, restoredSelections: selections,
                                   coalescingRange: range)
         }
+        storage.beginEditing()
         storage.replaceCharacters(in: range, with: replacement)
+        if !replacement.isEmpty, !attributes.isEmpty {
+            storage.setAttributes(attributes, range: NSRange(location: range.location, length: replacement.utf16.count))
+        }
+        storage.endEditing()
         return true
     }
 
     /// Composition registers after provisional edits using its immutable original,
     /// never by reading the already-replaced source to discover the inverse.
     func registerSourceInverse(range: NSRange, expected: String, replacement: String, selections: [NSValue], restoredSelections: [NSValue], coalescingRange: NSRange? = nil) {
-        guard expected != replacement else { return }
+        guard !EditorSourceText.exactlyEqual(expected, replacement) else { return }
         let selection = SourceEditSelection(selections)
         lastSourceEditSelection = selection
         let simple = (replacement.isEmpty && expected.count == 1 && expected.rangeOfCharacter(from: .newlines) == nil)
             || (expected.isEmpty && replacement.count == 1)
         undoManager.registerBufferUndo(target: self, actionName: "Typing", coalescingRange: simple ? coalescingRange : nil, replacementLength: expected.utf16.count) { buffer in
             guard NSMaxRange(range) <= buffer.storage.length,
-                  (buffer.storage.string as NSString).substring(with: range) == expected else { return }
+                  EditorSourceText.exactlyEqual((buffer.storage.string as NSString).substring(with: range), expected) else { return }
             buffer.registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
                                          replacement: expected, selections: restoredSelections, restoredSelections: selection.ranges)
             buffer.storage.replaceCharacters(in: range, with: replacement)
@@ -225,7 +230,7 @@ final class EditorBuffer {
         guard programmaticEditDepth == 0, !workspaceEditMutationInFlight,
               range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return }
         let previous = (storage.string as NSString).substring(with: range)
-        guard previous != replacement else { return }
+        guard !EditorSourceText.exactlyEqual(previous, replacement) else { return }
         let inverseRange = NSRange(location: range.location, length: (replacement as NSString).length)
         let simpleTyping = coalescing && actionName == "Typing"
             && (previous.isEmpty && replacement.count == 1 && replacement.rangeOfCharacter(from: .newlines) == nil
@@ -233,7 +238,7 @@ final class EditorBuffer {
         undoManager.registerBufferUndo(target: self, actionName: actionName,
                                        coalescingRange: simpleTyping ? range : nil, replacementLength: inverseRange.length) { buffer in
             guard NSMaxRange(inverseRange) <= buffer.storage.length,
-                  (buffer.storage.string as NSString).substring(with: inverseRange) == replacement else { return }
+                  EditorSourceText.exactlyEqual((buffer.storage.string as NSString).substring(with: inverseRange), replacement) else { return }
             buffer.registerTextUndo(range: inverseRange, replacement: previous, actionName: actionName)
             buffer.storage.replaceCharacters(in: inverseRange, with: previous)
         }
@@ -528,7 +533,7 @@ final class EditorBuffer {
     /// `originalText` (cheap for files under ~1 MB).
     var dirty: Bool {
         guard !readOnly else { return false }
-        return storage.string != originalText
+        return !EditorSourceText.exactlyEqual(storage.string, originalText)
     }
 
     /// Convenience initializer for callers that do not need hot-exit support
@@ -2005,7 +2010,9 @@ final class EditorBuffer {
             storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: formatted)
             storage.endEditing()
         }
-        editGeneration &+= 1
+        // The suppressed storage transaction can already have refreshed display
+        // attributes. Publish its final revision to every source observer too.
+        handleEdit(edit: nil)
         return true
     }
 

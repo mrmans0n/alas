@@ -8,11 +8,13 @@ final class EditorCompositionBridge {
         let original: String
         let selections: [NSValue]
         let originalRange: NSRange
+        let typingAttributes: [NSAttributedString.Key: Any]
         var range: NSRange
         var attributed: NSAttributedString
     }
     private var state: State?
     var isActive: Bool { state != nil }
+    var sourceTypingAttributes: [NSAttributedString.Key: Any]? { state?.typingAttributes }
     var markedRange: NSRange { state.flatMap { adapter.displayRange(forSource: $0.range) } ?? NSRange(location: NSNotFound, length: 0) }
 
     init(adapter: EditorDisplayAdapter) { self.adapter = adapter }
@@ -33,7 +35,7 @@ final class EditorCompositionBridge {
             let owner = UUID()
             guard adapter.buffer.beginComposition(owner: owner, settle: { [weak self] in self?.commit() }, invalidate: { [weak self] in self?.invalidate() }) else { return }
             state = State(owner: owner, original: adapter.buffer.storage.string, selections: view.sourceSelectedRanges, originalRange: sourceRange,
-                          range: sourceRange, attributed: attributed)
+                          typingAttributes: view.typingAttributes, range: sourceRange, attributed: attributed)
             adapter.beginCompositionPresentation()
         }
         guard var current = state else { return }
@@ -57,7 +59,7 @@ final class EditorCompositionBridge {
             var replacement = text
             var finalSelection: NSRange?
             var steppedOver = false
-            if adapter.view?.autoPairDisabled == false, text.count == 1, text == current.attributed.string,
+            if adapter.view?.autoPairDisabled == false, text.count == 1, EditorSourceText.exactlyEqual(text, current.attributed.string),
                range == current.range {
                 switch PairedDelimiterEditing.resolve(insertedText: text, in: current.original, selectedRange: current.originalRange) {
                 case let .wrap(opening, closing), let .insertPair(opening, closing):

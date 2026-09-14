@@ -12,12 +12,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var sourceSelectedRanges: [NSValue] {
         guard let displayAdapter else { return selectedRanges }
         var seen = Set<String>()
-        return selectedRanges.compactMap {
-            guard let range = displayAdapter.sourceRange(forDisplay: $0.rangeValue), seen.insert(NSStringFromRange(range)).inserted else { return nil }
-            return NSValue(range: range)
+        var result: [NSValue] = []
+        for selection in selectedRanges {
+            guard let range = displayAdapter.sourceRange(forDisplay: selection.rangeValue) else { return [] }
+            if seen.insert(NSStringFromRange(range)).inserted { result.append(NSValue(range: range)) }
         }
+        return result
     }
-    var sourceSelectedRange: NSRange { sourceSelectedRanges.first?.rangeValue ?? NSRange(location: 0, length: 0) }
+    var sourceSelectedRange: NSRange { sourceSelectedRanges.first?.rangeValue ?? NSRange(location: NSNotFound, length: 0) }
 
     func setSourceSelectedRanges(_ ranges: [NSValue]) {
         guard let displayAdapter else { selectedRanges = ranges
@@ -63,7 +65,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             pendingCompletionEditRange = range
             guard displayAdapter.replaceSource(range, with: text) else { pendingCompletionEditRange = nil
             return false }
-            if original != sourceString { didChangeText() } else { pendingCompletionEditRange = nil }
+            if !EditorSourceText.exactlyEqual(original, sourceString) { didChangeText() } else { pendingCompletionEditRange = nil }
             return true
         }
         insertTextAfterTextEdit(text, replacementRange: range)
@@ -514,7 +516,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func applyMultiCursorEdits(_ edits: [MultiCursorEdit]) {
         guard isEditable, !edits.isEmpty else { return }
-        if let adapter = displayAdapter, !adapter.buffer.acceptsSourceInput || adapter.composition.isActive { return }
+        if let adapter = displayAdapter, !adapter.buffer.acceptsSourceInput || adapter.composition.isActive || sourceSelectedRanges.isEmpty { return }
         let sorted = edits.sorted { $0.originalRange.location < $1.originalRange.location }
         var delta = 0
         var finalSelections: [NSValue] = []
@@ -525,7 +527,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
                 location: edit.originalRange.location + delta,
                 length: edit.originalRange.length
             )
-            insertTextAfterTextEdit(edit.replacement, replacementRange: effectiveRange)
+            if effectiveRange.length > 0 || !edit.replacement.isEmpty {
+                insertTextAfterTextEdit(edit.replacement, replacementRange: effectiveRange)
+            }
             let finalSelection = NSRange(
                 location: edit.resultingSelection.location + delta,
                 length: edit.resultingSelection.length
@@ -708,8 +712,13 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func cut(_ sender: Any?) {
         guard displayAdapter != nil else { super.cut(sender)
         return }
-        guard isEditable, writeSelection(to: .general, types: [.string]) else { return }
-        deleteSourceCharacter(backwards: true)
+        guard isEditable, displayAdapter?.buffer.acceptsSourceInput == true,
+              displayAdapter?.composition.isActive != true, writeSelection(to: .general, types: [.string]) else { return }
+        // Collapsed secondary selections survive cut, but never expand into
+        // backward deletions. The batch shifts their resulting source carets.
+        applyMultiCursorEdits(sourceSelectedRanges.map {
+            MultiCursorEdit(originalRange: $0.rangeValue, replacement: "", resultingSelection: NSRange(location: $0.rangeValue.location, length: 0))
+        })
     }
     override func paste(_ sender: Any?) {
         if displayAdapter != nil { _ = readSelection(from: .general) } else { super.paste(sender) }
@@ -785,7 +794,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         guard let drag = sourceDrag else { return true }
         guard displayAdapter?.buffer === drag.buffer, drag.buffer.editGeneration == drag.revision else { return false }
         let text = drag.buffer.storage.string as NSString
-        return zip(drag.ranges, drag.contents).allSatisfy { NSMaxRange($0.0) <= text.length && text.substring(with: $0.0) == $0.1 }
+        return zip(drag.ranges, drag.contents).allSatisfy { NSMaxRange($0.0) <= text.length && EditorSourceText.exactlyEqual(text.substring(with: $0.0), $0.1) }
     }
 
     func finishSourceDrag(operation: NSDragOperation) {
@@ -863,7 +872,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard let displayAdapter else { insertSourceText(insertString, replacementRange: replacementRange)
         return }
-        guard isEditable, let text = Self.string(from: insertString) else { return }
+        guard isEditable, !sourceSelectedRanges.isEmpty, let text = Self.string(from: insertString) else { return }
         if displayAdapter.composition.isActive {
             displayAdapter.composition.commit(text, replacementRange: replacementRange)
             notifyCompletionChanged()
@@ -997,6 +1006,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertNewline(_ sender: Any?) {
+        if displayAdapter != nil, sourceSelectedRanges.isEmpty { return }
         if snippetChoiceWindow.isVisible {
             selectSnippetChoice(at: snippetChoiceSelection)
             return
@@ -1062,12 +1072,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertTab(_ sender: Any?) {
+        if displayAdapter != nil, sourceSelectedRanges.isEmpty { return }
         if advanceSnippet(backwards: false) { return }
         if routeCompletionKey(.acceptSelected) { return }
         super.insertTab(sender)
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if displayAdapter != nil, sourceSelectedRanges.isEmpty { return }
         if advanceSnippet(backwards: true) { return }
         super.insertBacktab(sender)
     }
@@ -1728,7 +1740,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             let range = effectiveReplacementRange(replacementRange)
             let original = sourceString
             pendingCompletionEditRange = range
-            if displayAdapter.replaceSource(range, with: text), original != sourceString { didChangeText() }
+            if displayAdapter.replaceSource(range, with: text), !EditorSourceText.exactlyEqual(original, sourceString) { didChangeText() }
             else { pendingCompletionEditRange = nil }
         } else {
             super.insertText(insertString, replacementRange: replacementRange)

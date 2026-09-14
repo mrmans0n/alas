@@ -31,7 +31,7 @@ final class EditorDisplayAdapter {
                 if self.buffer.storage.editedMask.contains(.editedCharacters) {
                     // Programmatic reloads suppress onTextEdit while installing
                     // text, but the separate display still needs the new source.
-                    if self.document.map.revision != self.buffer.editGeneration || self.sourceSnapshot != self.buffer.storage.string { self.sourceChanged() }
+                    if self.document.map.revision != self.buffer.editGeneration || !EditorSourceText.exactlyEqual(self.sourceSnapshot, self.buffer.storage.string) { self.sourceChanged() }
                 } else { self.rebuild() }
             }
         }
@@ -75,12 +75,18 @@ final class EditorDisplayAdapter {
 
     @discardableResult
     func replaceSource(_ range: NSRange, with text: String, composition owner: UUID? = nil) -> Bool {
-        guard let view, view.isEditable else { return false }
+        guard let view, view.isEditable,
+              range.location >= 0, range.location <= buffer.storage.length,
+              range.length >= 0, range.length <= buffer.storage.length - range.location else { return false }
         let selections = view.sourceSelectedRanges
+        guard !selections.isEmpty else { return false }
+        var attributes = composition.sourceTypingAttributes ?? view.typingAttributes
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .markedClauseSegment)
         let final = [NSValue(range: NSRange(location: range.location + text.utf16.count, length: 0))]
         isApplyingSourceEdit = true
         defer { isApplyingSourceEdit = false }
-        guard buffer.replaceSource(range: range, with: text, selections: selections, finalSelections: final, composition: owner) else { return false }
+        guard buffer.replaceSource(range: range, with: text, selections: selections, finalSelections: final, composition: owner, attributes: attributes) else { return false }
         view.restoreSourceSelections(final)
         return true
     }
@@ -109,6 +115,7 @@ final class EditorDisplayAdapter {
         defer { isRebuilding = false }
         // The old document remains the source coordinate map for native selections.
         let selections = view.selectedRanges.compactMap { try? document.map.sourceRange(forDisplay: $0.rangeValue) }.map(NSValue.init(range:))
+        let typingAttributes = view.typingAttributes
         let scroll = captureScrollAnchor()
         do {
             try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
@@ -134,6 +141,9 @@ final class EditorDisplayAdapter {
             return NSValue(range: NSRange(location: start, length: max(0, boundary(NSMaxRange(range)) - start)))
         }
         view.restoreSourceSelections(clipped)
+        // Empty storage has no character from which AppKit can recover typing
+        // style. Keep the configured style across delete-all and reload.
+        if buffer.storage.length == 0 { view.typingAttributes = typingAttributes }
         restoreScrollAnchor(scroll)
         view.inputContext?.invalidateCharacterCoordinates()
     }
@@ -174,6 +184,13 @@ final class EditorDisplayAdapter {
     }
 }
 
+/// Source identity is exact UTF-16, not Swift's canonical Unicode equivalence.
+enum EditorSourceText {
+    static func exactlyEqual(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf16.elementsEqual(rhs.utf16)
+    }
+}
+
 /// A minimal replacement whose boundaries never split extended graphemes.
 struct EditorSourceDifference {
     let range: NSRange
@@ -182,10 +199,10 @@ struct EditorSourceDifference {
         let before = Array(original)
         let after = Array(final)
         var start = 0
-        while start < min(before.count, after.count), before[start] == after[start] { start += 1 }
+        while start < min(before.count, after.count), EditorSourceText.exactlyEqual(String(before[start]), String(after[start])) { start += 1 }
         var suffix = 0
         while suffix < min(before.count, after.count) - start,
-              before[before.count - 1 - suffix] == after[after.count - 1 - suffix] { suffix += 1 }
+              EditorSourceText.exactlyEqual(String(before[before.count - 1 - suffix]), String(after[after.count - 1 - suffix])) { suffix += 1 }
         let prefixLength = String(before[..<start]).utf16.count
         range = NSRange(location: prefixLength, length: String(before[start..<(before.count - suffix)]).utf16.count)
         replacement = String(after[start..<(after.count - suffix)])

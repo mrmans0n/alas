@@ -5,6 +5,96 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func formattingPublishesRevisionBeforeNextNativeInsertion() async throws {
+        let f = try await Fixture("abcd")
+        defer { f.remove() }
+        f.view.setSourceSelectedRanges([NSValue(range: NSRange(location: 3, length: 0))])
+        #expect(f.buffer.applyExplicitFormattingEdits([LSPTextEdit(range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 1)), newText: "A")]))
+        #expect(f.document.map.revision == f.buffer.editGeneration)
+        #expect(f.view.sourceSelectedRange == NSRange(location: 3, length: 0))
+        f.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(f.view.sourceString == "Abc!d")
+        #expect(f.view.sourceSelectedRange == NSRange(location: 4, length: 0))
+    }
+
+    @Test func staleProjectionRejectsNativeAndExplicitSourceMutation() async throws {
+        let f = try await Fixture("abcd")
+        defer { f.remove() }
+        try f.document.replace(source: f.buffer.storage, revision: f.buffer.editGeneration - 1, hints: [])
+        f.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        f.view.insertNewline(nil)
+        f.view.insertTab(nil)
+        f.view.deleteBackward(nil)
+        f.view.deleteWordForward(nil)
+        #expect(!f.view.replaceSource(range: NSRange(location: 0, length: 0), with: "?"))
+        #expect(f.view.sourceString == "abcd")
+        #expect(!f.buffer.undoManager.canUndo)
+    }
+
+    @Test func cutPreservesCollapsedSecondaryCaretsAndTheirText() async throws {
+        let f = try await Fixture("abcd")
+        defer { f.remove() }
+        let selections = [NSValue(range: NSRange(location: 0, length: 1)), NSValue(range: NSRange(location: 3, length: 0))]
+        f.view.setSourceSelectedRanges(selections)
+        f.view.cut(nil)
+        #expect(NSPasteboard.general.string(forType: .string) == "a")
+        #expect(f.view.sourceString == "bcd")
+        #expect(f.view.sourceSelectedRanges == [NSValue(range: NSRange(location: 0, length: 0)), NSValue(range: NSRange(location: 2, length: 0))])
+        f.buffer.undoManager.undo()
+        #expect(f.view.sourceString == "abcd")
+        #expect(f.view.sourceSelectedRanges == selections)
+        f.buffer.undoManager.redo()
+        #expect(f.view.sourceString == "bcd")
+    }
+
+    @Test(arguments: [false, true]) func typingIntoEmptySourceRetainsConfiguredFont(deleteFirst: Bool) async throws {
+        let f = try await Fixture(deleteFirst ? "abcd" : "")
+        defer { f.remove() }
+        let font = NSFont.monospacedSystemFont(ofSize: 19, weight: .regular)
+        f.view.font = font
+        f.view.typingAttributes = [.font: font, .foregroundColor: NSColor.red]
+        if deleteFirst {
+            f.view.setSourceSelectedRanges([NSValue(range: NSRange(location: 0, length: 4))])
+            f.view.deleteBackward(nil)
+        }
+        f.view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(f.buffer.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont == font)
+        #expect(f.document.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont == font)
+        #expect(f.document.storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .red)
+    }
+
+    @Test func canonicalEquivalentReplacementIsAnExactSourceEdit() async throws {
+        let f = try await Fixture("éx")
+        defer { f.remove() }
+        #expect(f.view.replaceSource(range: NSRange(location: 0, length: 1), with: "e\u{301}"))
+        #expect(Array(f.view.sourceString.utf16) == Array("e\u{301}x".utf16))
+        #expect(f.buffer.dirty)
+        f.buffer.undoManager.undo()
+        #expect(Array(f.view.sourceString.utf16) == Array("éx".utf16))
+        #expect(!f.buffer.dirty)
+        f.buffer.undoManager.redo()
+        #expect(Array(f.view.sourceString.utf16) == Array("e\u{301}x".utf16))
+    }
+
+    @Test(arguments: [false, true], ["e\u{301}y", "e\u{301}x"]) func compositionRestoresExactUnicode(cancel: Bool, final: String) async throws {
+        let f = try await Fixture("éx")
+        defer { f.remove() }
+        f.view.setSourceSelectedRanges([NSValue(range: NSRange(location: 0, length: 2))])
+        f.view.setMarkedText(final, selectedRange: NSRange(location: 3, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(Array(f.view.sourceString.utf16) == Array(final.utf16))
+        if cancel {
+            f.view.cancelOperation(nil)
+        } else {
+            f.view.unmarkText()
+            f.buffer.undoManager.undo()
+        }
+        #expect(Array(f.view.sourceString.utf16) == Array("éx".utf16))
+        if !cancel {
+            f.buffer.undoManager.redo()
+            #expect(Array(f.view.sourceString.utf16) == Array(final.utf16))
+        }
+    }
+
     @Test func nativeReplacementChangesOnlySourceAndUndoSurvivesHints() async throws {
         let f = try await Fixture("a🙂b")
         defer { f.remove() }
@@ -30,7 +120,9 @@ struct EditorDisplayInputTests {
         let f = try await Fixture("a🙂b")
         defer { f.remove() }
         f.view.setSelectedRange(NSRange(location: 1, length: 4))
-        let marked = NSAttributedString(string: "かな", attributes: [.markedClauseSegment: 1, .underlineStyle: 2])
+        let font = NSFont.monospacedSystemFont(ofSize: 19, weight: .regular)
+        f.view.typingAttributes = [.font: font]
+        let marked = NSAttributedString(string: "かな", attributes: [.markedClauseSegment: 1, .underlineStyle: 2, .font: NSFont.systemFont(ofSize: 8)])
         f.view.setMarkedText(marked, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 1, length: 4))
         #expect(f.buffer.storage.string == "aかなb")
         #expect(f.view.selectedRange() == NSRange(location: 2, length: 0))
@@ -38,6 +130,9 @@ struct EditorDisplayInputTests {
         #expect(!f.buffer.undoManager.canUndo)
         f.view.insertText("漢字", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(f.buffer.storage.string == "a漢字b")
+        #expect((f.buffer.storage.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.pointSize == font.pointSize)
+        #expect(f.buffer.storage.attribute(.markedClauseSegment, at: 1, effectiveRange: nil) == nil)
+        #expect(f.buffer.storage.attribute(.underlineStyle, at: 1, effectiveRange: nil) == nil)
         f.buffer.undoManager.undo()
         #expect(f.buffer.storage.string == "a🙂b")
         #expect(!f.buffer.undoManager.canUndo)
@@ -376,7 +471,7 @@ struct EditorDisplayInputTests {
             view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
             view.bindUndo(to: buffer)
             try view.bindDisplay(to: buffer)
-            try refreshHints()
+            if !text.isEmpty { try refreshHints() }
         }
         func refreshHints() throws {
             try view.displayAdapter?.updateHints([
