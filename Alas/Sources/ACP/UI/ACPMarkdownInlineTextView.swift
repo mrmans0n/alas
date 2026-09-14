@@ -222,7 +222,6 @@ extension NSAttributedString.Key {
 struct ACPMarkdownScrollRoutingState {
     private(set) var forwarding: Bool?
     private(set) var pendingStartEvent: NSEvent?
-    private var hasMomentumPhase = false
 
     mutating func shouldForward(
         deltaX: CGFloat,
@@ -238,10 +237,8 @@ struct ACPMarkdownScrollRoutingState {
         if phase.contains(.began) {
             forwarding = nil
             pendingStartEvent = hasDominantAxis ? nil : pendingEvent
-            hasMomentumPhase = false
         }
         if momentumPhase.contains(.began) {
-            hasMomentumPhase = true
             pendingStartEvent = nil
         }
         if forwarding == nil && hasGesturePhase && hasDominantAxis {
@@ -258,11 +255,11 @@ struct ACPMarkdownScrollRoutingState {
         if phase.contains(.cancelled)
             || momentumPhase.contains(.cancelled)
             || momentumPhase.contains(.ended)
-            || (phase.contains(.ended) && !hasMomentumPhase)
         {
             forwarding = nil
             pendingStartEvent = nil
-            hasMomentumPhase = false
+        } else if phase.contains(.ended) {
+            pendingStartEvent = nil
         }
 
         return shouldForward
@@ -364,6 +361,11 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             nextResponder?.scrollWheel(with: event)
             return
         }
+
+        if event.phase.contains(.began), scrollRoutingState.pendingStartEvent != nil {
+            return
+        }
+
         super.scrollWheel(with: event)
     }
 

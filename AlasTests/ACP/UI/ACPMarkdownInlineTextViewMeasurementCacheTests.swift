@@ -44,8 +44,8 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
                 scrollWheelEvent2Source: nil,
                 units: .pixel,
                 wheelCount: 2,
-                wheel1: Int32(deltaX),
-                wheel2: Int32(deltaY),
+                wheel1: Int32(deltaY),
+                wheel2: Int32(deltaX),
                 wheel3: 0
             )
         )
@@ -176,6 +176,23 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         #expect(momentumStart)
         #expect(momentumEnd)
         #expect(routing.forwarding == nil)
+    }
+
+    @Test("scroll routing preserves the responder until momentum finishes")
+    func scrollRoutingPreservesResponderUntilMomentumFinishes() {
+        var routing = ACPMarkdownScrollRoutingState()
+        _ = routing.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let gestureEnd = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        let momentumStart = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: NSEvent.Phase(), momentumPhase: .began
+        )
+
+        #expect(gestureEnd)
+        #expect(momentumStart)
     }
 
     @Test("scroll routing waits for dominant axis before latching")
