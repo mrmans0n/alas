@@ -597,7 +597,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             insertPairedDelimiter(opening: opening, closing: closing, replacementRange: range)
             return
         case .stepOver:
-            setSelectedRangeAfterTextEdit(NSRange(location: range.location + 1, length: 0))
+            setSelectedRangeAfterStepOver(NSRange(location: range.location + 1, length: 0))
             notifySignatureHelpReevaluation()
             return
         case .native:
@@ -1125,6 +1125,16 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         suppressCompletionSelectionNotifications = wasSuppressing
     }
 
+    private func setSelectedRangeAfterStepOver(_ range: NSRange) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        setSelectedRange(range)
+        suppressCompletionSelectionNotifications = wasSuppressing
+        guard !wasSuppressing else { return }
+        undoBuffer?.undoManager.breakTypingCoalescing()
+        completionSelectionChangeHandler?()
+    }
+
     private func setSelectedRangesAfterTextEdit(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         let wasSuppressing = suppressCompletionSelectionNotifications
         suppressCompletionSelectionNotifications = true
@@ -1204,7 +1214,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
         case .stepOver:
             replaceMarkedText(with: "", markedRange: marked)
-            setSelectedRangeAfterTextEdit(NSRange(location: marked.location + 1, length: 0))
+            setSelectedRangeAfterStepOver(NSRange(location: marked.location + 1, length: 0))
             notifySignatureHelpReevaluation()
             return true
 

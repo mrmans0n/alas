@@ -65,8 +65,12 @@ struct CodeTextViewCompletionTests {
     func stepOverClosingPairReevaluatesSignatureHelp() {
         let textView = makeTextView("outer(inner(a))")
         textView.setSelectedRange(NSRange(location: 13, length: 0)) // outer(inner(a|))
+        var completionDismissals = 0
         var selectionDismissals = 0
         var signatureReevaluations = 0
+        textView.completionSelectionChangeHandler = {
+            completionDismissals += 1
+        }
         textView.signatureHelpSelectionChangeHandler = {
             selectionDismissals += 1
         }
@@ -78,6 +82,7 @@ struct CodeTextViewCompletionTests {
 
         #expect(textView.string == "outer(inner(a))")
         #expect(textView.selectedRange() == NSRange(location: 14, length: 0))
+        #expect(completionDismissals == 1)
         #expect(selectionDismissals == 0)
         #expect(signatureReevaluations == 1)
         #expect(SignatureHelpFeature.contentChangeContext(
