@@ -431,11 +431,30 @@ enum RunScriptStackDetector {
             #"\btask\s*\(\s*["']([^"']+)["']"#,
             #"(?m)^\s*task\s+([A-Za-z_][A-Za-z0-9_-]*)\b"#,
         ]
-        return Set(patterns.flatMap { pattern -> [String] in
+        var tasks = Set(patterns.flatMap { pattern -> [String] in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
             let range = NSRange(stripped.startIndex..., in: stripped)
             return regex.matches(in: stripped, range: range).compactMap { match in
                 Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
+            }
+        })
+        let pluginIDs = gradlePluginIDs(stripped)
+        if !pluginIDs.isDisjoint(with: ["java", "java-library", "application"]) {
+            tasks.formUnion(["assemble", "test", "check", "clean"])
+        }
+        return tasks
+    }
+
+    private static func gradlePluginIDs(_ gradleBuild: String) -> Set<String> {
+        let patterns = [
+            #"\bid\s+["']([^"']+)["']"#,
+            #"\bid\s*\(\s*["']([^"']+)["']\s*\)"#,
+        ]
+        return Set(patterns.flatMap { pattern -> [String] in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let range = NSRange(gradleBuild.startIndex..., in: gradleBuild)
+            return regex.matches(in: gradleBuild, range: range).compactMap { match in
+                Range(match.range(at: 1), in: gradleBuild).map { String(gradleBuild[$0]) }
             }
         })
     }
@@ -541,8 +560,9 @@ enum RunScriptStackDetector {
         // walking the whole worktree — on a large monorepo a recursive scan
         // runs synchronously on the main actor and would be visibly slow.
         let candidates: [String]
-        if let solutionName = rootEntries.first(where: { $0.hasSuffix(".sln") }) {
-            candidates = dotnetProjectPaths(fromSolution: fileText(solutionName) ?? "")
+        let solutionNames = rootEntries.filter { $0.hasSuffix(".sln") }.sorted()
+        if !solutionNames.isEmpty {
+            candidates = Array(Set(solutionNames.flatMap { dotnetProjectPaths(fromSolution: fileText($0) ?? "") }))
         } else {
             candidates = rootEntries.filter { $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }
         }
@@ -680,12 +700,12 @@ enum RunScriptStackDetector {
     }
 
     private static func swiftConditionIsActive(_ condition: String) -> Bool {
-        let trimmed = condition.trimmingCharacters(in: .whitespaces)
-        let orParts = trimmed.components(separatedBy: "||")
+        let trimmed = stripBalancedOuterParentheses(condition.trimmingCharacters(in: .whitespaces))
+        let orParts = splitSwiftCondition(trimmed, by: "||")
         if orParts.count > 1 {
             return orParts.contains { swiftConditionIsActive($0) }
         }
-        let andParts = trimmed.components(separatedBy: "&&")
+        let andParts = splitSwiftCondition(trimmed, by: "&&")
         if andParts.count > 1 {
             return andParts.allSatisfy { swiftConditionIsActive($0) }
         }
@@ -698,6 +718,53 @@ enum RunScriptStackDetector {
         // Unknown manifest conditions may depend on SwiftPM settings. Keep
         // them rather than hiding real executable declarations.
         return true
+    }
+
+    private static func splitSwiftCondition(_ condition: String, by separator: String) -> [String] {
+        var parts: [String] = []
+        var depth = 0
+        var start = condition.startIndex
+        var index = condition.startIndex
+        while index < condition.endIndex {
+            if condition[index] == "(" {
+                depth += 1
+                index = condition.index(after: index)
+                continue
+            }
+            if condition[index] == ")" {
+                depth = max(0, depth - 1)
+                index = condition.index(after: index)
+                continue
+            }
+            if depth == 0, condition[index...].hasPrefix(separator) {
+                parts.append(String(condition[start..<index]))
+                index = condition.index(index, offsetBy: separator.count)
+                start = index
+                continue
+            }
+            index = condition.index(after: index)
+        }
+        parts.append(String(condition[start...]))
+        return parts
+    }
+
+    private static func stripBalancedOuterParentheses(_ condition: String) -> String {
+        var trimmed = condition.trimmingCharacters(in: .whitespaces)
+        while trimmed.first == "(", trimmed.last == ")" {
+            var depth = 0
+            var wrapsWholeCondition = true
+            for index in trimmed.indices {
+                if trimmed[index] == "(" { depth += 1 }
+                if trimmed[index] == ")" { depth -= 1 }
+                if depth == 0, index != trimmed.index(before: trimmed.endIndex) {
+                    wrapsWholeCondition = false
+                    break
+                }
+            }
+            guard wrapsWholeCondition else { break }
+            trimmed = String(trimmed.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
     }
 
     private static func swiftOSConditionName(_ condition: String) -> String? {
@@ -879,10 +946,30 @@ enum RunScriptStackDetector {
     private static func rakefileDeclaresTask(_ rakefile: String, task: String) -> Bool {
         let stripped = stripHashComments(rakefile)
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
-        return stripped.range(
-            of: #"(?m)^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["'])"#,
-            options: .regularExpression
-        ) != nil
+        guard let taskRegex = try? NSRegularExpression(
+            pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["'])"#
+        ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*\bdo\b"#)
+        else { return false }
+        var blockStack: [Bool] = []
+        for segment in stripped.components(separatedBy: .newlines).flatMap({ $0.components(separatedBy: ";") }) {
+            let trimmed = segment.trimmingCharacters(in: .whitespaces)
+            if trimmed == "end" {
+                _ = blockStack.popLast()
+                continue
+            }
+            let range = NSRange(segment.startIndex..., in: segment)
+            if namespaceRegex.firstMatch(in: segment, range: range) != nil {
+                blockStack.append(true)
+                continue
+            }
+            if !blockStack.contains(true), taskRegex.firstMatch(in: segment, range: range) != nil {
+                return true
+            }
+            if trimmed.hasSuffix(" do") || trimmed.contains(" do |") {
+                blockStack.append(false)
+            }
+        }
+        return false
     }
 
     /// Strips `//` and `/* */` comments, respecting string literals so a URL
@@ -969,7 +1056,8 @@ enum RunScriptStackDetector {
         for section in tomlSections(stripped) {
             let table = section.name
             guard table == "project" || table == "build-system" || table.hasPrefix("project.optional-dependencies")
-                || table == "dependency-groups"
+                || table == "dependency-groups" || table == "tool.poetry.dev-dependencies"
+                || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
             else { continue }
             if tomlDependencyText(section.body, declares: tool) { return true }
         }

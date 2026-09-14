@@ -64,6 +64,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["hello"])
     }
 
+    @Test func gradleRecordsTasksSuppliedByTheJavaPlugin() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("build.gradle", "plugins { id \"java\" }\n", in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -371,6 +379,25 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInParenthesizedInactiveOSBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            let package = Package(targets: [
+            #if (os(Linux))
+                .executableTarget(name: "LinuxTool"),
+            #endif
+                .target(name: "Lib"),
+            ])
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -573,6 +600,9 @@ struct RunScriptStackDetectorTests {
         try write("Rakefile", "# task :test\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
+        try write("Rakefile", "namespace :foo do\n  task :test\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
     }
@@ -613,6 +643,29 @@ struct RunScriptStackDetectorTests {
             "[project]\nname = \"lib\"\n[project.optional-dependencies]\ndev = [\"pytest\", \"ruff\"]\n",
             in: root
         )
+        #expect(detect(root)[.python]?.hasPytest == true)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonReadsPoetryDependencyTables() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("poetry.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [tool.poetry]
+            name = "lib"
+
+            [tool.poetry.group.test.dependencies]
+            pytest = "^8"
+
+            [tool.poetry.dev-dependencies]
+            ruff = "^0.8"
+            """,
+            in: root
+        )
+
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
     }
@@ -757,6 +810,39 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try write("One.csproj", "<OutputType>Exe</OutputType>", in: root)
         try write("Two.csproj", "<OutputType>WinExe</OutputType>", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
+    }
+
+    @Test func dotnetAggregatesExecutableProjectsFromAllRootSolutions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("src/One"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("src/Two"), withIntermediateDirectories: true
+        )
+        try write("src/One/One.csproj", "<OutputType>Exe</OutputType>", in: root)
+        try write("src/Two/Two.csproj", "<OutputType>Exe</OutputType>", in: root)
+        try write(
+            "One.sln",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "One", "src\\One\\One.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """,
+            in: root
+        )
+        try write(
+            "Two.sln",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Two", "src\\Two\\Two.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """,
+            in: root
+        )
+
         #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
     }
 
