@@ -6,19 +6,35 @@ struct JSONRPCFramer {
     static let maximumBodyBytes = 16 * 1024 * 1024
     static let maximumHeaderBytes = 8 * 1024
     private var buffer = Data()
+    private var expectedBodyBytes: Int?
+    private var completedFrames: [Data] = []
     private(set) var hasFailed = false
 
-    mutating func append<S: Sequence>(_ bytes: S) where S.Element == UInt8 {
-        guard !hasFailed else { return }
-        let remaining = Self.maximumBodyBytes + Self.maximumHeaderBytes - buffer.count
-        buffer.append(contentsOf: bytes.prefix(remaining + 1))
-        if buffer.count > Self.maximumBodyBytes + Self.maximumHeaderBytes { fail() }
+    mutating func append<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+        var cursor = bytes.startIndex
+        while cursor != bytes.endIndex, !hasFailed {
+            if let expectedBodyBytes {
+                // Consume only this body's remaining bytes. The same read may
+                // also contain the next frame, which has its own size bound.
+                let end = bytes.index(cursor, offsetBy: expectedBodyBytes - buffer.count, limitedBy: bytes.endIndex) ?? bytes.endIndex
+                buffer.append(contentsOf: bytes[cursor..<end])
+                cursor = end
+                if buffer.count == expectedBodyBytes { completeFrame() }
+            } else {
+                buffer.append(bytes[cursor])
+                cursor = bytes.index(after: cursor)
+                guard buffer.count <= Self.maximumHeaderBytes else { fail()
+                return }
+                if buffer.count >= 4, buffer.suffix(4).elementsEqual([0x0D, 0x0A, 0x0D, 0x0A]) {
+                    finishHeader()
+                }
+            }
+        }
     }
 
     mutating func drainFrames() -> [Data] {
-        var out: [Data] = []
-        while let frame = nextFrame() { out.append(frame) }
-        return out
+        defer { completedFrames = [] }
+        return completedFrames
     }
 
     static func encode(_ body: Data) -> Data {
@@ -27,16 +43,8 @@ struct JSONRPCFramer {
         return out
     }
 
-    private mutating func nextFrame() -> Data? {
-        guard !hasFailed else { return nil }
-        let terminator: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A]
-        guard let headerEnd = buffer.firstRange(of: terminator) else {
-            if buffer.count > Self.maximumHeaderBytes { fail() }
-            return nil
-        }
-        guard headerEnd.upperBound <= Self.maximumHeaderBytes else { fail()
-        return nil }
-        let header = String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self)
+    private mutating func finishHeader() {
+        let header = String(decoding: buffer.dropLast(4), as: UTF8.self)
         var contentLength = -1
         for line in header.split(separator: "\r\n") {
             let parts = line.split(separator: ":", maxSplits: 1)
@@ -46,16 +54,22 @@ struct JSONRPCFramer {
             }
         }
         guard contentLength >= 0, contentLength <= Self.maximumBodyBytes else { fail()
-        return nil }
-        let bodyStart = headerEnd.upperBound
-        guard buffer.count - bodyStart >= contentLength else { return nil }
-        let body = buffer.subdata(in: bodyStart..<(bodyStart + contentLength))
-        buffer.removeSubrange(buffer.startIndex..<(bodyStart + contentLength))
-        return body
+        return }
+        buffer = Data()
+        expectedBodyBytes = contentLength
+        if contentLength == 0 { completeFrame() }
+    }
+
+    private mutating func completeFrame() {
+        completedFrames.append(buffer)
+        buffer = Data()
+        expectedBodyBytes = nil
     }
 
     private mutating func fail() {
         hasFailed = true
         buffer = Data()
+        expectedBodyBytes = nil
+        completedFrames = []
     }
 }
