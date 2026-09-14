@@ -126,5 +126,6 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         let event = try #require(NSEvent(cgEvent: cgEvent))
 
         textView.scrollWheel(with: event)
+        #expect(transcriptResponder.receivedEvent === event)
     }
 }
