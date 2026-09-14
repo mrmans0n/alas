@@ -21,6 +21,26 @@ enum EditorCommandID: String, CaseIterable, Sendable {
 /// Immutable server capability snapshot captured from `initialize`.
 struct LSPCapabilities: Equatable, Sendable {
     private let supportedCommands: Set<EditorCommandID>
+    private(set) var semanticTokens: SemanticTokensProvider?
+
+    struct SemanticTokensProvider: Equatable, Sendable, Decodable {
+        struct Legend: Equatable, Sendable, Decodable {
+            let tokenTypes: [String]
+            let tokenModifiers: [String]
+        }
+        let legend: Legend
+        let supportsRange: Bool
+        let supportsFull: Bool
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            legend = try container.decode(Legend.self, forKey: .legend)
+            supportsRange = try container.decodeIfPresent(Provider.self, forKey: .range)?.isSupported ?? false
+            supportsFull = try container.decodeIfPresent(Provider.self, forKey: .full)?.isSupported ?? false
+        }
+
+        private enum CodingKeys: String, CodingKey { case legend, range, full }
+    }
 
     static let empty = LSPCapabilities(supportedCommands: [])
 
@@ -60,6 +80,7 @@ struct LSPCapabilities: Equatable, Sendable {
         if providers.signatureHelpProvider?.isSupported == true { commands.insert(.signatureHelp) }
         if providers.inlayHintProvider?.isSupported == true { commands.insert(.toggleInlayHints) }
         self.init(supportedCommands: commands)
+        semanticTokens = providers.semanticTokensProvider
     }
 
     private struct InitializeResult: Decodable {
@@ -78,6 +99,7 @@ struct LSPCapabilities: Equatable, Sendable {
         let documentRangeFormattingProvider: Provider?
         let documentFormattingProvider: Provider?
         let inlayHintProvider: Provider?
+        let semanticTokensProvider: SemanticTokensProvider?
     }
 
     private enum Provider: Decodable {

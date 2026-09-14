@@ -7,6 +7,18 @@ enum HighlightCapture: String, Sendable {
     case constant, variable, parameter, property, `operator`, punctuation
     case plain   // sentinel for "no capture"
 
+    static func fromSemanticToken(_ type: String, readonly: Bool = false) -> HighlightCapture? {
+        switch type {
+        case "namespace", "type", "class", "enum", "interface", "struct", "typeParameter": return .type
+        case "function", "method", "macro": return .function
+        case "enumMember": return .constant
+        case "decorator": return .attribute
+        case "regexp": return .string
+        case "variable" where readonly, "property" where readonly: return .constant
+        default: return HighlightCapture(rawValue: type).flatMap { $0 == .plain ? nil : $0 }
+        }
+    }
+
     static func from(name: String) -> HighlightCapture {
         // Tree-sitter highlight names use dotted forms ("keyword.control",
         // "function.method"). Take the first dot-separated segment and map.

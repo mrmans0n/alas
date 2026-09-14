@@ -83,7 +83,13 @@ final class LSPTransport: @unchecked Sendable {
             self.lock.lock()
             self.decoder.append(data)
             let frames = self.decoder.drainFrames()
+            let failed = self.decoder.hasFailed
             self.lock.unlock()
+            if failed {
+                self.continuation?.finish()
+                self.terminate()
+                return
+            }
             for f in frames { self.continuation?.yield(.frame(f)) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in

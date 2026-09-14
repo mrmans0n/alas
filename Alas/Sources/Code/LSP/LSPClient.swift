@@ -46,6 +46,95 @@ actor LSPClient {
 
     var isReady: Bool { state == .ready }
 
+    private struct SemanticRequest {
+        let id: UUID
+        let method: String
+        let params: LSPJSONValue
+        let continuation: CheckedContinuation<[Int], Error>
+    }
+    private var semanticActive: [String: (request: SemanticRequest, task: Task<Void, Never>)] = [:]
+    private var semanticPending: [String: SemanticRequest] = [:]
+    private var semanticSubscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
+    private var semanticStopped = false
+
+    /// Coalesce across all mounted editors of this document, including two tabs
+    /// sharing a client. Superseded pending callers finish without a wire request.
+    func semanticTokens(uri: String, range: LSPRange?) async throws -> [Int] {
+        guard !semanticStopped, let provider = capabilities.semanticTokens else { return [] }
+        let useRange = range != nil && provider.supportsRange
+        guard useRange || provider.supportsFull else { return [] }
+        var params: [String: LSPJSONValue] = ["textDocument": .object(["uri": .string(uri)])]
+        if useRange, let range { params["range"] = try LSPJSONValue.decode(from: JSONEncoder().encode(range)) }
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError())
+                return }
+                let request = SemanticRequest(id: id, method: useRange ? "textDocument/semanticTokens/range" : "textDocument/semanticTokens/full",
+                                              params: .object(params), continuation: continuation)
+                if semanticActive[uri] != nil {
+                    semanticPending.removeValue(forKey: uri)?.continuation.resume(throwing: CancellationError())
+                    semanticPending[uri] = request
+                } else { startSemanticRequest(request, uri: uri) }
+            }
+        } onCancel: {
+            Task { await self.cancelSemanticRequest(uri: uri, id: id) }
+        }
+    }
+
+    private func startSemanticRequest(_ request: SemanticRequest, uri: String) {
+        let task = Task {
+            let result: Result<[Int], Error>
+            do {
+                let raw = try await self.sendRequest(method: request.method, params: request.params, timeoutNanoseconds: 10_000_000_000)
+                result = .success(try Self.decodeSemanticResponse(raw))
+            } catch { result = .failure(error) }
+            guard self.semanticActive[uri]?.request.id == request.id else { return }
+            self.semanticActive.removeValue(forKey: uri)
+            request.continuation.resume(with: result)
+            if let next = self.semanticPending.removeValue(forKey: uri) { self.startSemanticRequest(next, uri: uri) }
+        }
+        semanticActive[uri] = (request, task)
+    }
+
+    private func cancelSemanticRequest(uri: String, id: UUID) {
+        if semanticPending[uri]?.id == id {
+            semanticPending.removeValue(forKey: uri)?.continuation.resume(throwing: CancellationError())
+        } else if semanticActive[uri]?.request.id == id { semanticActive[uri]?.task.cancel() }
+    }
+
+    nonisolated static func decodeSemanticResponse(_ raw: Data?) throws -> [Int] {
+        guard let raw, raw != Data("null".utf8) else { return [] }
+        guard raw.count <= JSONRPCFramer.maximumBodyBytes else { throw LSPError.invalidPayload }
+        let value = try LSPJSONValue.decode(from: raw)
+        guard case .array(let items) = value["data"], items.count <= SemanticTokensFeature.maximumIntegers else { throw LSPError.invalidPayload }
+        return try items.map { item in
+            guard case .number(let spelling) = item, let integer = Int(spelling), integer >= 0, integer <= 0x7FFF_FFFF else { throw LSPError.invalidPayload }
+            return integer
+        }
+    }
+
+    func subscribeSemanticRefreshes() -> AsyncStream<Void> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            guard !semanticStopped else { continuation.finish()
+            return }
+            semanticSubscribers[id] = continuation
+            continuation.onTermination = { [weak self] _ in Task { await self?.removeSemanticSubscriber(id) } }
+        }
+    }
+
+    private func removeSemanticSubscriber(_ id: UUID) { semanticSubscribers.removeValue(forKey: id) }
+
+    private func stopSemanticRequests() {
+        semanticStopped = true
+        for request in semanticPending.values { request.continuation.resume(throwing: CancellationError()) }
+        semanticPending.removeAll()
+        for active in semanticActive.values { active.task.cancel() }
+        for subscriber in semanticSubscribers.values { subscriber.finish() }
+        semanticSubscribers.removeAll()
+    }
+
     init(transport: LSPTransporting, language: String, rootURI: String) {
         self.transport = transport
         self.language = language
@@ -357,6 +446,7 @@ actor LSPClient {
     }
 
     func shutdown() async {
+        stopSemanticRequests()
         cancelInboundRequests()
         // Send the polite handshake only if we ever reached `.ready`. For
         // clients that died during `initialize()` (or never started), the
@@ -578,8 +668,11 @@ actor LSPClient {
         """
         let workspace = #""workspace":{"applyEdit":true,"configuration":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"changeAnnotationSupport":{"groupsOnLabel":false}},"executeCommand":{"dynamicRegistration":false}},"#
         let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#
+        let semantics = #""semanticTokens":{"dynamicRegistration":false,"requests":{"range":true,"full":{"delta":false}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","function","method","macro","keyword","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["readonly"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false,"augmentsSyntaxTokens":true},"#
+        let semanticWorkspace = workspace.replacingOccurrences(of: #""workspace":{"#,
+                                                              with: #""workspace":{"semanticTokens":{"refreshSupport":true},"#)
         return Data(json.replacingOccurrences(of: #""textDocument":{"#,
-                                              with: workspace + #""textDocument":{"# + actions).utf8)
+                                              with: semanticWorkspace + #""textDocument":{"# + semantics + actions).utf8)
     }
 
     private nonisolated static func jsonString(_ value: String) throws -> String {
@@ -589,6 +682,7 @@ actor LSPClient {
 
     private func consume() async {
         defer {
+            stopSemanticRequests()
             cancelInboundRequests()
             state = .dead
             for continuation in pending.values { continuation.resume(throwing: LSPError.transportClosed) }
@@ -603,6 +697,7 @@ actor LSPClient {
             case .stderr:
                 continue
             case .exited:
+                stopSemanticRequests()
                 cancelInboundRequests()
                 state = .dead
                 for (_, cont) in pending {
@@ -662,6 +757,17 @@ actor LSPClient {
         }
 
         guard let id = env.id else { return }
+        if method == "workspace/semanticTokens/refresh" {
+            let idValue: LSPJSONValue
+            switch id { case .int(let number): idValue = .number(String(number))
+            case .string(let string): idValue = .string(string) }
+            // Acknowledge before waking consumers. Never await highlighting here.
+            if let reply = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": .null]).encodedData() {
+                try? transport.send(reply)
+            }
+            for subscriber in semanticSubscribers.values { subscriber.yield(()) }
+            return
+        }
         guard inbound[id] == nil else { return }
         let params = (try? LSPJSONValue.decode(from: frame))?["params"] ?? .null
         let handler = serverRequests

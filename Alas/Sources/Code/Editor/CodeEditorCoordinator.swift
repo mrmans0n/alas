@@ -43,6 +43,12 @@ final class CodeEditorCoordinator {
     private var editorCommandStatusTask: Task<Void, Never>?
     private var renameFeature: RenameFeature?
     private var codeActionsFeature: CodeActionsFeature?
+    private var semanticFeature: SemanticTokensFeature?
+    private var semanticLayer: EditorSemanticLayer?
+    private var semanticClient: LSPClient?
+    private var semanticSubscription: Task<Void, Never>?
+    private var semanticBindingID = UUID()
+    private var semanticSupportsRange = false
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -472,6 +478,8 @@ final class CodeEditorCoordinator {
             Task { @MainActor [weak self, weak buffer] in
                 guard let self, let buffer, self.buffer === buffer else { return }
                 self.currentLanguage = buffer.effectiveLanguage
+                self.semanticFeature?.invalidate()
+                self.updateSemanticClient()
                 self.applyIndentationMode()
                 self.observeEffectiveLanguage(buffer)
             }
@@ -479,6 +487,7 @@ final class CodeEditorCoordinator {
     }
 
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        stopSemanticTokens()
         textView?.bindUndo(to: nil)
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
@@ -530,6 +539,7 @@ final class CodeEditorCoordinator {
             textView?.setSelectedRange(NSRange(location: 0, length: 0))
         }
         applyBaseStyle(theme: theme)
+        configureSemanticTokens(theme: theme)
         runHighlight(theme: theme)
         subscribeIfPossible(theme: theme)
         editObserverToken = buffer.onTextEdit { [weak self] edit in
@@ -597,6 +607,7 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
+        stopSemanticTokens()
         let detachedTextView = textView
         textView?.endSnippet()
         textView?.bindUndo(to: nil)
@@ -694,6 +705,7 @@ final class CodeEditorCoordinator {
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
                 self?.signatureHelp?.notifyScrolled()
+                Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
             }
             hoverObservers.append(token)
         }
@@ -724,6 +736,7 @@ final class CodeEditorCoordinator {
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
             self.signatureHelp?.notifyWindowResized()
+            Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
         }
         hoverObservers.append(resizeToken)
 
@@ -1021,6 +1034,7 @@ final class CodeEditorCoordinator {
     }
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
+        semanticFeature?.invalidate()
         if let worktreeID = currentWorktreeId {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
         }
@@ -1040,6 +1054,7 @@ final class CodeEditorCoordinator {
                 applyBaseStyle(theme: theme)
             }
         }
+        scheduleSemanticRefresh()
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled, let theme = self.currentTheme else { return }
@@ -1187,6 +1202,7 @@ final class CodeEditorCoordinator {
                 storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
             }
             storage.endEditing()
+            self.semanticLayer?.reapply(theme: editorTheme)
             if !cachedDiagnostics.isEmpty {
                 self.diagnosticsFeature.apply(cachedDiagnostics, to: storage, theme: theme)
             }
@@ -1195,6 +1211,114 @@ final class CodeEditorCoordinator {
                 self.onInitialHighlightReady?(tabId)
             }
         }
+    }
+
+    // MARK: - Semantic highlighting
+
+    private func stopSemanticTokens() {
+        semanticBindingID = UUID()
+        semanticFeature?.stop()
+        semanticFeature = nil
+        semanticLayer?.clear()
+        semanticLayer = nil
+        semanticSubscription?.cancel()
+        semanticSubscription = nil
+        semanticClient = nil
+    }
+
+    private func configureSemanticTokens(theme: Theme) {
+        guard let layoutManager, lspBinding != nil else { return }
+        semanticLayer = EditorSemanticLayer(layoutManager: layoutManager, theme: EditorTheme(theme: theme), isCurrent: { [weak self] context in
+            guard let self, let buffer = self.buffer,
+                  buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI == context.document.uri,
+                  !self.hasPendingDidChange else { return false }
+            return self.isLSPRequestCurrent(context)
+        })
+        semanticFeature = SemanticTokensFeature(request: { [weak self] range in
+            await self?.requestSemanticTokens(range: range)
+        }, apply: { [weak self] spans, context in
+            self?.semanticLayer?.replace(spans, context: context)
+        }, clear: { [weak self] in self?.semanticLayer?.clear() })
+        observeSemanticServer(bindingID: semanticBindingID)
+        updateSemanticClient()
+    }
+
+    private func observeSemanticServer(bindingID: UUID) {
+        withObservationTracking {
+            _ = appState.lsp.stateTick
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.semanticBindingID == bindingID else { return }
+                self.updateSemanticClient()
+                self.observeSemanticServer(bindingID: bindingID)
+            }
+        }
+    }
+
+    private func updateSemanticClient() {
+        let next: LSPClient?
+        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath),
+                                                  worktreeRoot: buffer.worktreeRoot) == .ready {
+            next = currentLSPClient()
+        } else { next = nil }
+        guard next !== semanticClient else { return }
+        semanticFeature?.stop()
+        semanticSubscription?.cancel()
+        semanticClient = next
+        guard let next else { return }
+        let bindingID = semanticBindingID
+        semanticSubscription = Task { [weak self] in
+            let capabilities = await next.capabilities
+            guard let self, !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next,
+                  let provider = capabilities.semanticTokens, provider.supportsRange || provider.supportsFull else { return }
+            self.semanticSupportsRange = provider.supportsRange
+            let refreshes = await next.subscribeSemanticRefreshes()
+            guard !Task.isCancelled else { return }
+            self.scheduleSemanticRefresh()
+            for await _ in refreshes {
+                guard !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next else { return }
+                self.scheduleSemanticRefresh()
+            }
+            guard !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next else { return }
+            self.semanticFeature?.stop()
+        }
+    }
+
+    private func scheduleSemanticRefresh(visibleRangeChanged: Bool = false) {
+        guard semanticClient != nil, let textView, let storage = buffer?.storage,
+              !visibleRangeChanged || semanticSupportsRange else { return }
+        let range: NSRange
+        if let layout = textView.layoutManager, let container = textView.textContainer {
+            let rect = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
+            let glyphs = layout.glyphRange(forBoundingRect: rect, in: container)
+            let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            guard characters.location <= storage.length, characters.length <= storage.length - characters.location else { return }
+            range = (storage.string as NSString).lineRange(for: characters)
+        } else {
+            range = NSRange(location: 0, length: storage.length)
+        }
+        semanticFeature?.refresh(range: range, debounce: .milliseconds(semanticSupportsRange ? 60 : 250))
+    }
+
+    private func requestSemanticTokens(range: NSRange) async -> SemanticTokensFeature.Result? {
+        guard let buffer else { return nil }
+        let generation = buffer.editGeneration
+        let bindingID = semanticBindingID
+        guard let (client, context) = await synchronizeLSPRequest(range: range),
+              self.buffer === buffer, buffer.editGeneration == generation, semanticBindingID == bindingID,
+              let provider = await client.capabilities.semanticTokens else { return nil }
+        let snapshot = buffer.storage.string
+        do {
+            let data = try await client.semanticTokens(uri: context.document.uri, range: provider.supportsRange ? context.range : nil)
+            let allowedRange = provider.supportsRange ? range : nil
+            let spans = try await Task.detached(priority: .utility) {
+                try SemanticTokensFeature.decode(data, legend: provider.legend.tokenTypes, text: snapshot,
+                                                 modifiers: provider.legend.tokenModifiers, allowedRange: allowedRange)
+            }.value
+            guard !Task.isCancelled, self.buffer === buffer, buffer.editGeneration == generation,
+                  semanticBindingID == bindingID, isLSPRequestCurrent(context), semanticClient === client else { return nil }
+            return .init(spans: spans, context: context)
+        } catch { return nil }
     }
 
     // MARK: - Diagnostics subscription
