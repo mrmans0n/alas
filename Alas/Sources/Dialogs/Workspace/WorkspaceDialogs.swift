@@ -248,6 +248,7 @@ struct CreateWorkspaceCheckoutDialog: View {
     @State private var showsBaseOverrides = false
     @State private var isChecking = false
     @State private var creationFinished = false
+    @State private var inspectedCheckout: WorkspaceCheckout?
     @State private var isVisible = true
     @Environment(\.theme) private var theme
 
@@ -259,6 +260,17 @@ struct CreateWorkspaceCheckoutDialog: View {
     }
 
     var body: some View {
+        Group {
+            if let inspectedCheckout {
+                WorkspaceCheckoutInspector(state: state, checkout: inspectedCheckout)
+            } else {
+                creationDialog
+            }
+        }
+        .onDisappear { isVisible = false }
+    }
+
+    private var creationDialog: some View {
         DialogContainer(
             title: "New workspace checkout",
             subtitle: workspace.name,
@@ -284,7 +296,6 @@ struct CreateWorkspaceCheckoutDialog: View {
             confirmEnabled: canProceed
         )
         .onExitCommand(perform: goBackOrClose)
-        .onDisappear { isVisible = false }
     }
 
     private var steps: some View {
@@ -403,7 +414,7 @@ struct CreateWorkspaceCheckoutDialog: View {
         switch model.step {
         case .details: "Review checkout"
         case .preflight: isChecking ? "Checking..." : "Create checkout"
-        case .creating: creationFinished ? "Done" : "Creating..."
+        case .creating: creationFinished ? (model.selectedCheckoutID == nil ? "Done" : "Open checkout details") : "Creating..."
         }
     }
 
@@ -459,7 +470,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                     while isVisible && !Task.isCancelled {
                         try await Task.sleep(for: .milliseconds(250))
                         guard isVisible else { return }
-                        await state.workspacesManager.refreshCheckoutSnapshots()
+                        await state.workspacesManager.refreshCheckoutSnapshots(reconciling: checkout.id)
                         guard isVisible else { return }
                         if let current = state.workspacesManager.checkout(id: checkout.id), current.operation == .idle {
                             if current.members.allSatisfy({ $0.checkpoint == .setupComplete }) {
@@ -472,11 +483,18 @@ struct CreateWorkspaceCheckoutDialog: View {
                     }
                 } catch {
                     self.error = error.localizedDescription
+                    if state.workspacesManager.checkout(id: plan.checkoutID) != nil {
+                        model.didPersist(checkoutID: plan.checkoutID)
+                    }
                 }
                 creationFinished = true
             }
         case .creating:
-            presented = false
+            if let id = model.selectedCheckoutID, let checkout = state.workspacesManager.checkout(id: id) {
+                inspectedCheckout = checkout
+            } else {
+                presented = false
+            }
         }
     }
 }

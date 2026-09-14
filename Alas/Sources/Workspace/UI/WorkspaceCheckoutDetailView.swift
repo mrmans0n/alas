@@ -43,8 +43,17 @@ struct WorkspaceCheckoutDetailView: View {
                     if let stopMessage = model.stopMessage {
                         WorkspaceNotice(message: stopMessage)
                     }
-                    ForEach(model.diagnostics, id: \.self) { diagnostic in
-                        WorkspaceNotice(message: diagnostic, isError: true)
+                    ForEach(model.diagnostics) { diagnostic in
+                        VStack(alignment: .leading, spacing: 4) {
+                            WorkspaceNotice(message: diagnostic.message, isError: diagnostic.severity == .error)
+                            if let detail = diagnostic.detail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(theme.color("fg-muted"))
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                     if model.checkout.operation == .creating || model.checkout.operation == .repairing {
                         ProgressView(value: Double(model.progress.completedMembers), total: Double(max(model.progress.totalMembers, 1)))
@@ -149,6 +158,10 @@ struct WorkspaceCheckoutMemberRow: View {
                 Text(row.detail).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                if let action = row.actions.first(where: { !$0.isDestructive }) {
+                    AlasButton(title: action.title, style: .subtle) { perform(action.kind) }
+                        .accessibilityLabel("\(action.title) for \(row.title)")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(row.status.label).font(.system(size: 10.5)).foregroundColor(theme.color("fg-muted"))
@@ -299,6 +312,7 @@ private extension WorkspaceCheckoutMemberPresentationStatus {
         case .ready: "Ready"
         case .creating: "Creating"
         case .missing: "Missing"
+        case .unavailable: "Unavailable"
         case .identityConflict: "Identity Conflict"
         case .needsAttention: "Needs Attention"
         case .explicitlyDeleted: "Explicitly Deleted"

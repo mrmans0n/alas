@@ -59,7 +59,7 @@ struct WorkspaceMemberReviewRollupTests {
             Self.member(id: memberID, projectID: "app", name: "App", worktreeID: "/checkouts/release/app"),
         ])
         let record = Self.record(id: "active-review", worktreeID: "/checkouts/release/app", status: .active, updatedAt: 1)
-        let model = WorkspaceSidebarTree<EmptyView>.detailModel(
+        let model = WorkspaceCheckoutInspector.detailModel(
             for: checkout,
             rollupBuilder: MemberReviewRollupBuilder(
                 reviews: InMemoryWorkspaceReviewSessionReader(records: [record]),
