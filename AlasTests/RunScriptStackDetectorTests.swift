@@ -776,6 +776,31 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageDoesNotActivateElseAfterUnknownImportConditions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            let package = Package(
+                name: "App",
+                products: [
+            #if canImport(PackageDescription)
+                    .library(name: "App", targets: ["App"]),
+            #else
+                    .executable(name: "App", targets: ["App"]),
+            #endif
+                ],
+                targets: [.target(name: "App")]
+            )
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageUsesManifestToolsVersionForSwiftConditions() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1045,6 +1070,29 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.go]?.goRunTarget == nil)
     }
 
+    @Test func goResolvesCGOTagFromTheDetectedToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build cgo\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let cgoDisabled = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(cgoDisabled[.go]?.goRunTarget == nil)
+
+        let cgoEnabled = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [], cgoEnabled: true)
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(cgoEnabled[.go]?.goRunTarget == ".")
+    }
+
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1146,11 +1194,28 @@ struct RunScriptStackDetectorTests {
 
         try FileManager.default.createDirectory(at: root.appendingPathComponent("bin"), withIntermediateDirectories: true)
         try touch("bin/rails", ".rubocop.yml", in: root)
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rubocop\"\n", in: root)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("spec"), withIntermediateDirectories: true)
         let stacks = detect(root)
         #expect(stacks[.ruby] == nil)
         #expect(stacks[.rails]?.hasSpecDirectory == true)
         #expect(stacks[.rails]?.hasRubocopConfig == true)
+    }
+
+    @Test func rubocopRequiresDeclaredBundleDependency() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("bin"), withIntermediateDirectories: true)
+        try touch("bin/rails", ".rubocop.yml", in: root)
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\n", in: root)
+
+        #expect(detect(root)[.rails]?.hasRubocopConfig == false)
+
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rubocop\"\n", in: root)
+        #expect(detect(root)[.rails]?.hasRubocopConfig == true)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("bin/rails"))
+        #expect(detect(root)[.ruby]?.hasRubocopConfig == true)
     }
 
     @Test func rubyRecordsDeclaredRakeTestTask() throws {
@@ -1247,6 +1312,48 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == false)
         #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonUVRunnerIgnoresNonDefaultDependencyGroupsForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            lint = ["ruff"]
+            test = ["pytest"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            lint = ["ruff"]
+            test = ["pytest"]
+
+            [tool.uv]
+            default-groups = ["lint", "test"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == true)
+        #expect(detect(root)[.python]?.hasRuff == true)
     }
 
     @Test func pythonBareRunnerIgnoresOptionalExtrasForToolAvailability() throws {

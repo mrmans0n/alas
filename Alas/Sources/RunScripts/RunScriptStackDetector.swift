@@ -10,6 +10,7 @@ struct RunScriptStackDetection: Identifiable, Equatable, Sendable {
 struct GoToolchainEnvironment: Equatable, Sendable {
     var minorVersion: Int?
     var architectureFeatures: Set<String>
+    var cgoEnabled = false
 }
 
 /// Creation-time stack detection from marker files at the worktree root.
@@ -49,7 +50,12 @@ enum RunScriptStackDetector {
         let hasArtisan = entries.contains("artisan")
         let hasDjangoManage = entries.contains("manage.py")
         let hasSpec = isDirectory("spec")
-        let hasRubocop = has(".rubocop.yml")
+        let hasRubocop = has(".rubocop.yml") && rubyBundleDeclaresGem(
+            named: "rubocop",
+            rootEntries: names,
+            worktreeRoot: worktreeRoot,
+            fileManager: fileManager
+        )
 
         var detections: [RunScriptStackDetection] = []
         func add(_ stack: RunScriptStack, _ context: RunScriptStackContext = .init()) {
@@ -78,6 +84,7 @@ enum RunScriptStackDetector {
                 // Laravel/PHP defer to their framework-specific stack.
                 guard (has("pyproject.toml") || hasRequirements), !hasDjangoManage else { continue }
                 let pyproject = contents("pyproject.toml") ?? ""
+                let dependencyGroups = pythonRunner == .uv ? uvDefaultDependencyGroups(pyproject) : []
                 add(stack, .init(
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
@@ -86,13 +93,13 @@ enum RunScriptStackDetector {
                         pyproject,
                         tool: "pytest",
                         includeOptionalDependencies: false,
-                        includeDependencyGroups: pythonRunner != .bare
+                        dependencyGroups: dependencyGroups
                     ),
                     hasRuff: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "ruff",
                         includeOptionalDependencies: false,
-                        includeDependencyGroups: pythonRunner != .bare
+                        dependencyGroups: dependencyGroups
                     )
                 ))
             case .django:
@@ -925,7 +932,7 @@ enum RunScriptStackDetector {
         struct Frame {
             let parentActive: Bool
             var active: Bool
-            var branchTaken: Bool
+            var priorBranchesDefinitelyFalse: Bool
         }
         var output: [String] = []
         var stack: [Frame] = []
@@ -934,24 +941,28 @@ enum RunScriptStackDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#if") {
                 let parent = isActive()
-                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion) == true
-                stack.append(.init(parentActive: parent, active: parent && condition, branchTaken: condition))
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
+                stack.append(.init(
+                    parentActive: parent,
+                    active: parent && condition == true,
+                    priorBranchesDefinitelyFalse: condition == false
+                ))
                 continue
             }
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#elseif") {
                 guard !stack.isEmpty else { continue }
-                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion) == true
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
                 var frame = stack.removeLast()
-                frame.active = frame.parentActive && !frame.branchTaken && condition
-                frame.branchTaken = frame.branchTaken || condition
+                frame.active = frame.parentActive && frame.priorBranchesDefinitelyFalse && condition == true
+                frame.priorBranchesDefinitelyFalse = frame.priorBranchesDefinitelyFalse && condition == false
                 stack.append(frame)
                 continue
             }
             if trimmed == "#else" {
                 guard !stack.isEmpty else { continue }
                 var frame = stack.removeLast()
-                frame.active = frame.parentActive && !frame.branchTaken
-                frame.branchTaken = true
+                frame.active = frame.parentActive && frame.priorBranchesDefinitelyFalse
+                frame.priorBranchesDefinitelyFalse = false
                 stack.append(frame)
                 continue
             }
@@ -1282,12 +1293,13 @@ enum RunScriptStackDetector {
     private static func goBuildTagIsEnabled(_ tag: Substring, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let tag = String(tag)
         return goCoreBuildTags.contains(tag)
+            || (tag == "cgo" && toolchainEnvironment.cgoEnabled)
             || toolchainEnvironment.architectureFeatures.contains(tag)
             || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
     }
 
     private static var goCoreBuildTags: Set<String> {
-        ["darwin", "unix", String(currentGoArchitecture), "cgo", "gc"]
+        ["darwin", "unix", String(currentGoArchitecture), "gc"]
     }
 
     private static var defaultGoArchitectureFeatureTags: Set<String> {
@@ -1301,7 +1313,7 @@ enum RunScriptStackDetector {
     }
 
     private static var defaultGoToolchainEnvironment: GoToolchainEnvironment {
-        .init(minorVersion: 25, architectureFeatures: defaultGoArchitectureFeatureTags)
+        .init(minorVersion: 25, architectureFeatures: defaultGoArchitectureFeatureTags, cgoEnabled: true)
     }
 
     private static func goReleaseTags(minorVersion: Int?) -> Set<String> {
@@ -1317,7 +1329,7 @@ enum RunScriptStackDetector {
     private static func currentGoToolchainEnvironment(worktreeRoot: URL) -> GoToolchainEnvironment? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["go", "env", "GOVERSION", "GOAMD64", "GOARM64"]
+        process.arguments = ["go", "env", "GOVERSION", "GOAMD64", "GOARM64", "CGO_ENABLED"]
         process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
@@ -1342,9 +1354,11 @@ enum RunScriptStackDetector {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let version = lines.first ?? ""
         let architectureFeatureLevel = lines.dropFirst().first { !$0.isEmpty }
+        let cgoValue = lines.dropFirst(3).first
         return .init(
             minorVersion: goToolchainMinorVersion(from: version),
-            architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel)
+            architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel),
+            cgoEnabled: cgoValue != "0"
         )
     }
 
@@ -1423,6 +1437,34 @@ enum RunScriptStackDetector {
         let escapedGem = NSRegularExpression.escapedPattern(for: gem)
         return stripped.range(
             of: #"(?m)^\s*gem\s+["']"# + escapedGem + #"["']"#, options: .regularExpression
+        ) != nil
+    }
+
+    private static func rubyBundleDeclaresGem(
+        named gem: String,
+        rootEntries: [String],
+        worktreeRoot: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        func fileContents(_ name: String) -> String {
+            let url = worktreeRoot.appendingPathComponent(name)
+            guard let data = fileManager.contents(atPath: url.path) else { return "" }
+            return String(decoding: data, as: UTF8.self)
+        }
+        if rootEntries.contains("Gemfile"), gemfileDeclaresGem(fileContents("Gemfile"), gem: gem) {
+            return true
+        }
+        return rootEntries.filter { $0.hasSuffix(".gemspec") }.contains { name in
+            gemspecDeclaresGem(fileContents(name), gem: gem)
+        }
+    }
+
+    private static func gemspecDeclaresGem(_ gemspec: String, gem: String) -> Bool {
+        let stripped = stripHashComments(gemspec)
+        let escapedGem = NSRegularExpression.escapedPattern(for: gem)
+        return stripped.range(
+            of: #"\badd_(?:development_)?dependency\s+["']"# + escapedGem + #"["']"#,
+            options: .regularExpression
         ) != nil
     }
 
@@ -1724,7 +1766,7 @@ enum RunScriptStackDetector {
         _ pyproject: String,
         tool: String,
         includeOptionalDependencies: Bool,
-        includeDependencyGroups: Bool
+        dependencyGroups: Set<String>
     ) -> Bool {
         let stripped = stripHashComments(pyproject)
         for section in tomlSections(stripped) {
@@ -1735,8 +1777,8 @@ enum RunScriptStackDetector {
             case "build-system":
                 continue
             case "dependency-groups":
-                guard includeDependencyGroups else { continue }
-                if tomlDependencyText(section.body, declares: tool) { return true }
+                guard !dependencyGroups.isEmpty else { continue }
+                if tomlKeyedDependencyText(section.body, declares: tool, keys: Array(dependencyGroups)) { return true }
             default:
                 if table.hasPrefix("project.optional-dependencies") {
                     guard includeOptionalDependencies else { continue }
@@ -1750,6 +1792,12 @@ enum RunScriptStackDetector {
             }
         }
         return false
+    }
+
+    private static func uvDefaultDependencyGroups(_ pyproject: String) -> Set<String> {
+        let stripped = stripHashComments(pyproject)
+        guard let toolUV = tomlSections(stripped).first(where: { $0.name == "tool.uv" }) else { return [] }
+        return Set(tomlStringArrayValues(toolUV.body, key: "default-groups"))
     }
 
     private static func tomlSections(_ toml: String) -> [(name: String, body: String)] {
@@ -1813,6 +1861,23 @@ enum RunScriptStackDetector {
                 guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
                 let body = String(text[bodyRange])
                 return quotedDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+            }
+        }
+    }
+
+    private static func tomlStringArrayValues(_ text: String, key: String) -> [String] {
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
+        guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#),
+              let stringRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
+        else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return arrayRegex.matches(in: text, range: range).flatMap { match -> [String] in
+            guard let bodyRange = Range(match.range(at: 1), in: text) else { return [] }
+            let body = String(text[bodyRange])
+            let fullBodyRange = NSRange(body.startIndex..., in: body)
+            return stringRegex.matches(in: body, range: fullBodyRange).compactMap { stringMatch in
+                guard let valueRange = Range(stringMatch.range(at: 1), in: body) else { return nil }
+                return String(body[valueRange])
             }
         }
     }
