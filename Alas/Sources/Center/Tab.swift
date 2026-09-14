@@ -767,6 +767,10 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var revealCharacter: Int? = nil  // 0-based UTF-16
     var revealRevision: Int? = nil   // increments for each explicit reveal request
     var externalAbsolutePath: String? = nil  // set when navigating to a file outside the worktree
+    /// Root identity established by local LSP navigation. Retain it across
+    /// lazy buffer creation and tab restoration so symlink retargets cannot
+    /// silently establish a new editable worktree boundary.
+    var navigationResolvedRoot: URL? = nil
     /// The worktree-relative path of the in-worktree file the user was
     /// viewing when they ⌘-clicked to open this external tab. Persisted so
     /// that app-restart reopens can still route LSP traffic to the correct

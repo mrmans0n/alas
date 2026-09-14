@@ -121,6 +121,7 @@ final class EditorBuffer {
 
     let worktreeRoot: URL
     private let localSaveRoot: URL?
+    private let navigationResolvedRoot: URL?
     private(set) var relativePath: String
 
     /// `true` when this buffer represents a file outside the worktree (e.g.
@@ -554,24 +555,24 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// Synchronous load variant for non-UI save materialization. Normal editor
     /// opens use the async load path to avoid blocking the main thread.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
     }
 
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
@@ -602,7 +603,7 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
@@ -611,7 +612,8 @@ final class EditorBuffer {
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
         )
         self.remoteHost = remoteHost
-        self.localSaveRoot = remoteHost == nil ? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
+        self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
+        self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -637,6 +639,9 @@ final class EditorBuffer {
                 lsp: lsp,
                 checkConflictOnRestore: checkConflictOnRestore
             )
+        }
+        if self.navigationResolvedRoot != nil {
+            readOnly = navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath())
         }
         if isExternal || loadSynchronously {
             loadFromDiskSync()
@@ -1355,6 +1360,17 @@ final class EditorBuffer {
         // cannot redirect the write. Replacing this canonical parent concurrently
         // retains the atomic writer's existing external-process race.
         return url
+    }
+
+    /// A navigation decision belongs to the root resolved when the tab opened,
+    /// not whichever root an alias names when a lazy load eventually starts.
+    private func navigationLoadIsReadOnly(resolvedURL: URL) -> Bool {
+        guard let navigationResolvedRoot else { return false }
+        let rootComponents = navigationResolvedRoot.pathComponents
+        let targetComponents = resolvedURL.standardizedFileURL.pathComponents
+        return worktreeRoot.resolvingSymlinksInPath().standardizedFileURL != navigationResolvedRoot
+            || targetComponents.count <= rootComponents.count
+            || !targetComponents.starts(with: rootComponents)
     }
 
     /// Remote writes must not block the main actor. Keep the buffer dirty and
@@ -2498,7 +2514,7 @@ final class EditorBuffer {
         case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
             let detected = LineEnding.detect(in: raw)
             let canonical = LineEnding.lf.normalize(raw)
-            let nextReadOnly = (isExternal && !externalEditable) || isSymlink
+            let nextReadOnly = (isExternal && !externalEditable) || isSymlink || navigationLoadIsReadOnly(resolvedURL: resolvedURL)
             let didApplyChange = storage.string != canonical
                 || originalText != canonical
                 || lineEnding != detected
@@ -2566,7 +2582,7 @@ final class EditorBuffer {
         lineEnding = detected
         updateOriginalFileAttributes(from: resolvedURL)
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        readOnly = (isExternal && !externalEditable) || isSymlink
+        readOnly = (isExternal && !externalEditable) || isSymlink || navigationLoadIsReadOnly(resolvedURL: resolvedURL)
         loadKind = .loaded
         return self
     }

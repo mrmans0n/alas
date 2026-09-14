@@ -148,8 +148,11 @@ final class TabsManager {
         let targetComponents = normalizedURL.pathComponents
         var isContained = targetComponents.count > rootComponents.count
             && targetComponents.starts(with: rootComponents)
+        var navigationResolvedRoot: URL?
         if isContained, target.document.host == nil {
-            let resolvedRootComponents = normalizedRoot.resolvingSymlinksInPath().pathComponents
+            let resolvedRoot = normalizedRoot.resolvingSymlinksInPath().standardizedFileURL
+            navigationResolvedRoot = resolvedRoot
+            let resolvedRootComponents = resolvedRoot.pathComponents
             let resolvedTargetComponents = normalizedURL.resolvingSymlinksInPath().pathComponents
             // A directory symlink can escape the worktree despite a contained
             // logical path. Missing targets cannot establish resolved identity.
@@ -162,7 +165,8 @@ final class TabsManager {
                 worktreeId: target.document.worktreeID,
                 relativePath: targetComponents.dropFirst(rootComponents.count).joined(separator: "/"),
                 revealLine: target.position.line,
-                revealCharacter: target.position.character
+                revealCharacter: target.position.character,
+                navigationResolvedRoot: navigationResolvedRoot
             )
         } else {
             _ = openExternalEditor(
@@ -698,7 +702,8 @@ final class TabsManager {
         relativePath: String,
         revealLine: Int?,
         revealCharacter: Int?,
-        revealEndLine: Int? = nil
+        revealEndLine: Int? = nil,
+        navigationResolvedRoot: URL? = nil
     ) -> Tab {
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
             && MarkdownFileType.supportsRichPreview(relativePath: relativePath)
@@ -708,6 +713,7 @@ final class TabsManager {
                return false
            }) {
             if case .editor(var s) = file.tabs[idx] {
+                s.navigationResolvedRoot = s.navigationResolvedRoot ?? navigationResolvedRoot
                 s.revealLine = revealLine
                 s.revealEndLine = revealEndLine
                 s.revealCharacter = revealCharacter
@@ -731,7 +737,8 @@ final class TabsManager {
             relativePath: relativePath,
             revealLine: revealLine,
             revealEndLine: revealEndLine,
-            revealCharacter: revealCharacter
+            revealCharacter: revealCharacter,
+            navigationResolvedRoot: navigationResolvedRoot
         )
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
@@ -1966,6 +1973,12 @@ final class TabsManager {
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let existing = tabBuffers[tabId] { return existing }
+        let navigationResolvedRoot: URL?
+        if case .editor(let state)? = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) {
+            navigationResolvedRoot = state.navigationResolvedRoot
+        } else {
+            navigationResolvedRoot = nil
+        }
         let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
         var restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
         if restoresToDifferentPath {
@@ -1990,7 +2003,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 lsp: lsp,
-                checkConflictOnRestore: true
+                checkConflictOnRestore: true,
+                navigationResolvedRoot: navigationResolvedRoot
             )
         } else {
             buffer = EditorBuffer(
@@ -1999,7 +2013,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                checkConflictOnRestore: true
+                checkConflictOnRestore: true,
+                navigationResolvedRoot: navigationResolvedRoot
             )
         }
         buffer.startWatching()
@@ -2696,7 +2711,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 lsp: lsp,
-                loadSynchronously: true
+                loadSynchronously: true,
+                navigationResolvedRoot: state.navigationResolvedRoot
             )
         } else {
             buffer = EditorBuffer(
@@ -2705,7 +2721,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                loadSynchronously: true
+                loadSynchronously: true,
+                navigationResolvedRoot: state.navigationResolvedRoot
             )
         }
         if buffer.relativePath != relativePath {
