@@ -22,6 +22,7 @@ final class EditorBufferUndoManager: UndoManager {
     private var typingGroupOpen = false
     private var lastTypingRange: NSRange?
     private var lastTypingReplacementLength = 0
+    var beforeUndo: (() -> Void)?
     var workspaceActionInFlight = false {
         didSet { if workspaceActionInFlight { breakTypingCoalescing() } }
     }
@@ -59,6 +60,7 @@ final class EditorBufferUndoManager: UndoManager {
 
     override func undo() {
         guard !workspaceActionInFlight else { return }
+        beforeUndo?()
         breakTypingCoalescing()
         if current.canUndo { current.undo() }
         else if cursor > 0 { markers[cursor - 1].activate(false) }

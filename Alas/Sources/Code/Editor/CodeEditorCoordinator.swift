@@ -488,6 +488,7 @@ final class CodeEditorCoordinator {
 
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
         stopSemanticTokens()
+        textView?.displayAdapter?.composition.commit()
         textView?.bindUndo(to: nil)
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
@@ -497,9 +498,7 @@ final class CodeEditorCoordinator {
                 previous.removeOnEdit(token)
             }
             editObserverToken = nil
-            if let layoutManager {
-                previous.storage.removeLayoutManager(layoutManager)
-            }
+            try? textView?.bindDisplay(to: nil)
         }
         self.buffer = buffer
         textView?.bindUndo(to: buffer)
@@ -528,8 +527,9 @@ final class CodeEditorCoordinator {
         currentLanguage = buffer.languageOverride ?? freshlyInferred
         observeEffectiveLanguage(buffer)
         applyIndentationMode()
-        if let layoutManager {
-            buffer.storage.addLayoutManager(layoutManager)
+        do { try textView?.bindDisplay(to: buffer) }
+        catch {
+            if let layoutManager { buffer.storage.addLayoutManager(layoutManager) }
         }
         if isRebind {
             // Drop any state captured against the previous buffer before we
@@ -550,7 +550,7 @@ final class CodeEditorCoordinator {
     private func saveViewState() {
         guard let textView, let buffer, let currentTabId else { return }
         buffer.viewStates[currentTabId] = (
-            textView.selectedRanges,
+            textView.sourceSelectedRanges,
             textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
         )
     }
@@ -596,7 +596,7 @@ final class CodeEditorCoordinator {
             let length = min(range.length, buffer.storage.length - location)
             return NSValue(range: NSRange(location: location, length: length))
         }
-        textView.setSelectedRanges(ranges, affinity: .downstream, stillSelecting: false)
+        textView.setSourceSelectedRanges(ranges)
         scroll(textView, to: viewState.scrollOrigin)
     }
 
@@ -608,6 +608,7 @@ final class CodeEditorCoordinator {
 
     func detach() {
         stopSemanticTokens()
+        textView?.displayAdapter?.composition.commit()
         let detachedTextView = textView
         textView?.endSnippet()
         textView?.bindUndo(to: nil)
@@ -637,9 +638,8 @@ final class CodeEditorCoordinator {
         diagnosticsSetupTask = nil
         didChangeTask?.cancel()
         didChangeTask = nil
-        if let buffer, let layoutManager {
-            buffer.storage.removeLayoutManager(layoutManager)
-        }
+        try? textView?.bindDisplay(to: nil)
+        if let layoutManager { layoutManager.textStorage?.removeLayoutManager(layoutManager) }
         layoutManager = nil
         clearHoverObservers()
         hover?.tearDown()
@@ -715,6 +715,7 @@ final class CodeEditorCoordinator {
             object: textView,
             queue: .main
         ) { [weak self] _ in
+            guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
             self?.hover?.notifyCaretChanged()
             self?.definition?.notifyCaretChanged()
             self?.signatureHelp?.notifyScrolled()

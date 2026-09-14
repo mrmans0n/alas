@@ -1279,10 +1279,13 @@ struct EditorBufferTests {
             revealCharacter: nil,
             theme: theme
         )
-        #expect(buffer.storage.layoutManagers.contains { $0 === layoutManager })
+        let display = try #require(textView.displayAdapter?.document.storage)
+        #expect(display.layoutManagers.contains { $0 === layoutManager })
+        #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
 
         coordinator.detach()
 
+        #expect(!display.layoutManagers.contains { $0 === layoutManager })
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
 
@@ -1512,7 +1515,7 @@ struct EditorBufferTests {
         #expect(appliedFont?.isFixedPitch == true)
     }
 
-    @Test func coordinatorPathChangeRebindsLayoutManagerToNewBufferStorage() async throws {
+    @Test func coordinatorPathChangeRebindsLayoutManagerToNewDisplayStorage() async throws {
         // Regression: when the active editor tab switched, the coordinator
         // updated its bookkeeping but never moved the layout manager off the
         // first buffer's NSTextStorage, so the text view kept rendering the
@@ -1547,7 +1550,9 @@ struct EditorBufferTests {
             revealCharacter: nil,
             theme: theme
         )
-        #expect(bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+        let displayA = try #require(textView.displayAdapter?.document.storage)
+        #expect(displayA.layoutManagers.contains { $0 === layoutManager })
+        #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
 
         coordinator.updateIfNeeded(
             worktreeId: "wt",
@@ -1566,8 +1571,12 @@ struct EditorBufferTests {
             relativePath: "b.swift"
         )
         await bufferB.awaitLoadForTesting()
+        #expect(!displayA.layoutManagers.contains { $0 === layoutManager })
         #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
-        #expect(bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        let displayB = try #require(textView.displayAdapter?.document.storage)
+        #expect(displayB.layoutManagers.contains { $0 === layoutManager })
+        #expect(!bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        #expect(textView.sourceString == "let beta = 1\n")
         // The newly bound storage must come back styled monospaced. The
         // original bug here was that applyBaseStyle resolved the font from
         // textView.font, which after rebinding read char 0 of the new

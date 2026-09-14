@@ -132,6 +132,94 @@ final class EditorBuffer {
 
     @ObservationIgnored let undoManager = EditorBufferUndoManager()
 
+    @ObservationIgnored private(set) var compositionOwner: UUID?
+    @ObservationIgnored private var compositionSettlement: (() -> Void)?
+    @ObservationIgnored private var compositionInvalidation: (() -> Void)?
+    @ObservationIgnored private var compositionReload: (() -> Void)?
+    private final class SourceEditSelection {
+        var ranges: [NSValue]
+        init(_ ranges: [NSValue]) { self.ranges = ranges }
+    }
+    @ObservationIgnored private var lastSourceEditSelection: SourceEditSelection?
+    @ObservationIgnored private var selectionObservers: [UUID: ([NSValue]) -> Void] = [:]
+
+    var acceptsSourceInput: Bool {
+        !readOnly && (!isExternal || externalEditable) && !workspaceEditMutationInFlight && !undoManager.workspaceActionInFlight
+    }
+
+    func beginComposition(owner: UUID, settle: @escaping () -> Void, invalidate: @escaping () -> Void) -> Bool {
+        guard acceptsSourceInput, compositionOwner == nil else { return false }
+        undoManager.breakTypingCoalescing()
+        compositionOwner = owner
+        compositionSettlement = settle
+        compositionInvalidation = invalidate
+        return true
+    }
+
+    func endComposition(owner: UUID) {
+        guard compositionOwner == owner else { return }
+        compositionOwner = nil
+        compositionSettlement = nil
+        compositionInvalidation = nil
+        let reload = compositionReload
+        compositionReload = nil
+        if let reload { DispatchQueue.main.async(execute: reload) }
+    }
+
+    private func invalidateComposition() {
+        let invalidate = compositionInvalidation
+        compositionOwner = nil
+        compositionSettlement = nil
+        compositionInvalidation = nil
+        compositionReload = nil
+        invalidate?()
+    }
+
+    func observeSourceSelection(_ observer: @escaping ([NSValue]) -> Void) -> UUID {
+        let id = UUID()
+        selectionObservers[id] = observer
+        return id
+    }
+
+    func removeSourceSelectionObserver(_ id: UUID) { selectionObservers.removeValue(forKey: id) }
+
+    func recordSourceEditSelection(_ ranges: [NSValue]) { lastSourceEditSelection?.ranges = ranges }
+
+    @discardableResult
+    func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil) -> Bool {
+        guard acceptsSourceInput, compositionOwner == composition,
+              range.location >= 0, range.location <= storage.length, range.length >= 0, range.length <= storage.length - range.location,
+              let map = try? EditorDisplayMap(source: storage.string, revision: editGeneration, hints: []),
+              (try? map.displaySegments(forSource: range)) != nil else { return false }
+        let previous = (storage.string as NSString).substring(with: range)
+        guard previous != replacement else { return true }
+        if composition == nil {
+            registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
+                                  replacement: previous, selections: finalSelections, restoredSelections: selections,
+                                  coalescingRange: range)
+        }
+        storage.replaceCharacters(in: range, with: replacement)
+        return true
+    }
+
+    /// Composition registers after provisional edits using its immutable original,
+    /// never by reading the already-replaced source to discover the inverse.
+    func registerSourceInverse(range: NSRange, expected: String, replacement: String, selections: [NSValue], restoredSelections: [NSValue], coalescingRange: NSRange? = nil) {
+        guard expected != replacement else { return }
+        let selection = SourceEditSelection(selections)
+        lastSourceEditSelection = selection
+        let simple = (replacement.isEmpty && expected.count == 1 && expected.rangeOfCharacter(from: .newlines) == nil)
+            || (expected.isEmpty && replacement.count == 1)
+        undoManager.registerBufferUndo(target: self, actionName: "Typing", coalescingRange: simple ? coalescingRange : nil, replacementLength: expected.utf16.count) { buffer in
+            guard NSMaxRange(range) <= buffer.storage.length,
+                  (buffer.storage.string as NSString).substring(with: range) == expected else { return }
+            buffer.registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
+                                         replacement: expected, selections: restoredSelections, restoredSelections: selection.ranges)
+            buffer.storage.replaceCharacters(in: range, with: replacement)
+            for observer in Array(buffer.selectionObservers.values) { observer(restoredSelections) }
+        }
+    }
+
     /// The inverse targets stable storage, never a text view reused by a tab.
     func registerTextUndo(range: NSRange, replacement: String, actionName: String = "Typing", coalescing: Bool = false) {
         guard programmaticEditDepth == 0, !workspaceEditMutationInFlight,
@@ -182,7 +270,7 @@ final class EditorBuffer {
     var workspaceEditHost: String? { remoteHost }
 
     func beginWorkspaceEditMutation() throws {
-        guard !workspaceEditMutationInFlight, !remoteSaveInFlight,
+        guard compositionOwner == nil, !workspaceEditMutationInFlight, !remoteSaveInFlight,
               initialLoadFinished, !readOnly, !isExternal || externalEditable else { throw SaveError.remoteSaveConflict }
         workspaceEditMutationInFlight = true
     }
@@ -206,7 +294,7 @@ final class EditorBuffer {
     /// Workspace edits keep open text unsaved, including resource deletion.
     /// A tombstone retains the live storage and its baseline for recovery.
     func applyWorkspaceEditContent(_ content: Data?, expectedGeneration: Int) throws {
-        guard editGeneration == expectedGeneration, initialLoadFinished,
+        guard compositionOwner == nil, editGeneration == expectedGeneration, initialLoadFinished,
               !readOnly, !isExternal || externalEditable,
               !remoteSaveInFlight else { throw SaveError.remoteSaveConflict }
         let wasDeleted = workspaceEditDeleted
@@ -516,6 +604,7 @@ final class EditorBuffer {
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
+        undoManager.beforeUndo = { [weak self] in self?.compositionSettlement?() }
         let snapshot: EditorBufferStore.Snapshot?
         if restoreEnabled, let store, let worktreeId, let tabId {
             snapshot = (try? store.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
@@ -802,6 +891,7 @@ final class EditorBuffer {
     }
 
     func revert() {
+        invalidateComposition()
         if let remoteHost {
             beginRemoteLoad(host: remoteHost, replacingDirty: true)
             discardSnapshot()
@@ -837,6 +927,17 @@ final class EditorBuffer {
         src.resume()
         watcherSource = src
         watcherFD = fd
+    }
+
+    private func reloadAfterExternalChange() {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in self?.reloadAfterExternalChange() }
+            return
+        }
+        // A queued watcher reload must recheck the settled composition's source.
+        if dirty { conflict = .changedOnDisk
+        return }
+        revert()
     }
 
     private func watcherEventDelivery() -> @MainActor () -> Void {
@@ -934,7 +1035,7 @@ final class EditorBuffer {
             if dirty {
                 conflict = .changedOnDisk
             } else {
-                revert()
+                reloadAfterExternalChange()
             }
         } catch {
             if case .connectionFailed = error as? RemoteFileAccessError {
@@ -967,7 +1068,7 @@ final class EditorBuffer {
             conflict = .changedOnDisk
             return
         }
-        revert()
+        reloadAfterExternalChange()
         // Re-arm watcher in case rename swapped the inode (atomic save by an
         // external tool).
         startWatching()
@@ -1891,7 +1992,7 @@ final class EditorBuffer {
     /// not shift. Returns `false` if any edit range is invalid, leaving the
     /// buffer untouched.
     private func applyFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
-        guard !undoManager.workspaceActionInFlight else { return false }
+        guard compositionOwner == nil, !undoManager.workspaceActionInFlight else { return false }
         let snapshot = WorkspaceFileSnapshot(
             document: .init(host: workspaceEditHost, worktreeID: "", uri: worktreeRoot.appendingPathComponent(relativePath).lspURI),
             content: Data(storage.string.utf8)
@@ -2061,12 +2162,14 @@ final class EditorBuffer {
     }
 
     private func setStorageText(_ text: String) {
+        invalidateComposition()
         withLoadEditTrackingSuppressed {
             storage.setAttributedString(NSAttributedString(string: text))
         }
     }
 
     private func applyLoadedText(_ raw: String) {
+        invalidateComposition()
         let detected = LineEnding.detect(in: raw)
         let canonical = LineEnding.lf.normalize(raw)
         storage.setAttributedString(NSAttributedString(string: canonical))
@@ -2075,6 +2178,10 @@ final class EditorBuffer {
     }
 
     private func beginRemoteLoad(host: String, replacingDirty: Bool) {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in self?.beginRemoteLoad(host: host, replacingDirty: replacingDirty) }
+            return
+        }
         remoteLoadGeneration &+= 1
         let generation = remoteLoadGeneration
         let path = absoluteFileURL.path
@@ -2241,6 +2348,13 @@ final class EditorBuffer {
         hasPendingSnapshot: Bool = false,
         completion: @escaping @MainActor (LoadState.Pending?) -> Void
     ) {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in
+                self?.loadFromDisk(preservePendingEdits: preservePendingEdits, replacingDirty: replacingDirty,
+                                   notifyAfterLoad: notifyAfterLoad, hasPendingSnapshot: hasPendingSnapshot, completion: completion)
+            }
+            return
+        }
         if let remoteHost {
             let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
             beginRemoteLoad(host: remoteHost, replacingDirty: replacingDirty)
@@ -2313,6 +2427,7 @@ final class EditorBuffer {
 
     @discardableResult
     private func applyLoadResult(_ result: LoadResult) -> Bool {
+        invalidateComposition()
         switch result {
         case .missing:
             let didApplyChange = storage.string != "(unable to read file)" || !readOnly
@@ -2365,6 +2480,7 @@ final class EditorBuffer {
 
     @discardableResult
     private func loadFromDiskSync() -> Self {
+        invalidateComposition()
         let url = absoluteFileURL
         let resolvedURL = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
