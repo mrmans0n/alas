@@ -18,12 +18,15 @@ struct EditorDisplayIntegrationTests {
         defer { delayed?.cancel() }
         transport.onSend = { sent in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
-            received = true
-            delayed = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .null]).encodedData(), as: UTF8.self))
-                replied = true
+            Task { @MainActor in
+                #expect(Thread.isMainThread)
+                received = true
+                delayed = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .null]).encodedData(), as: UTF8.self))
+                    replied = true
+                }
             }
         }
         let request = Task { try await client.hover(uri: "file:///tmp/file.swift", position: .init(line: 0, character: 0)) }
