@@ -272,7 +272,10 @@ enum RunScriptStackDetector {
                         let isCloseStar = text[index] == "*" && text.index(after: index) < text.endIndex
                             && text[text.index(after: index)] == "/"
                         index = text.index(after: index)
-                        if isCloseStar { index = text.index(after: index); break }
+                        if isCloseStar {
+                            index = text.index(after: index)
+                            break
+                        }
                     }
                     continue
                 }
