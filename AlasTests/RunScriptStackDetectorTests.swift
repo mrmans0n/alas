@@ -116,6 +116,9 @@ struct RunScriptStackDetectorTests {
         try write("build.gradle", #"def documentation = "id 'java'""#, in: root)
 
         #expect(detect(root)[.gradle]?.gradleTasks == [])
+
+        try write("build.gradle", #"def documentation = 'id "java"'"#, in: root)
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
     }
 
     @Test func mavenDetectsWrapper() throws {
@@ -335,6 +338,32 @@ struct RunScriptStackDetectorTests {
         try touch("src/main.rs", in: root)
 
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
+    @Test func cargoDoesNotTreatDefaultOptionalDependenciesAsPackageFeatures() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [features]
+            default = ["dep:cli"]
+            cli = []
+
+            [[bin]]
+            name = "tool"
+            path = "src/main.rs"
+            required-features = ["cli"]
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
     }
 
     @Test func cargoParsesSingleQuotedRequiredFeatures() throws {
@@ -664,6 +693,31 @@ struct RunScriptStackDetectorTests {
                 name: "App",
                 products: [
             #if swift(>=999.0)
+                    .executable(name: "App", targets: ["App"]),
+            #else
+                    .library(name: "App", targets: ["App"]),
+            #endif
+                ],
+                targets: [.target(name: "App")]
+            )
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    @Test func swiftPackageLeavesRunUncheckedForUnavailableImports() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            let package = Package(
+                name: "App",
+                products: [
+            #if canImport(DefinitelyMissingModule)
                     .executable(name: "App", targets: ["App"]),
             #else
                     .library(name: "App", targets: ["App"]),

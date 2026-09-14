@@ -667,7 +667,8 @@ enum RunScriptStackDetector {
             let features = quotedValueRegex.matches(in: values, range: valuesNSRange).compactMap { value -> String? in
                 guard let valueRange = Range(value.range(at: 1), in: values) else { return nil }
                 let feature = String(values[valueRange])
-                return feature.components(separatedBy: "/").first?.replacingOccurrences(of: "dep:", with: "")
+                guard !feature.hasPrefix("dep:") else { return nil }
+                return feature.components(separatedBy: "/").first
             }
             return (String(section[nameRange]), features)
         })
@@ -931,6 +932,9 @@ enum RunScriptStackDetector {
         if let condition = swiftVersionCondition(trimmed, function: "compiler") {
             return swiftVersion(currentSwiftCompilerVersion, satisfies: condition)
         }
+        if swiftImportConditionName(trimmed) != nil {
+            return false
+        }
         // Unknown manifest conditions may depend on SwiftPM settings. Keep
         // them rather than hiding real executable declarations.
         return true
@@ -1001,6 +1005,15 @@ enum RunScriptStackDetector {
 
     private static func swiftArchitectureConditionName(_ condition: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: #"^arch\(\s*([A-Za-z0-9_]+)\s*\)$"#) else { return nil }
+        let range = NSRange(condition.startIndex..., in: condition)
+        guard let match = regex.firstMatch(in: condition, range: range),
+              let nameRange = Range(match.range(at: 1), in: condition)
+        else { return nil }
+        return String(condition[nameRange])
+    }
+
+    private static func swiftImportConditionName(_ condition: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"^canImport\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$"#) else { return nil }
         let range = NSRange(condition.startIndex..., in: condition)
         guard let match = regex.firstMatch(in: condition, range: range),
               let nameRange = Range(match.range(at: 1), in: condition)
@@ -1367,6 +1380,7 @@ enum RunScriptStackDetector {
         var isEscaped = false
         var index = text.startIndex
         var stringStart = text.startIndex
+        var quoteCharacter: Character = "\""
         while index < text.endIndex {
             let char = text[index]
             if inString {
@@ -1374,7 +1388,7 @@ enum RunScriptStackDetector {
                     isEscaped = false
                 } else if char == "\\" {
                     isEscaped = true
-                } else if char == "\"" {
+                } else if char == quoteCharacter {
                     inString = false
                     let end = text.index(after: index)
                     ranges.append(NSRange(stringStart..<end, in: text))
@@ -1382,9 +1396,10 @@ enum RunScriptStackDetector {
                 index = text.index(after: index)
                 continue
             }
-            if char == "\"" {
+            if char == "\"" || char == "'" {
                 inString = true
                 stringStart = index
+                quoteCharacter = char
                 index = text.index(after: index)
                 continue
             }
