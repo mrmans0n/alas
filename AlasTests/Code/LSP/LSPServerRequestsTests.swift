@@ -4,6 +4,80 @@ import Testing
 
 @Suite("LSP server requests", .serialized)
 struct LSPServerRequestsTests {
+    enum CommandEnding: CaseIterable { case finish, end, cancelFinish, shutdown }
+
+    @Test(arguments: CommandEnding.allCases)
+    func commandTerminationPreservesConfigurationExceptAtShutdown(ending: CommandEnding) async throws {
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        let configurationStarted = AsyncStream<Void>.makeStream()
+        let configurationPermission = AsyncStream<Void>.makeStream()
+        let editStarted = AsyncStream<Void>.makeStream()
+        let editPermission = AsyncStream<Void>.makeStream()
+        defer {
+            configurationStarted.continuation.finish()
+            configurationPermission.continuation.finish()
+            editStarted.continuation.finish()
+            editPermission.continuation.finish()
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        await client.setConfigurationHandler { _, _ in
+            configurationStarted.continuation.yield(())
+            var permission = configurationPermission.stream.makeAsyncIterator()
+            _ = await permission.next()
+            return .object(["tabSize": .number("4")])
+        }
+        let token = try await client.beginCommandSession { _ in
+            editStarted.continuation.yield(())
+            var permission = editPermission.stream.makeAsyncIterator()
+            _ = await permission.next()
+            return .init(applied: !Task.isCancelled)
+        }
+        await client.handle(frame: Data(#"{"id":"settings","method":"workspace/configuration","params":{"items":[{}]}}"#.utf8))
+        await client.handle(frame: Data(#"{"id":"edit","method":"workspace/applyEdit","params":{"edit":{"changes":{}}}}"#.utf8))
+        var configuration = configurationStarted.stream.makeAsyncIterator()
+        _ = await configuration.next()
+        var edit = editStarted.stream.makeAsyncIterator()
+        _ = await edit.next()
+        let configurationTask = try #require(await client.inbound[.string("settings")]?.task)
+        let editTask = try #require(await client.inbound[.string("edit")]?.task)
+        switch ending {
+        case .end:
+            await client.endCommandSession(token)
+        case .finish:
+            editPermission.continuation.yield(())
+            try await client.finishCommandSession(token)
+        case .cancelFinish:
+            let completion = Task { try await client.finishCommandSession(token) }
+            completion.cancel()
+            try await completion.value
+        case .shutdown:
+            await client.shutdown()
+        }
+        #expect(await (client.inbound[.string("settings")] != nil) == (ending != .shutdown))
+        configurationPermission.continuation.yield(())
+        editPermission.continuation.yield(())
+        await configurationTask.value
+        await editTask.value
+        let frames = try transport.sent.map { try LSPJSONValue.decode(from: Data($0.utf8)) }
+        let settings = frames.filter { $0["id"] == .string("settings") }
+        #expect(settings.count == 1)
+        if ending == .shutdown {
+            #expect(settings.first?["error"]?["code"] == .number("-32800"))
+        } else {
+            #expect(settings.first?["result"] == .array([.object(["tabSize": .number("4")])]))
+            #expect(settings.first?["error"] == nil)
+        }
+        let edits = frames.filter { $0["id"] == .string("edit") }
+        #expect(edits.count == 1)
+        #expect(edits.first?["result"]?["applied"] == .bool(ending == .finish))
+        guard ending != .shutdown else { return }
+        let next = try await client.beginCommandSession { _ in .init(applied: true) }
+        await client.endCommandSession(token)
+        await #expect(throws: LSPError.self) { try await client.beginCommandSession { _ in .init(applied: true) } }
+        await client.endCommandSession(next)
+    }
+
     @Test func suspendedResponseDoesNotWriteAfterShutdown() async throws {
         let transport = FakeTransport()
         defer { transport.finish() }

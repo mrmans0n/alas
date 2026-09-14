@@ -20,6 +20,7 @@ actor LSPClient {
     struct InboundRequest {
         let generation: UUID
         let method: String
+        let commandSession: UUID?
         let task: Task<Void, Never>
     }
     private(set) var inbound: [LSPID: InboundRequest] = [:]
@@ -424,18 +425,21 @@ actor LSPClient {
         guard commandSession == id else { return }
         commandSession = nil
         serverRequests.applyEdit = nil
-        cancelInboundRequests()
+        for (requestID, request) in inbound where request.commandSession == id {
+            cancelInboundRequest(requestID)
+        }
     }
 
     func finishCommandSession(_ id: UUID) async throws {
         guard commandSession == id else { return }
         serverRequests.applyEdit = nil
-        let edits = inbound.values.filter { $0.method == "workspace/applyEdit" }.map(\.task)
+        let edits = inbound.values.filter { $0.commandSession == id }.map(\.task)
         await withTaskCancellationHandler {
             for task in edits { await task.value }
         } onCancel: {
             Task { await self.endCommandSession(id) }
         }
+        guard commandSession == id else { return }
         let failure = commandEditFailure
         endCommandSession(id)
         if let failure { throw LSPError.responseError(.init(code: -32800, message: failure)) }
@@ -816,7 +820,8 @@ actor LSPClient {
             guard self.inbound[id]?.generation == generation else { return }
             self.completeInbound(id: id, reply: reply)
         }
-        inbound[id] = InboundRequest(generation: generation, method: method, task: task)
+        inbound[id] = InboundRequest(generation: generation, method: method,
+                                     commandSession: method == "workspace/applyEdit" ? commandSession : nil, task: task)
     }
 
     private func cancelInboundRequests() {
@@ -833,7 +838,7 @@ actor LSPClient {
 
     private func completeInbound(id: LSPID, reply: LSPServerRequests.Reply) {
         guard let request = inbound.removeValue(forKey: id) else { return }
-        if request.method == "workspace/applyEdit", commandSession != nil,
+        if request.commandSession != nil, request.commandSession == commandSession,
            reply.result?["applied"] == .bool(false) {
             commandEditFailure = reply.result?["failureReason"]?.stringValue ?? "Workspace edit was not applied."
         }
