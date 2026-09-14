@@ -58,7 +58,6 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         return try #require(NSEvent(cgEvent: cgEvent))
     }
 
-
     @Test func repeatedSameWidthProbesHitTheCache() {
         let textView = makeTextView("The quick brown fox jumps over the lazy dog, several times, wrapping.")
 
