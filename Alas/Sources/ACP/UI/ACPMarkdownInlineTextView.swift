@@ -221,7 +221,8 @@ extension NSAttributedString.Key {
 
 struct ACPMarkdownScrollRoutingState {
     private(set) var forwarding: Bool?
-    private(set) var pendingStartEvent: NSEvent?
+    private var pendingEvents: [NSEvent] = []
+    var hasPendingEvents: Bool { !pendingEvents.isEmpty }
 
     mutating func shouldForward(
         deltaX: CGFloat,
@@ -236,15 +237,18 @@ struct ACPMarkdownScrollRoutingState {
 
         if phase.contains(.began) {
             forwarding = nil
-            pendingStartEvent = hasDominantAxis ? nil : pendingEvent
+            pendingEvents.removeAll(keepingCapacity: true)
         }
         if momentumPhase.contains(.began) {
-            pendingStartEvent = nil
+            pendingEvents.removeAll(keepingCapacity: true)
+        }
+        if forwarding == nil && hasGesturePhase && !hasDominantAxis, let pendingEvent {
+            pendingEvents.append(pendingEvent)
         }
         if forwarding == nil && hasGesturePhase && hasDominantAxis {
             forwarding = isVertical
         }
-        if forwarding == nil && !hasGesturePhase && pendingStartEvent != nil {
+        if forwarding == nil && !hasGesturePhase && hasPendingEvents {
             forwarding = isVertical
         }
 
@@ -257,18 +261,18 @@ struct ACPMarkdownScrollRoutingState {
             || momentumPhase.contains(.ended)
         {
             forwarding = nil
-            pendingStartEvent = nil
+            pendingEvents.removeAll(keepingCapacity: true)
         } else if phase.contains(.ended) {
-            pendingStartEvent = nil
+            pendingEvents.removeAll(keepingCapacity: true)
         }
 
         return shouldForward
     }
 
-    mutating func consumePendingStartEvent() -> NSEvent? {
-        guard let pendingStartEvent else { return nil }
-        self.pendingStartEvent = nil
-        return pendingStartEvent
+    mutating func consumePendingEvents() -> [NSEvent] {
+        let events = pendingEvents
+        pendingEvents.removeAll(keepingCapacity: true)
+        return events
     }
 
     static func isVerticalDominant(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
@@ -356,19 +360,19 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             momentumPhase: event.momentumPhase,
             pendingEvent: event
         ) {
-            if let pendingStartEvent = scrollRoutingState.consumePendingStartEvent() {
-                nextResponder?.scrollWheel(with: pendingStartEvent)
+            for pendingEvent in scrollRoutingState.consumePendingEvents() {
+                nextResponder?.scrollWheel(with: pendingEvent)
             }
             nextResponder?.scrollWheel(with: event)
             return
         }
 
-        if event.phase.contains(.began), scrollRoutingState.pendingStartEvent != nil {
+        if scrollRoutingState.forwarding == nil, scrollRoutingState.hasPendingEvents {
             return
         }
 
-        if let pendingStartEvent = scrollRoutingState.consumePendingStartEvent() {
-            scrollTextView(with: pendingStartEvent)
+        for pendingEvent in scrollRoutingState.consumePendingEvents() {
+            scrollTextView(with: pendingEvent)
         }
         scrollTextView(with: event)
     }

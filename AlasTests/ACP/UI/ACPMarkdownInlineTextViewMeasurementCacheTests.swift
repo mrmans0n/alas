@@ -266,12 +266,19 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         let transcriptResponder = ACPMarkdownScrollRecordingResponder()
         textView.nextResponder = transcriptResponder
 
-        let ambiguous = try makeScrollEvent(
+        let ambiguousStart = try makeScrollEvent(
             deltaX: 10,
             deltaY: 10,
             phase: .began
         )
-        textView.scrollWheel(with: ambiguous)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(
+            deltaX: 5,
+            deltaY: 5,
+            phase: .changed
+        )
+        textView.scrollWheel(with: ambiguousChange)
 
         let vertical = try makeScrollEvent(
             deltaX: 0,
@@ -280,21 +287,30 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         textView.scrollWheel(with: vertical)
 
-        #expect(transcriptResponder.receivedEvents.count == 2)
-        #expect(transcriptResponder.receivedEvents[0] === ambiguous)
-        #expect(transcriptResponder.receivedEvents[1] === vertical)
+        #expect(textView.superScrollEventsForTests.isEmpty)
+        #expect(transcriptResponder.receivedEvents.count == 3)
+        #expect(transcriptResponder.receivedEvents[0] === ambiguousStart)
+        #expect(transcriptResponder.receivedEvents[1] === ambiguousChange)
+        #expect(transcriptResponder.receivedEvents[2] === vertical)
     }
 
     @Test("ambiguous gesture starts are replayed once axis becomes horizontal")
     func ambiguousGestureStartIsReplayedOnceAxisBecomesHorizontal() throws {
         let textView = makeTextView("Table cell")
 
-        let ambiguous = try makeScrollEvent(
+        let ambiguousStart = try makeScrollEvent(
             deltaX: 10,
             deltaY: 10,
             phase: .began
         )
-        textView.scrollWheel(with: ambiguous)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(
+            deltaX: 5,
+            deltaY: 5,
+            phase: .changed
+        )
+        textView.scrollWheel(with: ambiguousChange)
 
         let horizontal = try makeScrollEvent(
             deltaX: 20,
@@ -303,8 +319,9 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         textView.scrollWheel(with: horizontal)
 
-        #expect(textView.superScrollEventsForTests.count == 2)
-        #expect(textView.superScrollEventsForTests[0] === ambiguous)
-        #expect(textView.superScrollEventsForTests[1] === horizontal)
+        #expect(textView.superScrollEventsForTests.count == 3)
+        #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
+        #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
+        #expect(textView.superScrollEventsForTests[2] === horizontal)
     }
 }
