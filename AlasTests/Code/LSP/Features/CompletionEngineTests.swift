@@ -626,9 +626,7 @@ struct CompletionEngineTests {
             in: text
         )
 
-        #expect(plan?.edits == [
-            CompletionTextEdit(range: NSRange(location: 12, length: 2), replacementText: "openEditor")
-        ])
+        #expect(plan == nil)
     }
 
     @Test("rejects same-position insertion additional edits")
@@ -661,9 +659,23 @@ struct CompletionEngineTests {
             in: text
         )
 
-        #expect(plan?.edits == [
-            CompletionTextEdit(range: NSRange(location: 0, length: 0), replacementText: "primary")
-        ])
+        #expect(plan == nil)
+    }
+
+    @Test func completionDefaultsPreserveWireDataAndReplaceRange() throws {
+        let json = #"{"isIncomplete":false,"itemDefaults":{"editRange":{"insert":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}},"replace":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}}},"insertTextFormat":2,"insertTextMode":1,"data":{"token":[true,42]}},"items":[{"label":"print","textEditText":"print(${1:value})$0","sortText":"001","filterText":"pr","command":{"title":"After","command":"after","arguments":[{"id":3}]}}]}"#
+        let result = try JSONDecoder().decode(LSPCompletionResult.self, from: Data(json.utf8))
+        let item = try #require(result.items.first)
+        let wire = try LSPJSONValue.decode(from: JSONEncoder().encode(item))
+        #expect(wire["data"]?["token"] == .array([.bool(true), .number("42")]))
+        #expect(item.command?.command == "after")
+        let prefix = CompletionPrefix(text: "pr", range: NSRange(location: 0, length: 2))
+        let candidate = try #require(CompletionEngine.lspCandidates(from: [item], prefix: prefix).first)
+        let plan = try #require(CompletionEngine.editPlan(accepting: candidate, prefix: prefix, in: "print"))
+        #expect(apply(plan, to: "print") == "print(value)")
+        let grown = CompletionPrefix(text: "pri", range: NSRange(location: 0, length: 3))
+        let retained = try #require(CompletionEngine.editPlan(accepting: candidate, prefix: grown, originalPrefix: prefix, in: "priint"))
+        #expect(apply(retained, to: "priint") == "print(value)")
     }
 }
 

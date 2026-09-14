@@ -241,7 +241,10 @@ final class CodeEditorCoordinator {
                 await self?.flushPendingLSPDidChangeForCompletion()
             },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
-            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            applyWorkspaceCompletion: { [weak self] plan, snapshot, context in
+                await self?.applyWorkspaceCompletion(plan, snapshot: snapshot, context: context) ?? false
+            }
         )
         signatureHelp = SignatureHelpFeature(
             textView: textView,
@@ -347,6 +350,7 @@ final class CodeEditorCoordinator {
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
+            textView?.endSnippet()
             signatureHelp?.cancelAndDismiss()
             reportedInitialHighlightReady = false
             didChangeTask?.cancel()
@@ -594,6 +598,7 @@ final class CodeEditorCoordinator {
 
     func detach() {
         let detachedTextView = textView
+        textView?.endSnippet()
         textView?.bindUndo(to: nil)
         saveViewState()
         // LSP open/close for external buffers is managed by TabsManager
@@ -738,6 +743,23 @@ final class CodeEditorCoordinator {
     }
 
     // MARK: - Editor commands
+
+    private func applyWorkspaceCompletion(_ completion: CompletionEditPlan, snapshot: String, context: EditorRequestContext) async -> Bool {
+        guard isLSPRequestCurrent(context), textView?.string == snapshot, let renameFeature else { return false }
+        let coordinates = TextEditCoordinates.LineIndex(snapshot)
+        var edits: [LSPTextEdit] = []
+        for edit in completion.edits {
+            guard let start = coordinates.lspPosition(utf16Offset: edit.range.location),
+                  let end = coordinates.lspPosition(utf16Offset: NSMaxRange(edit.range)) else { return false }
+            edits.append(LSPTextEdit(range: LSPRange(start: start, end: end), newText: edit.replacementText))
+        }
+        let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
+        do {
+            let plan = try await renameFeature.prepare(.init(changes: [context.document.uri: edits]), context: context, generations: generations)
+            guard !Task.isCancelled, isLSPRequestCurrent(context), textView?.string == snapshot, !plan.requiresPreview else { return false }
+            return await renameFeature.makePreviewModel(plan: plan, context: context).apply()
+        } catch { return false }
+    }
 
     private func installEditorCommands(on textView: CodeTextView) {
         renameFeature?.cancel()

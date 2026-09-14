@@ -5,6 +5,41 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct CodeTextViewCompletionTests {
+    @Test func snippetMirrorsDeletionNavigationEscapeAndOrdinaryTab() throws {
+        let expansion = try SnippetSession.parse("${1:foo}=$1 ${2:bar}$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        view.insertText("😀", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.string == "😀=😀 bar")
+        view.deleteBackward(nil)
+        #expect(view.string == "= bar")
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 2, length: 3))
+        view.insertBacktab(nil)
+        #expect(view.selectedRange() == NSRange(location: 0, length: 0))
+        view.cancelOperation(nil)
+        #expect(view.snippetSession == nil)
+        view.insertTab(nil)
+        #expect(view.string == "\t= bar")
+    }
+
+    @Test func malformedSnippetIsNeverOfferedForRawInsertion() {
+        let item = LSPCompletionItem.testing(label: "call", sortText: nil, filterText: nil,
+                                             insertText: "call(${1:broken", insertTextFormat: .snippet)
+        #expect(CompletionEngine.lspCandidates(from: [item], prefix: CompletionPrefix(text: "", range: .init(location: 0, length: 0))).isEmpty)
+    }
+
+    @Test func externalBufferChangeEndsSnippetBeforeTab() throws {
+        let expansion = try SnippetSession.parse("${1:foo}=$1$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        view.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 7), with: "changed")
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.insertTab(nil)
+        #expect(view.string == "changed\t")
+        #expect(view.snippetSession == nil)
+    }
+
     private func makeTextView(_ text: String = "") -> CodeTextView {
         let storage = NSTextStorage(string: text)
         let layoutManager = NSLayoutManager()

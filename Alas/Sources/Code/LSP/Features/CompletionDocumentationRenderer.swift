@@ -3,6 +3,12 @@ import Markdown
 
 @MainActor
 enum CompletionDocumentationRenderer {
+    static func text(_ markup: LSPMarkup?) -> String? {
+        switch markup {
+        case .plain(let text), .markupContent(_, let text): text
+        case nil: nil
+        }
+    }
     static func render(
         _ documentation: String,
         theme: Theme,

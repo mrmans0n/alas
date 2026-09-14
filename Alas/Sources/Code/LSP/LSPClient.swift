@@ -32,6 +32,7 @@ actor LSPClient {
     private(set) var supportsPrepareRename = false
     private(set) var supportsPullDiagnostics: Bool = false
     private(set) var completionTriggerCharacters: [String] = []
+    private(set) var supportsCompletionResolve = false
     private(set) var signatureHelpTriggerCharacters: [String] = []
     private(set) var signatureHelpRetriggerCharacters: [String] = []
     // `AsyncStream` is single-consumer — values are delivered to whichever
@@ -98,6 +99,10 @@ actor LSPClient {
         }
         supportsPullDiagnostics = caps.supportsPullDiagnostics
         completionTriggerCharacters = caps.completionTriggerCharacters
+        if let rawResult,
+           let result = try? LSPJSONValue.decode(from: rawResult) {
+            supportsCompletionResolve = result["capabilities"]?["completionProvider"]?["resolveProvider"] == .bool(true)
+        }
         signatureHelpTriggerCharacters = caps.signatureHelpTriggerCharacters
         signatureHelpRetriggerCharacters = caps.signatureHelpRetriggerCharacters
         try sendNotification(method: "initialized", params: [String: Any]())
@@ -212,8 +217,12 @@ actor LSPClient {
         guard let raw, raw.count > 4 else {
             return LSPCompletionResult(isIncomplete: false, items: [])
         }
-        return (try? JSONDecoder().decode(LSPCompletionResult.self, from: raw))
-            ?? LSPCompletionResult(isIncomplete: false, items: [])
+        return try LSPCompletionResult(wireValue: LSPJSONValue.decode(from: raw))
+    }
+
+    func resolveCompletion(_ item: LSPCompletionItem) async throws -> LSPCompletionItem {
+        guard let raw = try await sendRequest(method: "completionItem/resolve", params: item.wireValue, timeoutNanoseconds: 2_000_000_000) else { throw LSPError.invalidPayload }
+        return try item.mergingResolved(LSPCompletionItem(wireValue: LSPJSONValue.decode(from: raw)))
     }
 
     func signatureHelp(uri: String, position: LSPPosition, context: LSPSignatureHelpContext?) async throws -> LSPSignatureHelp? {
@@ -565,7 +574,7 @@ actor LSPClient {
         }
         let rootUri = try jsonString(params.rootUri)
         let json = """
-        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true},"signatureHelp":{"dynamicRegistration":false,"contextSupport":true,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"activeParameterSupport":true,"parameterInformation":{"labelOffsetSupport":true}}}}}}}
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":true,"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[1]},"resolveSupport":{"properties":["documentation","detail","additionalTextEdits","command"]}},"contextSupport":true,"completionList":{"itemDefaults":["commitCharacters","editRange","insertTextFormat","insertTextMode","data"]}},"signatureHelp":{"dynamicRegistration":false,"contextSupport":true,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"activeParameterSupport":true,"parameterInformation":{"labelOffsetSupport":true}}}}}}}
         """
         let workspace = #""workspace":{"applyEdit":true,"configuration":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"changeAnnotationSupport":{"groupsOnLabel":false}},"executeCommand":{"dynamicRegistration":false}},"#
         let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#

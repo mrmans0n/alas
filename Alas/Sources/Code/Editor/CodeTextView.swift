@@ -42,6 +42,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var signatureHelpSelectionChangeHandler: (() -> Void)?
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
+    private(set) var snippetSession: SnippetSession?
+    private var snippetBufferSnapshot: String?
     var indentationMode: IndentationMode = .plain
     var warningToolTipProvider: ((NSPoint) -> String?)? { didSet { refreshWarningToolTip() } }
     private var warningToolTipTag: NSView.ToolTipTag?
@@ -486,6 +488,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if !hasMarkedText(), event.keyCode == 48, modifiers.isEmpty || modifiers == [.shift],
+           advanceSnippet(backwards: modifiers == [.shift]) { return }
         if !hasMarkedText(), modifiers.isEmpty {
             switch event.keyCode {
             case 36, 76, 48: // Return, keypad Enter, Tab
@@ -499,6 +503,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func didChangeText() {
         super.didChangeText()
+        if !suppressCompletionChangeNotifications { snippetSession = nil }
         notifyCompletionChanged()
     }
 
@@ -516,6 +521,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        snippetSession = nil
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
             let nsString = self.string as NSString
@@ -533,6 +539,11 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard isEditable else { return }
+        if let text = Self.string(from: insertString), snippetSession != nil, !hasMarkedText() {
+            let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+            if replaceSnippet(range, with: text) { return }
+            snippetSession = nil
+        }
         guard !isCommittingMarkedText else {
             insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
             return
@@ -608,6 +619,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if snippetSession != nil {
+            var range = selectedRange()
+            if range.length == 0, range.location > 0 { range = (string as NSString).rangeOfComposedCharacterSequence(at: range.location - 1) }
+            if replaceSnippet(range, with: "") { return }
+            snippetSession = nil
+        }
         let wasSuppressing = suppressCompletionSelectionNotifications
         suppressCompletionSelectionNotifications = true
         super.deleteBackward(sender)
@@ -615,6 +632,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func deleteForward(_ sender: Any?) {
+        if snippetSession != nil {
+            var range = selectedRange()
+            if range.length == 0, range.location < string.utf16.count { range = (string as NSString).rangeOfComposedCharacterSequence(at: range.location) }
+            if replaceSnippet(range, with: "") { return }
+            snippetSession = nil
+        }
         let wasSuppressing = suppressCompletionSelectionNotifications
         suppressCompletionSelectionNotifications = true
         super.deleteForward(sender)
@@ -622,6 +645,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertNewline(_ sender: Any?) {
+        if snippetSession != nil, replaceSnippet(selectedRange(), with: "\n") { return }
         guard isEditable else {
             super.insertNewline(sender)
             return
@@ -682,8 +706,45 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertTab(_ sender: Any?) {
+        if advanceSnippet(backwards: false) { return }
         if routeCompletionKey(.acceptSelected) { return }
         super.insertTab(sender)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        if advanceSnippet(backwards: true) { return }
+        super.insertBacktab(sender)
+    }
+
+    func startSnippet(_ expansion: SnippetExpansion, offset: Int) {
+        let session = SnippetSession(expansion: expansion, offset: offset)
+        snippetSession = session.isFinished ? nil : session
+        snippetBufferSnapshot = string
+        setSelectedRangeAfterTextEdit(session.selection ?? NSRange(location: offset + expansion.finalCaret, length: 0))
+    }
+
+    func endSnippet() { snippetSession = nil
+    snippetBufferSnapshot = nil }
+
+    private func advanceSnippet(backwards: Bool) -> Bool {
+        guard snippetBufferSnapshot == string else { endSnippet()
+        return false }
+        guard var session = snippetSession, let selection = session.advance(backwards: backwards) else { return false }
+        snippetSession = session.isFinished ? nil : session
+        setSelectedRangeAfterTextEdit(selection)
+        return true
+    }
+
+    private func replaceSnippet(_ range: NSRange, with text: String) -> Bool {
+        guard isEditable, !hasMultipleSelections, !hasMarkedText() else { endSnippet()
+        return false }
+        guard snippetBufferSnapshot == string else { endSnippet()
+        return false }
+        guard var session = snippetSession, let plan = session.replacing(range, with: text) else { return false }
+        applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
+        snippetSession = session
+        snippetBufferSnapshot = string
+        return true
     }
 
     override func moveUp(_ sender: Any?) {
@@ -698,6 +759,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func cancelOperation(_ sender: Any?) {
         if routeCompletionKey(.dismiss) { return }
+        if snippetSession != nil { snippetSession = nil
+        return }
         if escapeHandler?() == true { return }
         super.cancelOperation(sender)
     }
@@ -1109,6 +1172,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func notifyCompletionSelectionChanged() {
         guard !suppressCompletionSelectionNotifications else { return }
+        if let active = snippetSession?.selection,
+           hasMultipleSelections || selectedRange().location < active.location || NSMaxRange(selectedRange()) > NSMaxRange(active) {
+            snippetSession = nil
+        }
         undoBuffer?.undoManager.breakTypingCoalescing()
         completionSelectionChangeHandler?()
         signatureHelpSelectionChangeHandler?()

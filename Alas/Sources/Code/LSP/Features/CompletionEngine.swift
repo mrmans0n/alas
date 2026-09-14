@@ -22,6 +22,8 @@ struct CompletionCandidate: Identifiable, Equatable, Sendable {
     let textEdit: LSPTextEdit?
     let additionalTextEdits: [LSPTextEdit]
     let source: CompletionCandidateSource
+    var lspItem: LSPCompletionItem? = nil
+    var snippet: SnippetExpansion? = nil
 
     static func == (lhs: CompletionCandidate, rhs: CompletionCandidate) -> Bool {
         lhs.label == rhs.label &&
@@ -67,7 +69,8 @@ enum CompletionEngine {
     static func lspCandidates(
         from items: [LSPCompletionItem],
         prefix: CompletionPrefix,
-        memberAccessOnly: Bool = false
+        memberAccessOnly: Bool = false,
+        variables: [String: String] = [:]
     ) -> [CompletionCandidate] {
         let candidates = items.compactMap { item -> CompletionCandidate? in
             guard !memberAccessOnly || isMemberAccessCandidate(item) else {
@@ -81,10 +84,10 @@ enum CompletionEngine {
                 return nil
             }
 
-            let rawReplacement = item.textEdit?.newText ?? item.insertText ?? item.label
-            let replacement = item.insertTextFormat == .snippet
-                ? plainText(fromSnippet: rawReplacement)
-                : rawReplacement
+            let rawReplacement = item.textEdit?.newText ?? item.insertReplaceEdit?.newText ?? item.insertText ?? item.label
+            let snippet = item.insertTextFormat == .snippet ? try? SnippetSession.parse(rawReplacement, variables: variables) : nil
+            guard item.insertTextFormat != .snippet || snippet != nil else { return nil }
+            let replacement = snippet?.text ?? rawReplacement
 
             return CompletionCandidate(
                 label: item.label,
@@ -94,9 +97,11 @@ enum CompletionEngine {
                 sortText: item.sortText,
                 filterText: item.filterText,
                 replacementText: replacement,
-                textEdit: item.textEdit,
+                textEdit: item.textEdit ?? item.insertReplaceEdit.map { LSPTextEdit(range: $0.replace, newText: $0.newText) },
                 additionalTextEdits: item.additionalTextEdits ?? [],
-                source: .lsp
+                source: .lsp,
+                lspItem: item,
+                snippet: snippet
             )
         }
 
@@ -194,6 +199,16 @@ enum CompletionEngine {
         coordinateIndex: TextEditCoordinates.LineIndex? = nil
     ) -> CompletionEditPlan? {
         let coordinateIndex = coordinateIndex ?? TextEditCoordinates.LineIndex(text)
+        if let edit = candidate.lspItem?.insertReplaceEdit {
+            guard edit.insert.start == edit.replace.start,
+                  edit.insert.start.line == edit.insert.end.line,
+                  edit.replace.start.line == edit.replace.end.line,
+                  edit.insert.end.character <= edit.replace.end.character,
+                  let insert = rebasedRange(for: edit.insert, originalPrefix: originalPrefix, prefix: prefix,
+                                            includeInsertedTextAtStart: true, includeInsertedTextAtEnd: true,
+                                            coordinateIndex: coordinateIndex),
+                  insert.location <= NSMaxRange(prefix.range), NSMaxRange(prefix.range) <= NSMaxRange(insert) else { return nil }
+        }
         let primaryRange: NSRange
         if let textEdit = candidate.textEdit {
             guard let range = rebasedRange(
@@ -224,16 +239,17 @@ enum CompletionEngine {
                 includeInsertedTextAtStart: false,
                 includeInsertedTextAtEnd: false,
                 coordinateIndex: coordinateIndex
-            ) else { continue }
+            ) else { return nil }
             let edit = CompletionTextEdit(range: range, replacementText: additional.newText)
             guard !overlaps(edit.range, primary.range),
                   edits.allSatisfy({ !overlaps($0.range, edit.range) }) else {
-                continue
+                return nil
             }
             edits.append(edit)
         }
 
         edits.append(primary)
+        guard edits.allSatisfy({ Range($0.range, in: text) != nil }) else { return nil }
         edits.sort { lhs, rhs in
             if lhs.range.location == rhs.range.location {
                 return lhs.range.length < rhs.range.length
@@ -255,28 +271,7 @@ enum CompletionEngine {
     }
 
     static func plainText(fromSnippet snippet: String) -> String {
-        var result = snippet
-        result = result.replacingOccurrences(
-            of: #"\$\{\d+\|([^,}|]+)(?:,[^}|]+)*\|\}"#,
-            with: "$1",
-            options: .regularExpression
-        )
-        result = result.replacingOccurrences(
-            of: #"\$\{\d+:([^}]+)\}"#,
-            with: "$1",
-            options: .regularExpression
-        )
-        result = result.replacingOccurrences(
-            of: #"\$\{\d+\}"#,
-            with: "",
-            options: .regularExpression
-        )
-        result = result.replacingOccurrences(
-            of: #"\$\d+"#,
-            with: "",
-            options: .regularExpression
-        )
-        return result
+        (try? SnippetSession.parse(snippet).text) ?? ""
     }
 
     private static func rank(_ candidates: [CompletionCandidate], prefix: CompletionPrefix) -> [CompletionCandidate] {

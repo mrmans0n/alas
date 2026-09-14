@@ -462,7 +462,13 @@ enum LSPInsertTextFormat: Int, Codable, Hashable, Sendable {
     case snippet = 2
 }
 
-struct LSPCompletionItem: Decodable, Sendable {
+struct LSPInsertReplaceEdit: Codable, Equatable, Sendable {
+    let newText: String
+    let insert: LSPRange
+    let replace: LSPRange
+}
+
+struct LSPCompletionItem: Codable, Sendable {
     let label: String
     let kind: Int?
     let detail: String?
@@ -473,6 +479,38 @@ struct LSPCompletionItem: Decodable, Sendable {
     let insertTextFormat: LSPInsertTextFormat?
     let textEdit: LSPTextEdit?
     let additionalTextEdits: [LSPTextEdit]?
+    var insertReplaceEdit: LSPInsertReplaceEdit? = nil
+    var insertTextMode: Int? = nil
+    var command: LSPCommand? = nil
+    var data: LSPJSONValue? = nil
+    private var originalWireValue: LSPJSONValue? = nil
+
+    var wireValue: LSPJSONValue {
+        if let originalWireValue { return originalWireValue }
+        var fields: [String: LSPJSONValue] = ["label": .string(label)]
+        for (key, value) in [("detail", detail), ("sortText", sortText), ("filterText", filterText), ("insertText", insertText)] {
+            if let value { fields[key] = .string(value) }
+        }
+        if let kind { fields["kind"] = .number(String(kind)) }
+        if let insertTextFormat { fields["insertTextFormat"] = .number(String(insertTextFormat.rawValue)) }
+        if let insertTextMode { fields["insertTextMode"] = .number(String(insertTextMode)) }
+        if let textEdit { fields["textEdit"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(textEdit)) }
+        if let insertReplaceEdit { fields["textEdit"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(insertReplaceEdit)) }
+        if let additionalTextEdits { fields["additionalTextEdits"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(additionalTextEdits)) }
+        if let documentation {
+            switch documentation {
+            case .plain(let text): fields["documentation"] = .string(text)
+            case .markupContent(let kind, let value): fields["documentation"] = .object(["kind": .string(kind), "value": .string(value)])
+            }
+        }
+        fields["data"] = data
+        if let command {
+            var value: [String: LSPJSONValue] = ["title": .string(command.title), "command": .string(command.command)]
+            if let arguments = command.arguments { value["arguments"] = .array(arguments) }
+            fields["command"] = .object(value)
+        }
+        return .object(fields)
+    }
 
     init(
         label: String,
@@ -510,6 +548,39 @@ struct LSPCompletionItem: Decodable, Sendable {
         case textEdit
         case additionalTextEdits
     }
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let label = wireValue["label"]?.stringValue else { throw LSPError.invalidPayload }
+        func decode<T: Decodable>(_ key: String, as type: T.Type) throws -> T? {
+            guard let value = wireValue[key], value != .null else { return nil }
+            return try JSONDecoder().decode(type, from: value.encodedData())
+        }
+        self.label = label
+        kind = try decode("kind", as: Int.self)
+        detail = try decode("detail", as: String.self)
+        documentation = try decode("documentation", as: LSPMarkup.self)
+        sortText = try decode("sortText", as: String.self)
+        filterText = try decode("filterText", as: String.self)
+        insertText = try decode("insertText", as: String.self)
+        insertTextFormat = try decode("insertTextFormat", as: LSPInsertTextFormat.self)
+        insertTextMode = try decode("insertTextMode", as: Int.self)
+        if wireValue["textEdit"]?["insert"] != nil {
+            insertReplaceEdit = try decode("textEdit", as: LSPInsertReplaceEdit.self)
+            textEdit = insertReplaceEdit.map { LSPTextEdit(range: $0.replace, newText: $0.newText) }
+        } else { textEdit = try decode("textEdit", as: LSPTextEdit.self) }
+        additionalTextEdits = try decode("additionalTextEdits", as: [LSPTextEdit].self)
+        if let command = wireValue["command"], command != .null { self.command = try LSPCommand(wireValue: command) }
+        data = wireValue["data"]
+        originalWireValue = wireValue
+    }
+
+    init(from decoder: Decoder) throws { try self.init(wireValue: LSPJSONValue(from: decoder)) }
+    func encode(to encoder: Encoder) throws { try wireValue.encode(to: encoder) }
+
+    func mergingResolved(_ resolved: LSPCompletionItem) throws -> LSPCompletionItem {
+        guard case .object(let original) = wireValue, case .object(let changes) = resolved.wireValue else { throw LSPError.invalidPayload }
+        return try LSPCompletionItem(wireValue: .object(original.merging(changes) { _, new in new }))
+    }
 }
 
 struct LSPCompletionResult: Decodable, Sendable {
@@ -522,15 +593,31 @@ struct LSPCompletionResult: Decodable, Sendable {
     }
 
     init(from decoder: Decoder) throws {
-        if let items = try? [LSPCompletionItem](from: decoder) {
-            self.isIncomplete = false
-            self.items = items
+        try self.init(wireValue: LSPJSONValue(from: decoder))
+    }
+
+    init(wireValue: LSPJSONValue) throws {
+        if case .array(let values) = wireValue {
+            isIncomplete = false
+            items = try values.map { try LSPCompletionItem(wireValue: $0) }
             return
         }
-
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.isIncomplete = try container.decodeIfPresent(Bool.self, forKey: .isIncomplete) ?? false
-        self.items = try container.decode([LSPCompletionItem].self, forKey: .items)
+        guard case .array(let values) = wireValue["items"] else { throw LSPError.invalidPayload }
+        isIncomplete = wireValue["isIncomplete"] == .bool(true)
+        let defaults = wireValue["itemDefaults"]
+        items = try values.map { value in
+            guard case .object(var fields) = value else { throw LSPError.invalidPayload }
+            for key in ["commitCharacters", "insertTextFormat", "insertTextMode", "data"] where fields[key] == nil {
+                fields[key] = defaults?[key]
+            }
+            if fields["textEdit"] == nil, let range = defaults?["editRange"] {
+                let text = fields["textEditText"] ?? fields["insertText"] ?? fields["label"] ?? .string("")
+                if range["insert"] != nil {
+                    fields["textEdit"] = .object(["insert": range["insert"] ?? .null, "replace": range["replace"] ?? .null, "newText": text])
+                } else { fields["textEdit"] = .object(["range": range, "newText": text]) }
+            }
+            return try LSPCompletionItem(wireValue: .object(fields))
+        }
     }
 
     enum CodingKeys: String, CodingKey {

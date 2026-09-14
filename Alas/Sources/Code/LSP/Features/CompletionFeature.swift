@@ -10,6 +10,8 @@ final class CompletionFeature {
         let detail: String?
         let source: CompletionCandidateSource
         let editPlan: CompletionEditPlan
+        let data: LSPJSONValue?
+        let command: LSPJSONValue?
     }
 
     private weak var textView: CodeTextView?
@@ -22,6 +24,13 @@ final class CompletionFeature {
     private let prepareForCompletionRequest: @MainActor () async -> Void
     private let synchronizeRequest: SynchronizeRequest?
     private let isContextCurrent: (EditorRequestContext) -> Bool
+    private let applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)?
+    private var resolveTask: Task<Void, Never>?
+    private var acceptTask: Task<Void, Never>?
+    private var resolvingCandidateID: UUID?
+    private var resolvedDocumentation: [UUID: String] = [:]
+    private var candidateSnapshots: [UUID: String] = [:]
+    private var candidateContexts: [UUID: EditorRequestContext] = [:]
 
     private var debounceTask: Task<Void, Never>?
     private var requestTask: Task<Void, Never>?
@@ -59,7 +68,8 @@ final class CompletionFeature {
         getMonoFontSize: @escaping () -> Int = { 13 },
         prepareForCompletionRequest: @escaping @MainActor () async -> Void = {},
         synchronizeRequest: SynchronizeRequest? = nil,
-        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true },
+        applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)? = nil
     ) {
         self.textView = textView
         self.getClient = getClient
@@ -71,6 +81,7 @@ final class CompletionFeature {
         self.prepareForCompletionRequest = prepareForCompletionRequest
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        self.applyWorkspaceCompletion = applyWorkspaceCompletion
 
         textView.completionManualTriggerHandler = { [weak self] in
             self?.triggerManual()
@@ -87,6 +98,14 @@ final class CompletionFeature {
     }
 
     func cancelAndDismiss() {
+        resolveTask?.cancel()
+        acceptTask?.cancel()
+        resolveTask = nil
+        acceptTask = nil
+        resolvingCandidateID = nil
+        resolvedDocumentation.removeAll()
+        candidateSnapshots.removeAll()
+        candidateContexts.removeAll()
         debounceTask?.cancel()
         requestTask?.cancel()
         debounceTask = nil
@@ -242,6 +261,11 @@ final class CompletionFeature {
                     allowBufferFallback: allowBufferFallback,
                     memberAccessOnly: memberAccessOnly
                 )
+                if let contextToken {
+                    for candidate in self.candidates where self.candidateContexts[candidate.id] == nil {
+                        self.candidateContexts[candidate.id] = contextToken
+                    }
+                }
             }
         }
     }
@@ -312,6 +336,7 @@ final class CompletionFeature {
             coordinateIndex: coordinateIndex
         )
         let visible = merged.candidates.filter { Self.isVisible($0, for: prefix) }
+        for candidate in next { candidateSnapshots[candidate.id] = bufferText }
 
         candidates = visible
         candidatePool = merged.candidates
@@ -432,7 +457,9 @@ final class CompletionFeature {
             kind: candidate.kind,
             detail: candidate.detail,
             source: candidate.source,
-            editPlan: editPlan
+            editPlan: editPlan,
+            data: candidate.lspItem?.data,
+            command: candidate.lspItem?.wireValue["command"]
         )
     }
 
@@ -462,7 +489,8 @@ final class CompletionFeature {
                 source: $0.source
             )
         }
-        let documentationText = candidates.indices.contains(selection) ? candidates[selection].documentation : nil
+        let documentationText = candidates.indices.contains(selection)
+            ? resolvedDocumentation[candidates[selection].id] ?? candidates[selection].documentation : nil
         let theme = getTheme()
         let documentation = documentationText.flatMap { text -> MarkdownRenderResult? in
             guard !text.isEmpty else { return nil }
@@ -482,6 +510,30 @@ final class CompletionFeature {
             in: textView
         ) { [weak self] index in
             self?.accept(index: index)
+        }
+        resolveHighlightedItem()
+    }
+
+    private func resolveHighlightedItem() {
+        guard candidates.indices.contains(selection) else { return }
+        let candidate = candidates[selection]
+        guard resolvingCandidateID != candidate.id else { return }
+        resolveTask?.cancel()
+        resolvingCandidateID = candidate.id
+        guard let item = candidate.lspItem, let client = getClient(), let textView else { return }
+        let snapshot = textView.string
+        let selectedRange = textView.selectedRange()
+        let uri = getURI()
+        let id = requestID
+        resolveTask = Task { [weak self] in
+            guard await client.supportsCompletionResolve, !Task.isCancelled else { return }
+            guard let resolved = try? await client.resolveCompletion(item), !Task.isCancelled,
+                  let self, self.requestID == id, self.getURI() == uri,
+                  self.selectedCandidateID == candidate.id,
+                  self.textView?.string == snapshot, self.textView?.selectedRange() == selectedRange,
+                  self.candidateContexts[candidate.id].map(self.isContextCurrent) ?? true else { return }
+            self.resolvedDocumentation[candidate.id] = CompletionDocumentationRenderer.text(resolved.documentation)
+            self.showPopup()
         }
     }
 
@@ -525,6 +577,10 @@ final class CompletionFeature {
         }
 
         let candidate = candidates[index]
+        if candidate.lspItem != nil, getClient() != nil || applyWorkspaceCompletion != nil {
+            acceptResolved(candidate, prefix: prefix, textView: textView)
+            return
+        }
         guard let plan = CompletionEngine.editPlan(
             accepting: candidate,
             prefix: prefix,
@@ -537,6 +593,82 @@ final class CompletionFeature {
 
         textView.applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
         cancelAndDismiss()
+        if let snippet = candidate.snippet { textView.startSnippet(snippet, offset: plan.finalSelection.location - snippet.text.utf16.count) }
+    }
+
+    private func acceptResolved(_ candidate: CompletionCandidate, prefix: CompletionPrefix, textView: CodeTextView) {
+        guard let item = candidate.lspItem else { return }
+        resolveTask?.cancel()
+        acceptTask?.cancel()
+        debounceTask?.cancel()
+        requestTask?.cancel()
+        let snapshot = textView.string
+        let selection = textView.selectedRange()
+        let uri = getURI()
+        let id = requestID
+        let origin = candidateOrigins[candidate.id]
+        let candidateSnapshot = candidateSnapshots[candidate.id]
+        let candidateContext = candidateContexts[candidate.id]
+        let variables = Self.snippetVariables(text: snapshot, selection: selection, uri: uri)
+        closeUI()
+        acceptTask = Task { [weak self] in
+            guard let self else { return }
+            await prepareForCompletionRequest()
+            let bound = await synchronizeRequest?(selection)
+            if synchronizeRequest != nil, bound == nil { cancelAndDismiss()
+            return }
+            let client = bound?.0 ?? getClient()
+            do {
+                let resolved: LSPCompletionItem
+                if let client, await client.supportsCompletionResolve { resolved = try await client.resolveCompletion(item) }
+                else { resolved = item }
+                guard !Task.isCancelled, requestID == id, getURI() == uri,
+                      textView.string == snapshot, textView.selectedRange() == selection,
+                      bound.map({ isContextCurrent($0.1) }) ?? true else { return }
+                if !(resolved.additionalTextEdits ?? []).isEmpty {
+                    guard candidateSnapshot == snapshot, candidateContext.map(isContextCurrent) ?? true else { cancelAndDismiss()
+                    return }
+                }
+                guard let accepted = CompletionEngine.lspCandidates(from: [resolved], prefix: prefix, variables: variables).first,
+                      let plan = CompletionEngine.editPlan(accepting: accepted, prefix: prefix, originalPrefix: origin, in: snapshot) else {
+                    cancelAndDismiss()
+                    return
+                }
+                let expected = NSMutableString(string: snapshot)
+                for edit in plan.edits.reversed() { expected.replaceCharacters(in: edit.range, with: edit.replacementText) }
+                // Clear this task before application emits ordinary buffer change callbacks.
+                acceptTask = nil
+                let applied: Bool
+                if let applyWorkspaceCompletion, let context = bound?.1 {
+                    applied = await applyWorkspaceCompletion(plan, snapshot, context)
+                } else if applyWorkspaceCompletion != nil { applied = false }
+                else {
+                    textView.applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
+                    applied = textView.string == expected as String
+                }
+                guard applied, getURI() == uri, textView.string == expected as String else { cancelAndDismiss()
+                return }
+                cancelAndDismiss()
+                if let expansion = accepted.snippet {
+                    textView.startSnippet(expansion, offset: plan.finalSelection.location - expansion.text.utf16.count)
+                } else { textView.setSelectedRange(plan.finalSelection) }
+                if let command = resolved.command, let client { try await client.executeCommand(command) }
+            } catch { cancelAndDismiss() }
+        }
+    }
+
+    static func snippetVariables(text: String, selection: NSRange, uri: String?) -> [String: String] {
+        let ns = text as NSString
+        let caret = min(selection.location, ns.length)
+        let line = ns.lineRange(for: NSRange(location: caret, length: 0))
+        let url = uri.flatMap(URL.init(string:))
+        let lineIndex = TextEditCoordinates.lspPosition(utf16Offset: caret, in: text)?.line ?? 0
+        return ["TM_SELECTED_TEXT": Range(selection, in: text).map { String(text[$0]) } ?? "",
+                "TM_CURRENT_LINE": ns.substring(with: line).trimmingCharacters(in: .newlines),
+                "TM_CURRENT_WORD": CompletionEngine.prefix(in: text, caret: caret)?.text ?? "",
+                "TM_LINE_INDEX": String(lineIndex), "TM_LINE_NUMBER": String(lineIndex + 1),
+                "TM_FILENAME": url?.lastPathComponent ?? "", "TM_FILENAME_BASE": url?.deletingPathExtension().lastPathComponent ?? "",
+                "TM_DIRECTORY": url?.deletingLastPathComponent().path ?? "", "TM_FILEPATH": url?.path ?? ""]
     }
 
     private func closeUI() {
@@ -546,6 +678,9 @@ final class CompletionFeature {
     private func invalidateActiveSessionForChange(editRange: NSRange?) {
         let previousPrefix = prefix
         requestTask?.cancel()
+        resolveTask?.cancel()
+        acceptTask?.cancel()
+        resolvingCandidateID = nil
         requestTask = nil
         requestID &+= 1
         isRefreshing = true
@@ -670,6 +805,7 @@ final class CompletionFeature {
         guard isEnabled(),
               let textView,
               textView.isEditable,
+              textView.snippetSession == nil,
               textView.selectedRanges.count == 1,
               textView.selectedRange().length == 0 else {
             return false

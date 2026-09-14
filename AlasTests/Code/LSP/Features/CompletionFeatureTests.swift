@@ -5,6 +5,144 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct CompletionFeatureTests {
+    @Test func typingCancelsAcceptedResolveBeforeInsertionOrCommand() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        let view = makeTextView("pr")
+        var resolveID: LSPJSONValue?
+        var cancelled = false
+        var commanded = false
+        transport.onSend = { sent in
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)) else { return }
+            switch request["method"]?.stringValue {
+            case "initialize": transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"completionProvider":{"resolveProvider":true}}}}"#)
+            case "completionItem/resolve": resolveID = request["id"]
+            case "$/cancelRequest": cancelled = true
+            case "workspace/executeCommand": commanded = true
+            default: break
+            }
+        }
+        try await client.initialize()
+        let feature = CompletionFeature(textView: view, getClient: { client }, getURI: { "file:///tmp/file.swift" }, isEnabled: { true })
+        feature.testingPresent(items: [.testing(label: "print", sortText: nil, filterText: nil)], prefix: .init(text: "pr", range: .init(location: 0, length: 2)), bufferText: "pr")
+        view.insertTab(nil)
+        for _ in 0..<100 where resolveID == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let id = try #require(resolveID)
+        view.insertText("x", replacementRange: .init(location: NSNotFound, length: 0))
+        for _ in 0..<20 where !cancelled { try await Task.sleep(for: .milliseconds(10)) }
+        let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": id, "result": .object(["label": .string("print"), "insertText": .string("print()"), "command": .object(["title": .string("After"), "command": .string("after")])])])
+        transport.deliverFrame(String(decoding: try response.encodedData(), as: UTF8.self))
+        await Task.yield()
+        #expect(view.string == "prx")
+        #expect(cancelled)
+        #expect(!commanded)
+        feature.cancelAndDismiss()
+        transport.finish()
+    }
+
+    @Test func completionAndImportShareWorkspaceUndoBoundary() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("completion-undo-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("file.swift")
+        try Data("\npr".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#) }
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
+        ]), makeClient: { _, _, _, _, _ in client })
+        let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: lsp, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
+        let buffer = tabs.buffer(worktreeId: "w", tabId: "a", worktreeRoot: root, relativePath: "file.swift")
+        await buffer.awaitLoadForTesting()
+        await buffer.awaitWorkspaceEditLifecycle()
+        buffer.stopWatching()
+        defer { buffer.close(persistDirtySnapshot: false) }
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        buffer.storage.addLayoutManager(layout)
+        let view = CodeTextView(frame: .init(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        view.bindUndo(to: buffer)
+        view.setSelectedRange(.init(location: 3, length: 0))
+        let document = EditorDocumentID(host: nil, worktreeID: "w", uri: file.lspURI)
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let snapshot = try await access.snapshot(document)
+        let context = EditorRequestContext(document: document, version: try #require(snapshot.bufferVersion), serverGeneration: UUID(), range: .init(start: .init(line: 1, character: 2), end: .init(line: 1, character: 2)))
+        let rename = RenameFeature(textView: view, tabs: tabs, root: root, synchronize: { _ in (client, context) }, isCurrent: { _ in buffer.storage.string == "\npr" })
+        let undo = tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: root)
+        var operationID: UUID?
+        let feature = CompletionFeature(textView: view, getClient: { client }, getURI: { file.lspURI }, isEnabled: { true }, synchronizeRequest: { _ in (client, context) },
+                                        applyWorkspaceCompletion: { completion, text, context in
+            do {
+                let edits = try completion.edits.map { edit in LSPTextEdit(range: try #require(TextEditCoordinates.lspRange(for: edit.range, in: text)), newText: edit.replacementText) }
+                let plan = try await rename.prepare(.init(changes: [file.lspURI: edits]), context: context, generations: tabs.workspaceEditGenerations(host: nil, worktreeID: "w"))
+                let model = rename.makePreviewModel(plan: plan, context: context)
+                let result = await model.apply()
+                operationID = model.appliedOperationID
+                return result
+            } catch { Issue.record(error)
+            return false }
+        })
+        let item = try LSPCompletionItem(wireValue: LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}]}"#.utf8)))
+        feature.testingPresent(items: [item], prefix: .init(text: "pr", range: .init(location: 1, length: 2)), bufferText: "\npr")
+        view.insertTab(nil)
+        for _ in 0..<100 where operationID == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let id = try #require(operationID)
+        #expect(buffer.storage.string == "import Foo\n\nprint")
+        #expect(buffer.undoManager.isAtMarker(id, redo: false))
+        _ = await undo.undo(operationID: id)
+        #expect(buffer.storage.string == "\npr")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "\npr")
+        feature.cancelAndDismiss()
+        transport.finish()
+    }
+
+    @Test(arguments: [false, true])
+    func resolvedImportsApplyBeforeCommandAndInvalidImportsCancel(invalid: Bool) async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        let view = makeTextView("\npr")
+        var commandText: String?
+        var resolves = 0
+        transport.onSend = { sent in
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+            let method = request["method"]?.stringValue
+            var result: LSPJSONValue = .null
+            if method == "initialize" { result = .object(["capabilities": .object(["completionProvider": .object(["resolveProvider": .bool(true)])])]) }
+            else if method == "completionItem/resolve" {
+                resolves += 1
+                #expect(request["params"]?["data"]?["token"] == .string("opaque"))
+                let line = invalid ? 99 : 0
+                result = try! LSPJSONValue.decode(from: Data("""
+                {"label":"print","insertText":"print(${1:value})$0","insertTextFormat":2,"additionalTextEdits":[{"range":{"start":{"line":\(line),"character":0},"end":{"line":\(line),"character":0}},"newText":"import Foo\\n"}],"command":{"title":"After","command":"after"}}
+                """.utf8))
+            } else if method == "workspace/executeCommand" { commandText = view.string }
+            else { return }
+            let response = try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData()
+            transport.deliverFrame(String(decoding: response, as: UTF8.self))
+        }
+        try await client.initialize()
+        let feature = CompletionFeature(textView: view, getClient: { client }, getURI: { "file:///tmp/file.swift" }, isEnabled: { true })
+        let item = try LSPCompletionItem(wireValue: .object(["label": .string("print"), "data": .object(["token": .string("opaque")])]))
+        feature.testingPresent(items: [item], prefix: .init(text: "pr", range: .init(location: 1, length: 2)), bufferText: view.string)
+        view.insertTab(nil)
+        for _ in 0..<100 where resolves == 0 || (!invalid && commandText == nil) { try await Task.sleep(for: .milliseconds(10)) }
+        if invalid {
+            #expect(view.string == "\npr")
+            #expect(commandText == nil)
+        } else {
+            #expect(view.string == "import Foo\n\nprint(value)")
+            #expect(commandText == "import Foo\n\nprint(value)")
+            #expect(view.selectedRange() == NSRange(location: 18, length: 5))
+        }
+        feature.cancelAndDismiss()
+        transport.finish()
+    }
+
     private func makeTextView(_ text: String) -> CodeTextView {
         let storage = NSTextStorage(string: text)
         let layoutManager = NSLayoutManager()
