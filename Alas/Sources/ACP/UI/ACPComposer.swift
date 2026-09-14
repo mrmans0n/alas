@@ -200,6 +200,7 @@ struct ACPInputField: NSViewRepresentable {
         )
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let editorUndoManager = UndoManager()
         let worktreeRoot: URL
