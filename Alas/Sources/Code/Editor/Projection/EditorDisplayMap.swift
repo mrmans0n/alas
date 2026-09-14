@@ -1,10 +1,16 @@
 import AppKit
 
 struct EditorDisplayHint: Equatable {
+    struct Part: Equatable {
+        let label: String
+        let rect: CGRect
+    }
     let id: String
     let sourceOffset: Int
     let label: String
     let size: CGSize
+    var parts: [Part] = []
+    var fontSize: CGFloat = 11
 }
 
 enum EditorDisplayAffinity { case beforeHints, afterHints }

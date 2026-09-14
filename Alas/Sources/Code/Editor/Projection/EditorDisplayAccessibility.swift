@@ -142,7 +142,7 @@ extension CodeTextView {
             child.setAccessibilityRole(.staticText)
             child.setAccessibilityLabel(run.hint.label)
             child.setAccessibilityParent(self)
-            child.setAccessibilityCustomActions([NSAccessibilityCustomAction(name: "Move to source position") { [weak self, weak adapter] in
+            child.setAccessibilityCustomActions((inlayAccessibilityActions?(run.hint.id) ?? []) + [NSAccessibilityCustomAction(name: "Move to source position") { [weak self, weak adapter] in
                 guard let self, let adapter, let current = self.displayAdapter, current === adapter,
                       current.document.map.revision == revision,
                       current.document.map.hintRuns.contains(where: { $0.hint.id == run.hint.id && $0.hint.sourceOffset == run.hint.sourceOffset }) else { return false }

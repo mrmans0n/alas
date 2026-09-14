@@ -90,13 +90,24 @@ final class CodeActionsFeature {
         return .init(applied: true)
     }
 
+    /// A user-selected inlay action is already resolved by its originating
+    /// provider. Share the same preview, command-session and undo boundaries.
+    func performInlayAction(_ action: LSPCodeAction, client: LSPClient, context: EditorRequestContext,
+                            generations: [EditorDocumentID: WorkspaceEditBufferGeneration]) {
+        cancel()
+        let id = generation
+        task = Task { [weak self] in
+            await self?.run(action, client: client, context: context, generations: generations, id: id, resolve: false)
+        }
+    }
+
     private func run(_ action: LSPCodeAction, client: LSPClient, context: EditorRequestContext,
-                     generations: [EditorDocumentID: WorkspaceEditBufferGeneration], id: UUID) async {
+                     generations: [EditorDocumentID: WorkspaceEditBufferGeneration], id: UUID, resolve: Bool = true) async {
         let session = CodeActionContext(context: context, generations: generations)
         do {
             guard id == generation, isCurrent(context), !Task.isCancelled else { return }
             let resolved: LSPCodeAction
-            if !action.isCommand, await client.supportsCodeActionResolve {
+            if resolve, !action.isCommand, await client.supportsCodeActionResolve {
                 resolved = try await client.resolveCodeAction(action)
             } else { resolved = action }
             let result = try await Self.perform(resolved, isCurrent: {

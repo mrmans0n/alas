@@ -96,6 +96,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     private static let indentationClosingDelimiters: Set<Character> = [")", "]", "}"]
 
     var hoverHandler: ((NSPoint) -> Void)?
+    var inlayHoverHandler: ((NSPoint?) -> Bool)?
+    var inlayClickHandler: ((NSPoint) -> Bool)?
+    var inlayAccessibilityActions: ((String) -> [NSAccessibilityCustomAction])?
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
@@ -1404,10 +1407,13 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         let p = convert(event.locationInWindow, from: nil)
+        if inlayHoverHandler?(p) == true { return }
         hoverHandler?(p)
     }
 
     override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.intersection([.option, .shift]).isEmpty,
+           inlayClickHandler?(convert(event.locationInWindow, from: nil)) == true { return }
         let isOption = event.modifierFlags.contains(.option)
         let isShift = event.modifierFlags.contains(.shift)
 
@@ -1493,6 +1499,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        _ = inlayHoverHandler?(nil)
         mouseExitedHandler?()
     }
 

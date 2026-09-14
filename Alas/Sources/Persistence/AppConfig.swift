@@ -341,12 +341,24 @@ struct AppConfig: Codable, Equatable {
         var showLineEndings: Bool = true
         var showWarningCharacters: Bool = true
         var warningCharacters: [WarningCharacter] = WarningCharacter.defaults
+        var inlayHints = InlayHintSettings()
+        var inlayHintsByLanguage: [String: InlayHintSettings] = [:]
+
+        func inlayHints(for language: String) -> InlayHintSettings {
+            inlayHintsByLanguage[language] ?? inlayHints
+        }
+
+        mutating func toggleInlayHints(for language: String) {
+            var settings = inlayHints(for: language)
+            settings.enabled.toggle()
+            inlayHintsByLanguage[language] = settings
+        }
 
         enum CodingKeys: String, CodingKey {
             case fontFamily, fontSize, formatOnSave, showLineNumbers, showMinimap,
                  languageServers, dismissedInstallNudges, userDefinedRecipes,
                  showInvisibleCharacters, showSpaces, showTabs, showLineEndings,
-                 showWarningCharacters, warningCharacters
+                 showWarningCharacters, warningCharacters, inlayHints, inlayHintsByLanguage
         }
     }
 
@@ -743,7 +755,9 @@ extension AppConfig {
                 showTabs: showTabs,
                 showLineEndings: showLineEndings,
                 showWarningCharacters: showWarningCharacters,
-                warningCharacters: warningCharacters
+                warningCharacters: warningCharacters,
+                inlayHints: (try? codeContainer.decode(InlayHintSettings.self, forKey: .inlayHints)) ?? .init(),
+                inlayHintsByLanguage: (try? codeContainer.decode([String: InlayHintSettings].self, forKey: .inlayHintsByLanguage)) ?? [:]
             )
         } else {
             code = Code(

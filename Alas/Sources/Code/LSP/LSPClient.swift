@@ -26,6 +26,8 @@ actor LSPClient {
     private var commandSession: UUID?
     private var commandEditFailure: String?
     private(set) var supportsCodeActionResolve = false
+    private(set) var supportsInlayHintResolve = false
+    private var inlaySubscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
     private(set) var capabilities: LSPCapabilities = .empty
     private(set) var supportsDocumentFormatting: Bool = false
@@ -127,6 +129,8 @@ actor LSPClient {
     private func removeSemanticSubscriber(_ id: UUID) { semanticSubscribers.removeValue(forKey: id) }
 
     private func stopSemanticRequests() {
+        for subscriber in inlaySubscribers.values { subscriber.finish() }
+        inlaySubscribers.removeAll()
         semanticStopped = true
         for request in semanticPending.values { request.continuation.resume(throwing: CancellationError()) }
         semanticPending.removeAll()
@@ -178,6 +182,7 @@ actor LSPClient {
         capabilities = LSPCapabilities.fromInitializeResult(rawResult)
         if let rawResult, let value = try? LSPJSONValue.decode(from: rawResult) {
             supportsCodeActionResolve = value["capabilities"]?["codeActionProvider"]?["resolveProvider"] == .bool(true)
+            supportsInlayHintResolve = value["capabilities"]?["inlayHintProvider"]?["resolveProvider"] == .bool(true)
         }
         supportsDocumentFormatting = capabilities.supports(.formatDocument)
         if let rawResult,
@@ -377,6 +382,30 @@ actor LSPClient {
         if let arguments = command.arguments { params["arguments"] = .array(arguments) }
         _ = try await sendRequest(method: "workspace/executeCommand", params: LSPJSONValue.object(params), timeoutNanoseconds: 60_000_000_000)
     }
+
+    func inlayHints(uri: String, range: LSPRange) async throws -> [LSPInlayHint] {
+        guard capabilities.supports(.toggleInlayHints), state == .ready else { return [] }
+        let params: LSPJSONValue = .object(["textDocument": .object(["uri": .string(uri)]), "range": try LSPJSONValue.decode(from: JSONEncoder().encode(range))])
+        return try LSPInlayHint.decodeList(await sendRequest(method: "textDocument/inlayHint", params: params, timeoutNanoseconds: 10_000_000_000))
+    }
+
+    func resolveInlayHint(_ hint: LSPInlayHint) async throws -> LSPInlayHint {
+        guard supportsInlayHintResolve else { return hint }
+        guard let data = try await sendRequest(method: "inlayHint/resolve", params: hint.wireValue, timeoutNanoseconds: 2_000_000_000) else { throw LSPError.invalidPayload }
+        return try hint.mergingResolved(LSPInlayHint(wireValue: LSPJSONValue.decode(from: data)))
+    }
+
+    func subscribeInlayRefreshes() -> AsyncStream<Void> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            guard state != .dead else { continuation.finish()
+            return }
+            inlaySubscribers[id] = continuation
+            continuation.onTermination = { [weak self] _ in Task { await self?.removeInlaySubscriber(id) } }
+        }
+    }
+
+    private func removeInlaySubscriber(_ id: UUID) { inlaySubscribers.removeValue(forKey: id) }
 
     func setConfigurationHandler(_ handler: @escaping LSPServerRequests.Configuration) {
         serverRequests.configuration = handler
@@ -670,9 +699,10 @@ actor LSPClient {
         let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#
         let semantics = #""semanticTokens":{"dynamicRegistration":false,"requests":{"range":true,"full":{"delta":false}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","function","method","macro","keyword","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["readonly"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false,"augmentsSyntaxTokens":true},"#
         let semanticWorkspace = workspace.replacingOccurrences(of: #""workspace":{"#,
-                                                              with: #""workspace":{"semanticTokens":{"refreshSupport":true},"#)
+                                                              with: #""workspace":{"semanticTokens":{"refreshSupport":true},"inlayHint":{"refreshSupport":true},"#)
+        let inlays = #""inlayHint":{"dynamicRegistration":false,"resolveSupport":{"properties":["tooltip","textEdits","label.tooltip","label.location","label.command"]}},"#
         return Data(json.replacingOccurrences(of: #""textDocument":{"#,
-                                              with: semanticWorkspace + #""textDocument":{"# + semantics + actions).utf8)
+                                              with: semanticWorkspace + #""textDocument":{"# + semantics + actions + inlays).utf8)
     }
 
     private nonisolated static func jsonString(_ value: String) throws -> String {
@@ -757,7 +787,7 @@ actor LSPClient {
         }
 
         guard let id = env.id else { return }
-        if method == "workspace/semanticTokens/refresh" {
+        if method == "workspace/semanticTokens/refresh" || method == "workspace/inlayHint/refresh" {
             let idValue: LSPJSONValue
             switch id { case .int(let number): idValue = .number(String(number))
             case .string(let string): idValue = .string(string) }
@@ -765,7 +795,8 @@ actor LSPClient {
             if let reply = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": .null]).encodedData() {
                 try? transport.send(reply)
             }
-            for subscriber in semanticSubscribers.values { subscriber.yield(()) }
+            let subscribers = method == "workspace/inlayHint/refresh" ? inlaySubscribers : semanticSubscribers
+            for subscriber in subscribers.values { subscriber.yield(()) }
             return
         }
         guard inbound[id] == nil else { return }

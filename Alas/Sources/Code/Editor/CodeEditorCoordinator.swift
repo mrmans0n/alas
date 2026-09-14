@@ -50,6 +50,14 @@ final class CodeEditorCoordinator {
     private var semanticSubscription: Task<Void, Never>?
     private var semanticBindingID = UUID()
     private var semanticSupportsRange = false
+    private var inlayFeature: InlayHintsFeature?
+    private var inlayLayout: EditorInlayLayout?
+    private var inlayClient: LSPClient?
+    private var inlaySubscription: Task<Void, Never>?
+    private var inlaySettings: InlayHintSettings?
+    private var inlaySupported = false
+    private var inlayBindingID = UUID()
+    private var inlayResponse: (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -433,6 +441,7 @@ final class CodeEditorCoordinator {
         let family = appState.config.code.fontFamily
         let size = CGFloat(appState.config.code.fontSize)
         let fontChanged = currentFontFamily != family || currentFontSize != size
+        updateInlaySettings(force: fontChanged)
         if fontChanged {
             currentFontFamily = family
             currentFontSize = size
@@ -481,6 +490,9 @@ final class CodeEditorCoordinator {
                 self.currentLanguage = buffer.effectiveLanguage
                 self.semanticFeature?.invalidate()
                 self.updateSemanticClient()
+                self.inlayFeature?.invalidate()
+                self.updateInlaySettings()
+                self.updateInlayClient()
                 self.applyIndentationMode()
                 self.observeEffectiveLanguage(buffer)
             }
@@ -806,6 +818,12 @@ final class CodeEditorCoordinator {
                                                     diagnostics: { [weak self] in self?.diagnosticsFeature.current ?? [] })
         }
         let router = EditorCommandRouter()
+        router.register(.toggleInlayHints) { [weak self] _ in
+            guard let self, let language = currentLanguage else { return }
+            appState.config.code.toggleInlayHints(for: language)
+            appState.saveConfig()
+            updateInlaySettings()
+        }
         router.register(.definition) { [weak self, weak textView] range in
             self?.navigation?.cancelPendingRequest()
             textView?.triggerCommandClick(atUTF16Offset: range.location)
@@ -1054,6 +1072,7 @@ final class CodeEditorCoordinator {
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
         clearRevealHighlight()
+        inlayFeature?.invalidate()
         semanticFeature?.invalidate()
         if let worktreeID = currentWorktreeId {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
@@ -1236,6 +1255,7 @@ final class CodeEditorCoordinator {
     // MARK: - Semantic highlighting
 
     private func stopSemanticTokens() {
+        stopInlayHints()
         semanticBindingID = UUID()
         semanticFeature?.stop()
         semanticFeature = nil
@@ -1247,6 +1267,7 @@ final class CodeEditorCoordinator {
     }
 
     private func configureSemanticTokens(theme: Theme) {
+        configureInlayHints()
         guard let layoutManager, lspBinding != nil else { return }
         semanticLayer = EditorSemanticLayer(layoutManager: layoutManager, theme: EditorTheme(theme: theme), textView: textView, isCurrent: { [weak self] context in
             guard let self, let buffer = self.buffer,
@@ -1270,6 +1291,7 @@ final class CodeEditorCoordinator {
             Task { @MainActor [weak self] in
                 guard let self, self.semanticBindingID == bindingID else { return }
                 self.updateSemanticClient()
+                self.updateInlayClient()
                 self.observeSemanticServer(bindingID: bindingID)
             }
         }
@@ -1305,6 +1327,7 @@ final class CodeEditorCoordinator {
     }
 
     private func scheduleSemanticRefresh(visibleRangeChanged: Bool = false) {
+        scheduleInlayRefresh(visibleRangeChanged: visibleRangeChanged)
         guard semanticClient != nil, let textView, let storage = buffer?.storage,
               !visibleRangeChanged || semanticSupportsRange else { return }
         let range: NSRange
@@ -1339,6 +1362,151 @@ final class CodeEditorCoordinator {
                   semanticBindingID == bindingID, isLSPRequestCurrent(context), semanticClient === client else { return nil }
             return .init(spans: spans, context: context)
         } catch { return nil }
+    }
+
+    // MARK: - Inlay hints
+
+    private func stopInlayHints() {
+        inlayBindingID = UUID()
+        inlayFeature?.stop()
+        inlayFeature = nil
+        inlayLayout?.clear()
+        inlayLayout = nil
+        inlaySubscription?.cancel()
+        inlaySubscription = nil
+        inlayClient = nil
+        inlaySupported = false
+        inlayResponse = nil
+        inlaySettings = nil
+        lastInlayRange = nil
+        textView?.inlayHoverHandler = nil
+        textView?.inlayClickHandler = nil
+        textView?.inlayAccessibilityActions = nil
+    }
+
+    private func configureInlayHints() {
+        guard let textView, lspBinding != nil else { return }
+        inlayLayout = EditorInlayLayout(textView: textView)
+        inlayFeature = InlayHintsFeature(request: { [weak self] range in
+            await self?.requestInlayHints(range: range)
+        }, apply: { [weak self] hints in self?.applyInlayHints(hints) }, clear: { [weak self] in
+            self?.inlayLayout?.clear()
+            self?.inlayResponse = nil
+        })
+        updateInlaySettings()
+        updateInlayClient()
+        observeInlaySettings(bindingID: inlayBindingID)
+    }
+
+    private func observeInlaySettings(bindingID: UUID) {
+        withObservationTracking {
+            _ = appState.config.code.inlayHints
+            _ = appState.config.code.inlayHintsByLanguage
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, inlayBindingID == bindingID else { return }
+                updateInlaySettings()
+                observeInlaySettings(bindingID: bindingID)
+            }
+        }
+    }
+
+    private func updateInlaySettings(force: Bool = false) {
+        guard let language = currentLanguage else { return }
+        let next = appState.config.code.inlayHints(for: language)
+        guard force || next != inlaySettings else { return }
+        inlaySettings = next
+        inlayFeature?.stop()
+        scheduleInlayRefresh()
+    }
+
+    private func updateInlayClient() {
+        let next: LSPClient?
+        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath), worktreeRoot: buffer.worktreeRoot) == .ready {
+            next = currentLSPClient()
+        } else { next = nil }
+        guard next !== inlayClient else { return }
+        inlayFeature?.stop()
+        inlaySubscription?.cancel()
+        inlayClient = next
+        inlaySupported = false
+        guard let next else { return }
+        let binding = inlayBindingID
+        inlaySubscription = Task { [weak self] in
+            guard let self, await next.isReady, await next.capabilities.supports(.toggleInlayHints), inlayBindingID == binding, inlayClient === next else { return }
+            inlaySupported = true
+            let stream = await next.subscribeInlayRefreshes()
+            guard !Task.isCancelled else { return }
+            scheduleInlayRefresh()
+            for await _ in stream {
+                guard !Task.isCancelled, inlayBindingID == binding, inlayClient === next else { return }
+                inlayFeature?.invalidate()
+                scheduleInlayRefresh()
+            }
+            if !Task.isCancelled, inlayBindingID == binding, inlayClient === next { inlayFeature?.stop() }
+        }
+    }
+
+    private var lastInlayRange: (range: NSRange, revision: Int)?
+
+    private func scheduleInlayRefresh(visibleRangeChanged: Bool = false) {
+        guard inlayClient != nil, inlaySupported, inlaySettings?.enabled == true, let view = textView, let adapter = view.displayAdapter,
+              let layout = view.layoutManager, let container = view.textContainer else { return }
+        let visible = view.visibleRect
+        let margin = visible.insetBy(dx: 0, dy: -visible.height).offsetBy(dx: -view.textContainerOrigin.x, dy: -view.textContainerOrigin.y)
+        let glyphs = layout.glyphRange(forBoundingRect: margin, in: container)
+        guard let source = view.sourceRange(forNative: layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)) else { return }
+        let range = (adapter.buffer.storage.string as NSString).lineRange(for: source)
+        // Source edits can publish a provisional projection before the buffer
+        // advances its revision. The same viewport must be requested again
+        // after that revision is committed, even when its range is unchanged.
+        let revision = adapter.buffer.editGeneration
+        guard !visibleRangeChanged || range != lastInlayRange?.range || revision != lastInlayRange?.revision else { return }
+        lastInlayRange = (range, revision)
+        inlayFeature?.refresh(range: range)
+    }
+
+    private func requestInlayHints(range: NSRange) async -> [LSPInlayHint]? {
+        guard let buffer else { return nil }
+        let revision = buffer.editGeneration
+        let binding = inlayBindingID
+        guard let (client, context) = await synchronizeLSPRequest(range: range), buffer === self.buffer,
+              revision == buffer.editGeneration, binding == inlayBindingID, client === inlayClient else { return nil }
+        let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
+        do {
+            let hints = try await client.inlayHints(uri: context.document.uri, range: context.range)
+            guard !Task.isCancelled, buffer === self.buffer, revision == buffer.editGeneration,
+                  binding == inlayBindingID, client === inlayClient, isLSPRequestCurrent(context) else { return nil }
+            inlayResponse = (client, context, revision, generations)
+            return hints.filter { hint in
+                let p = hint.position, start = context.range.start, end = context.range.end
+                return (p.line > start.line || p.line == start.line && p.character >= start.character)
+                    && (p.line < end.line || p.line == end.line && p.character <= end.character)
+            }
+        } catch { return nil }
+    }
+
+    private func applyInlayHints(_ hints: [LSPInlayHint]) {
+        guard let response = inlayResponse, let settings = inlaySettings, let layout = inlayLayout,
+              isLSPRequestCurrent(response.context), buffer?.editGeneration == response.revision else { return }
+        layout.isCurrent = { [weak self] in
+            guard let self else { return false }
+            return inlayClient === response.client && buffer?.editGeneration == response.revision && isLSPRequestCurrent(response.context)
+        }
+        layout.resolve = { hint in try await response.client.resolveInlayHint(hint) }
+        layout.navigate = { [weak self] location, position in self?.openDiagnosticRelatedLocation(location, sourcePosition: position) }
+        layout.perform = { [weak self, weak layout] hint, part, applyEdits in
+            guard let self, layout?.isCurrent() == true else { return }
+            var action: [String: LSPJSONValue] = ["title": .string("Inlay hint")]
+            if applyEdits, let edits = hint.wireValue["textEdits"] {
+                action["edit"] = .object(["changes": .object([response.context.document.uri: edits])])
+            } else if let part, case .array(let parts) = hint.wireValue["label"], parts.indices.contains(part), let command = parts[part]["command"] { action["command"] = command }
+            else { return }
+            guard let chosen = try? LSPCodeAction(wireValue: .object(action)) else { return }
+            codeActionsFeature?.performInlayAction(chosen, client: response.client, context: response.context, generations: response.generations)
+        }
+        do { try layout.replace(hints, revision: response.revision, settings: settings) }
+        catch { layout.clear() }
     }
 
     // MARK: - Diagnostics subscription

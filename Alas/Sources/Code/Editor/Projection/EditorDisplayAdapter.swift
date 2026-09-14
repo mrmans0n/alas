@@ -53,7 +53,7 @@ final class EditorDisplayAdapter {
         view = nil
     }
 
-    /// LSP injection is intentionally unwired until all source consumers migrate.
+    /// Accepts only hints captured for the current source revision; composition defers projection.
     func updateHints(_ hints: [EditorDisplayHint], revision: Int) throws {
         guard revision == buffer.editGeneration else { return }
         _ = try EditorDisplayMap(source: buffer.storage.string, revision: revision, hints: hints)

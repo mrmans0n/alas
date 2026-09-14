@@ -5,6 +5,8 @@ struct CodeLanguageDetailView: View {
     let isNew: Bool
     let onSave: (LanguageServerConfig, [InstallRecipe]?) -> Void
     let onCancel: () -> Void
+    @Binding private var inlayHints: InlayHintSettings?
+    private let defaultInlayHints: InlayHintSettings
 
     @Environment(\.theme) var theme
     @State private var prefillQuery: String = ""
@@ -12,10 +14,14 @@ struct CodeLanguageDetailView: View {
 
     init(initial: LanguageServerConfig,
          isNew: Bool,
+         inlayHints: Binding<InlayHintSettings?> = .constant(nil),
+         defaultInlayHints: InlayHintSettings = .init(),
          onSave: @escaping (LanguageServerConfig, [InstallRecipe]?) -> Void,
          onCancel: @escaping () -> Void) {
         _entry = State(initialValue: initial)
         self.isNew = isNew
+        _inlayHints = inlayHints
+        self.defaultInlayHints = defaultInlayHints
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -119,6 +125,15 @@ struct CodeLanguageDetailView: View {
                 AlasToggle(on: $entry.enabled)
             }
 
+            if !isNew {
+                SettingsRow(name: "Use default inlay hints") {
+                    AlasToggle(on: Binding(get: { inlayHints == nil }, set: { inlayHints = $0 ? nil : defaultInlayHints }))
+                }
+                SettingsRow(name: "Show inlay hints") { AlasToggle(on: inlayBinding(\.enabled)).disabled(inlayHints == nil) }
+                SettingsRow(name: "Parameter names") { AlasToggle(on: inlayBinding(\.parameters)).disabled(inlayHints == nil || inlayHints?.enabled == false) }
+                SettingsRow(name: "Inferred types") { AlasToggle(on: inlayBinding(\.types)).disabled(inlayHints == nil || inlayHints?.enabled == false) }
+            }
+
             if let validation = validationMessage {
                 Text(validation)
                     .font(.system(size: 11.5))
@@ -141,6 +156,14 @@ struct CodeLanguageDetailView: View {
         .padding(24)
         .frame(width: 560)
         .background(theme.color("bg-1"))
+    }
+
+    private func inlayBinding(_ keyPath: WritableKeyPath<InlayHintSettings, Bool>) -> Binding<Bool> {
+        Binding(get: { (inlayHints ?? defaultInlayHints)[keyPath: keyPath] }, set: {
+            var settings = inlayHints ?? defaultInlayHints
+            settings[keyPath: keyPath] = $0
+            inlayHints = settings
+        })
     }
 
     private var validationMessage: String? {
