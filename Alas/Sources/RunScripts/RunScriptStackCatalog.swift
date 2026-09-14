@@ -106,6 +106,16 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// confirmed: a root library with a `cmd/` subpackage is not itself
     /// runnable, so `go run .` would fail even though a command exists.
     var goRunTarget: String?
+    /// The project path (relative to the worktree root) whose OutputType is
+    /// confirmed executable, for `dotnet run --project <path>`. Nil means no
+    /// executable project was found — bare `dotnet run` resolves from the
+    /// current directory alone, so a root .sln with projects in
+    /// subdirectories otherwise has nothing to run.
+    var dotnetRunProject: String?
+    /// Whether the Makefile declares a `test` rule of its own.
+    var hasMakeTestTarget = false
+    /// Whether the Makefile declares a `clean` rule of its own.
+    var hasMakeCleanTarget = false
 
     init(
         hasWrapper: Bool = false,
@@ -121,7 +131,10 @@ struct RunScriptStackContext: Equatable, Sendable {
         usesPhoenix: Bool = true,
         denoTasks: Set<String>? = nil,
         hasRunnableTarget: Bool = false,
-        goRunTarget: String? = nil
+        goRunTarget: String? = nil,
+        dotnetRunProject: String? = nil,
+        hasMakeTestTarget: Bool = false,
+        hasMakeCleanTarget: Bool = false
     ) {
         self.hasWrapper = hasWrapper
         self.kotlinWrapper = kotlinWrapper
@@ -135,6 +148,9 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
+        self.dotnetRunProject = dotnetRunProject
+        self.hasMakeTestTarget = hasMakeTestTarget
+        self.hasMakeCleanTarget = hasMakeCleanTarget
         self.hasRunnableTarget = hasRunnableTarget
         self.goRunTarget = goRunTarget
     }
@@ -239,11 +255,13 @@ enum RunScriptStackCatalog {
                 .init("clean", "Clean", "\(kotlin) clean"),
             ]
         case .dotnet:
+            let runCommand = context.dotnetRunProject
+                .map { "dotnet run --project \(AppState.shellQuote($0))" } ?? "dotnet run"
             return [
                 .init("restore", "Restore", "dotnet restore"),
                 .init("build", "Build", "dotnet build"),
                 .init("test", "Test", "dotnet test"),
-                .init("run", "Run", "dotnet run", onExit: .keep),
+                .init("run", "Run", runCommand, checked: context.dotnetRunProject != nil, onExit: .keep),
             ]
         case .go:
             return [
@@ -326,8 +344,8 @@ enum RunScriptStackCatalog {
         case .make:
             return [
                 .init("build", "Build", "make"),
-                .init("test", "Test", "make test"),
-                .init("clean", "Clean", "make clean"),
+                .init("test", "Test", "make test", checked: context.hasMakeTestTarget),
+                .init("clean", "Clean", "make clean", checked: context.hasMakeCleanTarget),
             ]
         case .flutter:
             let tool = context.usesFlutter ? "flutter" : "dart"

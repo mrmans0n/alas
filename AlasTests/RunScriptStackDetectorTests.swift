@@ -107,10 +107,25 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
 
         try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin"), withIntermediateDirectories: true)
+        try touch("src/bin/tool.rs", in: root)
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
 
         try FileManager.default.removeItem(at: root.appendingPathComponent("src/bin"))
         try write("Cargo.toml", "[package]\nname = \"lib\"\n\n[[bin]]\nname = \"tool\"\n", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
+    /// `cargo run` refuses to guess between multiple binaries unless
+    /// `default-run` resolves the ambiguity.
+    @Test func cargoLeavesMultipleBinariesUncheckedWithoutADefaultRun() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Cargo.toml", "[package]\nname = \"lib\"\n", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin"), withIntermediateDirectories: true)
+        try touch("src/bin/one.rs", "src/bin/two.rs", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+
+        try write("Cargo.toml", "[package]\nname = \"lib\"\ndefault-run = \"one\"\n", in: root)
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
@@ -166,7 +181,24 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("GNUmakefile", in: root)
-        #expect(detect(root)[.make] != nil)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
+    }
+
+    @Test func makefileReadsItsDeclaredTargets() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Makefile", "all:\n\techo build\n\ntest: all\n\techo test\n", in: root)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == true)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
+
+        try write("Makefile", "CFLAGS := -O2\n\nclean:\n\trm -rf build\n", in: root)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == true)
+
+        try write("Makefile", "all test clean:\n\techo combined\n", in: root)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == true)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == true)
     }
 
     @Test func swiftPackageDetectsManifest() throws {
@@ -300,6 +332,41 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("App.csproj", in: root)
         #expect(detect(root)[.dotnet] != nil)
+    }
+
+    @Test func dotnetFindsAnExecutableProjectAtTheRoot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("App.csproj", "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == "App.csproj")
+    }
+
+    /// A root .sln with no runnable project at the worktree root: only a
+    /// project under a subdirectory whose OutputType is actually executable
+    /// counts, not a library alongside it.
+    @Test func dotnetFindsAnExecutableProjectUnderTheSolutionLayout() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("App.sln", in: root)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("src/App.Lib"), withIntermediateDirectories: true
+        )
+        try write(
+            "src/App.Lib/App.Lib.csproj",
+            "<Project><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>",
+            in: root
+        )
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
+
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("src/App.Cli"), withIntermediateDirectories: true
+        )
+        try write(
+            "src/App.Cli/App.Cli.csproj",
+            "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>",
+            in: root
+        )
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == "src/App.Cli/App.Cli.csproj")
     }
 
     @Test func flutterReadsPubspecForTheSDK() throws {

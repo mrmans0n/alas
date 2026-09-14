@@ -94,15 +94,17 @@ enum RunScriptStackDetector {
                 add(stack, .init(kotlinWrapper: wrapper))
             case .dotnet:
                 guard names.contains(where: { $0.hasSuffix(".sln") || $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }) else { continue }
-                add(stack)
+                add(stack, .init(dotnetRunProject: dotnetExecutableProjectPath(worktreeRoot: worktreeRoot, fileManager: fileManager)))
             case .go:
                 guard has("go.mod") else { continue }
                 add(stack, .init(goRunTarget: goRunnableTarget(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
             case .cargo:
                 guard has("Cargo.toml") else { continue }
-                let hasBinary = isRegularFile("src/main.rs") || isDirectory("src/bin")
-                    || (contents("Cargo.toml")?.contains("[[bin]]") ?? false)
-                add(stack, .init(hasRunnableTarget: hasBinary))
+                add(stack, .init(hasRunnableTarget: cargoHasUnambiguousBinary(
+                    cargoToml: contents("Cargo.toml") ?? "",
+                    hasRootMain: isRegularFile("src/main.rs"),
+                    binDirectoryFiles: try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent("src/bin").path)
+                )))
             case .rails:
                 guard hasRails else { continue }
                 add(stack, .init(hasSpecDirectory: hasSpec, hasRubocopConfig: hasRubocop))
@@ -133,8 +135,14 @@ enum RunScriptStackDetector {
             case .make:
                 // CMake generates its own Makefile; only offer plain Make when
                 // nothing else owns the build.
-                guard has("Makefile", "makefile", "GNUmakefile"), !has("CMakeLists.txt") else { continue }
-                add(stack)
+                guard let makefileName = ["Makefile", "makefile", "GNUmakefile"].first(where: { entries.contains($0) }),
+                      !has("CMakeLists.txt")
+                else { continue }
+                let makefile = contents(makefileName) ?? ""
+                add(stack, .init(
+                    hasMakeTestTarget: makefileDeclaresTarget(makefile, target: "test"),
+                    hasMakeCleanTarget: makefileDeclaresTarget(makefile, target: "clean")
+                ))
             case .flutter:
                 guard let pubspec = contents("pubspec.yaml") else { continue }
                 add(stack, .init(usesFlutter: pubspecDeclaresFlutterSDK(pubspec)))
@@ -254,6 +262,73 @@ enum RunScriptStackDetector {
             }
         }
         return nil
+    }
+
+    /// Whether `cargo run` has exactly one binary to pick, or an explicit
+    /// `default-run` to resolve the ambiguity. Cargo refuses to guess when a
+    /// package declares more than one bin target and none is designated.
+    private static func cargoHasUnambiguousBinary(
+        cargoToml: String, hasRootMain: Bool, binDirectoryFiles: [String]?
+    ) -> Bool {
+        var binCount = hasRootMain ? 1 : 0
+        binCount += (binDirectoryFiles ?? []).filter { $0.hasSuffix(".rs") }.count
+        binCount += cargoToml.components(separatedBy: "[[bin]]").count - 1
+        guard binCount > 0 else { return false }
+        guard binCount > 1 else { return true }
+        return cargoToml.range(of: #"(?m)^\s*default-run\s*="#, options: .regularExpression) != nil
+    }
+
+    /// The path (relative to the worktree root) of a project file declaring
+    /// `<OutputType>Exe</OutputType>` (or `WinExe`), so `dotnet run --project
+    /// <path>` has something to run. Bare `dotnet run` only resolves a
+    /// project from the current directory, so a root `.sln` whose actual
+    /// projects live in subdirectories needs this to find one at all.
+    private static func dotnetExecutableProjectPath(worktreeRoot: URL, fileManager: FileManager) -> String? {
+        // `enumerator(atPath:)` yields relative path strings built by plain
+        // concatenation, so — unlike the URL-based enumerator — it isn't
+        // affected by macOS resolving /var to /private/var mid-walk.
+        guard let enumerator = fileManager.enumerator(atPath: worktreeRoot.path) else { return nil }
+        let skippedDirectories: Set<String> = ["bin", "obj", "node_modules"]
+        var candidates: [String] = []
+        while let relativePath = enumerator.nextObject() as? String {
+            let name = (relativePath as NSString).lastPathComponent
+            if name.hasPrefix(".") {
+                enumerator.skipDescendants()
+                continue
+            }
+            var isDirectory: ObjCBool = false
+            let fullPath = worktreeRoot.appendingPathComponent(relativePath).path
+            guard fileManager.fileExists(atPath: fullPath, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                if skippedDirectories.contains(name) { enumerator.skipDescendants() }
+                continue
+            }
+            guard relativePath.hasSuffix(".csproj") || relativePath.hasSuffix(".fsproj") else { continue }
+            candidates.append(relativePath)
+        }
+        for path in candidates.sorted() {
+            guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(path).path),
+                  let text = String(data: data, encoding: .utf8),
+                  text.range(of: #"<OutputType>\s*(Exe|WinExe)\s*</OutputType>"#, options: [.regularExpression, .caseInsensitive]) != nil
+            else { continue }
+            return path
+        }
+        return nil
+    }
+
+    /// Whether a Makefile declares a rule for `target` — a target line looks
+    /// like `name:` or `name: deps`, unindented (an indented line is a
+    /// recipe, not a rule) and not a variable assignment.
+    private static func makefileDeclaresTarget(_ makefile: String, target: String) -> Bool {
+        for line in makefile.components(separatedBy: .newlines) {
+            guard !line.hasPrefix("\t"), !line.hasPrefix(" ") else { continue }
+            guard let colonIndex = line.firstIndex(of: ":") else { continue }
+            let beforeColon = line[line.startIndex..<colonIndex]
+            guard !beforeColon.contains("=") else { continue }
+            let names = beforeColon.split(separator: " ").map { $0.trimmingCharacters(in: .whitespaces) }
+            if names.contains(target) { return true }
+        }
+        return false
     }
 
     /// Strips `//` and `/* */` comments from JSONC, respecting string

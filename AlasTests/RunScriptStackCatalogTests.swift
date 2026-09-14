@@ -153,6 +153,22 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.go, .init(goRunTarget: "./cmd/tool"))["run"]?.isCheckedByDefault == true)
     }
 
+    @Test func dotnetRunUsesTheDetectedExecutableProject() {
+        #expect(actions(.dotnet)["run"]?.body == "dotnet run")
+        #expect(actions(.dotnet)["run"]?.isCheckedByDefault == false)
+        let withProject = actions(.dotnet, .init(dotnetRunProject: "src/App.Cli/App.Cli.csproj"))["run"]
+        #expect(withProject?.body == "dotnet run --project src/App.Cli/App.Cli.csproj")
+        #expect(withProject?.isCheckedByDefault == true)
+    }
+
+    @Test func makeTestAndCleanAreOnlyCheckedWhenDeclared() {
+        #expect(actions(.make)["build"]?.isCheckedByDefault == true)
+        #expect(actions(.make)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.make)["clean"]?.isCheckedByDefault == false)
+        #expect(actions(.make, .init(hasMakeTestTarget: true))["test"]?.isCheckedByDefault == true)
+        #expect(actions(.make, .init(hasMakeCleanTarget: true))["clean"]?.isCheckedByDefault == true)
+    }
+
     @Test func oneShotCommandsCloseAndServersKeepThePane() {
         #expect(actions(.cargo)["build"]?.onExit == .close)
         #expect(actions(.cargo)["run"]?.onExit == .keep)
