@@ -4,6 +4,31 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.3] - 2026-09-14
+
+### ✨ Features
+
+- Animate sidebar and right-pane collapse transitions (#1220).
+- Add writing help for run scripts (#1215).
+- Add hover and press feedback to center-pane toolbar controls (#1213).
+
+### 🐛 Fixes
+
+- Make ACP queue "Send now" non-destructive and redesign Up next rows (#1214).
+- Prevent attention badge flashes while debounced transitions are pending (#1216).
+- Restore reliable space-pager swipe navigation (#1219).
+- Fit Agent sidebar card metadata instead of truncating it (#1206).
+- Correct Homebrew cask verification trust.
+
+### 🎨 Changed
+
+- Float right-pane header bands inside the icon rail (#1217).
+
+### 🏗️ Internal
+
+- Add the Alas build run script and its test harness.
+- Update `tree-sitter-cmake` to 0.7.5 (#1218).
+
 ## [0.17.2] - 2026-09-13
 
 ### ✨ Features
