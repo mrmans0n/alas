@@ -239,11 +239,22 @@ enum RunScriptStackDetector {
     /// share the prefix, like `:phoenix_pubsub` or `:phoenix_live_view`, and
     /// would fire on a dependency left commented out.
     private static func mixDeclaresPhoenixDependency(_ mix: String) -> Bool {
-        let stripped = mix.components(separatedBy: .newlines).map(stripLineComment).joined(separator: "\n")
+        guard let dependencyText = mixDependencyListBody(mix) else { return false }
+        let strippedComments = dependencyText.components(separatedBy: .newlines).map(stripLineComment).joined(separator: "\n")
+        let stripped = stripElixirStringLiterals(strippedComments)
         // Anchor to the actual dependency-tuple shape `{:phoenix, ...}` rather
         // than any occurrence of the atom: a bare ":phoenix" also matches
         // inside an unrelated string literal, e.g. a package description.
         return stripped.range(of: #"\{\s*:phoenix\s*,"#, options: .regularExpression) != nil
+    }
+
+    private static func mixDependencyListBody(_ mix: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?ms)^\s*defp?\s+deps\s+do\s*(.*?)(?=^\s*end\b)"#) else { return nil }
+        let range = NSRange(mix.startIndex..., in: mix)
+        guard let match = regex.firstMatch(in: mix, range: range),
+              let bodyRange = Range(match.range(at: 1), in: mix)
+        else { return nil }
+        return String(mix[bodyRange])
     }
 
     /// Whether a Go source file declares `package main`, the marker that
@@ -467,11 +478,28 @@ enum RunScriptStackDetector {
             #"\bid\s*\(\s*["']([^"']+)["']\s*\)"#,
             #"\bapply\s+plugin:\s*["']([^"']+)["']"#,
         ]
-        return Set(patterns.flatMap { pattern -> [String] in
+        var pluginIDs = Set(patterns.flatMap { pattern -> [String] in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
             let range = NSRange(gradleBuild.startIndex..., in: gradleBuild)
             return regex.matches(in: gradleBuild, range: range).compactMap { match in
                 Range(match.range(at: 1), in: gradleBuild).map { String(gradleBuild[$0]) }
+            }
+        })
+        pluginIDs.formUnion(gradleKotlinDSLPluginAccessors(gradleBuild))
+        return pluginIDs
+    }
+
+    private static func gradleKotlinDSLPluginAccessors(_ gradleBuild: String) -> Set<String> {
+        guard let blockRegex = try? NSRegularExpression(pattern: #"(?ms)\bplugins\s*\{(.*?)\}"#),
+              let accessorRegex = try? NSRegularExpression(pattern: #"(?m)^\s*`?(java|java-library|application|groovy)`?\s*$"#)
+        else { return [] }
+        let fullRange = NSRange(gradleBuild.startIndex..., in: gradleBuild)
+        return Set(blockRegex.matches(in: gradleBuild, range: fullRange).flatMap { block -> [String] in
+            guard let blockRange = Range(block.range(at: 1), in: gradleBuild) else { return [] }
+            let body = String(gradleBuild[blockRange])
+            let bodyRange = NSRange(body.startIndex..., in: body)
+            return accessorRegex.matches(in: body, range: bodyRange).compactMap { match in
+                Range(match.range(at: 1), in: body).map { String(body[$0]) }
             }
         })
     }
@@ -503,7 +531,7 @@ enum RunScriptStackDetector {
         ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#),
            let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#),
            let requiredFeaturesRegex = try? NSRegularExpression(pattern: #"(?m)^\s*required-features\s*=\s*\[([^\]]*)\]"#),
-           let quotedValueRegex = try? NSRegularExpression(pattern: #"\"([^\"]+)\""#)
+           let quotedValueRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
         else { return [] }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         return blockRegex.matches(in: cargoToml, range: fullRange).compactMap { block in
@@ -574,7 +602,7 @@ enum RunScriptStackDetector {
     private static func cargoDefaultFeatures(_ cargoToml: String) -> Set<String> {
         guard let featuresSectionRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*\[features\]\s*(.*?)(?=^\s*\[|\z)"#),
               let featureRegex = try? NSRegularExpression(pattern: #"(?m)^\s*([A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]"#),
-              let quotedValueRegex = try? NSRegularExpression(pattern: #"\"([^\"]+)\""#)
+              let quotedValueRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
         else { return [] }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         guard let sectionMatch = featuresSectionRegex.firstMatch(in: cargoToml, range: fullRange),
@@ -737,15 +765,15 @@ enum RunScriptStackDetector {
         func isActive() -> Bool { stack.last?.active ?? true }
         for line in swift.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("#if ") {
+            if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#if") {
                 let parent = isActive()
-                let condition = swiftConditionIsActive(String(trimmed.dropFirst(4)))
+                let condition = swiftConditionIsActive(conditionText)
                 stack.append(.init(parentActive: parent, active: parent && condition, branchTaken: condition))
                 continue
             }
-            if trimmed.hasPrefix("#elseif ") {
+            if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#elseif") {
                 guard !stack.isEmpty else { continue }
-                let condition = swiftConditionIsActive(String(trimmed.dropFirst(8)))
+                let condition = swiftConditionIsActive(conditionText)
                 var frame = stack.removeLast()
                 frame.active = frame.parentActive && !frame.branchTaken && condition
                 frame.branchTaken = frame.branchTaken || condition
@@ -795,6 +823,13 @@ enum RunScriptStackDetector {
         // Unknown manifest conditions may depend on SwiftPM settings. Keep
         // them rather than hiding real executable declarations.
         return true
+    }
+
+    private static func swiftConditionalDirectiveArgument(_ line: String, keyword: String) -> String? {
+        guard line.hasPrefix(keyword) else { return nil }
+        let rest = line.dropFirst(keyword.count)
+        guard let first = rest.first, first.isWhitespace || first == "(" else { return nil }
+        return String(rest).trimmingCharacters(in: .whitespaces)
     }
 
     private static func splitSwiftCondition(_ condition: String, by separator: String) -> [String] {
@@ -985,7 +1020,7 @@ enum RunScriptStackDetector {
     }
 
     private static func goBuildTagIsEnabled(_ tag: Substring) -> Bool {
-        ["darwin", "unix", currentGoArchitecture, "cgo"].contains(tag) || goReleaseTags.contains(String(tag))
+        ["darwin", "unix", currentGoArchitecture, "cgo", "gc"].contains(tag) || goReleaseTags.contains(String(tag))
     }
 
     private static let goReleaseTags = Set((1...25).map { "go1.\($0)" })
@@ -1184,6 +1219,72 @@ enum RunScriptStackDetector {
         let before = line[line.startIndex..<hashIndex]
         guard before.filter({ $0 == "\"" }).count.isMultiple(of: 2) else { return String(line) }
         return String(before)
+    }
+
+    private static func stripElixirStringLiterals(_ text: String) -> String {
+        var stripped = ""
+        stripped.reserveCapacity(text.count)
+        var index = text.startIndex
+        while index < text.endIndex {
+            let char = text[index]
+            if char == "\"" {
+                stripped.append("\"\"")
+                index = text.index(after: index)
+                var isEscaped = false
+                while index < text.endIndex {
+                    let inner = text[index]
+                    index = text.index(after: index)
+                    if isEscaped {
+                        isEscaped = false
+                    } else if inner == "\\" {
+                        isEscaped = true
+                    } else if inner == "\"" {
+                        break
+                    }
+                }
+                continue
+            }
+            if char == "~", text.index(after: index) < text.endIndex {
+                let sigil = text[text.index(after: index)]
+                if sigil == "s" || sigil == "S" {
+                    let delimiterIndex = text.index(index, offsetBy: 2)
+                    if delimiterIndex < text.endIndex {
+                        let delimiter = text[delimiterIndex]
+                        if let closingDelimiter = elixirClosingSigilDelimiter(for: delimiter) {
+                            stripped.append("~\(sigil)\(delimiter)\(closingDelimiter)")
+                            index = text.index(after: delimiterIndex)
+                            var isEscaped = false
+                            while index < text.endIndex {
+                                let inner = text[index]
+                                index = text.index(after: index)
+                                if sigil == "s", isEscaped {
+                                    isEscaped = false
+                                } else if sigil == "s", inner == "\\" {
+                                    isEscaped = true
+                                } else if inner == closingDelimiter {
+                                    break
+                                }
+                            }
+                            continue
+                        }
+                    }
+                }
+            }
+            stripped.append(char)
+            index = text.index(after: index)
+        }
+        return stripped
+    }
+
+    private static func elixirClosingSigilDelimiter(for delimiter: Character) -> Character? {
+        switch delimiter {
+        case "(": ")"
+        case "[": "]"
+        case "{": "}"
+        case "<": ">"
+        case "/", "|", "\"", "'": delimiter
+        default: nil
+        }
     }
 
     private static func pyprojectDeclaresPythonTool(_ pyproject: String, tool: String) -> Bool {

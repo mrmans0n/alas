@@ -88,6 +88,20 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
     }
 
+    @Test func gradleRecordsTasksSuppliedByKotlinDSLPluginAccessors() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try write("build.gradle.kts", "plugins { java }\n", in: root)
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+
+        try write("build.gradle.kts", "plugins { application }\n", in: root)
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+
+        try write("build.gradle.kts", "plugins { `java-library` }\n", in: root)
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -305,6 +319,28 @@ struct RunScriptStackDetectorTests {
         try touch("src/main.rs", in: root)
 
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
+    @Test func cargoParsesSingleQuotedRequiredFeatures() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [[bin]]
+            name = "tool"
+            path = "src/main.rs"
+            required-features = ['cli']
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
     }
 
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
@@ -536,6 +572,28 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageRecognizesCompactConditionalDirectives() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            #if(os(macOS))
+            let package = Package(targets: [
+                .target(name: "Lib"),
+            ])
+            #else
+            let package = Package(targets: [
+                .executableTarget(name: "OtherTool"),
+            ])
+            #endif
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -680,6 +738,15 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
         try write("main.go", "//go:build !go1.20\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !gc\n\npackage main\n\nfunc main() {}\n", in: root)
 
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
@@ -1156,6 +1223,24 @@ struct RunScriptStackDetectorTests {
         try write(
             "mix.exs",
             "def project do\n  [description: \"Utilities for :phoenix integrations\"]\nend\ndefp deps do\n  []\nend\n",
+            in: root
+        )
+        #expect(detect(root)[.elixir]?.usesPhoenix == false)
+    }
+
+    @Test func elixirIgnoresAPhoenixTupleInsideAStringLiteral() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "mix.exs",
+            #"""
+            def project do
+              [description: ~s/Example tuple {:phoenix, "~> 1.7"}/]
+            end
+            defp deps do
+              []
+            end
+            """#,
             in: root
         )
         #expect(detect(root)[.elixir]?.usesPhoenix == false)
