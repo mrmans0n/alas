@@ -1113,9 +1113,8 @@ extension GitService {
             ["check-ignore", "-q", "--", path],
             cwd: worktreePath
         )
-        let ignoredByPattern: Bool
         switch result.exitCode {
-        case 0: ignoredByPattern = true
+        case 0: break
         case 1: return false
         default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
