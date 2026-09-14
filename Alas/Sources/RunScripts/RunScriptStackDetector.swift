@@ -49,7 +49,13 @@ enum RunScriptStackDetector {
         let hasRails = isRegularFile("bin/rails")
         let hasArtisan = entries.contains("artisan")
         let hasDjangoManage = entries.contains("manage.py")
-        let hasSpec = isDirectory("spec")
+        let bundleHasRSpec = rubyBundleDeclaresAnyGem(
+            named: ["rspec", "rspec-rails"],
+            rootEntries: names,
+            worktreeRoot: worktreeRoot,
+            fileManager: fileManager
+        )
+        let hasSpec = isDirectory("spec") && bundleHasRSpec
         let hasRubocop = has(".rubocop.yml") && rubyBundleDeclaresGem(
             named: "rubocop",
             rootEntries: names,
@@ -1371,16 +1377,33 @@ enum RunScriptStackDetector {
         return Int(version[minorRange])
     }
 
-    private static func goArchitectureFeatureTags(level: String?) -> Set<String> {
+    static func goArchitectureFeatureTags(level: String?) -> Set<String> {
         guard let level else { return defaultGoArchitectureFeatureTags }
         #if arch(arm64)
-        guard level.hasPrefix("v8.") else { return defaultGoArchitectureFeatureTags }
-        let minorText = level.dropFirst("v8.".count)
-        guard let minor = Int(minorText), minor >= 0 else { return defaultGoArchitectureFeatureTags }
-        return Set((0...minor).map { "arm64.v8.\($0)" })
+        let baseLevel = level.split(separator: ",", maxSplits: 1).first.map(String.init) ?? level
+        guard let regex = try? NSRegularExpression(pattern: #"^v([0-9]+)\.([0-9]+)$"#) else { return defaultGoArchitectureFeatureTags }
+        let range = NSRange(baseLevel.startIndex..., in: baseLevel)
+        guard let match = regex.firstMatch(in: baseLevel, range: range),
+              let majorRange = Range(match.range(at: 1), in: baseLevel),
+              let minorRange = Range(match.range(at: 2), in: baseLevel),
+              let major = Int(baseLevel[majorRange]),
+              let minor = Int(baseLevel[minorRange]),
+              major >= 8,
+              minor >= 0
+        else { return defaultGoArchitectureFeatureTags }
+        var tags: Set<String> = []
+        if major >= 8 {
+            let v8UpperBound = major == 8 ? minor : 9
+            tags.formUnion((0...v8UpperBound).map { "arm64.v8.\($0)" })
+        }
+        if major >= 9 {
+            tags.formUnion((0...minor).map { "arm64.v9.\($0)" })
+        }
+        return tags
         #elseif arch(x86_64)
-        guard level.hasPrefix("v") else { return defaultGoArchitectureFeatureTags }
-        let levelText = level.dropFirst()
+        let baseLevel = level.split(separator: ",", maxSplits: 1).first.map(String.init) ?? level
+        guard baseLevel.hasPrefix("v") else { return defaultGoArchitectureFeatureTags }
+        let levelText = baseLevel.dropFirst()
         guard let version = Int(levelText), version >= 1 else { return defaultGoArchitectureFeatureTags }
         return Set((1...version).map { "amd64.v\($0)" })
         #else
@@ -1396,17 +1419,7 @@ enum RunScriptStackDetector {
             guard let dependencies = object[key] as? [String: Any] else { return [] }
             return Array(dependencies.keys)
         }
-        if dependencyKeys.contains("phpunit/phpunit") { return true }
-        guard let scripts = object["scripts"] as? [String: Any] else { return false }
-        return scripts.values.contains { value in
-            if let command = value as? String {
-                return command.contains("phpunit")
-            }
-            if let commands = value as? [String] {
-                return commands.contains { $0.contains("phpunit") }
-            }
-            return false
-        }
+        return dependencyKeys.contains("phpunit/phpunit")
     }
 
     private static func countOccurrences(of pattern: String, in text: String) -> Int {
@@ -1446,16 +1459,25 @@ enum RunScriptStackDetector {
         worktreeRoot: URL,
         fileManager: FileManager
     ) -> Bool {
+        rubyBundleDeclaresAnyGem(named: [gem], rootEntries: rootEntries, worktreeRoot: worktreeRoot, fileManager: fileManager)
+    }
+
+    private static func rubyBundleDeclaresAnyGem(
+        named gems: [String],
+        rootEntries: [String],
+        worktreeRoot: URL,
+        fileManager: FileManager
+    ) -> Bool {
         func fileContents(_ name: String) -> String {
             let url = worktreeRoot.appendingPathComponent(name)
             guard let data = fileManager.contents(atPath: url.path) else { return "" }
             return String(decoding: data, as: UTF8.self)
         }
-        if rootEntries.contains("Gemfile"), gemfileDeclaresGem(fileContents("Gemfile"), gem: gem) {
+        if rootEntries.contains("Gemfile"), gems.contains(where: { gemfileDeclaresGem(fileContents("Gemfile"), gem: $0) }) {
             return true
         }
         return rootEntries.filter { $0.hasSuffix(".gemspec") }.contains { name in
-            gemspecDeclaresGem(fileContents(name), gem: gem)
+            gems.contains { gemspecDeclaresGem(fileContents(name), gem: $0) }
         }
     }
 
@@ -1769,6 +1791,7 @@ enum RunScriptStackDetector {
         dependencyGroups: Set<String>
     ) -> Bool {
         let stripped = stripHashComments(pyproject)
+        let optionalPoetryGroups = poetryOptionalGroups(in: stripped)
         for section in tomlSections(stripped) {
             let table = section.name
             switch table {
@@ -1785,13 +1808,28 @@ enum RunScriptStackDetector {
                     if tomlDependencyText(section.body, declares: tool) { return true }
                     continue
                 }
-                guard table == "tool.poetry.dev-dependencies"
-                    || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
-                else { continue }
+                if table.hasPrefix("tool.poetry.group."), table.hasSuffix(".dependencies") {
+                    let group = table
+                        .dropFirst("tool.poetry.group.".count)
+                        .dropLast(".dependencies".count)
+                    guard !optionalPoetryGroups.contains(String(group)) else { continue }
+                } else {
+                    guard table == "tool.poetry.dev-dependencies" else { continue }
+                }
                 if tomlDependencyText(section.body, declares: tool) { return true }
             }
         }
         return false
+    }
+
+    private static func poetryOptionalGroups(in pyproject: String) -> Set<String> {
+        Set(tomlSections(pyproject).compactMap { section in
+            guard section.name.hasPrefix("tool.poetry.group."),
+                  !section.name.hasSuffix(".dependencies"),
+                  section.body.range(of: #"(?m)^\s*optional\s*=\s*true\s*$"#, options: .regularExpression) != nil
+            else { return nil }
+            return String(section.name.dropFirst("tool.poetry.group.".count))
+        })
     }
 
     private static func uvDefaultDependencyGroups(_ pyproject: String) -> Set<String> {

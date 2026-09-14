@@ -1070,6 +1070,13 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.go]?.goRunTarget == nil)
     }
 
+    @Test func goParsesARM64FeatureLevelsWithExtensions() {
+        #if arch(arm64)
+        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v8.2,lse").contains("arm64.v8.1"))
+        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v9.3,crypto").contains("arm64.v9.3"))
+        #endif
+    }
+
     @Test func goResolvesCGOTagFromTheDetectedToolchain() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1194,7 +1201,7 @@ struct RunScriptStackDetectorTests {
 
         try FileManager.default.createDirectory(at: root.appendingPathComponent("bin"), withIntermediateDirectories: true)
         try touch("bin/rails", ".rubocop.yml", in: root)
-        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rubocop\"\n", in: root)
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rspec-rails\"\ngem \"rubocop\"\n", in: root)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("spec"), withIntermediateDirectories: true)
         let stacks = detect(root)
         #expect(stacks[.ruby] == nil)
@@ -1216,6 +1223,23 @@ struct RunScriptStackDetectorTests {
 
         try FileManager.default.removeItem(at: root.appendingPathComponent("bin/rails"))
         #expect(detect(root)[.ruby]?.hasRubocopConfig == true)
+    }
+
+    @Test func rspecRequiresDeclaredBundleDependency() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("bin"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("spec"), withIntermediateDirectories: true)
+        try touch("bin/rails", in: root)
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\n", in: root)
+
+        #expect(detect(root)[.rails]?.hasSpecDirectory == false)
+
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rspec-rails\"\n", in: root)
+        #expect(detect(root)[.rails]?.hasSpecDirectory == true)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("bin/rails"))
+        #expect(detect(root)[.ruby]?.hasSpecDirectory == true)
     }
 
     @Test func rubyRecordsDeclaredRakeTestTask() throws {
@@ -1464,6 +1488,35 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.hasRuff == true)
     }
 
+    @Test func pythonIgnoresOptionalPoetryGroupsForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("poetry.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [tool.poetry]
+            name = "lib"
+
+            [tool.poetry.group.test]
+            optional = true
+
+            [tool.poetry.group.test.dependencies]
+            pytest = "^8"
+
+            [tool.poetry.group.lint]
+            optional = true
+
+            [tool.poetry.group.lint.dependencies]
+            ruff = "^0.8"
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
     @Test func pythonIgnoresUnrelatedProjectArraysWhenDetectingTools() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1538,6 +1591,10 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.php]?.hasPHPUnit == true)
 
         try write("composer.json", #"{"scripts":{"test":"vendor/bin/phpunit"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == false)
+
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("vendor/bin"), withIntermediateDirectories: true)
+        try touch("vendor/bin/phpunit", in: root)
         #expect(detect(root)[.php]?.hasPHPUnit == true)
     }
 
