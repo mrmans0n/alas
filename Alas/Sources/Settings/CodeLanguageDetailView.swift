@@ -1,16 +1,12 @@
 import SwiftUI
 
 struct CodeLanguageDetailView: View {
-    @State private var entry: LanguageServerConfig
+    @State private var model: CodeLanguageDetailModel
     let isNew: Bool
-    let onSave: (LanguageServerConfig, [InstallRecipe]?) -> Void
-    let onCancel: () -> Void
-    @Binding private var inlayHints: InlayHintSettings?
     private let defaultInlayHints: InlayHintSettings
 
     @Environment(\.theme) var theme
     @State private var prefillQuery: String = ""
-    @State private var pendingRecipes: [InstallRecipe]? = nil
 
     init(initial: LanguageServerConfig,
          isNew: Bool,
@@ -18,17 +14,14 @@ struct CodeLanguageDetailView: View {
          defaultInlayHints: InlayHintSettings = .init(),
          onSave: @escaping (LanguageServerConfig, [InstallRecipe]?) -> Void,
          onCancel: @escaping () -> Void) {
-        _entry = State(initialValue: initial)
+        _model = State(initialValue: CodeLanguageDetailModel(initial: initial, inlayHints: inlayHints, onSave: onSave, onCancel: onCancel))
         self.isNew = isNew
-        _inlayHints = inlayHints
         self.defaultInlayHints = defaultInlayHints
-        self.onSave = onSave
-        self.onCancel = onCancel
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(entry.language.isEmpty ? "Add language" : "Edit \(entry.language)")
+            Text(model.entry.language.isEmpty ? "Add language" : "Edit \(model.entry.language)")
                 .font(.system(size: 16, weight: .semibold))
                 .padding(.bottom, 12)
 
@@ -79,26 +72,26 @@ struct CodeLanguageDetailView: View {
             }
 
             SettingsRow(name: "Language ID") {
-                AlasField(text: $entry.language, monospaced: true)
+                AlasField(text: $model.entry.language, monospaced: true)
             }
             SettingsRow(name: "File extensions",
                         desc: "Comma-separated, e.g. swift, swiftinterface") {
                 AlasField(text: Binding(
-                    get: { entry.extensions.joined(separator: ", ") },
+                    get: { model.entry.extensions.joined(separator: ", ") },
                     set: {
-                        entry.extensions = $0.split(separator: ",")
+                        model.entry.extensions = $0.split(separator: ",")
                             .map { $0.trimmingCharacters(in: .whitespaces) }
                             .filter { !$0.isEmpty }
                     }
                 ), monospaced: true)
             }
             SettingsRow(name: "Command") {
-                AlasField(text: $entry.command, monospaced: true)
+                AlasField(text: $model.entry.command, monospaced: true)
             }
             SettingsRow(name: "Args", desc: "One per line.") {
                 TextEditor(text: Binding(
-                    get: { entry.args.joined(separator: "\n") },
-                    set: { entry.args = $0.split(separator: "\n").map(String.init) }
+                    get: { model.entry.args.joined(separator: "\n") },
+                    set: { model.entry.args = $0.split(separator: "\n").map(String.init) }
                 ))
                 .font(.system(size: 12, design: .monospaced))
                 .scrollContentBackground(.hidden)
@@ -110,8 +103,8 @@ struct CodeLanguageDetailView: View {
             }
             SettingsRow(name: "Root markers", desc: "One per line.") {
                 TextEditor(text: Binding(
-                    get: { entry.rootMarkers.joined(separator: "\n") },
-                    set: { entry.rootMarkers = $0.split(separator: "\n").map(String.init) }
+                    get: { model.entry.rootMarkers.joined(separator: "\n") },
+                    set: { model.entry.rootMarkers = $0.split(separator: "\n").map(String.init) }
                 ))
                 .font(.system(size: 12, design: .monospaced))
                 .scrollContentBackground(.hidden)
@@ -122,16 +115,16 @@ struct CodeLanguageDetailView: View {
                     .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
             SettingsRow(name: "Enabled") {
-                AlasToggle(on: $entry.enabled)
+                AlasToggle(on: $model.entry.enabled)
             }
 
             if !isNew {
                 SettingsRow(name: "Use default inlay hints") {
-                    AlasToggle(on: Binding(get: { inlayHints == nil }, set: { inlayHints = $0 ? nil : defaultInlayHints }))
+                    AlasToggle(on: Binding(get: { model.inlayHints == nil }, set: { model.inlayHints = $0 ? nil : defaultInlayHints }))
                 }
-                SettingsRow(name: "Show inlay hints") { AlasToggle(on: inlayBinding(\.enabled)).disabled(inlayHints == nil) }
-                SettingsRow(name: "Parameter names") { AlasToggle(on: inlayBinding(\.parameters)).disabled(inlayHints == nil || inlayHints?.enabled == false) }
-                SettingsRow(name: "Inferred types") { AlasToggle(on: inlayBinding(\.types)).disabled(inlayHints == nil || inlayHints?.enabled == false) }
+                SettingsRow(name: "Show inlay hints") { AlasToggle(on: inlayBinding(\.enabled)).disabled(model.inlayHints == nil) }
+                SettingsRow(name: "Parameter names") { AlasToggle(on: inlayBinding(\.parameters)).disabled(model.inlayHints == nil || model.inlayHints?.enabled == false) }
+                SettingsRow(name: "Inferred types") { AlasToggle(on: inlayBinding(\.types)).disabled(model.inlayHints == nil || model.inlayHints?.enabled == false) }
             }
 
             if let validation = validationMessage {
@@ -143,11 +136,12 @@ struct CodeLanguageDetailView: View {
 
             HStack(spacing: 8) {
                 Spacer()
-                AlasButton(title: "Cancel", style: .subtle, action: onCancel)
+                AlasButton(title: "Cancel", style: .subtle, action: model.cancel)
+
                 AlasButton(
                     title: "Save",
                     style: .primary,
-                    action: { onSave(entry.normalizedForSettingsSave(), pendingRecipes) }
+                    action: model.save
                 )
                     .disabled(validationMessage != nil)
             }
@@ -159,10 +153,10 @@ struct CodeLanguageDetailView: View {
     }
 
     private func inlayBinding(_ keyPath: WritableKeyPath<InlayHintSettings, Bool>) -> Binding<Bool> {
-        Binding(get: { (inlayHints ?? defaultInlayHints)[keyPath: keyPath] }, set: {
-            var settings = inlayHints ?? defaultInlayHints
+        Binding(get: { (model.inlayHints ?? defaultInlayHints)[keyPath: keyPath] }, set: {
+            var settings = model.inlayHints ?? defaultInlayHints
             settings[keyPath: keyPath] = $0
-            inlayHints = settings
+            model.inlayHints = settings
         })
     }
 
@@ -171,20 +165,48 @@ struct CodeLanguageDetailView: View {
         // them `LanguageServerRegistry.language(forFileExtension:)` never
         // matches the language and the LSP never spawns. Block save until
         // the required fields are filled.
-        if entry.language.trimmingCharacters(in: .whitespaces).isEmpty {
+        if model.entry.language.trimmingCharacters(in: .whitespaces).isEmpty {
             return "Language ID is required."
         }
-        if entry.command.trimmingCharacters(in: .whitespaces).isEmpty {
+        if model.entry.command.trimmingCharacters(in: .whitespaces).isEmpty {
             return "Command is required."
         }
-        if entry.extensions.isEmpty {
+        if model.entry.extensions.isEmpty {
             return "Add at least one file extension."
         }
         return nil
     }
 
     private func applyPrefill(_ pkg: MasonPackage) {
-        entry = LanguageServerConfig.prefilled(from: pkg)
-        pendingRecipes = pkg.recipes
+        model.entry = LanguageServerConfig.prefilled(from: pkg)
+        model.pendingRecipes = pkg.recipes
     }
+}
+
+/// Shared edit session for the sheet's fields and explicit Save/Cancel actions.
+@MainActor
+@Observable
+final class CodeLanguageDetailModel {
+    var entry: LanguageServerConfig
+    var pendingRecipes: [InstallRecipe]?
+    var inlayHints: InlayHintSettings?
+    private let hintBinding: Binding<InlayHintSettings?>
+    private let onSave: (LanguageServerConfig, [InstallRecipe]?) -> Void
+    private let onCancel: () -> Void
+
+    init(initial: LanguageServerConfig, inlayHints: Binding<InlayHintSettings?>,
+         onSave: @escaping (LanguageServerConfig, [InstallRecipe]?) -> Void,
+         onCancel: @escaping () -> Void) {
+        entry = initial
+        hintBinding = inlayHints
+        self.inlayHints = inlayHints.wrappedValue
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    func save() {
+        hintBinding.wrappedValue = inlayHints
+        onSave(entry.normalizedForSettingsSave(), pendingRecipes)
+    }
+    func cancel() { onCancel() }
 }

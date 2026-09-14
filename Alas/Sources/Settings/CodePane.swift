@@ -109,7 +109,6 @@ struct CodePane: View {
                 isNew: false,
                 inlayHints: Binding(get: { state.config.code.inlayHintsByLanguage[entry.language] }, set: {
                     state.config.code.inlayHintsByLanguage[entry.language] = $0
-                    state.saveConfig()
                 }),
                 defaultInlayHints: state.config.code.inlayHints,
                 onSave: { saved, _ in save(originalLanguage: entry.language, saved, recipes: nil) },
