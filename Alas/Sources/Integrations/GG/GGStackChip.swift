@@ -54,10 +54,10 @@ struct GGStackChip: View {
     private func chipBody(backgroundOpacity: Double) -> some View {
         let tint = theme.color(model.colorToken)
         return Text(model.label)
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(.system(size: 10.5, weight: .semibold))
             .lineLimit(1)
             .foregroundColor(tint)
-            .padding(.horizontal, 6).padding(.vertical, 1)
+            .padding(.horizontal, 7).padding(.vertical, 2)
             .background(tint.opacity(backgroundOpacity))
             .clipShape(Capsule())
     }
@@ -80,6 +80,6 @@ struct GGCIDot: View {
     var body: some View {
         Circle()
             .fill(theme.color(token))
-            .frame(width: 6, height: 6)
+            .frame(width: 7, height: 7)
     }
 }
