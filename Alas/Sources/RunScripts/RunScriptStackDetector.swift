@@ -918,24 +918,27 @@ enum RunScriptStackDetector {
         var ranges: [NSRange] = []
         var index = text.startIndex
         while index < text.endIndex {
-            if text[index] == "\"" {
-                let start = index
-                if text[index...].hasPrefix("\"\"\"") {
-                    index = text.index(index, offsetBy: 3)
-                    while index < text.endIndex {
-                        if text[index...].hasPrefix("\"\"\"") {
-                            index = text.index(index, offsetBy: 3)
-                            ranges.append(NSRange(start..<index, in: text))
-                            break
-                        }
-                        index = text.index(after: index)
-                    }
-                    if index >= text.endIndex {
-                        ranges.append(NSRange(start..<text.endIndex, in: text))
-                    }
-                    continue
-                }
+            guard let opener = swiftStringLiteralOpener(at: index, in: text) else {
                 index = text.index(after: index)
+                continue
+            }
+            let start = index
+            index = opener.contentStart
+            if opener.hashCount > 0 || opener.quoteCount == 3 {
+                while index < text.endIndex {
+                    if swiftStringDelimiterMatches(at: index, in: text, quoteCount: opener.quoteCount, hashCount: opener.hashCount) {
+                        index = text.index(index, offsetBy: opener.quoteCount + opener.hashCount)
+                        ranges.append(NSRange(start..<index, in: text))
+                        break
+                    }
+                    index = text.index(after: index)
+                }
+                if index >= text.endIndex {
+                    ranges.append(NSRange(start..<text.endIndex, in: text))
+                }
+                continue
+            }
+            if opener.quoteCount == 1 {
                 var isEscaped = false
                 while index < text.endIndex {
                     let char = text[index]
@@ -951,9 +954,40 @@ enum RunScriptStackDetector {
                 ranges.append(NSRange(start..<index, in: text))
                 continue
             }
-            index = text.index(after: index)
         }
         return ranges
+    }
+
+    private static func swiftStringLiteralOpener(at index: String.Index, in text: String) -> (hashCount: Int, quoteCount: Int, contentStart: String.Index)? {
+        var hashCount = 0
+        var quoteIndex = index
+        while quoteIndex < text.endIndex, text[quoteIndex] == "#" {
+            hashCount += 1
+            quoteIndex = text.index(after: quoteIndex)
+        }
+        guard quoteIndex < text.endIndex, text[quoteIndex] == "\"" else { return nil }
+        let quoteCount = text[quoteIndex...].hasPrefix("\"\"\"") ? 3 : 1
+        let contentStart = text.index(quoteIndex, offsetBy: quoteCount)
+        return (hashCount, quoteCount, contentStart)
+    }
+
+    private static func swiftStringDelimiterMatches(
+        at index: String.Index,
+        in text: String,
+        quoteCount: Int,
+        hashCount: Int
+    ) -> Bool {
+        guard text.distance(from: index, to: text.endIndex) >= quoteCount + hashCount else { return false }
+        var cursor = index
+        for _ in 0..<quoteCount {
+            guard text[cursor] == "\"" else { return false }
+            cursor = text.index(after: cursor)
+        }
+        for _ in 0..<hashCount {
+            guard text[cursor] == "#" else { return false }
+            cursor = text.index(after: cursor)
+        }
+        return true
     }
 
     private static func swiftToolsVersion(in manifest: String) -> (major: Int, minor: Int)? {
@@ -1533,10 +1567,24 @@ enum RunScriptStackDetector {
             // read as a rule for "test".
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
+            guard !makeColonStartsAssignmentOperator(in: line, at: colonIndex) else { continue }
             let beforeColon = line[line.startIndex..<colonIndex]
             guard !beforeColon.contains("=") else { continue }
             let names = beforeColon.split(separator: " ").map { $0.trimmingCharacters(in: .whitespaces) }
             if names.contains(target) { return true }
+        }
+        return false
+    }
+
+    private static func makeColonStartsAssignmentOperator(in line: Substring, at colonIndex: Substring.Index) -> Bool {
+        let afterColon = line.index(after: colonIndex)
+        guard afterColon < line.endIndex else { return false }
+        if line[afterColon] == "=" {
+            return true
+        }
+        if line[afterColon] == ":" {
+            let afterDoubleColon = line.index(after: afterColon)
+            return afterDoubleColon < line.endIndex && line[afterDoubleColon] == "="
         }
         return false
     }
@@ -1596,7 +1644,8 @@ enum RunScriptStackDetector {
             pattern: #"^\s*task\s*\(\s*["']"# + escapedTask + #"["']"#
         ), let parenthesizedTaskSkeletonRegex = try? NSRegularExpression(
             pattern: #"^\s*task\s*\("#
-        ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#)
+        ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#),
+           let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#)
         else { return false }
         var blockStack: [Bool] = []
         let originalSegments = commentless.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
@@ -1610,6 +1659,10 @@ enum RunScriptStackDetector {
             let range = NSRange(segment.startIndex..., in: segment)
             let originalRange = NSRange(originalSegment.startIndex..., in: originalSegment)
             if namespaceRegex.firstMatch(in: segment, range: range) != nil {
+                blockStack.append(true)
+                continue
+            }
+            if methodRegex.firstMatch(in: segment, range: range) != nil {
                 blockStack.append(true)
                 continue
             }

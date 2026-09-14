@@ -534,6 +534,15 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.make]?.hasMakeTestTarget == true)
     }
 
+    @Test func makefileIgnoresSimpleAssignmentOperators() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Makefile", "test := integration\nclean ?= distclean\nall:\n\techo build\n", in: root)
+
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
+    }
+
     @Test func swiftPackageDetectsManifest() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -915,6 +924,23 @@ struct RunScriptStackDetectorTests {
                 .target(name: "Lib"),
             ])
             """#,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    @Test func swiftPackageIgnoresExecutableTargetsInsideRawStringLiterals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            let docs = #"Example " .executableTarget(name: "Fake") text"#
+            let package = Package(targets: [
+                .target(name: "Lib"),
+            ])
+            """,
             in: root
         )
 
@@ -1420,6 +1446,15 @@ struct RunScriptStackDetectorTests {
 
         try write("Rakefile", "task test: :prepare do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
+    }
+
+    @Test func rubyIgnoresRakeTasksInsideUncalledMethods() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
+        try write("Rakefile", "def register_tasks\n  task :test do\n    ruby \"test/all_test.rb\"\n  end\nend\n", in: root)
+
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
     }
 
     @Test func djangoDetectsManageAndSharesPythonRunner() throws {
