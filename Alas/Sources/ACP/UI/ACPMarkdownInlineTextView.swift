@@ -353,25 +353,58 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// Markdown cells are NSTextViews, so without this override they consume
     /// wheel events even though they cannot scroll vertically themselves.
     override func scrollWheel(with event: NSEvent) {
-        if scrollRoutingState.shouldForward(
+        if let transcriptScroller {
+            var routingState = transcriptScroller.markdownScrollRoutingState
+            routeScrollWheel(
+                with: event,
+                routingState: &routingState,
+                forward: { transcriptScroller.scrollMarkdownWheel(with: $0) }
+            )
+            transcriptScroller.markdownScrollRoutingState = routingState
+        } else {
+            routeScrollWheel(
+                with: event,
+                routingState: &scrollRoutingState,
+                forward: { [weak self] in self?.nextResponder?.scrollWheel(with: $0) }
+            )
+        }
+    }
+
+    private var transcriptScroller: ACPTranscriptScrollerView? {
+        var responder = nextResponder
+        while let current = responder {
+            if let scroller = current as? ACPTranscriptScrollerView {
+                return scroller
+            }
+            responder = current.nextResponder
+        }
+        return nil
+    }
+
+    private func routeScrollWheel(
+        with event: NSEvent,
+        routingState: inout ACPMarkdownScrollRoutingState,
+        forward: (NSEvent) -> Void
+    ) {
+        if routingState.shouldForward(
             deltaX: event.scrollingDeltaX,
             deltaY: event.scrollingDeltaY,
             phase: event.phase,
             momentumPhase: event.momentumPhase,
             pendingEvent: event
         ) {
-            for pendingEvent in scrollRoutingState.consumePendingEvents() {
-                nextResponder?.scrollWheel(with: pendingEvent)
+            for pendingEvent in routingState.consumePendingEvents() {
+                forward(pendingEvent)
             }
-            nextResponder?.scrollWheel(with: event)
+            forward(event)
             return
         }
 
-        if scrollRoutingState.forwarding == nil, scrollRoutingState.hasPendingEvents {
+        if routingState.forwarding == nil, routingState.hasPendingEvents {
             return
         }
 
-        for pendingEvent in scrollRoutingState.consumePendingEvents() {
+        for pendingEvent in routingState.consumePendingEvents() {
             scrollTextView(with: pendingEvent)
         }
         scrollTextView(with: event)

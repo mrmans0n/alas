@@ -51,6 +51,7 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     let flippedDocumentView = ACPTranscriptDocumentView()
     var onScroll: ((_ previousY: CGFloat?, _ newY: CGFloat, _ viewportHeight: CGFloat, _ contentHeight: CGFloat, _ isProgrammatic: Bool) -> Void)?
     var onLogicalScrollCommit: ((Double) -> Void)?
+    var markdownScrollRoutingState = ACPMarkdownScrollRoutingState()
     private var logicalScrollerMetrics: ACPTranscriptLogicalScrollModel.Metrics?
 
     /// Fired from `layout()` whenever `contentView.bounds.width` differs
@@ -102,6 +103,7 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     private var programmaticAdjustmentDepth = 0
     #if DEBUG
     private(set) var scrollToBottomCallCountForTesting = 0
+    private(set) var markdownScrollEventsForTests: [NSEvent] = []
     #endif
     private var boundsObserver: NSObjectProtocol?
     private var liveScrollObservers: [NSObjectProtocol] = []
@@ -347,6 +349,13 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
         scrollToBottomCallCountForTesting += 1
         #endif
         setScrollY(max(0, contentHeight - viewportHeight))
+    }
+
+    func scrollMarkdownWheel(with event: NSEvent) {
+        #if DEBUG
+        markdownScrollEventsForTests.append(event)
+        #endif
+        scrollWheel(with: event)
     }
 
     private func performProgrammatic(_ body: () -> Void) {

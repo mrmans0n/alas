@@ -210,6 +210,27 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         #expect(momentumStart)
     }
 
+    @Test("scroll routing is shared across Markdown rows")
+    func scrollRoutingIsSharedAcrossMarkdownRows() throws {
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        let firstRow = makeTextView("First row")
+        let secondRow = makeTextView("Second row")
+        firstRow.nextResponder = scroller
+        secondRow.nextResponder = scroller
+
+        let start = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .began)
+        firstRow.scrollWheel(with: start)
+
+        let end = try makeScrollEvent(deltaX: 0, deltaY: 0, phase: .ended)
+        secondRow.scrollWheel(with: end)
+
+        #expect(firstRow.superScrollEventsForTests.isEmpty)
+        #expect(secondRow.superScrollEventsForTests.isEmpty)
+        #expect(scroller.markdownScrollEventsForTests.count == 2)
+        #expect(scroller.markdownScrollEventsForTests[0] === start)
+        #expect(scroller.markdownScrollEventsForTests[1] === end)
+    }
+
     @Test("scroll routing waits for dominant axis before latching")
     func scrollRoutingWaitsForAxisBeforeLatching() {
         var routing = ACPMarkdownScrollRoutingState()
