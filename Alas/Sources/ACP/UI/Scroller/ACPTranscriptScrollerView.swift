@@ -216,7 +216,7 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
         super.scrollWheel(with: event)
     }
 
-    deinit {
+    isolated deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
