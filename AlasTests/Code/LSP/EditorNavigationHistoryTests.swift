@@ -106,6 +106,69 @@ struct EditorNavigationHistoryTests {
         #expect(first.goBack() == a)
     }
 
+    @Test(arguments: [
+        ("root", "root/sub/../../outside%20%25%20file.swift", "outside % file.swift", nil as String?),
+        ("root", "outside%20%25%20file.swift", "outside % file.swift", nil),
+        ("root", "rootish/sibling.swift", "rootish/sibling.swift", nil),
+        ("root", "root/sub/../inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift"),
+        ("root/sub/..", "root/inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift"),
+        ("root", "root/inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift")
+    ])
+    @MainActor func navigationContainmentControlsBufferAndSaveRoute(
+        rootPath: String,
+        targetPath: String,
+        diskPath: String,
+        expectedRelativePath: String?
+    ) async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("navigation-containment-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture.appendingPathComponent("root/sub"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fixture.appendingPathComponent("rootish"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let file = fixture.appendingPathComponent(diskPath)
+        try Data("original".utf8).write(to: file)
+        let root = try #require(URL(string: fixture.absoluteString + rootPath))
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(host: nil, worktreeID: "w", uri: fixture.absoluteString + targetPath),
+            position: LSPPosition(line: 3, character: 7)
+        )
+        let manager = TabsManager(
+            bufferStore: EditorBufferStore(rootOverride: fixture.appendingPathComponent("buffers")),
+            tabsDirectory: fixture.appendingPathComponent("tabs")
+        )
+
+        #expect(manager.openNavigationTarget(target, worktreeRoot: root, originatingRelativePath: "source.swift", language: "swift"))
+        let tab = try #require(manager.activeTab(forWorktree: "w"))
+        guard case .editor(let state) = tab else {
+            Issue.record("Navigation did not open an editor")
+            return
+        }
+        defer { manager.discardBuffer(worktreeId: "w", tabId: state.id) }
+        #expect(state.relativePath == (expectedRelativePath ?? ""))
+        #expect(state.externalAbsolutePath == (expectedRelativePath == nil ? file.path : nil))
+        #expect(!state.isExternalEditable)
+        #expect(state.revealLine == 3)
+        #expect(state.revealCharacter == 7)
+
+        // Follow the same tab-state branch used by the mounted editor.
+        let buffer: EditorBuffer
+        if let absolutePath = state.externalAbsolutePath {
+            buffer = manager.externalBuffer(worktreeId: "w", tabId: state.id, absoluteURL: URL(fileURLWithPath: absolutePath))
+        } else {
+            buffer = manager.buffer(worktreeId: "w", tabId: state.id, worktreeRoot: root, relativePath: state.relativePath)
+        }
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        #expect(buffer.storage.string == "original")
+        #expect(buffer.isExternal == (expectedRelativePath == nil))
+        #expect(buffer.readOnly == (expectedRelativePath == nil))
+        #expect((manager.activeEditorContext(worktreeId: "w") == nil) == (expectedRelativePath == nil))
+        #expect((manager.peekExternalBuffer(tabId: state.id) != nil) == (expectedRelativePath == nil))
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "changed")
+        try buffer.save()
+        #expect(try String(contentsOf: file, encoding: .utf8) == (expectedRelativePath == nil ? "original" : "changed"))
+    }
+
     @Test @MainActor func historyKeepsOnlyTheMostRecentTwoHundredLocations() {
         let store = EditorNavigationStore()
         var previous = target(line: 0)

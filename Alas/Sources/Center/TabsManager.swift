@@ -142,18 +142,21 @@ final class TabsManager {
         guard target.document.host == RemoteHostRegistry.shared.host(forPath: worktreeRoot.path),
               let url = URL(string: target.document.uri)
         else { return false }
-        let rootPath = worktreeRoot.path.hasSuffix("/") ? worktreeRoot.path : worktreeRoot.path + "/"
-        if url.path.hasPrefix(rootPath) {
+        let normalizedURL = url.standardizedFileURL
+        let rootComponents = worktreeRoot.standardizedFileURL.pathComponents
+        let targetComponents = normalizedURL.pathComponents
+        if targetComponents.count > rootComponents.count,
+           targetComponents.starts(with: rootComponents) {
             _ = openEditor(
                 worktreeId: target.document.worktreeID,
-                relativePath: String(url.path.dropFirst(rootPath.count)),
+                relativePath: targetComponents.dropFirst(rootComponents.count).joined(separator: "/"),
                 revealLine: target.position.line,
                 revealCharacter: target.position.character
             )
         } else {
             _ = openExternalEditor(
                 worktreeId: target.document.worktreeID,
-                absoluteURL: url,
+                absoluteURL: normalizedURL,
                 revealLine: target.position.line,
                 revealCharacter: target.position.character,
                 originatingRelativePath: originatingRelativePath,
