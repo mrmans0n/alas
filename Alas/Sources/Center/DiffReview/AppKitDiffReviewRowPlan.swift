@@ -1019,6 +1019,7 @@ struct AppKitDiffReviewHeaderRowBody: View {
 }
 
 private extension AppKitDiffRowSpec {
+    @MainActor
     func withReviewCardChrome(
         position: AppKitDiffReviewCardRowPosition,
         theme: Theme

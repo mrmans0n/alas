@@ -79,7 +79,11 @@ struct ReviewCommentWireDTO: Codable, Equatable {
         }
     }
 
-    private static let iso8601 = ISO8601DateFormatter()
+    /// `nonisolated(unsafe)` is sound: the formatter is never mutated after
+    /// initialization (only `.string(from:)` is called, above), and Foundation
+    /// documents `ISO8601DateFormatter` as thread-safe for formatting once its
+    /// configuration is fixed.
+    nonisolated(unsafe) private static let iso8601 = ISO8601DateFormatter()
 
     /// One deterministic (sorted-keys, snake_case) JSON line for CLI/MCP
     /// text output.

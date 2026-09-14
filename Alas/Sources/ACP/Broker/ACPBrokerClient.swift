@@ -779,7 +779,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
     }
 
-    private func respond<T: Encodable>(id: JSONRPCID, value: T) {
+    private func respond<T: Encodable & Sendable>(id: JSONRPCID, value: T) {
         Task { [weak self] in
             guard let self else { return }
             do {

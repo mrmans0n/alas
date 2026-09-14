@@ -32,7 +32,7 @@ final class MarkdownImageLoader: @unchecked Sendable {
 
     private let cache = NSCache<NSURL, NSImage>()
     private let session: URLSession
-    private var inFlightRemoteCompletions: [URL: [@MainActor (NSImage?) -> Void]] = [:]
+    private var inFlightRemoteCompletions: [URL: [@MainActor @Sendable (NSImage?) -> Void]] = [:]
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -50,7 +50,7 @@ final class MarkdownImageLoader: @unchecked Sendable {
     /// an async fetch and calls `completion` on the main actor when the
     /// image arrives. If the fetch fails, `completion` is called with nil.
     @MainActor
-    func loadRemote(url: URL, completion: @escaping @MainActor (NSImage?) -> Void) -> NSImage? {
+    func loadRemote(url: URL, completion: @escaping @MainActor @Sendable (NSImage?) -> Void) -> NSImage? {
         if let cached = cache.object(forKey: url as NSURL) {
             return cached
         }

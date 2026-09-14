@@ -21,7 +21,7 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
         if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
     }
 
-    static let defaultRunner: (String, [String]) async throws -> (status: Int32, stderr: String) = { cmd, args in
+    static let defaultRunner: @Sendable (String, [String]) async throws -> (status: Int32, stderr: String) = { cmd, args in
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args

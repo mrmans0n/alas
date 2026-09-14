@@ -21,13 +21,14 @@ enum DiffHighlightPrewarmer {
         showWhitespace: Bool,
         theme: Theme
     ) {
+        let fontBox = UncheckedFontBox(font: font)
         queue.async {
             warm(
                 groups: groups,
                 expandedCollapsedRowIDs: expandedCollapsedRowIDs,
                 layoutMode: layoutMode,
                 fileExtension: fileExtension,
-                font: font,
+                font: fontBox.font,
                 showWhitespace: showWhitespace,
                 theme: theme
             )
@@ -118,4 +119,13 @@ enum DiffHighlightPrewarmer {
             }
         }
     }
+}
+
+/// `NSFont` is not `Sendable`, but AppKit vends font instances as immutable
+/// value-like objects — safe to read from both the calling thread and
+/// `DiffHighlightPrewarmer`'s background queue without synchronization. This
+/// box only carries the reference across that one queue hop; it never
+/// mutates the font.
+private struct UncheckedFontBox: @unchecked Sendable {
+    let font: NSFont
 }

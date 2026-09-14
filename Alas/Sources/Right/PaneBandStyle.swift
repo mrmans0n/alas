@@ -65,6 +65,7 @@ extension AnyTransition {
     /// The drawer body slides out from beneath its row while fading in. The
     /// drawer clips to its card shape, so the slide reads as an unfurl
     /// rather than the body arriving from outside.
+    @MainActor
     static let paneDrawerBody: AnyTransition = .move(edge: .top).combined(with: .opacity)
 }
 

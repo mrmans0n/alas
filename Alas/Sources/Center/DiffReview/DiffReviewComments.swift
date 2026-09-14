@@ -897,6 +897,7 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
 enum DiffReviewInlineFeedbackMarkdown {
     private static let typography = ACPChatTypography(fontFamily: "", fontSize: 11)
 
+    @MainActor
     static func view(_ source: String, noninteractiveTapAction: (() -> Void)? = nil) -> some View {
         ACPMarkdownText(
             raw: source,

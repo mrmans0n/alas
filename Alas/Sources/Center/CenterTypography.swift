@@ -29,7 +29,12 @@ enum CenterTypography {
     /// to beachball the app when a custom code font is configured and many lines
     /// re-render. Cache by (family, size) since the resolved font never changes
     /// for a given input.
-    private static let resolvedFontCache = NSCache<NSString, NSFont>()
+    /// `nonisolated(unsafe)` is sound: `NSCache` is documented thread-safe for
+    /// concurrent get/set, and the get-then-set at :39-44 is at worst a benign
+    /// lost update (a redundant re-resolve), never a crash or torn value.
+    /// `@MainActor` would be wrong here — `resolveCodeFont` runs per visible
+    /// code line from text-layout paths that are not always on the main thread.
+    nonisolated(unsafe) private static let resolvedFontCache = NSCache<NSString, NSFont>()
 
     static func resolveCodeFont(family: String, size: CGFloat) -> NSFont {
         guard !family.isEmpty else {
