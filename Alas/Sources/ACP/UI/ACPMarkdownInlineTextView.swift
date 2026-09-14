@@ -222,6 +222,7 @@ extension NSAttributedString.Key {
 struct ACPMarkdownScrollRoutingState {
     private(set) var forwarding: Bool?
     private var pendingEvents: [NSEvent] = []
+    private var resetsAfterCurrentEvent = false
     var hasPendingEvents: Bool { !pendingEvents.isEmpty }
 
     mutating func shouldForward(
@@ -234,6 +235,10 @@ struct ACPMarkdownScrollRoutingState {
         let isVertical = Self.isVerticalDominant(deltaX: deltaX, deltaY: deltaY)
         let hasDominantAxis = abs(deltaY) != abs(deltaX)
         let hasGesturePhase = !phase.isEmpty || !momentumPhase.isEmpty
+        let resetsAfterEvent = phase.contains(.cancelled)
+            || momentumPhase.contains(.cancelled)
+            || momentumPhase.contains(.ended)
+        resetsAfterCurrentEvent = resetsAfterEvent
 
         if phase.contains(.began) {
             forwarding = nil
@@ -248,6 +253,9 @@ struct ACPMarkdownScrollRoutingState {
         if forwarding == nil && phase.contains(.ended) && hasPendingEvents {
             forwarding = false
         }
+        if forwarding == nil && resetsAfterEvent && hasPendingEvents {
+            forwarding = false
+        }
         if forwarding == nil && !hasGesturePhase && hasPendingEvents {
             forwarding = isVertical
         }
@@ -256,15 +264,14 @@ struct ACPMarkdownScrollRoutingState {
             ? forwarding ?? false
             : isVertical
 
-        if phase.contains(.cancelled)
-            || momentumPhase.contains(.cancelled)
-            || momentumPhase.contains(.ended)
-        {
-            forwarding = nil
-            pendingEvents.removeAll(keepingCapacity: true)
-        }
-
         return shouldForward
+    }
+
+    mutating func completeCurrentEventRouting() {
+        guard resetsAfterCurrentEvent else { return }
+        resetsAfterCurrentEvent = false
+        forwarding = nil
+        pendingEvents.removeAll(keepingCapacity: true)
     }
 
     mutating func consumePendingEvents() -> [NSEvent] {
@@ -384,13 +391,16 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         routingState: inout ACPMarkdownScrollRoutingState,
         forward: (NSEvent) -> Void
     ) {
-        if routingState.shouldForward(
+        let shouldForward = routingState.shouldForward(
             deltaX: event.scrollingDeltaX,
             deltaY: event.scrollingDeltaY,
             phase: event.phase,
             momentumPhase: event.momentumPhase,
             pendingEvent: event
-        ) {
+        )
+        defer { routingState.completeCurrentEventRouting() }
+
+        if shouldForward {
             for pendingEvent in routingState.consumePendingEvents() {
                 forward(pendingEvent)
             }

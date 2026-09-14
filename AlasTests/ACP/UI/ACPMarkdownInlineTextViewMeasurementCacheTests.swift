@@ -188,6 +188,7 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         let momentumEnd = routing.shouldForward(
             deltaX: 0, deltaY: 0, phase: NSEvent.Phase(), momentumPhase: .ended
         )
+        routing.completeCurrentEventRouting()
         #expect(momentumStart)
         #expect(momentumEnd)
         #expect(routing.forwarding == nil)
@@ -388,6 +389,27 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
             #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
             #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
             #expect(textView.superScrollEventsForTests[2] === end)
+        }
+    }
+
+    @Test("unresolved ambiguous gestures are flushed at momentum end")
+    func unresolvedAmbiguousGesturesAreFlushedAtMomentumEnd() throws {
+        let textView = makeTextView("Table cell")
+
+        let ambiguousStart = try makeScrollEvent(deltaX: 10, deltaY: 10, phase: .began)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(deltaX: 5, deltaY: 5, phase: .changed)
+        textView.scrollWheel(with: ambiguousChange)
+
+        let momentumEnd = try makeScrollEvent(deltaX: 0, deltaY: 0, momentumPhase: .ended)
+        textView.scrollWheel(with: momentumEnd)
+
+        #expect(textView.superScrollEventsForTests.count == 3)
+        if textView.superScrollEventsForTests.count == 3 {
+            #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
+            #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
+            #expect(textView.superScrollEventsForTests[2] === momentumEnd)
         }
     }
 
