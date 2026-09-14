@@ -4,6 +4,16 @@ import Testing
 
 @Suite("CompletionEngine")
 struct CompletionEngineTests {
+    @Test func inheritedEditRangeFallsBackToLabelWhenTextEditTextIsAbsent() throws {
+        let json = #"{"itemDefaults":{"editRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}}},"items":[{"label":"print","insertText":"different"}]}"#
+        let result = try JSONDecoder().decode(LSPCompletionResult.self, from: Data(json.utf8))
+        let prefix = CompletionPrefix(text: "pr", range: NSRange(location: 0, length: 2))
+        let candidate = try #require(CompletionEngine.lspCandidates(from: result.items, prefix: prefix).first)
+        let plan = try #require(CompletionEngine.editPlan(accepting: candidate, prefix: prefix, in: "pr"))
+        #expect(apply(plan, to: "pr") == "print")
+        #expect(result.items.first?.insertText == "different")
+    }
+
     @Test("detects identifier prefix before caret")
     func prefixBeforeCaret() {
         let text = "tabs.op"

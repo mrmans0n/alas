@@ -5,6 +5,34 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct CodeTextViewCompletionTests {
+    @Test func snippetChoicePickerSupportsKeyboardMouseAndTabNavigation() throws {
+        let expansion = try SnippetSession.parse("${1|one,two,three|}=$1 ${2:end}$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        #expect(view.snippetChoiceWindow.isVisible)
+        view.moveDown(nil)
+        view.insertNewline(nil)
+        #expect(view.string == "two=two end")
+        #expect(!view.snippetChoiceWindow.isVisible)
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 8, length: 3))
+        view.insertBacktab(nil)
+        #expect(view.snippetChoiceWindow.isVisible)
+        view.selectSnippetChoice(at: 2)
+        #expect(view.string == "three=three end")
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 12, length: 3))
+        view.insertBacktab(nil)
+        view.moveUp(nil)
+        view.insertTab(nil)
+        #expect(view.string == "two=two end")
+        #expect(view.selectedRange() == NSRange(location: 8, length: 3))
+        view.insertBacktab(nil)
+        view.cancelOperation(nil)
+        #expect(view.snippetSession == nil)
+        #expect(!view.snippetChoiceWindow.isVisible)
+    }
+
     @Test func snippetMirrorsDeletionNavigationEscapeAndOrdinaryTab() throws {
         let expansion = try SnippetSession.parse("${1:foo}=$1 ${2:bar}$0")
         let view = makeTextView(expansion.text)

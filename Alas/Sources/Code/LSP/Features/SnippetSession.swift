@@ -8,6 +8,8 @@ struct SnippetExpansion: Sendable {
     let parents: [Int: Set<Int>]
     let stopOrders: [Int: [Int]]
     let transformOrders: [Int: [Int]]
+    let ancestorOrders: [Int: [Int]]
+    let choices: [Int: [String]]
     var orderedStops: [Int] { tabStops.keys.filter { $0 > 0 }.sorted() }
 }
 
@@ -20,11 +22,14 @@ struct SnippetSession {
     private var parents: [Int: Set<Int>]
     private let stopOrders: [Int: [Int]]
     private let transformOrders: [Int: [Int]]
+    private let ancestorOrders: [Int: [Int]]
+    private let choices: [Int: [String]]
     private var order: [Int]
     private var index = 0
     private var finalCaret: Int
     private(set) var isFinished = false
     var selection: NSRange? { !isFinished && order.indices.contains(index) ? stops[order[index]]?.first : nil }
+    var currentChoices: [String] { !isFinished && order.indices.contains(index) ? choices[order[index]] ?? [] : [] }
 
     init(expansion: SnippetExpansion, offset: Int) {
         stops = expansion.tabStops.mapValues { $0.map { NSRange(location: $0.location + offset, length: $0.length) } }
@@ -33,6 +38,8 @@ struct SnippetSession {
         parents = expansion.parents
         stopOrders = expansion.stopOrders
         transformOrders = expansion.transformOrders
+        ancestorOrders = expansion.ancestorOrders
+        choices = expansion.choices
         order = expansion.orderedStops
         finalCaret = expansion.finalCaret + offset
         isFinished = order.isEmpty
@@ -61,16 +68,19 @@ struct SnippetSession {
             edits.append(.init(range: range, replacementText: transformed))
             editOrders.append(transformOrders[key]?[index] ?? Int.max)
         }
-        let ancestors = (parents[key] ?? []).sorted { (stops[$0]?.first?.length ?? 0) < (stops[$1]?.first?.length ?? 0) }
+        let ancestors = (parents[key] ?? []).sorted {
+            (stopOrders[$0]?.compactMap { ancestorOrders[$0]?.count }.max() ?? 0)
+                > (stopOrders[$1]?.compactMap { ancestorOrders[$0]?.count }.max() ?? 0)
+        }
         for ancestor in ancestors {
-            guard let primaryIndex = stops[ancestor]?.indices.last(where: {
-                let range = stops[ancestor]![$0]
-                return range.location <= selected.location && NSMaxRange(selected) <= NSMaxRange(range)
-                    && (stopOrders[ancestor]?[$0] ?? 0) <= (stopOrders[key]?.first ?? Int.max)
+            guard let primaryIndex = stopOrders[ancestor]?.indices.first(where: { index in
+                let ordinal = stopOrders[ancestor]![index]
+                return editOrders.contains { ancestorOrders[$0]?.contains(ordinal) == true }
             }), let primary = stops[ancestor]?[primaryIndex],
                   let original = values[ancestor] else { return nil }
+            let primaryOrder = stopOrders[ancestor]![primaryIndex]
             let changed = NSMutableString(string: original)
-            let inside = zip(edits, editOrders).filter { primary.location <= $0.0.range.location && NSMaxRange($0.0.range) <= NSMaxRange(primary) }
+            let inside = zip(edits, editOrders).filter { ancestorOrders[$0.1]?.contains(primaryOrder) == true }
             for (edit, _) in inside.sorted(by: {
                 $0.0.range.location == $1.0.range.location ? $0.1 > $1.1 : $0.0.range.location > $1.0.range.location
             }) {
@@ -104,20 +114,11 @@ struct SnippetSession {
         for other in removed { stops[other] = nil
         transforms[other] = nil }
         order.removeAll { removed.contains($0) }
-        func mapped(_ range: NSRange) -> NSRange {
-            var start = range.location
-            var length = range.length
-            for edit in edits {
-                let delta = edit.replacementText.utf16.count - edit.range.length
-                if edit.range == range { length = edit.replacementText.utf16.count }
-                else if NSMaxRange(edit.range) <= range.location { start += delta }
-                else if range.location <= edit.range.location && NSMaxRange(edit.range) <= NSMaxRange(range) { length += delta }
-            }
-            return NSRange(location: start, length: length)
-        }
+        index = order.firstIndex(of: key) ?? 0
         func mappedCaret(_ location: Int, ordinal: Int = Int.max) -> Int {
             var result = location
             for (edit, editOrder) in orderedEdits {
+                if ancestorOrders[editOrder]?.contains(ordinal) == true { continue }
                 if edit.range.length == 0, edit.range.location == location, editOrder >= ordinal { continue }
                 if NSMaxRange(edit.range) <= location {
                     result += edit.replacementText.utf16.count - edit.range.length
@@ -127,18 +128,24 @@ struct SnippetSession {
             }
             return result
         }
+        func mapped(_ range: NSRange, ordinal: Int) -> NSRange {
+            let delta = orderedEdits.reduce(0) { result, entry in
+                result + (ancestorOrders[entry.1]?.contains(ordinal) == true
+                    ? entry.0.replacementText.utf16.count - entry.0.range.length : 0)
+            }
+            return NSRange(location: mappedCaret(range.location, ordinal: ordinal), length: range.length + delta)
+        }
         stops = Dictionary(uniqueKeysWithValues: stops.map { stopID, ranges in
             let updated = ranges.enumerated().map { index, range in
                 let ordinal = stopOrders[stopID]?[index] ?? Int.max
                 if let replacement = editedRanges[ordinal] { return replacement }
-                if range.length == 0 { return NSRange(location: mappedCaret(range.location, ordinal: ordinal), length: 0) }
-                return mapped(range)
+                return mapped(range, ordinal: ordinal)
             }
             return (stopID, updated)
         })
         transforms = Dictionary(uniqueKeysWithValues: transforms.map { key, entries in
             (key, entries.enumerated().map { index, entry in
-                (editedRanges[transformOrders[key]?[index] ?? Int.max] ?? mapped(entry.0), entry.1)
+                (editedRanges[transformOrders[key]?[index] ?? Int.max] ?? mapped(entry.0, ordinal: transformOrders[key]?[index] ?? Int.max), entry.1)
             })
         })
         finalCaret = mappedCaret(finalCaret, ordinal: stopOrders[0]?.first ?? Int.max)
@@ -157,7 +164,8 @@ struct SnippetSession {
         return SnippetExpansion(text: renderer.text, tabStops: renderer.stops,
                                 finalCaret: renderer.stops[0]?.first?.location ?? renderer.text.utf16.count,
                                 transforms: renderer.transforms, parents: renderer.parents,
-                                stopOrders: renderer.stopOrders, transformOrders: renderer.transformOrders)
+                                stopOrders: renderer.stopOrders, transformOrders: renderer.transformOrders,
+                                ancestorOrders: renderer.ancestorOrders, choices: parser.choices)
     }
 }
 
@@ -171,6 +179,7 @@ private indirect enum SnippetNode {
 private struct SnippetParser {
     var chars: [Character]
     var index = 0
+    var choices: [Int: [String]] = [:]
     init(_ source: String) { chars = Array(source) }
     mutating func parse(nested: Bool = false, depth: Int = 0) throws -> [SnippetNode] {
         guard depth < 32 else { throw SnippetSession.Error.limitExceeded }
@@ -201,27 +210,28 @@ private struct SnippetParser {
             }
             let number = Int(name)
             if name.first?.isNumber == true, number == nil { throw SnippetSession.Error.malformed }
+            if let number, number > Int(Int32.max) { throw SnippetSession.Error.limitExceeded }
             var children: [SnippetNode]?
             if braced {
                 if consume(":") { children = try parse(nested: true, depth: depth + 1) }
                 else if consume("|") {
                     guard number != nil else { throw SnippetSession.Error.malformed }
-                    var first = ""
-                    var inFirst = true
+                    var alternatives = [""]
                     var closed = false
                     while index < chars.count {
                         let c = chars[index]
                         index += 1
                         if c == "\\", index < chars.count, [",", "|", "\\"].contains(chars[index]) {
-                            if inFirst { first.append(chars[index]) }
+                            alternatives[alternatives.count - 1].append(chars[index])
                             index += 1
-                        } else if c == "," { inFirst = false }
+                        } else if c == "," { alternatives.append("") }
                         else if c == "|", consume("}") { closed = true
                         break }
-                        else if inFirst { first.append(c) }
+                        else { alternatives[alternatives.count - 1].append(c) }
                     }
                     guard closed else { throw SnippetSession.Error.malformed }
-                    children = [.text(first)]
+                    if choices[number!] == nil { choices[number!] = alternatives }
+                    children = [.text(alternatives[0])]
                 } else if consume("/") {
                     let regex = try segment(format: false)
                     let format = try segment(format: true)
@@ -281,6 +291,8 @@ private struct SnippetRenderer {
     var renderedDefinitions = Set<Int>()
     var stopOrders: [Int: [Int]] = [:]
     var transformOrders: [Int: [Int]] = [:]
+    var ancestorOrders: [Int: [Int]] = [:]
+    var ordinalStack: [Int] = []
     var nextOrdinal = 0
     mutating func collect(_ nodes: [SnippetNode]) {
         for node in nodes {
@@ -315,13 +327,16 @@ private struct SnippetRenderer {
             let start = text.utf16.count
             let ordinal = nextOrdinal
             nextOrdinal += 1
+            ancestorOrders[ordinal] = ordinalStack
             switch node {
             case .text(let value): text += value
             case .stop(let key, let children):
                 let rendered = try value(key)
                 parents[key, default: []].formUnion(stack)
                 if let children, renderedDefinitions.insert(key).inserted { stack.append(key)
+                ordinalStack.append(ordinal)
                 try render(children)
+                ordinalStack.removeLast()
                 stack.removeLast() } else { text += rendered }
                 stops[key, default: []].append(NSRange(location: start, length: text.utf16.count - start))
                 stopOrders[key, default: []].append(ordinal)
@@ -329,7 +344,13 @@ private struct SnippetRenderer {
                 if let value = variables[name] { text += value }
                 else if let children { try render(children) }
                 else {
-                    let key = unknownVariables[name] ?? max(reservedStops.max() ?? 0, stops.keys.max() ?? 0) + 1
+                    let key: Int
+                    if let existing = unknownVariables[name] { key = existing }
+                    else {
+                        let (allocated, overflow) = max(reservedStops.max() ?? 0, stops.keys.max() ?? 0).addingReportingOverflow(1)
+                        guard !overflow, allocated <= Int(Int32.max) else { throw SnippetSession.Error.limitExceeded }
+                        key = allocated
+                    }
                     unknownVariables[name] = key
                     text += name
                     stops[key, default: []].append(NSRange(location: start, length: name.utf16.count))

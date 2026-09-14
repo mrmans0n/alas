@@ -611,7 +611,7 @@ struct LSPCompletionResult: Decodable, Sendable {
                 fields[key] = defaults?[key]
             }
             if fields["textEdit"] == nil, let range = defaults?["editRange"] {
-                let text = fields["textEditText"] ?? fields["insertText"] ?? fields["label"] ?? .string("")
+                let text = fields["textEditText"] ?? fields["label"] ?? .string("")
                 if range["insert"] != nil {
                     fields["textEdit"] = .object(["insert": range["insert"] ?? .null, "replace": range["replace"] ?? .null, "newText": text])
                 } else { fields["textEdit"] = .object(["range": range, "newText": text]) }

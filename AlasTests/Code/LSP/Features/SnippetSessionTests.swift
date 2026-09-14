@@ -4,6 +4,62 @@ import Testing
 
 @Suite("SnippetSession")
 struct SnippetSessionTests {
+    @Test func retainsChoiceAlternativesForSelectedStop() throws {
+        let expansion = try SnippetSession.parse(#"${1|one,two\,three,four\|five|} ${2:end}$0"#)
+        #expect(expansion.choices[1] == ["one", "two,three", "four|five"])
+        var session = SnippetSession(expansion: expansion, offset: 0)
+        #expect(session.currentChoices == ["one", "two,three", "four|five"])
+        _ = session.advance(backwards: false)
+        #expect(session.currentChoices.isEmpty)
+    }
+
+    @Test(arguments: ["$9223372036854775807 $UNKNOWN", "$2147483647 $UNKNOWN", "${9223372036854775807:x}", "$9223372036854775808", "${2147483648/(.*)/$1/}"])
+    func oversizedStopIdentifiersFailClosed(source: String) {
+        #expect(throws: (any Error).self) { try SnippetSession.parse(source) }
+    }
+
+    @Test func adjacentMirrorIsNotStructurallyInsideAnEmptyParent() throws {
+        let expansion = try SnippetSession.parse("${1:$2}$2 $1$0")
+        var session = SnippetSession(expansion: expansion, offset: 0)
+        _ = session.advance(backwards: false)
+        let planned = session.replacing(NSRange(location: 0, length: 0), with: "x")
+        let plan = try #require(planned)
+        let text = NSMutableString(string: expansion.text)
+        for edit in plan.edits.reversed() { text.replaceCharacters(in: edit.range, with: edit.replacementText) }
+        #expect(text as String == "xx x")
+        let parent = session.advance(backwards: true)
+        #expect(parent == NSRange(location: 0, length: 1))
+    }
+
+    @Test func replacingParentKeepsCurrentStopAfterEarlierChildIsRemoved() throws {
+        let expansion = try SnippetSession.parse("${2:${1:x}} ${3:y}$0")
+        var session = SnippetSession(expansion: expansion, offset: 0)
+        _ = session.advance(backwards: false)
+        let planned = session.replacing(NSRange(location: 0, length: 1), with: "parent")
+        let plan = try #require(planned)
+        let text = NSMutableString(string: expansion.text)
+        for edit in plan.edits.reversed() { text.replaceCharacters(in: edit.range, with: edit.replacementText) }
+        #expect(text as String == "parent y")
+        #expect(plan.finalSelection == NSRange(location: 6, length: 0))
+        #expect(session.selection == NSRange(location: 0, length: 6))
+        let next = session.advance(backwards: false)
+        #expect(next == NSRange(location: 7, length: 1))
+        #expect(!session.isFinished)
+    }
+
+    @Test func editingForwardMirrorUpdatesItsNestedOccurrenceAndParent() throws {
+        let expansion = try SnippetSession.parse("$2 ${1:foo ${2:bar}}$0")
+        var session = SnippetSession(expansion: expansion, offset: 0)
+        _ = session.advance(backwards: false)
+        let planned = session.replacing(NSRange(location: 0, length: 3), with: "baz")
+        let plan = try #require(planned)
+        let text = NSMutableString(string: expansion.text)
+        for edit in plan.edits.reversed() { text.replaceCharacters(in: edit.range, with: edit.replacementText) }
+        #expect(text as String == "baz foo baz")
+        let parent = session.advance(backwards: true)
+        #expect(parent == NSRange(location: 4, length: 7))
+    }
+
     @Test(arguments: [
         (#"${1:ABC} ${1/(.*)/${1:/downcase}/}"#, "ABC abc"),
         (#"${1:foo_bar} ${1/(.*)/${1:/camelcase}/} ${1/(.*)/${1:/pascalcase}/}"#, "foo_bar fooBar FooBar"),

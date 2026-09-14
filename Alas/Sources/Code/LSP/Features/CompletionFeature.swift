@@ -593,7 +593,7 @@ final class CompletionFeature {
 
         textView.applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
         cancelAndDismiss()
-        if let snippet = candidate.snippet { textView.startSnippet(snippet, offset: plan.finalSelection.location - snippet.text.utf16.count) }
+        if let snippet = candidate.snippet { textView.startSnippet(snippet, offset: plan.finalSelection.location - snippet.text.utf16.count, theme: getTheme()) }
     }
 
     private func acceptResolved(_ candidate: CompletionCandidate, prefix: CompletionPrefix, textView: CodeTextView) {
@@ -650,7 +650,7 @@ final class CompletionFeature {
                 return }
                 cancelAndDismiss()
                 if let expansion = accepted.snippet {
-                    textView.startSnippet(expansion, offset: plan.finalSelection.location - expansion.text.utf16.count)
+                    textView.startSnippet(expansion, offset: plan.finalSelection.location - expansion.text.utf16.count, theme: self.getTheme())
                 } else { textView.setSelectedRange(plan.finalSelection) }
                 if let command = resolved.command, let client { try await client.executeCommand(command) }
             } catch { cancelAndDismiss() }

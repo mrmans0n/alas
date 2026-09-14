@@ -42,8 +42,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var signatureHelpSelectionChangeHandler: (() -> Void)?
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
-    private(set) var snippetSession: SnippetSession?
+    private(set) var snippetSession: SnippetSession? {
+        didSet { if snippetSession == nil { snippetChoiceWindow.hide() } }
+    }
     private var snippetBufferSnapshot: String?
+    let snippetChoiceWindow = CompletionWindowController()
+    private var snippetChoiceRows: [CompletionPopupRow] = []
+    private var snippetChoiceSelection = 0
+    private var snippetTheme = Theme.fallback
     var indentationMode: IndentationMode = .plain
     var warningToolTipProvider: ((NSPoint) -> String?)? { didSet { refreshWarningToolTip() } }
     private var warningToolTipTag: NSView.ToolTipTag?
@@ -645,6 +651,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertNewline(_ sender: Any?) {
+        if snippetChoiceWindow.isVisible {
+            selectSnippetChoice(at: snippetChoiceSelection)
+            return
+        }
         if snippetSession != nil, replaceSnippet(selectedRange(), with: "\n") { return }
         guard isEditable else {
             super.insertNewline(sender)
@@ -716,11 +726,13 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         super.insertBacktab(sender)
     }
 
-    func startSnippet(_ expansion: SnippetExpansion, offset: Int) {
+    func startSnippet(_ expansion: SnippetExpansion, offset: Int, theme: Theme = .fallback) {
+        snippetTheme = theme
         let session = SnippetSession(expansion: expansion, offset: offset)
         snippetSession = session.isFinished ? nil : session
         snippetBufferSnapshot = string
         setSelectedRangeAfterTextEdit(session.selection ?? NSRange(location: offset + expansion.finalCaret, length: 0))
+        showSnippetChoices()
     }
 
     func endSnippet() { snippetSession = nil
@@ -729,9 +741,50 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     private func advanceSnippet(backwards: Bool) -> Bool {
         guard snippetBufferSnapshot == string else { endSnippet()
         return false }
+        if !backwards, snippetChoiceWindow.isVisible { selectSnippetChoice(at: snippetChoiceSelection) }
         guard var session = snippetSession, let selection = session.advance(backwards: backwards) else { return false }
         snippetSession = session.isFinished ? nil : session
         setSelectedRangeAfterTextEdit(selection)
+        showSnippetChoices()
+        return true
+    }
+
+    private func showSnippetChoices() {
+        snippetChoiceWindow.hide()
+        guard let session = snippetSession, !session.currentChoices.isEmpty,
+              let selected = session.selection, NSMaxRange(selected) <= (string as NSString).length else { return }
+        let current = (string as NSString).substring(with: selected)
+        snippetChoiceSelection = session.currentChoices.firstIndex(of: current) ?? 0
+        snippetChoiceRows = session.currentChoices.map {
+            CompletionPopupRow(id: UUID(), label: $0.isEmpty ? "(empty)" : $0, detail: nil, kind: nil, source: .lsp)
+        }
+        presentSnippetChoices()
+    }
+
+    private func presentSnippetChoices() {
+        guard let anchor = completionAnchorRect() else { return }
+        snippetChoiceWindow.show(rows: snippetChoiceRows, selection: snippetChoiceSelection,
+                                 documentation: nil, theme: snippetTheme, anchor: anchor, in: self, compact: true) { [weak self] index in
+            self?.selectSnippetChoice(at: index)
+        }
+    }
+
+    /// Shared by popup clicks and keyboard acceptance; mirrors use the session edit plan.
+    func selectSnippetChoice(at index: Int) {
+        guard let session = snippetSession, session.currentChoices.indices.contains(index),
+              let range = session.selection else { return }
+        guard replaceSnippet(range, with: session.currentChoices[index]) else { endSnippet()
+        return }
+        if let selection = snippetSession?.selection { setSelectedRangeAfterTextEdit(selection) }
+        snippetChoiceWindow.hide()
+    }
+
+    private func moveSnippetChoice(_ delta: Int) -> Bool {
+        guard snippetChoiceWindow.isVisible else { return false }
+        guard snippetBufferSnapshot == string else { endSnippet()
+        return false }
+        snippetChoiceSelection = min(max(0, snippetChoiceSelection + delta), snippetChoiceRows.count - 1)
+        presentSnippetChoices()
         return true
     }
 
@@ -741,6 +794,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         guard snippetBufferSnapshot == string else { endSnippet()
         return false }
         guard var session = snippetSession, let plan = session.replacing(range, with: text) else { return false }
+        snippetChoiceWindow.hide()
         applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
         snippetSession = session
         snippetBufferSnapshot = string
@@ -748,11 +802,13 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func moveUp(_ sender: Any?) {
+        if moveSnippetChoice(-1) { return }
         if routeCompletionKey(.moveSelection(-1)) { return }
         super.moveUp(sender)
     }
 
     override func moveDown(_ sender: Any?) {
+        if moveSnippetChoice(1) { return }
         if routeCompletionKey(.moveSelection(1)) { return }
         super.moveDown(sender)
     }

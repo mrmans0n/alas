@@ -21,10 +21,12 @@ final class CompletionWindowController {
         theme: Theme,
         anchor: NSRect,
         in textView: CodeTextView,
+        compact: Bool = false,
         onChoose: @escaping (Int) -> Void
     ) {
         let hasDocumentation = (documentation?.attributedString.length ?? 0) > 0
-        let size = NSSize(width: hasDocumentation ? listWidth * 2 : listWidth, height: maxHeight)
+        let height = compact ? min(maxHeight, CGFloat(max(1, rows.count)) * 28) : maxHeight
+        let size = NSSize(width: hasDocumentation ? listWidth * 2 : listWidth, height: height)
         let root = CompletionPopup(
             rows: rows,
             selection: selection,
@@ -34,7 +36,8 @@ final class CompletionWindowController {
             onChoose: onChoose,
             onWillPresentMermaidViewer: { [weak self] in
                 self?.hide()
-            }
+            },
+            listHeight: height
         )
         if let hostingController {
             hostingController.rootView = root
