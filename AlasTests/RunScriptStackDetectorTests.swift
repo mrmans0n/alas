@@ -285,6 +285,16 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.flutter]?.usesFlutter == true)
     }
 
+    @Test func flutterAcceptsQuotedSDKScalars() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("pubspec.yaml", "name: app\ndependencies:\n  flutter:\n    sdk: \"flutter\"\n", in: root)
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+
+        try write("pubspec.yaml", "name: app\ndependencies:\n  flutter: { sdk: 'flutter' }\n", in: root)
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+    }
+
     @Test func elixirReadsMixForPhoenix() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

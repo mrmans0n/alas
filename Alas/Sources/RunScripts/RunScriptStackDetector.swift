@@ -170,7 +170,8 @@ enum RunScriptStackDetector {
             guard let mapping = yamlMappingLine(stripLineComment(rawLine)), mapping.key == "flutter" else { continue }
             if let value = mapping.value {
                 // Flow form: the "sdk: flutter" pair lives on the same line.
-                if value.range(of: #"sdk:\s*flutter\b"#, options: .regularExpression) != nil { return true }
+                // The scalar may be quoted ("flutter" or 'flutter').
+                if value.range(of: #"sdk:\s*['"]?flutter['"]?\b"#, options: .regularExpression) != nil { return true }
                 continue // A non-flow, non-empty value can't be the SDK form.
             }
             // Block form: scan the nested lines for "sdk: flutter", skipping
@@ -180,7 +181,7 @@ enum RunScriptStackDetector {
                 let stripped = stripLineComment(candidate)
                 if stripped.trimmingCharacters(in: .whitespaces).isEmpty { continue }
                 guard let child = yamlMappingLine(stripped), child.indent > mapping.indent else { break }
-                if child.key == "sdk", child.value?.trimmingCharacters(in: .whitespaces) == "flutter" {
+                if child.key == "sdk", let value = child.value, unquoteYAMLScalar(value.trimmingCharacters(in: .whitespaces)) == "flutter" {
                     return true
                 }
             }
@@ -220,6 +221,15 @@ enum RunScriptStackDetector {
         guard !key.isEmpty else { return nil }
         let value = trimmed[trimmed.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
         return (indent, key, value.isEmpty ? nil : value)
+    }
+
+    /// Strips a matching pair of surrounding quotes from a YAML scalar, so
+    /// `sdk: "flutter"` and `sdk: 'flutter'` compare equal to `sdk: flutter`.
+    private static func unquoteYAMLScalar(_ value: String) -> String {
+        guard value.count >= 2, let first = value.first, let last = value.last,
+              first == last, first == "\"" || first == "'"
+        else { return value }
+        return String(value.dropFirst().dropLast())
     }
 
     /// The parts of package.json creation cares about. A manifest that fails
