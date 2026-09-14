@@ -68,7 +68,7 @@ enum RunScriptStackDetector {
                 // when there is no manage.py, the same way Rails/Ruby and
                 // Laravel/PHP defer to their framework-specific stack.
                 guard has("pyproject.toml"), !hasDjangoManage else { continue }
-                let pyproject = contents("pyproject.toml") ?? ""
+                let pyproject = stripHashComments(contents("pyproject.toml") ?? "")
                 add(stack, .init(
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
@@ -109,7 +109,7 @@ enum RunScriptStackDetector {
                 add(stack, .init(hasRunnableTarget: cargoHasUnambiguousBinary(
                     cargoToml: contents("Cargo.toml") ?? "",
                     hasRootMain: isRegularFile("src/main.rs"),
-                    binDirectoryFiles: try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent("src/bin").path)
+                    binTargetPaths: cargoBinTargetPaths(worktreeRoot: worktreeRoot, fileManager: fileManager)
                 )))
             case .rails:
                 guard hasRails else { continue }
@@ -274,19 +274,18 @@ enum RunScriptStackDetector {
     /// Whether `cargo run` has exactly one binary to pick, or an explicit
     /// `default-run` to resolve the ambiguity. Cargo refuses to guess when a
     /// package declares more than one bin target and none is designated.
-    private static func cargoHasUnambiguousBinary(
-        cargoToml: String, hasRootMain: Bool, binDirectoryFiles: [String]?
-    ) -> Bool {
+    private static func cargoHasUnambiguousBinary(cargoToml: String, hasRootMain: Bool, binTargetPaths: Set<String>) -> Bool {
         var binaryPaths = Set<String>()
         if hasRootMain { binaryPaths.insert("src/main.rs") }
-        let binFiles = (binDirectoryFiles ?? []).filter { $0.hasSuffix(".rs") }
-        binaryPaths.formUnion(binFiles.map { "src/bin/\($0)" })
+        binaryPaths.formUnion(binTargetPaths)
 
         for declaredBin in cargoDeclaredBins(cargoToml) {
             if let path = declaredBin.path {
                 binaryPaths.insert(path)
-            } else if binFiles.contains("\(declaredBin.name).rs") {
+            } else if binTargetPaths.contains("src/bin/\(declaredBin.name).rs") {
                 binaryPaths.insert("src/bin/\(declaredBin.name).rs")
+            } else if binTargetPaths.contains("src/bin/\(declaredBin.name)/main.rs") {
+                binaryPaths.insert("src/bin/\(declaredBin.name)/main.rs")
             } else if hasRootMain, cargoPackageName(cargoToml) == declaredBin.name {
                 binaryPaths.insert("src/main.rs")
             } else {
@@ -301,6 +300,27 @@ enum RunScriptStackDetector {
             return cargoToml.range(of: #"(?m)^\s*default-run\s*="#, options: .regularExpression) != nil
         }
         return true
+    }
+
+    private static func cargoBinTargetPaths(worktreeRoot: URL, fileManager: FileManager) -> Set<String> {
+        let binRoot = worktreeRoot.appendingPathComponent("src/bin")
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: binRoot.path) else { return [] }
+        var paths = Set<String>()
+        for entry in entries {
+            if entry.hasSuffix(".rs") {
+                paths.insert("src/bin/\(entry)")
+                continue
+            }
+            var isDirectory: ObjCBool = false
+            let mainPath = binRoot.appendingPathComponent(entry).appendingPathComponent("main.rs")
+            if fileManager.fileExists(atPath: mainPath.deletingLastPathComponent().path, isDirectory: &isDirectory),
+               isDirectory.boolValue,
+               fileManager.fileExists(atPath: mainPath.path)
+            {
+                paths.insert("src/bin/\(entry)/main.rs")
+            }
+        }
+        return paths
     }
 
     private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?)] {
@@ -396,13 +416,61 @@ enum RunScriptStackDetector {
         // is Swift source, so `//`/`/* */` comments are as valid here as
         // anywhere else.
         let uncommented = stripCStyleComments(manifest)
-        let executableProducts = countOccurrences(of: #"\.executable\s*\("#, in: uncommented)
-        let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: uncommented)
-        if executableProducts + executableTargets > 0 { return executableProducts + executableTargets == 1 }
+        let executableProducts = swiftExecutableProducts(in: uncommented)
+        let executableTargetNames = swiftExecutableTargetNames(in: uncommented)
+        let legacyTargetNames = swiftLegacyExecutableTargetNames(in: uncommented)
+        if !executableProducts.isEmpty {
+            let productTargets = Set(executableProducts.flatMap(\.targets))
+            let extraExecutableTargets = executableTargetNames.subtracting(productTargets)
+            let extraLegacyTargets = legacyTargetNames.subtracting(productTargets)
+            return executableProducts.count + extraExecutableTargets.count + extraLegacyTargets.count == 1
+        }
+        if !executableTargetNames.isEmpty { return executableTargetNames.count == 1 }
         // Older manifests declare an executable product via `type:
         // .executable` on a plain `.target` without a dedicated
         // .executableTarget entry; a single one is unambiguous the same way.
-        return countOccurrences(of: #"type:\s*\.executable\b"#, in: uncommented) == 1
+        return legacyTargetNames.count == 1
+    }
+
+    private static func swiftExecutableProducts(in manifest: String) -> [(name: String, targets: Set<String>)] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?s)\.executable\s*\(\s*name:\s*"([^"]+)"(.*?)(?=\)\s*[,;\]])"#
+        ), let targetsRegex = try? NSRegularExpression(pattern: #"targets:\s*\[([^\]]*)\]"#),
+           let targetNameRegex = try? NSRegularExpression(pattern: #""([^"]+)""#)
+        else { return [] }
+        let fullRange = NSRange(manifest.startIndex..., in: manifest)
+        return regex.matches(in: manifest, range: fullRange).compactMap { match in
+            guard let nameRange = Range(match.range(at: 1), in: manifest),
+                  let bodyRange = Range(match.range(at: 2), in: manifest)
+            else { return nil }
+            let body = String(manifest[bodyRange])
+            let bodyNSRange = NSRange(body.startIndex..., in: body)
+            let targets = targetsRegex.firstMatch(in: body, range: bodyNSRange).flatMap { targetsMatch -> Set<String>? in
+                guard let listRange = Range(targetsMatch.range(at: 1), in: body) else { return nil }
+                let list = String(body[listRange])
+                let listNSRange = NSRange(list.startIndex..., in: list)
+                return Set(targetNameRegex.matches(in: list, range: listNSRange).compactMap { targetMatch in
+                    Range(targetMatch.range(at: 1), in: list).map { String(list[$0]) }
+                })
+            } ?? []
+            return (String(manifest[nameRange]), targets)
+        }
+    }
+
+    private static func swiftExecutableTargetNames(in manifest: String) -> Set<String> {
+        swiftDeclarationNames(matching: #"\.executableTarget\s*\(\s*name:\s*"([^"]+)""#, in: manifest)
+    }
+
+    private static func swiftLegacyExecutableTargetNames(in manifest: String) -> Set<String> {
+        swiftDeclarationNames(matching: #"\.target\s*\(\s*name:\s*"([^"]+)".*?type:\s*\.executable\b"#, in: manifest)
+    }
+
+    private static func swiftDeclarationNames(matching pattern: String, in manifest: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
+        let fullRange = NSRange(manifest.startIndex..., in: manifest)
+        return Set(regex.matches(in: manifest, range: fullRange).compactMap { match in
+            Range(match.range(at: 1), in: manifest).map { String(manifest[$0]) }
+        })
     }
 
     private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?) -> Bool {
@@ -577,6 +645,10 @@ enum RunScriptStackDetector {
         let before = line[line.startIndex..<hashIndex]
         guard before.filter({ $0 == "\"" }).count.isMultiple(of: 2) else { return String(line) }
         return String(before)
+    }
+
+    private static func stripHashComments(_ text: String) -> String {
+        text.components(separatedBy: .newlines).map(stripLineComment).joined(separator: "\n")
     }
 
     /// A minimal `key: value` YAML mapping line: leading indentation width,

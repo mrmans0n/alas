@@ -143,6 +143,21 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
+    @Test func cargoCountsDirectoryFormBinTargets() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Cargo.toml", "[package]\nname = \"tool\"\n", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin/helper"), withIntermediateDirectories: true)
+        try touch("src/bin/helper/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+
+        try write("Cargo.toml", "[package]\nname = \"tool\"\ndefault-run = \"tool\"\n", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -298,6 +313,17 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageDeduplicatesExecutableProductsFromTheirTargets() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "products: [.executable(name: \"app\", targets: [\"App\"])], targets: [.executableTarget(name: \"App\")]",
+            in: root
+        )
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
+    }
+
     @Test func xcodePrefersWorkspaceOverProject() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -341,7 +367,12 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        try write("main.go", "//go:build amd64\n\npackage main\n", in: root)
+        #if arch(arm64)
+        let excludedArchitecture = "amd64"
+        #else
+        let excludedArchitecture = "arm64"
+        #endif
+        try write("main.go", "//go:build \(excludedArchitecture)\n\npackage main\n", in: root)
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
@@ -436,6 +467,24 @@ struct RunScriptStackDetectorTests {
         )
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonIgnoresCommentedOutToolMentions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+            # pytest = "^8"
+            # ruff was removed from this project
+            """,
+            in: root
+        )
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
     }
 
     @Test func laravelHidesPlainComposer() throws {
