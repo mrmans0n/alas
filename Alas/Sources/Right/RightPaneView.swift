@@ -188,21 +188,7 @@ struct RightPaneView: View {
             HStack(spacing: 0) {
                 if !collapsed {
                     VStack(spacing: 0) {
-                        RightPaneToolbar(
-                            tab: rps.activeTab,
-                            branch: rps.currentBranch,
-                            totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
-                            totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
-                            activeAgentCount: agentRollup.active.count,
-                            waitingAgentCount: waitingAgentCount,
-                            runningScriptNames: runningScriptNames,
-                            showIgnored: state.config.files.showIgnored,
-                            onToggleShowIgnored: {
-                                state.config.files.showIgnored.toggle()
-                                state.saveConfig()
-                            },
-                            onSearch: { state.openSearchOverlay() }
-                        )
+                        paneToolbar(rps: rps)
                         // Hides the indicators of every SwiftUI ScrollView in
                         // the tab bodies (Files, Agent, Run). The Changes tab
                         // scrolls through AppKit, which this cannot reach — it
@@ -255,9 +241,32 @@ struct RightPaneView: View {
                         .count { $0.status.isActive },
                     activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                 )
+                if rps.activeTab == .run {
+                    paneToolbar(rps: rps)
+                }
                 tabContent(rps: rps)
             }
         }
+    }
+
+    private func paneToolbar(rps: RightPaneState) -> some View {
+        RightPaneToolbar(
+            tab: rps.activeTab,
+            branch: rps.currentBranch,
+            totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
+            totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
+            activeAgentCount: agentRollup.active.count,
+            waitingAgentCount: waitingAgentCount,
+            runningScriptNames: runningScriptNames,
+            showIgnored: state.config.files.showIgnored,
+            onToggleShowIgnored: {
+                state.config.files.showIgnored.toggle()
+                state.saveConfig()
+            },
+            onSearch: { state.openSearchOverlay() },
+            onOpenPreview: { state.openWebPreview(in: worktree) },
+            onNewRunScript: { state.newRunScript(scope: $0, in: worktree) }
+        )
     }
 
     /// Keyboard equivalent of tapping a rail tab. Handled here rather than in

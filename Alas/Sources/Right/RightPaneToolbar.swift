@@ -13,8 +13,12 @@ struct RightPaneToolbar: View {
     var showIgnored: Bool = false
     var onToggleShowIgnored: () -> Void = {}
     var onSearch: () -> Void = {}
+    let onOpenPreview: () -> Void
+    let onNewRunScript: (RunScriptScope) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var previewHovered = false
+    @State private var newScriptHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -22,6 +26,9 @@ struct RightPaneToolbar: View {
 
             Spacer(minLength: 6)
             trailing
+            if tab == .run {
+                runControls
+            }
             if RightPaneToolbarModel.showsOverflowMenu(for: tab) {
                 overflowMenu
             }
@@ -72,6 +79,44 @@ struct RightPaneToolbar: View {
         case .search:
             ToolbarBtn(icon: "search", tooltip: "Search files", action: onSearch)
         }
+    }
+
+    private var runControls: some View {
+        HStack(spacing: 2) {
+            Button(action: onOpenPreview) {
+                HStack(spacing: 5) {
+                    Icon(name: "globe", size: 11)
+                    Text("Preview")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(theme.color(previewHovered ? "fg" : "fg-muted"))
+                .padding(.horizontal, 6)
+                .frame(height: 22)
+                .background(previewHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.toolbarControl)
+            .onHover { previewHovered = $0 }
+            .help("Open web preview")
+            .accessibilityLabel("Open web preview")
+            .accessibilityIdentifier("run-open-preview")
+
+            Menu {
+                Button("New Repo Script") { onNewRunScript(.repo) }
+                Button("New Global Script") { onNewRunScript(.global) }
+            } label: {
+                Icon(name: "plus", size: 13, color: theme.color(newScriptHovered ? "fg" : "fg-muted"))
+                    .toolbarControlSurface(isLit: newScriptHovered)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .onHover { newScriptHovered = $0 }
+            .help("New run script")
+            .accessibilityLabel("New run script")
+            .accessibilityIdentifier("run-new-script")
+        }
+        .fixedSize()
     }
 
     private var overflowMenu: some View {
