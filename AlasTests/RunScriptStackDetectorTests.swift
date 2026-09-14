@@ -72,6 +72,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
     }
 
+    @Test func gradleRecordsTasksSuppliedByLegacyAppliedJavaPlugin() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("build.gradle", "apply plugin: 'java'\n", in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -214,6 +222,28 @@ struct RunScriptStackDetectorTests {
 
         try write("Cargo.toml", "[package]\nname = \"tool\"\nautobins = false\n\n[[bin]]\nname = \"tool\"\npath = \"src/main.rs\"\n", in: root)
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
+    @Test func cargoLeavesFeatureGatedBinariesUnchecked() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [[bin]]
+            name = "tool"
+            path = "src/main.rs"
+            required-features = ["cli"]
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
     }
 
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
@@ -606,6 +636,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.pythonRunner == .uv)
     }
 
+    @Test func pythonDetectsRequirementsOnlyProjects() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("requirements.txt", in: root)
+
+        #expect(detect(root)[.python]?.hasRequirementsFile == true)
+    }
+
     @Test func resultsFollowCatalogOrder() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -800,6 +838,14 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("App.csproj", "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == "App.csproj")
+    }
+
+    @Test func dotnetRecognizesWebSDKProjectsAsExecutable() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("App.csproj", #"<Project Sdk="Microsoft.NET.Sdk.Web"></Project>"#, in: root)
+
         #expect(detect(root)[.dotnet]?.dotnetRunProject == "App.csproj")
     }
 

@@ -67,7 +67,7 @@ enum RunScriptStackDetector {
                 // Django owns the Python build; only offer generic Python
                 // when there is no manage.py, the same way Rails/Ruby and
                 // Laravel/PHP defer to their framework-specific stack.
-                guard has("pyproject.toml"), !hasDjangoManage else { continue }
+                guard (has("pyproject.toml") || hasRequirements), !hasDjangoManage else { continue }
                 let pyproject = contents("pyproject.toml") ?? ""
                 add(stack, .init(
                     pythonRunner: pythonRunner,
@@ -393,6 +393,18 @@ enum RunScriptStackDetector {
         }
 
         for declaredBin in cargoDeclaredBins(cargoToml) {
+            if declaredBin.requiredFeatures {
+                if let path = declaredBin.path {
+                    binaryPaths.remove(path)
+                } else {
+                    binaryPaths.remove("src/bin/\(declaredBin.name).rs")
+                    binaryPaths.remove("src/bin/\(declaredBin.name)/main.rs")
+                    if hasRootMain, cargoPackageName(cargoToml) == declaredBin.name {
+                        binaryPaths.remove("src/main.rs")
+                    }
+                }
+                continue
+            }
             if let path = declaredBin.path {
                 binaryPaths.insert(path)
             } else if binTargetPaths.contains("src/bin/\(declaredBin.name).rs") {
@@ -449,6 +461,7 @@ enum RunScriptStackDetector {
         let patterns = [
             #"\bid\s+["']([^"']+)["']"#,
             #"\bid\s*\(\s*["']([^"']+)["']\s*\)"#,
+            #"\bapply\s+plugin:\s*["']([^"']+)["']"#,
         ]
         return Set(patterns.flatMap { pattern -> [String] in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -480,11 +493,12 @@ enum RunScriptStackDetector {
         return paths
     }
 
-    private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?)] {
+    private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?, requiredFeatures: Bool)] {
         guard let blockRegex = try? NSRegularExpression(
             pattern: #"(?ms)^\s*\[\[bin\]\]\s*(.*?)(?=^\s*\[\[bin\]\]|\z)"#
         ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#),
-           let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#)
+           let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#),
+           let requiredFeaturesRegex = try? NSRegularExpression(pattern: #"(?m)^\s*required-features\s*="#)
         else { return [] }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         return blockRegex.matches(in: cargoToml, range: fullRange).compactMap { block in
@@ -497,7 +511,10 @@ enum RunScriptStackDetector {
             let path = pathRegex.firstMatch(in: text, range: range).flatMap { match in
                 Range(match.range(at: 1), in: text).map { String(text[$0]) }
             }
-            return (String(text[nameRange]), path)
+            return (
+                String(text[nameRange]), path,
+                requiredFeaturesRegex.firstMatch(in: text, range: range) != nil
+            )
         }
     }
 
@@ -567,12 +584,17 @@ enum RunScriptStackDetector {
             candidates = rootEntries.filter { $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }
         }
         let executableProjects = candidates.sorted().filter { path in
-            guard let text = fileText(path),
-                  text.range(of: #"<OutputType>\s*(Exe|WinExe)\s*</OutputType>"#, options: [.regularExpression, .caseInsensitive]) != nil
-            else { return false }
-            return true
+            guard let text = fileText(path) else { return false }
+            return dotnetProjectIsExecutable(text)
         }
         return executableProjects.count == 1 ? executableProjects[0] : nil
+    }
+
+    private static func dotnetProjectIsExecutable(_ project: String) -> Bool {
+        if project.range(of: #"<OutputType>\s*(Exe|WinExe)\s*</OutputType>"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return true
+        }
+        return project.range(of: #"<Project\b[^>]*\bSdk\s*=\s*["']Microsoft\.NET\.Sdk\.Web["']"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// Extracts each referenced project's relative path from a .sln file's
