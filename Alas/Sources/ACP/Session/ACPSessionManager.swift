@@ -19,8 +19,8 @@ private struct ACPMirrorMessageDelta: Sendable {
     let changedRange: Range<Int>?
 
     static func compare(
-        previous: [ACPHydratedMessage],
-        current: [ACPHydratedMessage]
+        previous: [ACPMirrorMessageFingerprint],
+        current: [ACPMirrorMessageFingerprint]
     ) -> Self {
         var prefixCount = 0
         let sharedCount = min(previous.count, current.count)
@@ -40,6 +40,11 @@ private struct ACPMirrorMessageDelta: Sendable {
         let changedEnd = max(previous.count - suffixCount, current.count - suffixCount)
         return Self(previousCount: previous.count, changedRange: prefixCount..<changedEnd)
     }
+}
+
+private struct ACPMirrorSnapshotComparison: Sendable {
+    let snapshot: [ACPMirrorMessageFingerprint]
+    let delta: ACPMirrorMessageDelta?
 }
 
 private struct ACPForkFallbackPersistenceError: LocalizedError {
@@ -542,7 +547,7 @@ final class ACPSessionManager: ObservableObject {
     private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
     private var inFlightMirrorRefreshes: [ACPSession.ID: Task<Void, Never>] = [:]
     private var dirtyMirrorRefreshes: Set<ACPSession.ID> = []
-    private var mirrorMessageSnapshots: [ACPSession.ID: [ACPHydratedMessage]] = [:]
+    private var mirrorMessageSnapshots: [ACPSession.ID: [ACPMirrorMessageFingerprint]] = [:]
     // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
     private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
     private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -3061,11 +3066,15 @@ extension ACPSessionManager {
         } catch {
             return
         }
-        let previousMessages = mirrorMessageSnapshots[sessionId]
-        let delta = await Task.detached(priority: .userInitiated) {
-            previousMessages.map {
-                ACPMirrorMessageDelta.compare(previous: $0, current: result.messages)
-            }
+        let previousSnapshot = mirrorMessageSnapshots[sessionId]
+        let comparison = await Task.detached(priority: .userInitiated) {
+            let snapshot = result.messages.map(\.mirrorFingerprint)
+            return ACPMirrorSnapshotComparison(
+                snapshot: snapshot,
+                delta: previousSnapshot.map {
+                    ACPMirrorMessageDelta.compare(previous: $0, current: snapshot)
+                }
+            )
         }.value
         guard !Task.isCancelled, sessions[sessionId] === session else { return }
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
@@ -3073,9 +3082,9 @@ extension ACPSessionManager {
         // transcript rows, so this must run before any early-return below.
         session.restoreQueue(result.queue)
         scheduleScheduledQueueReconnect(sessionId: sessionId)
-        mirrorMessageSnapshots[sessionId] = result.messages
+        mirrorMessageSnapshots[sessionId] = comparison.snapshot
         guard !result.wireMessages.isEmpty else { return }
-        if applyMirrorSnapshotToHydratedTranscript(result.messages, delta: delta, in: session) {
+        if applyMirrorSnapshotToHydratedTranscript(result.messages, delta: comparison.delta, in: session) {
             return
         }
         let tailStart = replaceTranscriptWithTail(
@@ -3126,7 +3135,7 @@ extension ACPSessionManager {
 
         if messages.count > existing.count, changedRange.lowerBound >= existing.count {
             for index in existing.count..<messages.count {
-                transcript.appendMessage(
+                session.appendMirroredTranscriptMessage(
                     messages[index].wire.toMessage(),
                     createdAt: messages[index].createdAt
                 )

@@ -763,6 +763,40 @@ import Foundation
         #expect(truncatedAfterRefresh.content.count == ACPMessage.ToolCall.truncatedTailBytes)
     }
 
+    @Test("mirror append advances the tail render window")
+    func mirrorAppendAdvancesTailRenderWindow() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-append-window-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        for index in 0..<ACPTranscript.tailWindow {
+            let message: ACPMessage = .systemNotice(id: UUID(), text: "m\(index)")
+            try storeA.appendMessage(
+                sessionId: "s", id: "m\(index)", kind: message.kind,
+                seq: Int64(index), payload: ACPMessageCodec.encode(message),
+                createdAt: Int64(index))
+        }
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+        await mgrB.refreshMirror(sessionId: "s")
+        #expect(mirrorSession.transcript.visibleHead == 0)
+
+        let appended: ACPMessage = .systemNotice(id: UUID(), text: "new")
+        try storeA.appendMessage(
+            sessionId: "s", id: "new", kind: appended.kind,
+            seq: Int64(ACPTranscript.tailWindow), payload: ACPMessageCodec.encode(appended),
+            createdAt: Int64(ACPTranscript.tailWindow))
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        #expect(mirrorSession.transcript.visibleHead == 1)
+    }
+
     @Test("refreshMirror through hydrator does not touch lastOpenedAt")
     func mirrorRefreshDoesNotTouchLastOpenedAt() async throws {
         let url = FileManager.default.temporaryDirectory

@@ -1375,6 +1375,11 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.replaceMessage(at: index, with: message, createdAt: createdAt)
     }
 
+    func appendMirroredTranscriptMessage(_ message: ACPMessage, createdAt: Date) {
+        transcript.appendMessage(message, createdAt: createdAt)
+        didAppendTranscriptMessage()
+    }
+
     private func messagesPreservingToolCallContentRevisions(_ messages: [ACPMessage]) -> [ACPMessage] {
         let previousToolCalls = transcript.messages.reduce(into: [String: ACPMessage.ToolCall]()) { result, message in
             if case .toolCall(let toolCall) = message {
