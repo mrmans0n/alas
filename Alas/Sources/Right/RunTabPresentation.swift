@@ -8,9 +8,9 @@ enum RunStatusTone: Equatable {
     case warning
 }
 
-/// One button offered by a Run row. Modelled as data so the rules about which
+/// One action offered by a Run row. Modelled as data so the rules about which
 /// actions a state allows are testable without touching SwiftUI.
-enum RunRowAction: Equatable {
+enum RunRowAction: Hashable {
     /// "Run" the first time, "Rerun" once the script has an outcome.
     case start(label: String)
     case stop

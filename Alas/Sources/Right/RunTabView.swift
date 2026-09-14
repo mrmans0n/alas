@@ -70,15 +70,12 @@ struct RunTabView: View {
                                 }
                             }
                         }
-                        newScriptFooter
                     }
+                    .padding(.top, PaneBandLayout.outerVertical)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            previewHeader
-        }
         .task(id: worktree.id) {
             let startedWorktreeID = worktree.id
             activeWorktreeID = startedWorktreeID
@@ -261,11 +258,6 @@ struct RunTabView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
-            HStack(spacing: 8) {
-                Button("New Repo Script") { state.newRunScript(scope: .repo, in: worktree) }
-                Button("New Global Script") { state.newRunScript(scope: .global, in: worktree) }
-            }
-            .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 20)
@@ -315,42 +307,6 @@ struct RunTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-error-state")
-    }
-
-    private var newScriptFooter: some View {
-        HStack(spacing: 8) {
-            Button("New Repo Script") { state.newRunScript(scope: .repo, in: worktree) }
-            Button("New Global Script") { state.newRunScript(scope: .global, in: worktree) }
-            Spacer(minLength: 0)
-        }
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private var previewHeader: some View {
-        HStack(spacing: 0) {
-            Button {
-                state.openWebPreview(in: worktree)
-            } label: {
-                HStack(spacing: 5) {
-                    Icon(name: "globe", size: 11)
-                    Text("Preview")
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                }
-                .frame(height: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .controlSize(.small)
-            .help("Open web preview")
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.color("bg-2"))
-        .overlay(Divider().opacity(0.45), alignment: .bottom)
     }
 }
 
@@ -434,8 +390,12 @@ private struct RunRowView: View {
 
     @Environment(\.theme) private var theme
     @State private var hovering = false
+    @State private var menuHovered = false
 
     var body: some View {
+        let status = Text(presentation.statusLabel).foregroundColor(toneColor)
+        let detail = Text(presentation.detail.map { " · \($0)" } ?? "")
+            .foregroundColor(theme.color("fg-faint"))
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 RunStatusDot(tone: presentation.tone, isActive: presentation.isActive)
@@ -444,17 +404,17 @@ private struct RunRowView: View {
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(presentation.statusLabel)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(toneColor)
+                if let action = primaryAction {
+                    actionButton(action, prominent: true)
+                        .fixedSize()
+                }
+                actionMenu
             }
 
-            if let detail = presentation.detail {
-                Text(detail)
-                    .font(.system(size: 10.5))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .lineLimit(1)
-            }
+            Text("\(status)\(detail)")
+                .font(.system(size: 10.5))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 13)
 
             if let location = presentation.locationLabel {
                 HStack(spacing: 4) {
@@ -464,6 +424,7 @@ private struct RunRowView: View {
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
+                .padding(.leading, 13)
             }
 
             if let conflict = presentation.conflictLabel {
@@ -474,19 +435,29 @@ private struct RunRowView: View {
                         .foregroundColor(theme.color("warn"))
                         .lineLimit(2)
                 }
+                .padding(.leading, 13)
             }
 
-            HStack(spacing: 6) {
-                ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
-                    Button(label(for: action)) { onAction(action) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(theme.color("accent"))
-                        .accessibilityLabel("\(label(for: action)) \(presentation.name)")
+            if hasSecondaryActions {
+                HStack(spacing: 6) {
+                    ForEach(presentation.actions, id: \.self) { action in
+                        switch action {
+                        case .openTerminal, .showOutput:
+                            actionButton(action)
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    ForEach(presentation.actions, id: \.self) { action in
+                        if case .openEndpoint = action {
+                            actionButton(action)
+                        }
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(.leading, 7)
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -497,6 +468,97 @@ private struct RunRowView: View {
         .help(presentation.locationDetail)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("run-row-\(presentation.id)")
+    }
+
+    private var primaryAction: RunRowAction? {
+        presentation.actions.first {
+            switch $0 {
+            case .start, .stop: true
+            default: false
+            }
+        }
+    }
+
+    private var hasSecondaryActions: Bool {
+        presentation.actions.contains {
+            switch $0 {
+            case .openTerminal, .openEndpoint, .showOutput: true
+            default: false
+            }
+        }
+    }
+
+    private var actionMenu: some View {
+        Menu {
+            if presentation.actions.contains(.restart) {
+                Button("Restart") { onAction(.restart) }
+            }
+            if presentation.actions.contains(.edit) {
+                Button("Edit") { onAction(.edit) }
+            }
+        } label: {
+            Icon(name: "ellipsis", size: 12, color: theme.color("fg-muted"))
+                .toolbarControlSurface(isLit: menuHovered)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { menuHovered = $0 }
+        .help("More actions for \(presentation.name)")
+        .accessibilityLabel("More actions for \(presentation.name)")
+    }
+
+    private func actionButton(_ action: RunRowAction, prominent: Bool = false) -> some View {
+        Button { onAction(action) } label: {
+            HStack(spacing: 4) {
+                if case .openEndpoint = action {
+                    Text(label(for: action))
+                        .font(.system(size: 10, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Icon(name: "arrow.up.right", size: 10)
+                } else {
+                    Icon(
+                        name: icon(for: action),
+                        size: 10,
+                        color: theme.color(prominent && action != .stop ? "accent" : "fg-muted")
+                    )
+                    Text(label(for: action))
+                        .font(.system(size: 10.5, weight: prominent ? .medium : .regular))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(theme.color(prominent && action != .stop ? "accent" : "fg-muted"))
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(
+                prominent ? theme.color(action == .stop ? "bg-3" : "accent-soft") : .clear,
+                in: RoundedRectangle(cornerRadius: 5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.toolbarControl)
+        .help(actionHelp(action))
+        .accessibilityLabel("\(actionHelp(action)) for \(presentation.name)")
+    }
+
+    private func actionHelp(_ action: RunRowAction) -> String {
+        if case .openEndpoint(let url) = action {
+            return "Open \(url.absoluteString)"
+        }
+        return label(for: action)
+    }
+
+    private func icon(for action: RunRowAction) -> String {
+        switch action {
+        case .start: "play"
+        case .stop: "stop"
+        case .restart: "arrow.clockwise"
+        case .openTerminal: "terminal"
+        case .openEndpoint: "arrow.up.right"
+        case .showOutput: "doc.text"
+        case .edit: "pencil"
+        }
     }
 
     private var toneColor: Color {
@@ -515,7 +577,8 @@ private struct RunRowView: View {
         case .stop:             "Stop"
         case .restart:          "Restart"
         case .openTerminal:     "Terminal"
-        case .openEndpoint:     "Open"
+        case .openEndpoint(let url):
+            url.formatted(.url.scheme(.never).user(.never).password(.never).port(.always).path(.never).query(.never).fragment(.never))
         case .showOutput:       "Output"
         case .edit:             "Edit"
         }
