@@ -7,6 +7,11 @@ struct RunScriptStackDetection: Identifiable, Equatable, Sendable {
     var id: RunScriptStack { stack }
 }
 
+struct GoToolchainEnvironment: Equatable, Sendable {
+    var minorVersion: Int?
+    var architectureFeatures: Set<String>
+}
+
 /// Creation-time stack detection from marker files at the worktree root.
 /// Reads one directory listing plus, when present, a few small manifests.
 /// Results follow `RunScriptStack.allCases` order so the picker is stable.
@@ -15,7 +20,7 @@ enum RunScriptStackDetector {
     static func detect(
         worktreeRoot: URL,
         fileManager: FileManager = .default,
-        goToolchainMinorVersion: (URL) -> Int? = currentGoToolchainMinorVersion
+        goToolchainEnvironment: (URL) -> GoToolchainEnvironment? = currentGoToolchainEnvironment
     ) -> [RunScriptStackDetection] {
         guard let names = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.path) else { return [] }
         let entries = Set(names)
@@ -129,11 +134,12 @@ enum RunScriptStackDetector {
                 ))
             case .go:
                 guard has("go.mod") else { continue }
+                let toolchainEnvironment = goToolchainEnvironment(worktreeRoot) ?? defaultGoToolchainEnvironment
                 add(stack, .init(goRunTarget: goRunnableTarget(
                     rootEntries: names,
                     worktreeRoot: worktreeRoot,
                     fileManager: fileManager,
-                    releaseTags: goReleaseTags(worktreeRoot: worktreeRoot, minorVersion: goToolchainMinorVersion)
+                    toolchainEnvironment: toolchainEnvironment
                 )))
             case .cargo:
                 guard has("Cargo.toml") else { continue }
@@ -397,14 +403,18 @@ enum RunScriptStackDetector {
         rootEntries: [String],
         worktreeRoot: URL,
         fileManager: FileManager,
-        releaseTags: Set<String>
+        toolchainEnvironment: GoToolchainEnvironment
     ) -> String? {
         func fileText(_ relativePath: String) -> String? {
             guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
             return String(decoding: data, as: UTF8.self)
         }
         if rootEntries.contains(where: {
-            $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0), releaseTags: releaseTags)
+            $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(
+                named: $0,
+                contents: fileText($0),
+                toolchainEnvironment: toolchainEnvironment
+            )
         }) {
             return "."
         }
@@ -423,7 +433,7 @@ enum RunScriptStackDetector {
                 $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(
                     named: $0,
                     contents: fileText("\(subdir)/\($0)"),
-                    releaseTags: releaseTags
+                    toolchainEnvironment: toolchainEnvironment
                 )
             }) {
                 commandTargets.append("./\(subdir)")
@@ -924,13 +934,13 @@ enum RunScriptStackDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#if") {
                 let parent = isActive()
-                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion) == true
                 stack.append(.init(parentActive: parent, active: parent && condition, branchTaken: condition))
                 continue
             }
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#elseif") {
                 guard !stack.isEmpty else { continue }
-                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion) == true
                 var frame = stack.removeLast()
                 frame.active = frame.parentActive && !frame.branchTaken && condition
                 frame.branchTaken = frame.branchTaken || condition
@@ -956,18 +966,24 @@ enum RunScriptStackDetector {
         return output.joined(separator: "\n")
     }
 
-    private static func swiftConditionIsActive(_ condition: String, swiftLanguageVersion: (major: Int, minor: Int)) -> Bool {
+    private static func swiftConditionIsActive(_ condition: String, swiftLanguageVersion: (major: Int, minor: Int)) -> Bool? {
         let trimmed = stripBalancedOuterParentheses(condition.trimmingCharacters(in: .whitespaces))
         let orParts = splitSwiftCondition(trimmed, by: "||")
         if orParts.count > 1 {
-            return orParts.contains { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
+            let values = orParts.map { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
+            if values.contains(true) { return true }
+            if values.contains(nil) { return nil }
+            return false
         }
         let andParts = splitSwiftCondition(trimmed, by: "&&")
         if andParts.count > 1 {
-            return andParts.allSatisfy { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
+            let values = andParts.map { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
+            if values.contains(false) { return false }
+            if values.contains(nil) { return nil }
+            return true
         }
         if trimmed.hasPrefix("!") {
-            return !swiftConditionIsActive(String(trimmed.dropFirst()), swiftLanguageVersion: swiftLanguageVersion)
+            return swiftConditionIsActive(String(trimmed.dropFirst()), swiftLanguageVersion: swiftLanguageVersion).map(!)
         }
         if trimmed == "true" { return true }
         if trimmed == "false" { return false }
@@ -983,13 +999,11 @@ enum RunScriptStackDetector {
         if let condition = swiftVersionCondition(trimmed, function: "compiler") {
             return swiftVersion(currentSwiftCompilerVersion, satisfies: condition)
         }
-        if swiftImportConditionName(trimmed) != nil {
-            return false
-        }
+        if swiftImportConditionName(trimmed) != nil { return nil }
         // Unknown manifest conditions may depend on SwiftPM settings. Leave
         // generated `swift run` unchecked unless we can prove the branch is
         // active the same way SwiftPM would.
-        return false
+        return nil
     }
 
     private static func swiftConditionalDirectiveArgument(_ line: String, keyword: String) -> String? {
@@ -1148,11 +1162,16 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?, releaseTags: Set<String>) -> Bool {
+    private static func goSourceIsRunnableOnCurrentHost(
+        named name: String,
+        contents: String?,
+        toolchainEnvironment: GoToolchainEnvironment
+    ) -> Bool {
         guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
               let firstCharacter = name.first, firstCharacter != ".", firstCharacter != "_",
               let contents, goFileDeclaresPackageMain(contents),
-              goFilenameSupportsCurrentHost(name), goBuildConstraintAllowsCurrentHost(contents, releaseTags: releaseTags)
+              goFilenameSupportsCurrentHost(name),
+              goBuildConstraintAllowsCurrentHost(contents, toolchainEnvironment: toolchainEnvironment)
         else { return false }
         return true
     }
@@ -1196,11 +1215,11 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static func goBuildConstraintAllowsCurrentHost(_ contents: String, releaseTags: Set<String>) -> Bool {
+    private static func goBuildConstraintAllowsCurrentHost(_ contents: String, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let lines = contents.components(separatedBy: .newlines)
         if let directive = lines.first(where: { $0.hasPrefix("//go:build ") }) {
             let expression = String(directive.dropFirst("//go:build ".count))
-            return goBuildExpressionAllowsCurrentHost(expression, releaseTags: releaseTags)
+            return goBuildExpressionAllowsCurrentHost(expression, toolchainEnvironment: toolchainEnvironment)
         }
         let legacyDirectives = lines.prefix { line in
             line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("//")
@@ -1210,15 +1229,15 @@ enum RunScriptStackDetector {
             directive.dropFirst("// +build ".count).split { $0 == " " || $0 == "\t" }.contains { option in
                 option.split(separator: ",").allSatisfy { term in
                     if term.hasPrefix("!") {
-                        return !goBuildTagIsEnabled(term.dropFirst(), releaseTags: releaseTags)
+                        return !goBuildTagIsEnabled(term.dropFirst(), toolchainEnvironment: toolchainEnvironment)
                     }
-                    return goBuildTagIsEnabled(term, releaseTags: releaseTags)
+                    return goBuildTagIsEnabled(term, toolchainEnvironment: toolchainEnvironment)
                 }
             }
         }
     }
 
-    private static func goBuildExpressionAllowsCurrentHost(_ expression: String, releaseTags: Set<String>) -> Bool {
+    private static func goBuildExpressionAllowsCurrentHost(_ expression: String, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let tokens = expression.matches(of: /&&|\|\||!|\(|\)|[A-Za-z0-9_.]+/).map(\.output)
         guard tokens.joined() == expression.filter({ !$0.isWhitespace }) else { return false }
         var index = 0
@@ -1236,7 +1255,7 @@ enum RunScriptStackDetector {
             }
             let tag = tokens[index]
             index += 1
-            return goBuildTagIsEnabled(tag, releaseTags: releaseTags)
+            return goBuildTagIsEnabled(tag, toolchainEnvironment: toolchainEnvironment)
         }
         func parseAnd() -> Bool? {
             guard var value = parsePrimary() else { return nil }
@@ -1260,16 +1279,18 @@ enum RunScriptStackDetector {
         return result
     }
 
-    private static func goBuildTagIsEnabled(_ tag: Substring, releaseTags: Set<String>) -> Bool {
+    private static func goBuildTagIsEnabled(_ tag: Substring, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let tag = String(tag)
-        return goCoreBuildTags.contains(tag) || currentGoArchitectureFeatureTags.contains(tag) || releaseTags.contains(tag)
+        return goCoreBuildTags.contains(tag)
+            || toolchainEnvironment.architectureFeatures.contains(tag)
+            || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
     }
 
     private static var goCoreBuildTags: Set<String> {
         ["darwin", "unix", String(currentGoArchitecture), "cgo", "gc"]
     }
 
-    private static var currentGoArchitectureFeatureTags: Set<String> {
+    private static var defaultGoArchitectureFeatureTags: Set<String> {
 #if arch(arm64)
         ["arm64.v8.0"]
 #elseif arch(x86_64)
@@ -1279,35 +1300,78 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static func goReleaseTags(worktreeRoot: URL, minorVersion: (URL) -> Int?) -> Set<String> {
-        let minor = minorVersion(worktreeRoot) ?? 25
+    private static var defaultGoToolchainEnvironment: GoToolchainEnvironment {
+        .init(minorVersion: 25, architectureFeatures: defaultGoArchitectureFeatureTags)
+    }
+
+    private static func goReleaseTags(minorVersion: Int?) -> Set<String> {
+        let minor = minorVersion ?? 25
         guard minor >= 1 else { return [] }
         return Set((1...minor).map { "go1.\($0)" })
     }
 
-    private static func currentGoToolchainMinorVersion(worktreeRoot: URL) -> Int? {
+    /// Best-effort, bounded Go environment probe. `go env` is evaluated from
+    /// the target worktree so local version-manager/toolchain configuration is
+    /// reflected, but the detector must not wait unboundedly while opening the
+    /// new-script dialog.
+    private static func currentGoToolchainEnvironment(worktreeRoot: URL) -> GoToolchainEnvironment? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["go", "env", "GOVERSION"]
+        process.arguments = ["go", "env", "GOVERSION", "GOAMD64", "GOARM64"]
         process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
         do {
             try process.run()
-            process.waitUntilExit()
+            let deadline = Date().addingTimeInterval(0.25)
+            while process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            if process.isRunning {
+                process.terminate()
+                return nil
+            }
         } catch {
             return nil
         }
         guard process.terminationStatus == 0 else { return nil }
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        let version = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = String(decoding: data, as: UTF8.self)
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let version = lines.first ?? ""
+        let architectureFeatureLevel = lines.dropFirst().first { !$0.isEmpty }
+        return .init(
+            minorVersion: goToolchainMinorVersion(from: version),
+            architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel)
+        )
+    }
+
+    private static func goToolchainMinorVersion(from version: String) -> Int? {
         guard let regex = try? NSRegularExpression(pattern: #"^go1\.([0-9]+)"#) else { return nil }
         let range = NSRange(version.startIndex..., in: version)
         guard let match = regex.firstMatch(in: version, range: range),
               let minorRange = Range(match.range(at: 1), in: version)
         else { return nil }
         return Int(version[minorRange])
+    }
+
+    private static func goArchitectureFeatureTags(level: String?) -> Set<String> {
+        guard let level else { return defaultGoArchitectureFeatureTags }
+        #if arch(arm64)
+        guard level.hasPrefix("v8.") else { return defaultGoArchitectureFeatureTags }
+        let minorText = level.dropFirst("v8.".count)
+        guard let minor = Int(minorText), minor >= 0 else { return defaultGoArchitectureFeatureTags }
+        return Set((0...minor).map { "arm64.v8.\($0)" })
+        #elseif arch(x86_64)
+        guard level.hasPrefix("v") else { return defaultGoArchitectureFeatureTags }
+        let levelText = level.dropFirst()
+        guard let version = Int(levelText), version >= 1 else { return defaultGoArchitectureFeatureTags }
+        return Set((1...version).map { "amd64.v\($0)" })
+        #else
+        return []
+        #endif
     }
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
@@ -1663,10 +1727,6 @@ enum RunScriptStackDetector {
         includeDependencyGroups: Bool
     ) -> Bool {
         let stripped = stripHashComments(pyproject)
-        let escapedTool = NSRegularExpression.escapedPattern(for: tool)
-        if stripped.range(of: #"(?m)^\s*\[tool\."# + escapedTool + #"(\.|\])"#, options: .regularExpression) != nil {
-            return true
-        }
         for section in tomlSections(stripped) {
             let table = section.name
             switch table {

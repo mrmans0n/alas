@@ -751,6 +751,31 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageLeavesRunUncheckedForNegatedUnknownImports() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            let package = Package(
+                name: "App",
+                products: [
+            #if !canImport(PackageDescription)
+                    .executable(name: "App", targets: ["App"]),
+            #else
+                    .library(name: "App", targets: ["App"]),
+            #endif
+                ],
+                targets: [.target(name: "App")]
+            )
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageUsesManifestToolsVersionForSwiftConditions() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -986,14 +1011,38 @@ struct RunScriptStackDetectorTests {
 
         let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
             worktreeRoot: root,
-            goToolchainMinorVersion: { resolvedRoot in
+            goToolchainEnvironment: { resolvedRoot in
                 resolvedRoots.append(resolvedRoot)
-                return resolvedRoot == root ? 26 : 1
+                return .init(
+                    minorVersion: resolvedRoot == root ? 26 : 1,
+                    architectureFeatures: []
+                )
             }
         ).map { ($0.stack, $0.context) })
 
         #expect(resolvedRoots == [root])
         #expect(stacks[.go]?.goRunTarget == ".")
+    }
+
+    @Test func goResolvesArchitectureFeatureTagsFromTheToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        #if arch(arm64)
+        let featureTag = "arm64.v8.1"
+        #else
+        let featureTag = "amd64.v2"
+        #endif
+        try write("main.go", "//go:build !\(featureTag)\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [featureTag])
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
     }
 
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
@@ -1254,6 +1303,29 @@ struct RunScriptStackDetectorTests {
             [build-system]
             requires = ["setuptools", "pytest", "ruff"]
             build-backend = "setuptools.build_meta"
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonIgnoresToolConfigWithoutADependency() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [tool.pytest.ini_options]
+            testpaths = ["tests"]
+
+            [tool.ruff]
+            line-length = 120
             """,
             in: root
         )
