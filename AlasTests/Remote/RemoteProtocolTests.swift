@@ -181,6 +181,7 @@ struct RemoteProtocolTests {
             status: "streaming",
             canDrive: false,
             projectId: "project-1",
+            worktreeId: "worktree-1",
             updatedAt: 123,
             worktree: RemoteWorktreeSummary(
                 projectName: "alas",
@@ -206,6 +207,7 @@ struct RemoteProtocolTests {
         )
 
         #expect(summary.projectId == nil)
+        #expect(summary.worktreeId == nil)
         #expect(summary.updatedAt == 0)
     }
 

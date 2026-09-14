@@ -11181,6 +11181,7 @@ extension AppState: RemoteSessionsProvider {
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
             projectId: projectAndWorktree(withWorktreeId: manager.worktreeId)?.project.id,
+            worktreeId: worktreeSummary == nil ? nil : manager.worktreeId,
             updatedAt: manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0,
             worktree: worktreeSummary
         )
@@ -11193,11 +11194,14 @@ extension AppState: RemoteSessionsProvider {
         for mgr in acpManagers.values {
             let worktreeSummary: RemoteWorktreeSummary?
             let projectId: String?
+            let worktreeId: String?
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
                 projectId = resolved.project.id
+                worktreeId = mgr.worktreeId
                 worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
             } else {
                 projectId = nil
+                worktreeId = nil
                 worktreeSummary = nil
             }
 
@@ -11216,6 +11220,7 @@ extension AppState: RemoteSessionsProvider {
                     isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
                     projectId: projectId,
+                    worktreeId: worktreeId,
                     worktree: worktreeSummary
                 )
                 let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
@@ -11255,6 +11260,7 @@ extension AppState: RemoteSessionsProvider {
         var isActive: Bool
         var canDrive: Bool
         let projectId: String?
+        let worktreeId: String?
         let worktree: RemoteWorktreeSummary?
 
         init(
@@ -11264,6 +11270,7 @@ extension AppState: RemoteSessionsProvider {
             isActive: Bool,
             canDrive: Bool,
             projectId: String?,
+            worktreeId: String?,
             worktree: RemoteWorktreeSummary?
         ) {
             self.operationalRow = row
@@ -11273,6 +11280,7 @@ extension AppState: RemoteSessionsProvider {
             self.isActive = isActive
             self.canDrive = canDrive
             self.projectId = projectId
+            self.worktreeId = worktreeId
             self.worktree = worktree
         }
 
@@ -11285,6 +11293,7 @@ extension AppState: RemoteSessionsProvider {
                 canDrive: canDrive,
                 isActive: isActive,
                 projectId: projectId,
+                worktreeId: worktreeId,
                 updatedAt: displayRow.updatedAt,
                 worktree: worktree
             )

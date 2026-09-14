@@ -99,6 +99,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
     let canDrive: Bool       // this remote-host instance currently holds the writer lease
     let isActive: Bool       // still backed by an open Alas tab
     let projectId: String?
+    let worktreeId: String?
     let updatedAt: Int64
     let worktree: RemoteWorktreeSummary?
 
@@ -110,6 +111,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
         canDrive: Bool,
         isActive: Bool = true,
         projectId: String? = nil,
+        worktreeId: String? = nil,
         updatedAt: Int64 = 0,
         worktree: RemoteWorktreeSummary? = nil
     ) {
@@ -120,6 +122,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
         self.canDrive = canDrive
         self.isActive = isActive
         self.projectId = projectId
+        self.worktreeId = worktreeId
         self.updatedAt = updatedAt
         self.worktree = worktree
     }
@@ -127,7 +130,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, agentId, status, canDrive, isActive, projectId, updatedAt, worktree
+        case id, title, agentId, status, canDrive, isActive, projectId, worktreeId, updatedAt, worktree
     }
 
     init(from decoder: Decoder) throws {
@@ -140,6 +143,7 @@ extension RemoteSessionSummary: Codable {
             canDrive: try c.decode(Bool.self, forKey: .canDrive),
             isActive: try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? true,
             projectId: try c.decodeIfPresent(String.self, forKey: .projectId),
+            worktreeId: try c.decodeIfPresent(String.self, forKey: .worktreeId),
             updatedAt: try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0,
             worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree)
         )
@@ -154,6 +158,7 @@ extension RemoteSessionSummary: Codable {
         try c.encode(canDrive, forKey: .canDrive)
         try c.encode(isActive, forKey: .isActive)
         try c.encodeIfPresent(projectId, forKey: .projectId)
+        try c.encodeIfPresent(worktreeId, forKey: .worktreeId)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(worktree, forKey: .worktree)
     }
