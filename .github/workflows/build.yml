@@ -379,6 +379,9 @@ jobs:
             -only-testing AlasTests/DefinitionSnippetCacheTests \
             -only-testing AlasTests/HoverFeatureBehaviorTests \
             -only-testing AlasTests/CompletionFeatureTests \
+            -only-testing AlasTests/CodeTextViewCompletionTests \
+            -only-testing AlasTests/EditorBufferTests \
+            -only-testing AlasTests/HoverWindowControllerTests \
             -only-testing AlasTests/SnippetSessionTests \
             -only-testing AlasTests/SignatureHelpFeatureTests \
             -only-testing AlasTests/DiagnosticDetailsTests \
