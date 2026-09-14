@@ -308,7 +308,6 @@ struct RunTabView: View {
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-error-state")
     }
-
 }
 
 private struct RunTabLoadingView: View {
