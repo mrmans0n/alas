@@ -10,6 +10,7 @@ struct HarnessActivityTransition: Equatable {
     let body: String?
     let occurredAt: Date
     var isSnapshot = false
+    var requiresUserInput = false
 }
 
 @Observable
@@ -32,6 +33,7 @@ final class HarnessService {
         var pid: pid_t?
         var lastBody: String?
         var updatedAt: Date
+        var requiresUserInput = false
     }
 
     /// Cursor notifications are less reliable than Claude's and frequently
@@ -136,6 +138,7 @@ final class HarnessService {
             )
 
         case .awaitingInput:
+            // Hooks also report idle prompts here, so they cannot establish input intent.
             // Cancel pending cursor-idle debounce; awaiting is a real state change.
             if event.agent == .cursor {
                 cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
@@ -171,7 +174,7 @@ final class HarnessService {
             }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .permissionRequest, pid: event.pid,
-                lastBody: event.body, updatedAt: Date()
+                lastBody: event.body, updatedAt: Date(), requiresUserInput: true
             )
             if previousState != .permissionRequest, shouldNotifyOnAwaiting(),
                let lookup = stateLookup(event.sessionId) {
@@ -260,11 +263,11 @@ final class HarnessService {
     /// (currently the ACP bridge) report activity for sessions they own.
     /// No notification side effects — those remain socket-driven so we don't
     /// double-fire when both hooks and ACP cover the same session.
-    func setExternalActivity(sessionId: String, owner: SessionOwnerID? = nil, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false) {
+    func setExternalActivity(sessionId: String, owner: SessionOwnerID? = nil, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false, requiresUserInput: Bool = false) {
         let previous = activityBySession[sessionId]
         activityBySession[sessionId] = HarnessActivityState(
             agent: agent, state: state, pid: nil,
-            lastBody: body, updatedAt: Date()
+            lastBody: body, updatedAt: Date(), requiresUserInput: requiresUserInput || state == .permissionRequest
         )
         emitActivityTransition(sessionID: sessionId, previous: previous, owner: owner, isSnapshot: isSnapshot)
     }
@@ -273,11 +276,13 @@ final class HarnessService {
         let current = activityBySession[sessionID]
         let bodyChanged = current?.lastBody != previous?.lastBody
             && (current?.state == .awaitingInput || current?.state == .permissionRequest)
-        guard current?.state != previous?.state || current?.agent != previous?.agent || bodyChanged,
+        let inputIntentChanged = current?.requiresUserInput != previous?.requiresUserInput
+        guard current?.state != previous?.state || current?.agent != previous?.agent || bodyChanged || inputIntentChanged,
               let agent = current?.agent ?? previous?.agent else { return }
         onActivityTransition?(HarnessActivityTransition(
             sessionID: sessionID, owner: owner, agent: agent, previousState: previous?.state, state: current?.state,
-            body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot
+            body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot,
+            requiresUserInput: current?.requiresUserInput ?? false
         ))
     }
 
@@ -332,7 +337,8 @@ final class HarnessService {
     #if DEBUG
     func setStateForTesting(sessionId: String, agent: AgentKind, state: ActivityState) {
         activityBySession[sessionId] = HarnessActivityState(
-            agent: agent, state: state, pid: nil, lastBody: nil, updatedAt: Date()
+            agent: agent, state: state, pid: nil, lastBody: nil, updatedAt: Date(),
+            requiresUserInput: state == .permissionRequest
         )
     }
     #endif

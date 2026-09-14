@@ -165,7 +165,7 @@ extension AppState {
 
     func beginReviewAttentionInteraction(worktreeID: String, tabID: TabID, sessionID: String, command: DiffReviewDraftCommentScrollCommand) {
         guard !isAttentionInboxOpen, selectedWorktreeId == worktreeID else { return }
-        let eventIDs = attentionAggregation.items.filter { item in
+        let eventIDs = currentAttentionItems.filter { item in
             guard item.worktree?.id == worktreeID,
                   case .reviewComment(_, command.commentID) = item.jumpTarget
             else { return false }
@@ -209,7 +209,7 @@ extension AppState {
 
     func acknowledgeReviewCommentAttention(worktreeID: String, commentID: String) {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0, selectedWorktreeId == worktreeID else { return }
-        for item in attentionAggregation.items where item.worktree?.id == worktreeID {
+        for item in currentAttentionItems where item.worktree?.id == worktreeID {
             guard case .reviewComment(_, let itemCommentID) = item.jumpTarget,
                   itemCommentID == commentID else { continue }
             attentionStore.acknowledge(eventID: item.eventID, at: Date())
@@ -263,7 +263,8 @@ extension AppState {
             }
             return AttentionProducer.harness(
                 sessionID: sessionID, agent: activity.agent, state: activity.state,
-                body: activity.lastBody, owner: context.owner, display: context.display
+                body: activity.lastBody, owner: context.owner, display: context.display,
+                requiresUserInput: activity.requiresUserInput
             )
         }
         let knownHarnessSessionIDs = Set(harness.activityBySession.keys)
@@ -292,7 +293,14 @@ extension AppState {
                     break
                 }
             }
+            var observedScripts = Set<String>()
             for failure in runScriptFailureQueue.failures(for: entry.worktree.id) {
+                guard observedScripts.insert(failure.scriptKey).inserted else { continue }
+                let key = AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: owner)
+                if let stored = attentionStore.document.observations[key],
+                   !stored.isActive || stored.fingerprint != failure.id {
+                    continue
+                }
                 observations += AttentionProducer.script(
                     failure: failure,
                     owner: .make(worktree: entry.worktree, project: entry.project),
@@ -490,17 +498,22 @@ extension AppState {
         }
     }
 
+    private var currentAttentionItems: [AttentionItem] {
+        let aggregation = attentionAggregation
+        return aggregation.items + aggregation.history.filter { $0.presentation != .historical }
+    }
+
     /// Called by explicit surface interactions, never by producer refreshes.
     func acknowledgeAttentionSurface(worktreeID: String, target: AttentionJumpTarget) {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
-        for item in attentionAggregation.items where item.worktree?.id == worktreeID {
+        for item in currentAttentionItems where item.worktree?.id == worktreeID {
             if attentionItem(item, matches: target) { attentionStore.acknowledge(eventID: item.eventID, at: Date()) }
         }
     }
 
     private func acknowledgeAttentionTarget(_ target: AttentionJumpTarget) {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
-        for item in attentionAggregation.items where attentionItem(item, matches: target) {
+        for item in currentAttentionItems where attentionItem(item, matches: target) {
             attentionStore.acknowledge(eventID: item.eventID, at: Date())
         }
     }
@@ -531,7 +544,7 @@ extension AppState {
             acknowledgeSessionTarget(worktreeID: worktreeID, owner: owner, sessionID: session.sessionId)
         case .terminal(let terminal):
             guard let leaf = terminal.root.find(leafId: terminal.focusedLeafId)?.leaf else { return }
-            acknowledgeSessionTarget(worktreeID: worktreeID, owner: owner, sessionID: leaf.sessionId ?? leaf.id)
+            acknowledgeSessionTarget(worktreeID: worktreeID, owner: owner, sessionID: leaf.sessionId)
         default: break
         }
     }
@@ -543,7 +556,7 @@ extension AppState {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
         let target = AttentionJumpTarget.session(sessionID: sessionID)
         if let pending = pendingHarnessAttention[sessionID] {
-            // The awaiting event doesn't exist yet — it's parked in the
+            // The awaiting event doesn't exist yet. It's parked in the
             // settle window. Remember the intent (keyed by the fingerprint
             // the user actually saw) so the badge never appears for it.
             harnessAttentionPreAcknowledgedSessions[sessionID] = fingerprint(for: pending)
@@ -751,13 +764,14 @@ extension AppState {
               let state = transition.state,
               AttentionProducer.harness(
                   sessionID: sessionID, agent: transition.agent, state: state,
-                  body: transition.body, owner: context.owner, display: context.display
+                  body: transition.body, owner: context.owner, display: context.display,
+                  requiresUserInput: transition.requiresUserInput
               ).compactMap(\.activeSignal).first != nil else { return }
         if pendingHarnessAttention[sessionID]?.state == transition.state {
             if let existing = pendingHarnessAttention[sessionID],
                fingerprint(for: existing) != fingerprint(for: transition) {
                 // A different question than the one the user may have
-                // pre-acknowledged — the marker must not suppress it.
+                // pre-acknowledged, so the marker must not suppress it.
                 // Whitespace-only re-emits produce the same fingerprint and
                 // keep the marker intact.
                 harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
@@ -766,7 +780,7 @@ extension AppState {
             harnessAttentionDebouncers[sessionID]?.poke()
         } else {
             // A different kind (e.g. permission → awaiting) supersedes the
-            // old pending signal entirely — including any pre-acknowledgment
+            // old pending signal entirely, including any pre-acknowledgment
             // recorded against it, since the user hasn't seen this kind.
             harnessAttentionDebouncers.removeValue(forKey: sessionID)?.cancel()
             harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
@@ -793,8 +807,9 @@ extension AppState {
     /// still in that state when the settle window closes; anything else means
     /// the state flapped and the badge should never have appeared.
     private func applyPendingHarnessAttention(_ transition: HarnessActivityTransition) {
-        guard let current = harness.activityBySession[transition.sessionID]?.state,
-              current == transition.state else {
+        guard let current = harness.activityBySession[transition.sessionID],
+              current.state == transition.state,
+              current.requiresUserInput == transition.requiresUserInput else {
             // The marker only applies to this pending transition; a rejected
             // one must not suppress the next genuine badge for the session.
             harnessAttentionPreAcknowledgedSessions.removeValue(forKey: transition.sessionID)
@@ -825,7 +840,9 @@ extension AppState {
     /// `AttentionProducer.harnessFingerprint`).
     private func fingerprint(for transition: HarnessActivityTransition) -> String {
         guard let state = transition.state else { return "" }
-        return AttentionProducer.harnessFingerprint(state: state, body: transition.body)
+        return AttentionProducer.harnessFingerprint(
+            state: state, body: transition.body, requiresUserInput: transition.requiresUserInput
+        )
     }
 
     private func applyHarnessAttention(_ transition: HarnessActivityTransition) {
@@ -834,8 +851,14 @@ extension AppState {
               let context = attentionContext(for: resolution.worktree) else { return }
         let observations = AttentionProducer.harness(
             sessionID: transition.sessionID, agent: transition.agent, state: state,
-            body: transition.body, owner: context.owner, display: context.display
+            body: transition.body, owner: context.owner, display: context.display,
+            requiresUserInput: transition.requiresUserInput
         )
+        if !transition.isSnapshot,
+           transition.previousState == .awaitingInput || transition.previousState == .permissionRequest,
+           state == .busy || state == .idle {
+            acknowledgeSessionTarget(worktreeID: resolution.worktree.id, owner: resolution.owner, sessionID: transition.sessionID)
+        }
         if transition.isSnapshot {
             reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: transition.occurredAt)
             for observation in observations where observation.activeSignal == nil {
@@ -843,11 +866,6 @@ extension AppState {
             }
         } else {
             for observation in observations { observeAttention(observation, at: transition.occurredAt) }
-        }
-        if !transition.isSnapshot,
-           transition.previousState == .awaitingInput || transition.previousState == .permissionRequest,
-           state == .busy || state == .idle {
-            acknowledgeSessionTarget(worktreeID: resolution.worktree.id, owner: resolution.owner, sessionID: transition.sessionID)
         }
         if state == .idle, !transition.isSnapshot {
             attentionStore.appendHistory(AttentionProducer.finished(

@@ -53,16 +53,31 @@ struct AttentionStoreTests {
         #expect(reloaded.acknowledgments[latest.id] != nil)
     }
 
-    @Test func repeatedActiveObservationCreatesOneEventAndRecurrenceCreatesAnother() throws {
+    @Test func currentRequestSurvivesReloadAndRearmsOnlyForANewOccurrence() throws {
         let fixture = try Fixture()
         let signal = fixture.signal(fingerprint: "request-1")
+        func aggregate(_ store: AttentionStore) -> AttentionAggregation {
+            AttentionSignalAggregator.aggregate(liveSignals: [], document: store.document, worktrees: [])
+        }
 
         fixture.store.observe(.active(signal), at: fixture.now)
         fixture.store.observe(.active(signal), at: fixture.now.addingTimeInterval(1))
-        fixture.store.observe(.inactive(sourceKey: signal.sourceKey), at: fixture.now.addingTimeInterval(2))
-        fixture.store.observe(.active(fixture.signal(fingerprint: "request-2")), at: fixture.now.addingTimeInterval(3))
+        let first = try #require(aggregate(fixture.store).items.first)
+        #expect(aggregate(fixture.store).unresolvedCount == 1)
+        fixture.store.acknowledge(eventID: first.eventID, at: fixture.now.addingTimeInterval(2))
 
-        #expect(fixture.store.document.events.map(\.fingerprint) == ["request-1", "request-2"])
+        let reloaded = AttentionStore(url: fixture.url, now: { fixture.now })
+        reloaded.observe(.active(signal), at: fixture.now.addingTimeInterval(3))
+        #expect(aggregate(reloaded).unresolvedCount == 0)
+        #expect(aggregate(reloaded).history.first?.presentation == .unverified)
+
+        reloaded.observe(.inactive(sourceKey: signal.sourceKey), at: fixture.now.addingTimeInterval(4))
+        #expect(aggregate(reloaded).history.first?.presentation == .historical)
+        reloaded.observe(.active(signal), at: fixture.now.addingTimeInterval(5))
+        let current = try #require(aggregate(reloaded).items.first)
+        #expect(aggregate(reloaded).unresolvedCount == 1)
+        #expect(current.eventID != first.eventID)
+        #expect(aggregate(reloaded).history.map(\.eventID) == [first.eventID])
     }
 
     @Test func conflictShrinkUpdatesObservationWithoutNewEvent() throws {
@@ -475,6 +490,36 @@ struct AttentionStoreTests {
 
         #expect(fixture.store.document.events.map(\.fingerprint) == ["unresolved", "finished-2"])
         #expect(fixture.store.document.observations[unresolved.sourceKey]?.eventID == fixture.store.document.events.first?.id)
+    }
+
+    @Test func retentionPrunesSupersededRequestsBeforeCurrentBlockers() throws {
+        let fixture = try Fixture(maxEvents: 2)
+        let other = fixture.signal(sourceKey: .init(rawValue: "session:other"), fingerprint: "other", kind: .agentPermission)
+        fixture.store.observe(.active(other), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(fingerprint: "old")), at: fixture.now.addingTimeInterval(1))
+        fixture.store.observe(.active(fixture.signal(fingerprint: "current")), at: fixture.now.addingTimeInterval(2))
+
+        let result = AttentionSignalAggregator.aggregate(liveSignals: [], document: fixture.store.document, worktrees: [])
+        #expect(result.unresolvedCount == 2)
+        #expect(Set(fixture.store.events.map(\.fingerprint)) == ["other", "current"])
+    }
+
+    @Test func logicalScriptFailureFollowsWorktreeIdentityMigration() throws {
+        let fixture = try Fixture()
+        let legacyKey = AttentionSourceKey(rawValue: "script:\(fixture.legacyOwner.storageKey):5:build:failure")
+        let currentKey = AttentionSourceKey(rawValue: "script:\(fixture.lineageOwner.storageKey):5:build:failure")
+        let signal = AttentionSignal(
+            sourceKey: legacyKey, fingerprint: "run-1", owner: fixture.legacyOwner,
+            kind: .runScriptFailure, title: "Build failed", body: nil,
+            jumpTarget: .runScriptFailure(failureID: "run-1"), display: fixture.signal(fingerprint: "").display
+        )
+        fixture.store.observe(.active(signal), at: fixture.now)
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.observe(.inactive(sourceKey: currentKey), at: fixture.now.addingTimeInterval(1))
+
+        let result = AttentionSignalAggregator.aggregate(liveSignals: [], document: fixture.store.document, worktrees: [])
+        #expect(result.unresolvedCount == 0)
+        #expect(result.history.first?.presentation == .historical)
     }
 
     @MainActor

@@ -4,7 +4,9 @@ struct AttentionInboxRowPresentation: Identifiable {
     let item: AttentionItem
     let now: Date
     var id: UUID { item.eventID }
-    var title: String { item.title }
+    var title: String {
+        item.presentation == .unverified ? "Last known: \(item.title)" : item.title
+    }
     var attribution: String {
         [item.display.projectName, item.display.branch.isEmpty ? item.display.path : item.display.branch,
          item.display.host].compactMap { $0 }.joined(separator: " · ")
@@ -12,10 +14,25 @@ struct AttentionInboxRowPresentation: Identifiable {
     var timestampText: String { Self.timestamp(item.occurredAt, now: now) }
     var absoluteTimestamp: String { item.occurredAt.formatted(date: .complete, time: .standard) }
     var acknowledgmentText: String? {
-        item.acknowledgedAt.map { "Addressed \(Self.timestamp($0, now: now))" }
+        item.acknowledgedAt.map { "Acknowledged \(Self.timestamp($0, now: now))" }
     }
     var acknowledgmentHelp: String? {
-        item.acknowledgedAt.map { "Addressed \($0.formatted(date: .complete, time: .standard))" }
+        item.acknowledgedAt.map { "Acknowledged \($0.formatted(date: .complete, time: .standard))" }
+    }
+    var emphasizesAction: Bool {
+        item.presentation == .live && item.kind.requiresAction && item.acknowledgedAt == nil
+    }
+    var stateExplanation: String {
+        switch item.presentation {
+        case .live:
+            item.kind.requiresAction
+                ? "Still active. Acknowledging this event does not resolve it."
+                : "Current activity. No action requested."
+        case .unverified:
+            "Current state is unavailable. This last-known condition is pending verification."
+        case .historical:
+            "Past activity. This event is no longer current; it may have cleared or been superseded."
+        }
     }
     var actionTitle: String {
         switch item.jumpTarget {
@@ -35,8 +52,8 @@ struct AttentionInboxRowPresentation: Identifiable {
         return nil
     }
     var dismissAccessibilityLabel: String? {
-        guard item.acknowledgedAt == nil else { return nil }
-        return "Dismiss, \(title), \(attribution)"
+        guard item.acknowledgedAt == nil, item.kind.requiresAction, item.presentation != .historical else { return nil }
+        return "Acknowledge, \(title), \(attribution)"
     }
 
     static func timestamp(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
@@ -61,7 +78,7 @@ struct AttentionInboxPresentation {
 
     /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.
     static func historyToggleLabel(count: Int, isExpanded: Bool) -> String {
-        let events = count == 1 ? "1 earlier event" : "\(count) earlier events"
+        let events = count == 1 ? "1 activity event" : "\(count) activity events"
         return isExpanded ? "Hide \(events)" : "Show \(events)"
     }
 
@@ -94,22 +111,22 @@ struct AttentionInboxView: View {
                 HStack(spacing: 9) {
                     Image(systemName: "tray")
                         .font(.system(size: 12))
-                        .foregroundStyle(theme.color("warn"))
+                        .foregroundStyle(theme.color(aggregation.unresolvedCount > 0 ? "warn" : "fg-muted"))
                         .accessibilityHidden(true)
-                    Text("Needs attention")
+                    Text("Inbox")
                         .font(.system(size: 13, weight: .semibold))
                     Text("\(aggregation.unresolvedCount)")
                         .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(theme.color("fg-muted"))
-                        .accessibilityLabel("\(aggregation.unresolvedCount) unresolved items")
+                        .accessibilityLabel("\(aggregation.unresolvedCount) items needing attention")
                     Spacer()
                     if !presentation.activeRows.isEmpty {
-                        Button("Dismiss all") {
+                        Button("Acknowledge all") {
                             for item in presentation.activeRows { onDismiss(item.item) }
                         }
                         .controlSize(.small)
-                        .accessibilityLabel("Dismiss all \(aggregation.unresolvedCount) unresolved items")
+                        .accessibilityLabel("Acknowledge all \(aggregation.unresolvedCount) items needing attention")
                     }
                 }
                 .foregroundStyle(theme.color("fg"))
@@ -149,7 +166,7 @@ struct AttentionInboxList: View {
             if let emptyTitle = presentation.emptyTitle {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(emptyTitle).font(.system(size: 13, weight: .medium))
-                    Text("New requests will appear here. Earlier events stay collapsed below.")
+                    Text("New requests will appear here. Acknowledged events and other activity remain below.")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.color("fg-muted"))
                 }
@@ -185,8 +202,8 @@ struct AttentionInboxRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: isHistory ? "clock" : "exclamationmark.circle")
-                    .foregroundStyle(theme.color(isHistory ? "fg-dim" : "warn"))
+                Image(systemName: presentation.emphasizesAction ? "exclamationmark.circle" : "clock")
+                    .foregroundStyle(theme.color(presentation.emphasizesAction ? "warn" : "fg-dim"))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(presentation.title)
@@ -204,6 +221,9 @@ struct AttentionInboxRow: View {
                     .help(presentation.absoluteTimestamp)
                     .accessibilityLabel(presentation.absoluteTimestamp)
             }
+            Text(presentation.stateExplanation)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-muted"))
             if let body = presentation.item.body, !body.isEmpty {
                 Text(body)
                     .font(.system(size: 12))
@@ -222,10 +242,10 @@ struct AttentionInboxRow: View {
                         .accessibilityLabel(presentation.acknowledgmentHelp ?? acknowledgment)
                 }
                 Spacer(minLength: 0)
-                if !isHistory {
-                    Button("Dismiss") { onDismiss(presentation.item) }
+                if !isHistory, let acknowledgmentLabel = presentation.dismissAccessibilityLabel {
+                    Button("Acknowledge") { onDismiss(presentation.item) }
                         .controlSize(.small)
-                        .accessibilityLabel(presentation.dismissAccessibilityLabel ?? "Dismiss")
+                        .accessibilityLabel(acknowledgmentLabel)
                 }
                 if !isHistory || presentation.item.jumpTarget != .none {
                     Button(presentation.actionTitle) {
@@ -249,8 +269,8 @@ struct AttentionInboxRow: View {
     }
 }
 
-/// Header for the acknowledged-history section. Starts collapsed so the panel opens on
-/// what still needs attention rather than on a wall of past events.
+/// Header for acknowledged events and other activity. Starts collapsed so the panel
+/// opens on what needs attention without hiding access to current or past activity.
 private struct AttentionInboxHistoryToggle: View {
     let count: Int
     @Binding var isExpanded: Bool
@@ -266,7 +286,7 @@ private struct AttentionInboxHistoryToggle: View {
                     .font(.system(size: 9, weight: .semibold))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .accessibilityHidden(true)
-                Text("Earlier")
+                Text("Activity")
                     .font(.system(size: 11, weight: .semibold))
                 Text("\(count)")
                     .font(.system(size: 11))

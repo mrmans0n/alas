@@ -462,23 +462,37 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
-    @Test func failedRunRecordsAttentionWithExactFailureTarget() async throws {
+    @Test(arguments: [false, true])
+    func removingQueuedFailureRetiresItsAttention(purge: Bool) async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             RunScriptCompletion(exitCode: 65, transcript: Data("compile failed\n".utf8), truncated: false)
         })
+        defer { try? FileManager.default.removeItem(at: fixture.worktree.path) }
         fixture.state.harness.notifications.notificationAdder = { _ in }
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         let failure = try #require(fixture.state.runScriptFailures(in: fixture.worktree.id).first)
-        let events = fixture.state.attentionStore.events
-        #expect(events.count == 1)
-        let event = try #require(events.first)
-        #expect(event.kind == .runScriptFailure)
-        #expect(event.jumpTarget == .runScriptFailure(failureID: failure.id))
-        #expect(event.occurredAt == failure.completedAt)
-        #expect(event.body == "compile failed\n")
+        let beforeRemoval = fixture.state.attentionAggregation
+        #expect(beforeRemoval.unresolvedCount == 1)
+        let item = try #require(beforeRemoval.items.first)
+        #expect(item.kind == .runScriptFailure)
+        #expect(item.jumpTarget == .runScriptFailure(failureID: failure.id))
+        #expect(item.presentation == .live)
+
+        if purge {
+            fixture.state.cleanupRunScriptState(worktreeID: fixture.worktree.id)
+        } else {
+            fixture.state.dismissRunScriptFailure(id: failure.id, worktreeID: fixture.worktree.id)
+        }
+
+        let afterRemoval = fixture.state.attentionAggregation
+        #expect(afterRemoval.unresolvedCount == 0)
+        #expect(afterRemoval.items.isEmpty)
+        #expect(afterRemoval.history.map(\.eventID) == [item.eventID])
+        #expect(afterRemoval.history.first?.presentation == .historical)
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
     }
 
     @MainActor
@@ -911,6 +925,7 @@ struct RunScriptLaunchTests {
             attentionStore: AttentionStore(url: dir.appendingPathComponent("attention-events.json"))
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
         return (state, runScript, worktree)
     }
 }

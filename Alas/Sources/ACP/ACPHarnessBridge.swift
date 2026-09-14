@@ -100,9 +100,9 @@ final class ACPHarnessBridge {
             acknowledgeIfUserAddressedAttention(previousState: previousState, session: session, isSnapshot: isSnapshot)
             harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .busy, isSnapshot: isSnapshot)
         case .awaitingPermission:
-            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot, requiresUserInput: true)
         case .awaitingInput:
-            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot, requiresUserInput: true)
         }
     }
 

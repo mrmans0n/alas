@@ -196,7 +196,8 @@ struct AppStateRunRecordTests {
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
             },
-            runScriptCompletionWaiter: waiter
+            runScriptCompletionWaiter: waiter,
+            attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json"))
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         let primaryWorktree = worktree(id: "wt-1", branch: "main")
@@ -294,9 +295,14 @@ struct AppStateRunRecordTests {
         #expect(runRecord(fixture)?.status == .starting)
     }
 
-    @Test func failedRunLinksTheCapturedOutput() async throws {
+    @Test func onlySuccessfulRerunOfFailedScriptRetiresItsAttention() async throws {
+        let calls = LockedCounter()
         let fixture = try makeFixture(waiter: { _ in
-            RunScriptCompletion(exitCode: 42, transcript: Data("boom\n".utf8), truncated: false)
+            RunScriptCompletion(
+                exitCode: calls.incrementAndGet() == 1 ? 42 : 0,
+                transcript: Data("boom\n".utf8),
+                truncated: false
+            )
         })
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
@@ -309,6 +315,85 @@ struct AppStateRunRecordTests {
         let failures = fixture.state.runScriptFailures(in: fixture.worktree.id)
         #expect(failures.count == 1)
         #expect(record.failureID == failures.first?.id)
+
+        let failed = fixture.state.attentionAggregation
+        #expect(failed.unresolvedCount == 1)
+        let item = try #require(failed.items.first)
+        let failureID = try #require(record.failureID)
+        #expect(item.presentation == .live)
+        #expect(item.jumpTarget == .runScriptFailure(failureID: failureID))
+
+        let otherURL = fixture.directory.appendingPathComponent("other.sh")
+        try "echo ok\n".write(to: otherURL, atomically: true, encoding: .utf8)
+        let other = RunScript(
+            scope: .repo,
+            fileName: "other.sh",
+            fileURL: otherURL,
+            displayName: "Other",
+            onExit: .keep,
+            cwd: nil,
+            isExecutable: false
+        )
+        fixture.state.runOrFocusScript(other, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(fixture.state.runRecords.record(
+            worktreeID: fixture.worktree.id, scriptKey: other.key
+        )?.status == .finished(.succeeded))
+        let afterUnrelatedSuccess = fixture.state.attentionAggregation
+        #expect(afterUnrelatedSuccess.unresolvedCount == 1)
+        #expect(afterUnrelatedSuccess.items.map(\.eventID) == [item.eventID])
+        #expect(afterUnrelatedSuccess.items.first?.presentation == .live)
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(runRecord(fixture)?.status == .finished(.succeeded))
+        let afterRerun = fixture.state.attentionAggregation
+        #expect(afterRerun.unresolvedCount == 0)
+        #expect(afterRerun.items.isEmpty)
+        #expect(afterRerun.history.map(\.eventID) == [item.eventID])
+        #expect(afterRerun.history.first?.presentation == .historical)
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
+    @Test func laterFailureSupersedesPreviousOccurrenceAndSurvivesItsDismissal() async throws {
+        let fixture = try makeFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 42, transcript: Data("boom\n".utf8), truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        let firstFailure = try #require(runRecord(fixture)?.failureID)
+        let firstItem = try #require(fixture.state.attentionAggregation.items.first)
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        let secondFailure = try #require(runRecord(fixture)?.failureID)
+        #expect(secondFailure != firstFailure)
+
+        let afterRerun = fixture.state.attentionAggregation
+        #expect(afterRerun.unresolvedCount == 1)
+        #expect(afterRerun.items.count == 1)
+        let currentItem = try #require(afterRerun.items.first)
+        #expect(currentItem.eventID != firstItem.eventID)
+        #expect(currentItem.jumpTarget == .runScriptFailure(failureID: secondFailure))
+        #expect(currentItem.presentation == .live)
+        #expect(afterRerun.history.map(\.eventID) == [firstItem.eventID])
+        #expect(afterRerun.history.first?.presentation == .historical)
+
+        fixture.state.dismissRunScriptFailure(id: firstFailure, worktreeID: fixture.worktree.id)
+
+        let afterOldDismissal = fixture.state.attentionAggregation
+        #expect(afterOldDismissal.unresolvedCount == 1)
+        #expect(afterOldDismissal.items.map(\.eventID) == [currentItem.eventID])
+        #expect(afterOldDismissal.items.first?.presentation == .live)
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).map(\.id) == [secondFailure])
     }
 
     @Test func launchFailureRestoresThePreviousObservedOutcome() async throws {

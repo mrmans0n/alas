@@ -32,10 +32,21 @@ struct AttentionSourceKey: Codable, Hashable, Sendable {
 enum AttentionKind: String, Codable, Sendable {
     case agentAwaiting, agentPermission, runScriptFailure, gitOperation
     case conflicts, reviewReply, failedChecks, actionableFeedback
-    case reviewSyncBlocked, hostDisconnected, agentFinished
+    case reviewSyncBlocked, hostDisconnected, agentFinished, agentReady
 }
 
 extension AttentionKind {
+    /// A condition can be worth recording without requiring the user's intervention.
+    var requiresAction: Bool {
+        switch self {
+        case .agentAwaiting, .agentPermission, .runScriptFailure, .conflicts, .hostDisconnected:
+            true
+        case .agentReady, .gitOperation, .reviewReply, .failedChecks, .actionableFeedback,
+             .reviewSyncBlocked, .agentFinished:
+            false
+        }
+    }
+
     func historicalTitle(from title: String) -> String {
         switch self {
         case .agentAwaiting:
@@ -56,7 +67,7 @@ extension AttentionKind {
             title.replacingOccurrences(of: " needs action", with: " required action")
         case .reviewSyncBlocked:
             title.replacingOccurrences(of: " is ahead", with: " was ahead")
-        case .reviewReply, .failedChecks, .agentFinished:
+        case .reviewReply, .failedChecks, .agentFinished, .agentReady:
             title
         }
     }
@@ -142,7 +153,7 @@ struct AttentionEvent: Codable, Equatable, Sendable {
         jumpTarget = signal.jumpTarget
         display = signal.display
         self.occurredAt = occurredAt
-        requiresAction = true
+        requiresAction = signal.kind.requiresAction
     }
 
     init(id: UUID = UUID(), history: AttentionHistoryEvent, occurredAt: Date) {

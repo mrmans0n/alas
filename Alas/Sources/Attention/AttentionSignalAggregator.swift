@@ -8,6 +8,7 @@ struct AttentionLiveSignal: Equatable, Sendable {
 
 enum AttentionItemPresentation: Equatable, Sendable {
     case live
+    case unverified
     case historical
 }
 
@@ -125,12 +126,21 @@ enum AttentionSignalAggregator {
         var history: [AttentionItem] = []
 
         for event in document.events {
+            let observation = document.observations[event.sourceKey]
+            let isCurrent = observation?.isActive == true && observation?.eventID == event.id
+            let live = isCurrent ? activeSignals[event.id] : nil
+            let presentation: AttentionItemPresentation = isCurrent
+                ? (live == nil ? .unverified : .live)
+                : .historical
             let acknowledgment = document.acknowledgments[event.id]
-            if event.requiresAction, acknowledgment == nil {
-                let live = activeSignals[event.id]
-                items.append(item(for: event, live: live, acknowledgment: nil, resolver: resolver))
+            let currentItem = item(
+                for: event, live: live, presentation: presentation,
+                acknowledgment: acknowledgment, resolver: resolver
+            )
+            if isCurrent, event.requiresAction, currentItem.kind.requiresAction, acknowledgment == nil {
+                items.append(currentItem)
             } else {
-                history.append(item(for: event, live: nil, acknowledgment: acknowledgment, resolver: resolver))
+                history.append(currentItem)
             }
         }
 
@@ -149,19 +159,19 @@ enum AttentionSignalAggregator {
     private static func item(
         for event: AttentionEvent,
         live: AttentionLiveSignal?,
+        presentation: AttentionItemPresentation,
         acknowledgment: AttentionAcknowledgment?,
         resolver: AttentionWorktreeResolver
     ) -> AttentionItem {
         let signal = live?.signal
         let owner = signal?.owner ?? event.owner
         let worktree = resolver.resolve(owner)
-        let presentation: AttentionItemPresentation = live == nil ? .historical : .live
         return AttentionItem(
             eventID: event.id,
             sourceKey: signal?.sourceKey ?? event.sourceKey,
             owner: owner,
             kind: signal?.kind ?? event.kind,
-            title: live == nil ? historicalTitle(for: event) : signal!.title,
+            title: presentation == .historical ? historicalTitle(for: event) : signal?.title ?? event.title,
             body: signal?.body ?? event.body,
             occurredAt: event.occurredAt,
             presentation: presentation,

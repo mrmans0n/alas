@@ -148,8 +148,10 @@ final class AttentionStore {
     private func retain(at date: Date) {
         let cutoff = date.addingTimeInterval(-resolvedRetention)
         let acknowledgedIDs = Set(document.acknowledgments.keys)
+        let activeEventIDs = Set(document.observations.values.lazy.filter(\.isActive).compactMap(\.eventID))
         document.events.removeAll { event in
-            acknowledgedIDs.contains(event.id) && event.occurredAt < cutoff
+            (acknowledgedIDs.contains(event.id) || !activeEventIDs.contains(event.id) || !event.kind.requiresAction)
+                && event.occurredAt < cutoff
         }
 
         while document.events.count > maxEvents,
@@ -157,7 +159,9 @@ final class AttentionStore {
             document.events.remove(at: index)
         }
         while document.events.count > maxEvents,
-              let index = oldestEventIndex(where: { !$0.requiresAction }) {
+              let index = oldestEventIndex(where: {
+                  !$0.requiresAction || !$0.kind.requiresAction || !activeEventIDs.contains($0.id)
+              }) {
             document.events.remove(at: index)
         }
         while document.events.count > maxEvents {
@@ -294,7 +298,7 @@ final class AttentionStore {
     private func migratedSourceKey(_ sourceKey: AttentionSourceKey, from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> AttentionSourceKey? {
         let legacyKey = legacyOwner.storageKey
         let lineageKey = lineageOwner.storageKey
-        for prefix in ["git:", "review:", "host:"] {
+        for prefix in ["git:", "review:", "host:", "script:"] {
             let legacyPrefix = "\(prefix)\(legacyKey):"
             guard sourceKey.rawValue.hasPrefix(legacyPrefix) else { continue }
             return AttentionSourceKey(rawValue: "\(prefix)\(lineageKey):\(sourceKey.rawValue.dropFirst(legacyPrefix.count))")
