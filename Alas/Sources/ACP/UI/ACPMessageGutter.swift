@@ -225,16 +225,17 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
                 let forkItem = NSMenuItem(title: "Fork from here", action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
                 for target in forkTargets {
-                    let title = target.isSameAgent
-                        ? "\(target.displayName)\tSame agent"
-                        : target.displayName
                     let item = NSMenuItem(
-                        title: title,
+                        title: target.displayName,
                         action: #selector(forkFromHere(_:)),
                         keyEquivalent: ""
                     )
                     item.target = self
                     item.representedObject = target.id
+                    item.image = AgentLogoView.menuImage(assetName: target.logoAssetName, size: 14)
+                    if target.isSameAgent {
+                        item.badge = NSMenuItemBadge(string: "Current")
+                    }
                     submenu.addItem(item)
                 }
                 forkItem.submenu = submenu

@@ -39,7 +39,12 @@ struct ACPTranscriptRowContentTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
         let targets: [ACPSessionForkTarget] = [
-            .init(id: "claude", displayName: "Claude", isSameAgent: true)
+            .init(
+                id: "claude",
+                displayName: "Claude",
+                logoAssetName: "agent-claude",
+                isSameAgent: true
+            )
         ]
 
         func row(isForkEligible: Bool) -> ACPTranscriptRowContent {
@@ -73,12 +78,26 @@ struct ACPTranscriptRowContentTests {
             stableId: "s1", message: msg, contentMaxWidth: 800,
             typography: .default, trustedImageRoot: nil,
             isForkEligible: true,
-            forkTargets: [.init(id: "claude", displayName: "Claude", isSameAgent: true)])
+            forkTargets: [
+                .init(
+                    id: "claude",
+                    displayName: "Claude",
+                    logoAssetName: "agent-claude",
+                    isSameAgent: true
+                )
+            ])
         let b = ACPTranscriptRowContent.equalityKey(
             stableId: "s1", message: msg, contentMaxWidth: 800,
             typography: .default, trustedImageRoot: nil,
             isForkEligible: true,
-            forkTargets: [.init(id: "codex", displayName: "Codex", isSameAgent: true)])
+            forkTargets: [
+                .init(
+                    id: "codex",
+                    displayName: "Codex",
+                    logoAssetName: "agent-codex",
+                    isSameAgent: true
+                )
+            ])
         #expect(a != b)
     }
 

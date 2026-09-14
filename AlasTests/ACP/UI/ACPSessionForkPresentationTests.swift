@@ -22,14 +22,19 @@ struct ACPSessionForkPresentationTests {
         let targets = ACPForkTargetPolicy.targets(
             sourceAgentID: "codex",
             enabledAgents: [
-                .init(id: "claude", displayName: "Claude"),
-                .init(id: "gemini", displayName: "Gemini"),
+                .init(id: "claude", displayName: "Claude", logoAssetName: "agent-claude"),
+                .init(id: "gemini", displayName: "Gemini", logoAssetName: "agent-gemini"),
             ],
-            sourceAgent: .init(id: "codex", displayName: "Codex"),
+            sourceAgent: .init(
+                id: "codex",
+                displayName: "Codex",
+                logoAssetName: "agent-codex"
+            ),
             catalogAgentIDs: ["claude", "gemini", "codex"]
         )
         #expect(targets.map(\.id) == ["codex", "claude", "gemini"])
         #expect(targets.first?.isSameAgent == true)
+        #expect(targets.first?.logoAssetName == "agent-codex")
     }
 
     @Test("message menu only offers fork for eligible rows")

@@ -597,10 +597,18 @@ final class AppState {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
             enabledAgents: agentRegistry.enabled().map {
-                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+                ACPForkAgentOption(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    logoAssetName: $0.builtinLogoAssetName
+                )
             },
             sourceAgent: agentRegistry.agents.first(where: { $0.id == sourceAgentID }).map {
-                ACPForkAgentOption(id: $0.id, displayName: $0.displayName)
+                ACPForkAgentOption(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    logoAssetName: $0.builtinLogoAssetName
+                )
             },
             catalogAgentIDs: ACPLaunchCatalog.specs.map(\.agentID)
         )

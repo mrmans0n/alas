@@ -91,15 +91,20 @@ struct ACPSessionForkPolicyTests {
         let targets = ACPForkTargetPolicy.targets(
             sourceAgentID: "claude",
             enabledAgents: [
-                .init(id: "claude", displayName: "Claude"),
-                .init(id: "claude", displayName: "Custom duplicate")
+                .init(id: "claude", displayName: "Claude", logoAssetName: "agent-claude"),
+                .init(id: "claude", displayName: "Custom duplicate", logoAssetName: nil)
             ],
             sourceAgent: nil,
             catalogAgentIDs: ["claude"]
         )
 
         #expect(targets == [
-            .init(id: "claude", displayName: "Claude", isSameAgent: true)
+            .init(
+                id: "claude",
+                displayName: "Claude",
+                logoAssetName: "agent-claude",
+                isSameAgent: true
+            )
         ])
     }
 
