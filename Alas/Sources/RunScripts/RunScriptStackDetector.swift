@@ -76,13 +76,13 @@ enum RunScriptStackDetector {
                     hasPytest: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "pytest",
-                        includeOptionalDependencies: pythonRunner != .bare,
+                        includeOptionalDependencies: false,
                         includeDependencyGroups: pythonRunner != .bare
                     ),
                     hasRuff: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "ruff",
-                        includeOptionalDependencies: pythonRunner != .bare,
+                        includeOptionalDependencies: false,
                         includeDependencyGroups: pythonRunner != .bare
                     )
                 ))
@@ -768,7 +768,11 @@ enum RunScriptStackDetector {
         // A commented-out `.executableTarget` must not count — Package.swift
         // is Swift source, so `//`/`/* */` comments are as valid here as
         // anywhere else.
-        let uncommented = stripInactiveSwiftConditionalBranches(stripCStyleComments(manifest))
+        let languageVersion = swiftToolsVersion(in: manifest) ?? currentSwiftLanguageVersion
+        let uncommented = stripInactiveSwiftConditionalBranches(
+            stripCStyleComments(manifest),
+            swiftLanguageVersion: languageVersion
+        )
         let executableProducts = swiftExecutableProducts(in: uncommented)
         let executableTargetNames = swiftExecutableTargetNames(in: uncommented)
         let legacyTargetNames = swiftLegacyExecutableTargetNames(in: uncommented)
@@ -872,7 +876,24 @@ enum RunScriptStackDetector {
         return ranges
     }
 
-    private static func stripInactiveSwiftConditionalBranches(_ swift: String) -> String {
+    private static func swiftToolsVersion(in manifest: String) -> (major: Int, minor: Int)? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?m)^\s*//\s*swift-tools-version:\s*([0-9]+)(?:\.([0-9]+))?"#) else { return nil }
+        let range = NSRange(manifest.startIndex..., in: manifest)
+        guard let match = regex.firstMatch(in: manifest, range: range),
+              let majorRange = Range(match.range(at: 1), in: manifest)
+        else { return nil }
+        let minor: Int
+        if match.range(at: 2).location != NSNotFound,
+           let minorRange = Range(match.range(at: 2), in: manifest)
+        {
+            minor = Int(manifest[minorRange]) ?? 0
+        } else {
+            minor = 0
+        }
+        return (Int(manifest[majorRange]) ?? 0, minor)
+    }
+
+    private static func stripInactiveSwiftConditionalBranches(_ swift: String, swiftLanguageVersion: (major: Int, minor: Int)) -> String {
         struct Frame {
             let parentActive: Bool
             var active: Bool
@@ -885,13 +906,13 @@ enum RunScriptStackDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#if") {
                 let parent = isActive()
-                let condition = swiftConditionIsActive(conditionText)
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
                 stack.append(.init(parentActive: parent, active: parent && condition, branchTaken: condition))
                 continue
             }
             if let conditionText = swiftConditionalDirectiveArgument(trimmed, keyword: "#elseif") {
                 guard !stack.isEmpty else { continue }
-                let condition = swiftConditionIsActive(conditionText)
+                let condition = swiftConditionIsActive(conditionText, swiftLanguageVersion: swiftLanguageVersion)
                 var frame = stack.removeLast()
                 frame.active = frame.parentActive && !frame.branchTaken && condition
                 frame.branchTaken = frame.branchTaken || condition
@@ -917,18 +938,18 @@ enum RunScriptStackDetector {
         return output.joined(separator: "\n")
     }
 
-    private static func swiftConditionIsActive(_ condition: String) -> Bool {
+    private static func swiftConditionIsActive(_ condition: String, swiftLanguageVersion: (major: Int, minor: Int)) -> Bool {
         let trimmed = stripBalancedOuterParentheses(condition.trimmingCharacters(in: .whitespaces))
         let orParts = splitSwiftCondition(trimmed, by: "||")
         if orParts.count > 1 {
-            return orParts.contains { swiftConditionIsActive($0) }
+            return orParts.contains { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
         }
         let andParts = splitSwiftCondition(trimmed, by: "&&")
         if andParts.count > 1 {
-            return andParts.allSatisfy { swiftConditionIsActive($0) }
+            return andParts.allSatisfy { swiftConditionIsActive($0, swiftLanguageVersion: swiftLanguageVersion) }
         }
         if trimmed.hasPrefix("!") {
-            return !swiftConditionIsActive(String(trimmed.dropFirst()))
+            return !swiftConditionIsActive(String(trimmed.dropFirst()), swiftLanguageVersion: swiftLanguageVersion)
         }
         if trimmed == "true" { return true }
         if trimmed == "false" { return false }
@@ -939,7 +960,7 @@ enum RunScriptStackDetector {
             return architecture == currentSwiftArchitecture
         }
         if let condition = swiftVersionCondition(trimmed, function: "swift") {
-            return swiftVersion(currentSwiftLanguageVersion, satisfies: condition)
+            return swiftVersion(swiftLanguageVersion, satisfies: condition)
         }
         if let condition = swiftVersionCondition(trimmed, function: "compiler") {
             return swiftVersion(currentSwiftCompilerVersion, satisfies: condition)
@@ -1322,7 +1343,7 @@ enum RunScriptStackDetector {
     }
 
     private static func rakefileDeclaresTask(_ rakefile: String, task: String) -> Bool {
-        let stripped = stripHashComments(rakefile)
+        let stripped = stripRubyHeredocs(stripHashComments(rakefile))
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
         guard let taskRegex = try? NSRegularExpression(
             pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)"#
@@ -1348,6 +1369,28 @@ enum RunScriptStackDetector {
             }
         }
         return false
+    }
+
+    private static func stripRubyHeredocs(_ ruby: String) -> String {
+        guard let heredocRegex = try? NSRegularExpression(pattern: #"<<[-~]?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#) else { return ruby }
+        var output: [String] = []
+        var terminator: String?
+        for line in ruby.components(separatedBy: .newlines) {
+            if let currentTerminator = terminator {
+                output.append("")
+                if line.trimmingCharacters(in: .whitespaces) == currentTerminator {
+                    terminator = nil
+                }
+                continue
+            }
+            output.append(line)
+            let range = NSRange(line.startIndex..., in: line)
+            guard let match = heredocRegex.firstMatch(in: line, range: range),
+                  let terminatorRange = Range(match.range(at: 1), in: line)
+            else { continue }
+            terminator = String(line[terminatorRange])
+        }
+        return output.joined(separator: "\n")
     }
 
     private static func rubyBlockOpens(_ trimmedLine: String) -> Bool {

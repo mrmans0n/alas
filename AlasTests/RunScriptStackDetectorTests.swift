@@ -751,6 +751,27 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageUsesManifestToolsVersionForSwiftConditions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            // swift-tools-version: 6.0
+            import PackageDescription
+            #if swift(<6.0)
+            let targets: [Target] = [.executableTarget(name: "Tool")]
+            #else
+            let targets: [Target] = [.target(name: "Lib")]
+            #endif
+            let package = Package(name: "Lib", targets: targets)
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageIgnoresExecutableTargetsInsideStringLiterals() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1062,6 +1083,9 @@ struct RunScriptStackDetectorTests {
         try write("Rakefile", "namespace(:foo) {\n  task :test\n}\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
+        try write("Rakefile", "docs = <<~TEXT\n  task :test\nTEXT\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
 
@@ -1140,6 +1164,27 @@ struct RunScriptStackDetectorTests {
     @Test func pythonBareRunnerIgnoresOptionalExtrasForToolAvailability() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [project.optional-dependencies]
+            dev = ["pytest", "ruff"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonUVRunnerIgnoresOptionalExtrasForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
         try write(
             "pyproject.toml",
             """
