@@ -402,28 +402,29 @@ enum RunScriptStackDetector {
     /// `default-run` to resolve the ambiguity. Cargo refuses to guess when a
     /// package declares more than one bin target and none is designated.
     private static func cargoHasUnambiguousBinary(cargoToml: String, hasRootMain: Bool, binTargetPaths: Set<String>) -> Bool {
+        let structuralToml = stripTomlMultilineStrings(cargoToml)
         var binaries: [String: Bool] = [:]
         func addBinary(name: String?, runnableByDefault: Bool) {
             guard let name, !name.isEmpty else { return }
             binaries[name] = runnableByDefault
         }
-        let automaticBinariesEnabled = cargoPackageBool(cargoToml, key: "autobins") ?? true
+        let automaticBinariesEnabled = cargoPackageBool(structuralToml, key: "autobins") ?? true
         if automaticBinariesEnabled {
             if hasRootMain {
-                addBinary(name: cargoPackageName(cargoToml), runnableByDefault: true)
+                addBinary(name: cargoPackageName(structuralToml), runnableByDefault: true)
             }
             for path in binTargetPaths {
                 addBinary(name: cargoBinName(fromPath: path), runnableByDefault: true)
             }
         }
 
-        let defaultFeatures = cargoDefaultFeatures(cargoToml)
-        for declaredBin in cargoDeclaredBins(cargoToml) {
+        let defaultFeatures = cargoDefaultFeatures(structuralToml)
+        for declaredBin in cargoDeclaredBins(structuralToml) {
             binaries[declaredBin.name] = declaredBin.requiredFeatures.isSubset(of: defaultFeatures)
         }
 
         guard !binaries.isEmpty else { return false }
-        if let defaultRun = cargoPackageString(cargoToml, key: "default-run") {
+        if let defaultRun = cargoPackageString(structuralToml, key: "default-run") {
             return binaries[defaultRun] == true
         }
         return binaries.count == 1 && binaries.values.first == true
@@ -439,6 +440,32 @@ enum RunScriptStackDetector {
             return suffix.components(separatedBy: "/").first
         }
         return nil
+    }
+
+    private static func stripTomlMultilineStrings(_ text: String) -> String {
+        var stripped = ""
+        stripped.reserveCapacity(text.count)
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index...].hasPrefix("'''") || text[index...].hasPrefix("\"\"\"") {
+                let delimiter = String(text[index...].prefix(3))
+                for _ in 0..<3 { stripped.append(" ") }
+                index = text.index(index, offsetBy: 3)
+                while index < text.endIndex {
+                    if text[index...].hasPrefix(delimiter) {
+                        for _ in 0..<3 { stripped.append(" ") }
+                        index = text.index(index, offsetBy: 3)
+                        break
+                    }
+                    stripped.append(text[index] == "\n" ? "\n" : " ")
+                    index = text.index(after: index)
+                }
+                continue
+            }
+            stripped.append(text[index])
+            index = text.index(after: index)
+        }
+        return stripped
     }
 
     private static func zigBuildSteps(_ buildZig: String) -> Set<String> {
@@ -1067,7 +1094,22 @@ enum RunScriptStackDetector {
     }
 
     private static func goBuildTagIsEnabled(_ tag: Substring) -> Bool {
-        ["darwin", "unix", currentGoArchitecture, "cgo", "gc"].contains(tag) || goReleaseTags.contains(String(tag))
+        let tag = String(tag)
+        return goCoreBuildTags.contains(tag) || currentGoArchitectureFeatureTags.contains(tag) || goReleaseTags.contains(tag)
+    }
+
+    private static var goCoreBuildTags: Set<String> {
+        ["darwin", "unix", String(currentGoArchitecture), "cgo", "gc"]
+    }
+
+    private static var currentGoArchitectureFeatureTags: Set<String> {
+#if arch(arm64)
+        ["arm64.v8.0"]
+#elseif arch(x86_64)
+        ["amd64.v1"]
+#else
+        []
+#endif
     }
 
     private static let goReleaseTags = Set((1...25).map { "go1.\($0)" })

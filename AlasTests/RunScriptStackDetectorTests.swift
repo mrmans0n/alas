@@ -373,6 +373,27 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
     }
 
+    @Test func cargoIgnoresBinTablesInsideMultilineStrings() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "library"
+
+            [package.metadata.docs]
+            example = '''
+            [[bin]]
+            name = "fake"
+            '''
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -796,6 +817,20 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
         try write("main.go", "//go:build !gc\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goTreatsDefaultArchitectureFeatureTagsAsEnabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        #if arch(arm64)
+        let featureTag = "arm64.v8.0"
+        #else
+        let featureTag = "amd64.v1"
+        #endif
+        try write("main.go", "//go:build !\(featureTag)\n\npackage main\n\nfunc main() {}\n", in: root)
 
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
