@@ -14,6 +14,39 @@ private enum ACPMirrorRefreshPolicy {
     static let inactivePollNanos: UInt64 = 30_000_000_000
 }
 
+private struct ACPMirrorMessageDelta: Sendable {
+    let previousCount: Int
+    let changedRange: Range<Int>?
+
+    static func compare(
+        previous: [ACPMirrorMessageFingerprint],
+        current: [ACPMirrorMessageFingerprint]
+    ) -> Self {
+        var prefixCount = 0
+        let sharedCount = min(previous.count, current.count)
+        while prefixCount < sharedCount,
+              previous[prefixCount] == current[prefixCount] {
+            prefixCount += 1
+        }
+        guard prefixCount != previous.count || prefixCount != current.count else {
+            return Self(previousCount: previous.count, changedRange: nil)
+        }
+
+        var suffixCount = 0
+        while suffixCount < sharedCount - prefixCount,
+              previous[previous.count - suffixCount - 1] == current[current.count - suffixCount - 1] {
+            suffixCount += 1
+        }
+        let changedEnd = max(previous.count - suffixCount, current.count - suffixCount)
+        return Self(previousCount: previous.count, changedRange: prefixCount..<changedEnd)
+    }
+}
+
+private struct ACPMirrorSnapshotComparison: Sendable {
+    let snapshot: [ACPMirrorMessageFingerprint]
+    let delta: ACPMirrorMessageDelta?
+}
+
 private struct ACPForkFallbackPersistenceError: LocalizedError {
     let underlying: any Error
 
@@ -514,6 +547,7 @@ final class ACPSessionManager: ObservableObject {
     private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
     private var inFlightMirrorRefreshes: [ACPSession.ID: Task<Void, Never>] = [:]
     private var dirtyMirrorRefreshes: Set<ACPSession.ID> = []
+    private var mirrorMessageSnapshots: [ACPSession.ID: [ACPMirrorMessageFingerprint]] = [:]
     // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
     private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
     private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1201,6 +1235,7 @@ final class ACPSessionManager: ObservableObject {
         pendingBackfillOlderMessages[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
+        mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
@@ -1259,6 +1294,7 @@ final class ACPSessionManager: ObservableObject {
         pendingBackfillOlderMessages[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
+        mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
@@ -2920,6 +2956,7 @@ extension ACPSessionManager {
         mirrorPoll.removeValue(forKey: sessionId)?.cancel()
         inFlightMirrorRefreshes.removeValue(forKey: sessionId)?.cancel()
         dirtyMirrorRefreshes.remove(sessionId)
+        mirrorMessageSnapshots.removeValue(forKey: sessionId)
     }
 
     /// Cancel every background task owned by this manager — mirror
@@ -3029,13 +3066,27 @@ extension ACPSessionManager {
         } catch {
             return
         }
+        let previousSnapshot = mirrorMessageSnapshots[sessionId]
+        let comparison = await Task.detached(priority: .userInitiated) {
+            let snapshot = result.messages.map(\.mirrorFingerprint)
+            return ACPMirrorSnapshotComparison(
+                snapshot: snapshot,
+                delta: previousSnapshot.map {
+                    ACPMirrorMessageDelta.compare(previous: $0, current: snapshot)
+                }
+            )
+        }.value
         guard !Task.isCancelled, sessions[sessionId] === session else { return }
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         session.restoreQueue(result.queue)
         scheduleScheduledQueueReconnect(sessionId: sessionId)
+        mirrorMessageSnapshots[sessionId] = comparison.snapshot
         guard !result.wireMessages.isEmpty else { return }
+        if applyMirrorSnapshotToHydratedTranscript(result.messages, delta: comparison.delta, in: session) {
+            return
+        }
         let tailStart = replaceTranscriptWithTail(
             result.messages,
             in: session,
@@ -3045,6 +3096,72 @@ extension ACPSessionManager {
             olderMessages: Array(result.messages.prefix(tailStart)),
             sessionId: sessionId,
             session: session)
+    }
+
+    /// Once the initial tail-first load has finished, keep the full transcript
+    /// mounted across mirror refreshes. Replacing it with the tail and
+    /// backfilling the prefix again makes the task pill disappear whenever the
+    /// current plan sits outside the tail window, and briefly collapses the
+    /// scroll document on every persisted streaming update.
+    private func applyMirrorSnapshotToHydratedTranscript(
+        _ messages: [ACPHydratedMessage],
+        delta: ACPMirrorMessageDelta?,
+        in session: ACPSession
+    ) -> Bool {
+        let transcript = session.transcript
+        guard transcript.messageIndexOffset == 0,
+              !transcript.messages.isEmpty,
+              !transcript.isBackfillingOlderMessages
+        else { return false }
+
+        let existing = transcript.messages
+        guard let delta, delta.previousCount == existing.count else { return false }
+        guard let changedRange = delta.changedRange else { return true }
+
+        if messages.count == existing.count {
+            for index in changedRange where messages.indices.contains(index) {
+                let message = messages[index].wire.toMessage(preservingIdentityFrom: transcript.messages[index])
+                if message != transcript.messages[index]
+                    || transcript.createdAt(forMessageAt: index) != messages[index].createdAt {
+                    session.replaceTranscriptMessage(
+                        at: index,
+                        with: message,
+                        createdAt: messages[index].createdAt
+                    )
+                }
+            }
+            return true
+        }
+
+        if messages.count > existing.count, changedRange.lowerBound >= existing.count {
+            for index in existing.count..<messages.count {
+                session.appendMirroredTranscriptMessage(
+                    messages[index].wire.toMessage(),
+                    createdAt: messages[index].createdAt
+                )
+            }
+            return true
+        }
+
+        var refreshed: [ACPMessage] = []
+        refreshed.reserveCapacity(messages.count)
+        for (index, hydrated) in messages.enumerated() {
+            if existing.indices.contains(index) {
+                refreshed.append(hydrated.wire.toMessage(preservingIdentityFrom: existing[index]))
+            } else {
+                refreshed.append(hydrated.wire.toMessage())
+            }
+        }
+        let createdAts = messages.map(\.createdAt)
+        let timestampsUnchanged = messages.count == existing.count
+            && createdAts.indices.allSatisfy { index in
+                transcript.createdAt(forMessageAt: index) == createdAts[index]
+            }
+        if refreshed == existing, timestampsUnchanged {
+            return true
+        }
+        session.replaceTranscriptMessages(refreshed, createdAts: createdAts)
+        return true
     }
 
     private func syncMirrorSessionMetadata(

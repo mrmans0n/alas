@@ -190,13 +190,16 @@ final class ACPTranscript: ObservableObject {
         messages.append(message)
     }
 
-    func replaceMessage(at index: Int, with message: ACPMessage) {
+    func replaceMessage(at index: Int, with message: ACPMessage, createdAt: Date? = nil) {
         let old = messages[index]
         let oldStableId = stableId(for: old)
         let newStableId = stableId(for: message)
         if oldStableId != newStableId {
             messageCreatedAts[newStableId] = messageCreatedAts[oldStableId] ?? Date()
             messageCreatedAts.removeValue(forKey: oldStableId)
+        }
+        if let createdAt {
+            messageCreatedAts[newStableId] = createdAt
         }
         pendingMessagesMutation = .replace(index: index, old: old, new: message)
         messages[index] = message

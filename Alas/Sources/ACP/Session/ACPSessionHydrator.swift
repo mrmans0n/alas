@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Off-main hydration of an ACP session's persisted state. Owns its own
@@ -57,9 +58,14 @@ actor ACPSessionHydrator {
         messages.reserveCapacity(stored.count)
         for m in stored {
             if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
+                let createdAt = Date(timeIntervalSince1970: TimeInterval(m.createdAt))
                 messages.append(.init(
                     wire: w,
-                    createdAt: Date(timeIntervalSince1970: TimeInterval(m.createdAt))
+                    createdAt: createdAt,
+                    mirrorFingerprint: .init(
+                        payloadDigest: Data(SHA256.hash(data: m.payload)),
+                        createdAt: createdAt
+                    )
                 ))
                 if storedDraft != nil,
                    sawRecordedSubmittedDraft,
@@ -149,7 +155,13 @@ struct HydrationResult: Sendable {
     }
 }
 
+struct ACPMirrorMessageFingerprint: Sendable, Equatable {
+    let payloadDigest: Data
+    let createdAt: Date
+}
+
 struct ACPHydratedMessage: Sendable {
     let wire: ACPMessageWire
     let createdAt: Date
+    let mirrorFingerprint: ACPMirrorMessageFingerprint
 }
