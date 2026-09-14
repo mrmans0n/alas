@@ -61,6 +61,33 @@ struct CodeTextViewCompletionTests {
         #expect(events == ["completion"])
     }
 
+    @Test("stepping over an inner closing pair re-evaluates signature help without selection dismissal")
+    func stepOverClosingPairReevaluatesSignatureHelp() {
+        let textView = makeTextView("outer(inner(a))")
+        textView.setSelectedRange(NSRange(location: 13, length: 0)) // outer(inner(a|))
+        var selectionDismissals = 0
+        var signatureReevaluations = 0
+        textView.signatureHelpSelectionChangeHandler = {
+            selectionDismissals += 1
+        }
+        textView.signatureHelpChangeHandler = {
+            signatureReevaluations += 1
+        }
+
+        textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(textView.string == "outer(inner(a))")
+        #expect(textView.selectedRange() == NSRange(location: 14, length: 0))
+        #expect(selectionDismissals == 0)
+        #expect(signatureReevaluations == 1)
+        #expect(SignatureHelpFeature.contentChangeContext(
+            text: textView.string,
+            caret: textView.selectedRange().location,
+            previousCallStart: 11,
+            isVisible: true
+        )?.triggerKind == .contentChange)
+    }
+
     @Test func insertNewlineRoutesAcceptSelectedAndDoesNotMutateTextWhenHandled() {
         let textView = makeTextView("let value = open")
         var actions: [CodeTextView.CompletionKeyAction] = []

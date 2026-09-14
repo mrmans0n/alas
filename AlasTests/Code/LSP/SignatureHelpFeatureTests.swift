@@ -78,7 +78,7 @@ struct SignatureHelpFeatureTests {
         try await client.initialize()
         let initialize = try #require(transport.sent.first)
         #expect(initialize.contains(#""contextSupport":true"#))
-        #expect(initialize.contains(#""activeSignatureHelpSupport":true"#))
+        #expect(!initialize.contains(#""activeSignatureHelpSupport""#))
         #expect(initialize.contains(#""activeParameterSupport":true"#))
         let help = try await client.signatureHelp(
             uri: "file:///tmp/f.swift",
@@ -99,7 +99,12 @@ struct SignatureHelpFeatureTests {
         #expect(request.contains(#""triggerKind":2"#))
         #expect(request.contains(#""triggerCharacter":",""#))
         #expect(request.contains(#""isRetrigger":true"#))
-        #expect(request.contains(#""activeSignatureHelp":{"signatures":[{"label":"f(a)"#))
+        let requestObject = try #require(JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any])
+        let requestParams = try #require(requestObject["params"] as? [String: Any])
+        let requestContext = try #require(requestParams["context"] as? [String: Any])
+        let activeHelp = try #require(requestContext["activeSignatureHelp"] as? [String: Any])
+        #expect(activeHelp["activeSignature"] as? Int == 0)
+        #expect((activeHelp["signatures"] as? [[String: Any]])?.first?["label"] as? String == "f(a)")
         #expect(help?.signatures.map(\.label) == ["f(a)"])
         #expect(await client.signatureHelpTriggerCharacters == ["("])
         #expect(await client.signatureHelpRetriggerCharacters == [","])
