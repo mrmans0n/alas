@@ -91,6 +91,9 @@ struct RunScriptStackContext: Equatable, Sendable {
     var hasRakeTestTask = false
     var hasRubocopConfig = false
     var hasRequirementsFile = false
+    /// pyproject.toml exists, so the default bare-Python install command can
+    /// install the project itself with `python3 -m pip install -e .`.
+    var hasPyprojectFile = false
     /// Whether pyproject.toml mentions pytest/ruff anywhere — a dependency
     /// line, an optional-dependency group, or a `[tool.pytest]`/`[tool.ruff]`
     /// config section. A runtime-only library that never mentions either
@@ -145,6 +148,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasRakeTestTask: Bool = false,
         hasRubocopConfig: Bool = false,
         hasRequirementsFile: Bool = false,
+        hasPyprojectFile: Bool = false,
         hasPytest: Bool = false,
         hasRuff: Bool = false,
         hasPHPUnit: Bool = false,
@@ -169,6 +173,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.hasRakeTestTask = hasRakeTestTask
         self.hasRubocopConfig = hasRubocopConfig
         self.hasRequirementsFile = hasRequirementsFile
+        self.hasPyprojectFile = hasPyprojectFile
         self.hasPytest = hasPytest
         self.hasRuff = hasRuff
         self.hasPHPUnit = hasPHPUnit
@@ -247,7 +252,7 @@ enum RunScriptStackCatalog {
             let python = context.pythonRunner == .bare ? "python3" : "python"
             let manage = "\(run)\(python) manage.py"
             return [
-                .init("install", "Install", install, checked: context.pythonRunner != .bare || context.hasRequirementsFile),
+                .init("install", "Install", install, checked: context.pythonRunner != .bare || context.hasRequirementsFile || context.hasPyprojectFile),
                 .init("dev", "Dev server", "\(manage) runserver", onExit: .keep, endpoint: "http://localhost:8000"),
                 .init("migrate", "Migrate", "\(manage) migrate"),
                 .init("test", "Test", "\(manage) test"),

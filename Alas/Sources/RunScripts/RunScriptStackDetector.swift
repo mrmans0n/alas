@@ -72,12 +72,17 @@ enum RunScriptStackDetector {
                 add(stack, .init(
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
+                    hasPyprojectFile: has("pyproject.toml"),
                     hasPytest: pyprojectDeclaresPythonTool(pyproject, tool: "pytest"),
                     hasRuff: pyprojectDeclaresPythonTool(pyproject, tool: "ruff")
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
-                add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
+                add(stack, .init(
+                    pythonRunner: pythonRunner,
+                    hasRequirementsFile: hasRequirements,
+                    hasPyprojectFile: has("pyproject.toml")
+                ))
             case .gradle:
                 guard has("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts") else { continue }
                 let buildFiles = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
@@ -385,46 +390,42 @@ enum RunScriptStackDetector {
     /// `default-run` to resolve the ambiguity. Cargo refuses to guess when a
     /// package declares more than one bin target and none is designated.
     private static func cargoHasUnambiguousBinary(cargoToml: String, hasRootMain: Bool, binTargetPaths: Set<String>) -> Bool {
-        var binaryPaths = Set<String>()
+        var binaries: [String: Bool] = [:]
+        func addBinary(name: String?, runnableByDefault: Bool) {
+            guard let name, !name.isEmpty else { return }
+            binaries[name] = runnableByDefault
+        }
         let automaticBinariesEnabled = cargoPackageBool(cargoToml, key: "autobins") ?? true
         if automaticBinariesEnabled {
-            if hasRootMain { binaryPaths.insert("src/main.rs") }
-            binaryPaths.formUnion(binTargetPaths)
+            if hasRootMain {
+                addBinary(name: cargoPackageName(cargoToml), runnableByDefault: true)
+            }
+            for path in binTargetPaths {
+                addBinary(name: cargoBinName(fromPath: path), runnableByDefault: true)
+            }
         }
 
         for declaredBin in cargoDeclaredBins(cargoToml) {
-            if declaredBin.requiredFeatures {
-                if let path = declaredBin.path {
-                    binaryPaths.remove(path)
-                } else {
-                    binaryPaths.remove("src/bin/\(declaredBin.name).rs")
-                    binaryPaths.remove("src/bin/\(declaredBin.name)/main.rs")
-                    if hasRootMain, cargoPackageName(cargoToml) == declaredBin.name {
-                        binaryPaths.remove("src/main.rs")
-                    }
-                }
-                continue
-            }
-            if let path = declaredBin.path {
-                binaryPaths.insert(path)
-            } else if binTargetPaths.contains("src/bin/\(declaredBin.name).rs") {
-                binaryPaths.insert("src/bin/\(declaredBin.name).rs")
-            } else if binTargetPaths.contains("src/bin/\(declaredBin.name)/main.rs") {
-                binaryPaths.insert("src/bin/\(declaredBin.name)/main.rs")
-            } else if hasRootMain, cargoPackageName(cargoToml) == declaredBin.name {
-                binaryPaths.insert("src/main.rs")
-            } else {
-                // A declared target without an inferred source path still is
-                // a distinct binary target from Cargo's perspective.
-                binaryPaths.insert("declared:\(declaredBin.name)")
-            }
+            binaries[declaredBin.name] = !declaredBin.requiredFeatures
         }
 
-        guard !binaryPaths.isEmpty else { return false }
-        guard binaryPaths.count == 1 else {
-            return cargoPackageString(cargoToml, key: "default-run") != nil
+        guard !binaries.isEmpty else { return false }
+        if let defaultRun = cargoPackageString(cargoToml, key: "default-run") {
+            return binaries[defaultRun] == true
         }
-        return true
+        return binaries.count == 1 && binaries.values.first == true
+    }
+
+    private static func cargoBinName(fromPath path: String) -> String? {
+        guard path.hasPrefix("src/bin/") else { return nil }
+        let suffix = String(path.dropFirst("src/bin/".count))
+        if suffix.hasSuffix(".rs"), !suffix.contains("/") {
+            return String(suffix.dropLast(".rs".count))
+        }
+        if suffix.hasSuffix("/main.rs") {
+            return suffix.components(separatedBy: "/").first
+        }
+        return nil
     }
 
     private static func zigBuildSteps(_ buildZig: String) -> Set<String> {

@@ -246,6 +246,33 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
     }
 
+    @Test func cargoDefaultRunMustNotSelectFeatureGatedBinary() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tools"
+            default-run = "gated"
+
+            [[bin]]
+            name = "gated"
+            path = "src/bin/gated.rs"
+            required-features = ["cli"]
+
+            [[bin]]
+            name = "plain"
+            path = "src/bin/plain.rs"
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin"), withIntermediateDirectories: true)
+        try touch("src/bin/gated.rs", "src/bin/plain.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -706,6 +733,14 @@ struct RunScriptStackDetectorTests {
         let stacks = detect(root)
         #expect(stacks[.django] != nil)
         #expect(stacks[.python] == nil)
+    }
+
+    @Test func djangoPreservesPyprojectContext() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("manage.py", "pyproject.toml", in: root)
+
+        #expect(detect(root)[.django]?.hasPyprojectFile == true)
     }
 
     /// A runtime-only library that never mentions pytest or ruff most likely
