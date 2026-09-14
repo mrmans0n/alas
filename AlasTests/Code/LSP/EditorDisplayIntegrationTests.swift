@@ -240,6 +240,49 @@ struct EditorDisplayIntegrationTests {
         #expect(layout.warningToolTip(at: point, in: f.view)?.contains("Zero width") == true)
     }
 
+    @Test func diagnosticBatchRebuildsProjectionOnceAndPreservesSourceState() async throws {
+        final class Counts: @unchecked Sendable {
+            var sourceNotifications = 0
+            var projectionRebuilds = 0
+        }
+
+        let source = String(repeating: "x ", count: 200)
+        let f = try await Fixture(source)
+        defer { f.remove() }
+        f.view.setSourceSelectedRange(NSRange(location: 120, length: 17))
+        let expectedSelection = f.view.sourceSelectedRange
+        let diagnostics = try (0..<200).map { index in
+            try JSONDecoder().decode(LSPDiagnostic.self, from: Data("""
+            {"range":{"start":{"line":0,"character":\(index * 2)},"end":{"line":0,"character":\(index * 2 + 1)}},"severity":1,"message":"Problem \(index)"}
+            """.utf8))
+        }
+        let counts = Counts()
+        let center = NotificationCenter.default
+        let sourceToken = center.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: f.buffer.storage, queue: .main) { _ in
+            counts.sourceNotifications += 1
+        }
+        let projectionToken = center.addObserver(forName: .editorDisplayProjectionDidChange, object: f.view, queue: .main) { _ in
+            counts.projectionRebuilds += 1
+        }
+        defer {
+            center.removeObserver(sourceToken)
+            center.removeObserver(projectionToken)
+        }
+
+        DiagnosticsFeature().apply(diagnostics, to: f.buffer.storage, theme: try ThemeStore().current)
+
+        #expect(counts.sourceNotifications == 1)
+        #expect(counts.projectionRebuilds == 1)
+        #expect(f.buffer.storage.string == source)
+        #expect(f.view.sourceString == source)
+        #expect(f.view.sourceSelectedRange == expectedSelection)
+        let adapter = try #require(f.view.displayAdapter)
+        for offset in [0, 198, 398] {
+            let range = try #require(adapter.displayRange(forSource: NSRange(location: offset, length: 1)))
+            #expect(adapter.document.storage.attribute(.underlineStyle, at: range.location, effectiveRange: nil) as? Int != nil)
+        }
+    }
+
     @Test func sourceAttributesAndSemanticColorsExcludeHintsAfterRebuild() async throws {
         let f = try await Fixture("alpha")
         defer { f.remove() }

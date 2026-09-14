@@ -325,6 +325,8 @@ jobs:
             -only-testing AlasTests/LSPMessagesTests \
             -only-testing AlasTests/LSPPositionCodecTests \
             -only-testing AlasTests/LSPTransportFramingTests \
+            -only-testing AlasTests/JSONRPCFramerBoundsTests \
+            -only-testing AlasTests/JSONRPCStdioFramingFailureTests \
             -only-testing AlasTests/ProcessTransportTerminationTests \
             -only-testing AlasTests/LSPClientLifecycleTests \
             -only-testing AlasTests/LSPServerRequestsTests \

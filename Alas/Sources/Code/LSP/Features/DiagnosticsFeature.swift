@@ -23,12 +23,14 @@ final class DiagnosticsFeature {
         current = diagnostics
         let editorTheme = EditorTheme(theme: theme)
         let full = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
         storage.removeAttribute(.underlineStyle, range: full)
         storage.removeAttribute(.underlineColor, range: full)
         for d in diagnostics {
             guard let nsr = Self.nsRange(for: d.range, in: storage.string) else { continue }
             storage.addAttributes(editorTheme.diagnosticAttributes(severity: d.severity), range: nsr)
         }
+        storage.endEditing()
         onChange?()
     }
 
