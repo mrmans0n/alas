@@ -68,19 +68,21 @@ enum RunScriptStackDetector {
                 // when there is no manage.py, the same way Rails/Ruby and
                 // Laravel/PHP defer to their framework-specific stack.
                 guard has("pyproject.toml"), !hasDjangoManage else { continue }
-                let pyproject = stripHashComments(contents("pyproject.toml") ?? "")
+                let pyproject = contents("pyproject.toml") ?? ""
                 add(stack, .init(
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
-                    hasPytest: pyproject.contains("pytest"),
-                    hasRuff: pyproject.contains("ruff")
+                    hasPytest: pyprojectDeclaresPythonTool(pyproject, tool: "pytest"),
+                    hasRuff: pyprojectDeclaresPythonTool(pyproject, tool: "ruff")
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
                 add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
             case .gradle:
                 guard has("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts") else { continue }
-                add(stack, .init(hasWrapper: entries.contains("gradlew")))
+                let buildFiles = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+                    .compactMap { contents($0) }
+                add(stack, .init(hasWrapper: entries.contains("gradlew"), gradleTasks: gradleDeclaredTasks(buildFiles.joined(separator: "\n"))))
             case .maven:
                 guard has("pom.xml") else { continue }
                 add(stack, .init(hasWrapper: entries.contains("mvnw")))
@@ -312,9 +314,26 @@ enum RunScriptStackDetector {
 
     private static func zigBuildSteps(_ buildZig: String) -> Set<String> {
         guard let regex = try? NSRegularExpression(pattern: #"\.step\s*\(\s*\"([^\"]+)\""#) else { return [] }
-        let range = NSRange(buildZig.startIndex..., in: buildZig)
-        return Set(regex.matches(in: buildZig, range: range).compactMap { match in
-            Range(match.range(at: 1), in: buildZig).map { String(buildZig[$0]) }
+        let stripped = stripCStyleComments(buildZig)
+        let range = NSRange(stripped.startIndex..., in: stripped)
+        return Set(regex.matches(in: stripped, range: range).compactMap { match in
+            Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
+        })
+    }
+
+    private static func gradleDeclaredTasks(_ gradleBuild: String) -> Set<String> {
+        let stripped = stripCStyleComments(gradleBuild)
+        let patterns = [
+            #"tasks\.(?:register|create|named)\s*\(\s*["']([^"']+)["']"#,
+            #"\btask\s*\(\s*["']([^"']+)["']"#,
+            #"(?m)^\s*task\s+([A-Za-z_][A-Za-z0-9_-]*)\b"#,
+        ]
+        return Set(patterns.flatMap { pattern -> [String] in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let range = NSRange(stripped.startIndex..., in: stripped)
+            return regex.matches(in: stripped, range: range).compactMap { match in
+                Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
+            }
         })
     }
 
@@ -726,6 +745,69 @@ enum RunScriptStackDetector {
         let before = line[line.startIndex..<hashIndex]
         guard before.filter({ $0 == "\"" }).count.isMultiple(of: 2) else { return String(line) }
         return String(before)
+    }
+
+    private static func pyprojectDeclaresPythonTool(_ pyproject: String, tool: String) -> Bool {
+        let stripped = stripHashComments(pyproject)
+        let escapedTool = NSRegularExpression.escapedPattern(for: tool)
+        if stripped.range(of: #"(?m)^\s*\[tool\."# + escapedTool + #"(\.|\])"#, options: .regularExpression) != nil {
+            return true
+        }
+        for section in tomlSections(stripped) {
+            let table = section.name
+            guard table == "project" || table == "build-system" || table.hasPrefix("project.optional-dependencies")
+                || table == "dependency-groups"
+            else { continue }
+            if tomlDependencyText(section.body, declares: tool) { return true }
+        }
+        return false
+    }
+
+    private static func tomlSections(_ toml: String) -> [(name: String, body: String)] {
+        let lines = toml.components(separatedBy: .newlines)
+        var sections: [(name: String, body: String)] = []
+        var currentName = ""
+        var currentLines: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
+                sections.append((currentName, currentLines.joined(separator: "\n")))
+                currentName = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+                currentLines = []
+            } else {
+                currentLines.append(line)
+            }
+        }
+        sections.append((currentName, currentLines.joined(separator: "\n")))
+        return sections
+    }
+
+    private static func tomlDependencyText(_ text: String, declares tool: String) -> Bool {
+        let escapedTool = NSRegularExpression.escapedPattern(for: tool)
+        guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\[(.*?)\]"#),
+              let inlineTableRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\{(.*?)\}"#),
+              let quotedDependencyRegex = try? NSRegularExpression(
+                  pattern: #"["']"# + escapedTool + #"([<>=~! ;,\[][^"']*)?["']"#
+              ),
+              let tableDependencyRegex = try? NSRegularExpression(pattern: #"(?m)^\s*["']?"# + escapedTool + #"["']?\s*="#)
+        else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        if tableDependencyRegex.firstMatch(in: text, range: range) != nil {
+            return true
+        }
+        let arrayMatches = arrayRegex.matches(in: text, range: range)
+        if arrayMatches.contains(where: { match in
+            guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
+            let body = String(text[bodyRange])
+            return quotedDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+        }) {
+            return true
+        }
+        return inlineTableRegex.matches(in: text, range: range).contains { match in
+            guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
+            let body = String(text[bodyRange])
+            return tableDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+        }
     }
 
     private static func stripHashComments(_ text: String) -> String {

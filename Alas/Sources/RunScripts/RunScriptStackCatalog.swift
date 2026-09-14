@@ -74,6 +74,9 @@ enum KotlinToolchainWrapper: Sendable, Hashable {
 struct RunScriptStackContext: Equatable, Sendable {
     /// A project-local wrapper (`gradlew`, `mvnw`) was found.
     var hasWrapper = false
+    /// Gradle task names confirmed from the build files. Nil means no build
+    /// file could be read; optional tasks stay unchecked.
+    var gradleTasks: Set<String>?
     var kotlinWrapper = KotlinToolchainWrapper.system
     var packageManager = JavaScriptPackageManager.npm
     /// `scripts` keys from package.json. Nil when no package.json was read,
@@ -130,6 +133,7 @@ struct RunScriptStackContext: Equatable, Sendable {
 
     init(
         hasWrapper: Bool = false,
+        gradleTasks: Set<String>? = nil,
         kotlinWrapper: KotlinToolchainWrapper = .system,
         packageManager: JavaScriptPackageManager = .npm,
         packageScripts: Set<String>? = nil,
@@ -152,6 +156,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasMakeCleanTarget: Bool = false
     ) {
         self.hasWrapper = hasWrapper
+        self.gradleTasks = gradleTasks
         self.kotlinWrapper = kotlinWrapper
         self.packageManager = packageManager
         self.packageScripts = packageScripts
@@ -246,10 +251,10 @@ enum RunScriptStackCatalog {
         case .gradle:
             let gradle = context.hasWrapper ? "./gradlew" : "gradle"
             return [
-                .init("build", "Build", "\(gradle) assemble"),
-                .init("test", "Test", "\(gradle) test"),
-                .init("check", "Check", "\(gradle) check"),
-                .init("clean", "Clean", "\(gradle) clean"),
+                .init("build", "Build", "\(gradle) assemble", checked: context.gradleTasks?.contains("assemble") ?? false),
+                .init("test", "Test", "\(gradle) test", checked: context.gradleTasks?.contains("test") ?? false),
+                .init("check", "Check", "\(gradle) check", checked: context.gradleTasks?.contains("check") ?? false),
+                .init("clean", "Clean", "\(gradle) clean", checked: context.gradleTasks?.contains("clean") ?? false),
             ]
         case .maven:
             let mvn = context.hasWrapper ? "./mvnw" : "mvn"

@@ -13,7 +13,9 @@ struct RunScriptStackCatalogTests {
         #expect(!actions.isEmpty)
         #expect(Set(actions.map(\.id)).count == actions.count)
         #expect(Set(actions.map(\.displayName)).count == actions.count)
-        #expect(actions.contains { $0.isCheckedByDefault })
+        if stack != .gradle {
+            #expect(actions.contains { $0.isCheckedByDefault })
+        }
         for action in actions {
             #expect(!action.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             let contents = RunScriptTemplate.contents(
@@ -39,6 +41,15 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.gradle, .init(hasWrapper: true))["build"]?.body == "./gradlew assemble")
         #expect(actions(.gradle)["build"]?.body == "gradle assemble")
         #expect(actions(.gradle)["test"]?.body == "gradle test")
+    }
+
+    @Test func gradleTasksAreUncheckedUnlessDeclared() {
+        #expect(actions(.gradle)["build"]?.isCheckedByDefault == false)
+        #expect(actions(.gradle)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.gradle)["check"]?.isCheckedByDefault == false)
+        #expect(actions(.gradle)["clean"]?.isCheckedByDefault == false)
+        #expect(actions(.gradle, .init(gradleTasks: ["assemble", "test"]))["build"]?.isCheckedByDefault == true)
+        #expect(actions(.gradle, .init(gradleTasks: ["assemble", "test"]))["test"]?.isCheckedByDefault == true)
     }
 
     @Test func mavenPrefersWrapperAndRunsBatchMode() {

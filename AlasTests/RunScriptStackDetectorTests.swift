@@ -49,6 +49,21 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.hasWrapper == false)
     }
 
+    @Test func gradleRecordsOnlyDeclaredTasks() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.gradle.kts",
+            """
+            tasks.register("hello")
+            // tasks.register("test")
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.gradle]?.gradleTasks == ["hello"])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -538,6 +553,24 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.hasRuff == false)
     }
 
+    @Test func pythonIgnoresToolMentionsInUnrelatedMetadata() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            description = "Works without pytest or ruff"
+            dependencies = []
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
     @Test func laravelHidesPlainComposer() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -792,6 +825,23 @@ struct RunScriptStackDetectorTests {
         )
 
         #expect(detect(root)[.zig]?.zigBuildSteps == ["test", "run"])
+    }
+
+    @Test func zigIgnoresCommentedOutBuildSteps() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.zig",
+            """
+            pub fn build(b: *std.Build) void {
+                // _ = b.step("test", "Run unit tests");
+                _ = b.step("run", "Run the app");
+            }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.zig]?.zigBuildSteps == ["run"])
     }
 
     @Test func denoReadsDeclaredTaskNames() throws {
