@@ -72,6 +72,17 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == [])
     }
 
+    @Test func gradleIgnoresTaskSyntaxInsideSlashyStringLiterals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("build.gradle", #"def docs = /tasks.register("test")/"#, in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
+
+        try write("build.gradle", #"def docs = $/tasks.register("check")/$"#, in: root)
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
+    }
+
     @Test func gradleRecordsTasksSuppliedByTheJavaPlugin() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -911,7 +922,16 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        try write("main.go", "//go:build go1.25\n\npackage main\n\nfunc main() {}\n", in: root)
+        try write("main.go", "//go:build go1.999\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goDerivesNewestReleaseTagsFromTheInstalledToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !go1.25\n\npackage main\n\nfunc main() {}\n", in: root)
 
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
@@ -1039,6 +1059,9 @@ struct RunScriptStackDetectorTests {
         try write("Rakefile", "namespace :foo do\n  if true\n  end\n  task :test\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
+        try write("Rakefile", "namespace(:foo) {\n  task :test\n}\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
 
@@ -1087,7 +1110,7 @@ struct RunScriptStackDetectorTests {
 
         try write(
             "pyproject.toml",
-            "[project]\nname = \"lib\"\n[project.optional-dependencies]\ndev = [\"pytest\", \"ruff\"]\n",
+            "[project]\nname = \"lib\"\ndependencies = [\"pytest\", \"ruff\"]\n",
             in: root
         )
         #expect(detect(root)[.python]?.hasPytest == true)
@@ -1105,6 +1128,26 @@ struct RunScriptStackDetectorTests {
             dependencies = []
 
             [dependency-groups]
+            dev = ["pytest", "ruff"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonBareRunnerIgnoresOptionalExtrasForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [project.optional-dependencies]
             dev = ["pytest", "ruff"]
             """,
             in: root

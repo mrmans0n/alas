@@ -73,8 +73,18 @@ enum RunScriptStackDetector {
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
                     hasPyprojectFile: has("pyproject.toml"),
-                    hasPytest: pyprojectDeclaresPythonTool(pyproject, tool: "pytest", includeDependencyGroups: pythonRunner != .bare),
-                    hasRuff: pyprojectDeclaresPythonTool(pyproject, tool: "ruff", includeDependencyGroups: pythonRunner != .bare)
+                    hasPytest: pyprojectDeclaresPythonTool(
+                        pyproject,
+                        tool: "pytest",
+                        includeOptionalDependencies: pythonRunner != .bare,
+                        includeDependencyGroups: pythonRunner != .bare
+                    ),
+                    hasRuff: pyprojectDeclaresPythonTool(
+                        pyproject,
+                        tool: "ruff",
+                        includeOptionalDependencies: pythonRunner != .bare,
+                        includeDependencyGroups: pythonRunner != .bare
+                    )
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
@@ -497,7 +507,7 @@ enum RunScriptStackDetector {
 
     private static func gradleDeclaredTasks(_ gradleBuild: String) -> Set<String> {
         let stripped = stripCStyleComments(gradleBuild)
-        let stringRanges = cStringLiteralRanges(stripped)
+        let stringRanges = gradleStringLiteralRanges(stripped)
         let patterns = [
             #"tasks\.(?:register|create|named)\s*\(\s*["']([^"']+)["']"#,
             #"\btask\s*\(\s*["']([^"']+)["']"#,
@@ -524,7 +534,7 @@ enum RunScriptStackDetector {
             #"\bid\s*\(\s*["']([^"']+)["']\s*\)"#,
             #"\bapply\s+plugin:\s*["']([^"']+)["']"#,
         ]
-        let stringRanges = cStringLiteralRanges(gradleBuild)
+        let stringRanges = gradleStringLiteralRanges(gradleBuild)
         var pluginIDs = Set(patterns.flatMap { pattern -> [String] in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
             let range = NSRange(gradleBuild.startIndex..., in: gradleBuild)
@@ -542,7 +552,7 @@ enum RunScriptStackDetector {
               let accessorRegex = try? NSRegularExpression(pattern: #"(?m)^\s*`?(java|java-library|application|groovy)`?\s*$"#)
         else { return [] }
         let fullRange = NSRange(gradleBuild.startIndex..., in: gradleBuild)
-        let stringRanges = cStringLiteralRanges(gradleBuild)
+        let stringRanges = gradleStringLiteralRanges(gradleBuild)
         return Set(blockRegex.matches(in: gradleBuild, range: fullRange).flatMap { block -> [String] in
             guard !stringRanges.contains(where: { NSLocationInRange(block.range.location, $0) }) else { return [] }
             guard let blockRange = Range(block.range(at: 1), in: gradleBuild) else { return [] }
@@ -1229,7 +1239,35 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static let goReleaseTags = Set((1...24).map { "go1.\($0)" })
+    private static let goReleaseTags: Set<String> = {
+        let minor = currentGoToolchainMinorVersion() ?? 25
+        guard minor >= 1 else { return [] }
+        return Set((1...minor).map { "go1.\($0)" })
+    }()
+
+    private static func currentGoToolchainMinorVersion() -> Int? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["go", "env", "GOVERSION"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let version = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: #"^go1\.([0-9]+)"#) else { return nil }
+        let range = NSRange(version.startIndex..., in: version)
+        guard let match = regex.firstMatch(in: version, range: range),
+              let minorRange = Range(match.range(at: 1), in: version)
+        else { return nil }
+        return Int(version[minorRange])
+    }
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
         guard let data = composerJSON.data(using: .utf8),
@@ -1288,12 +1326,12 @@ enum RunScriptStackDetector {
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
         guard let taskRegex = try? NSRegularExpression(
             pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)"#
-        ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*\bdo\b"#)
+        ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#)
         else { return false }
         var blockStack: [Bool] = []
         for segment in stripped.components(separatedBy: .newlines).flatMap({ $0.components(separatedBy: ";") }) {
             let trimmed = segment.trimmingCharacters(in: .whitespaces)
-            if trimmed == "end" {
+            if trimmed == "end" || trimmed == "}" {
                 _ = blockStack.popLast()
                 continue
             }
@@ -1410,6 +1448,66 @@ enum RunScriptStackDetector {
         return ranges
     }
 
+    private static func gradleStringLiteralRanges(_ text: String) -> [NSRange] {
+        cStringLiteralRanges(text) + groovySlashyStringLiteralRanges(text)
+    }
+
+    private static func groovySlashyStringLiteralRanges(_ text: String) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index...].hasPrefix("$/") {
+                let start = index
+                index = text.index(index, offsetBy: 2)
+                while index < text.endIndex {
+                    if text[index...].hasPrefix("/$") {
+                        index = text.index(index, offsetBy: 2)
+                        ranges.append(NSRange(start..<index, in: text))
+                        break
+                    }
+                    index = text.index(after: index)
+                }
+                if index >= text.endIndex {
+                    ranges.append(NSRange(start..<text.endIndex, in: text))
+                }
+                continue
+            }
+            if text[index] == "/",
+               slashCanStartGroovyString(at: index, in: text)
+            {
+                let start = index
+                index = text.index(after: index)
+                var isEscaped = false
+                while index < text.endIndex {
+                    let char = text[index]
+                    index = text.index(after: index)
+                    if isEscaped {
+                        isEscaped = false
+                    } else if char == "\\" {
+                        isEscaped = true
+                    } else if char == "/" {
+                        ranges.append(NSRange(start..<index, in: text))
+                        break
+                    }
+                }
+                if index >= text.endIndex {
+                    ranges.append(NSRange(start..<text.endIndex, in: text))
+                }
+                continue
+            }
+            index = text.index(after: index)
+        }
+        return ranges
+    }
+
+    private static func slashCanStartGroovyString(at index: String.Index, in text: String) -> Bool {
+        let next = text.index(after: index)
+        guard next < text.endIndex, text[next] != "/", text[next] != "*" else { return false }
+        let prefix = text[..<index].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let previous = prefix.last else { return true }
+        return previous == "=" || previous == "(" || previous == "[" || previous == "{" || previous == "," || previous == ":"
+    }
+
     /// Strips comments and drops trailing commas so `JSONSerialization`
     /// accepts a JSONC document like deno.jsonc.
     private static func parseJSONC(_ text: String) -> [String: Any]? {
@@ -1495,7 +1593,12 @@ enum RunScriptStackDetector {
         }
     }
 
-    private static func pyprojectDeclaresPythonTool(_ pyproject: String, tool: String, includeDependencyGroups: Bool) -> Bool {
+    private static func pyprojectDeclaresPythonTool(
+        _ pyproject: String,
+        tool: String,
+        includeOptionalDependencies: Bool,
+        includeDependencyGroups: Bool
+    ) -> Bool {
         let stripped = stripHashComments(pyproject)
         let escapedTool = NSRegularExpression.escapedPattern(for: tool)
         if stripped.range(of: #"(?m)^\s*\[tool\."# + escapedTool + #"(\.|\])"#, options: .regularExpression) != nil {
@@ -1512,8 +1615,12 @@ enum RunScriptStackDetector {
                 guard includeDependencyGroups else { continue }
                 if tomlDependencyText(section.body, declares: tool) { return true }
             default:
-                guard table.hasPrefix("project.optional-dependencies")
-                    || table == "tool.poetry.dev-dependencies"
+                if table.hasPrefix("project.optional-dependencies") {
+                    guard includeOptionalDependencies else { continue }
+                    if tomlDependencyText(section.body, declares: tool) { return true }
+                    continue
+                }
+                guard table == "tool.poetry.dev-dependencies"
                     || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
                 else { continue }
                 if tomlDependencyText(section.body, declares: tool) { return true }
