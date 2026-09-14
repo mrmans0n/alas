@@ -149,7 +149,7 @@ struct HydrationResult: Sendable {
     }
 }
 
-struct ACPHydratedMessage: Sendable {
+struct ACPHydratedMessage: Sendable, Equatable {
     let wire: ACPMessageWire
     let createdAt: Date
 }

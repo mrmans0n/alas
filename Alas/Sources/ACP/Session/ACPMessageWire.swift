@@ -5,7 +5,7 @@ import Foundation
 /// payloads into `ACPMessageWire` on a background actor; the main hop
 /// converts each variant into a full `ACPMessage`, which is the only
 /// place we allocate `StreamingText` (a `@MainActor` class).
-enum ACPMessageWire: Sendable {
+enum ACPMessageWire: Sendable, Equatable {
     case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource?)
     case agent(messageId: String?, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?)
     case thought(messageId: String?, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?)
@@ -119,7 +119,13 @@ enum ACPMessageWire: Sendable {
             else { return existing }
             return .thought(id: id, messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
         case let (.toolCall(toolCall), .toolCall(existingToolCall)):
-            return toolCall == existingToolCall ? existing : .toolCall(toolCall)
+            guard toolCall != existingToolCall else { return existing }
+            guard existingToolCall.isContentTruncated,
+                  toolCall.status != "in_progress", toolCall.status != "pending"
+            else { return .toolCall(toolCall) }
+            var truncated = toolCall
+            truncated.truncateForOffWindow()
+            return .toolCall(truncated)
         case let (.fileEdit(fileEdit), .fileEdit(id, existingFileEdit)):
             return fileEdit == existingFileEdit ? existing : .fileEdit(id: id, fileEdit)
         case let (.plan(items), .plan(id, existingItems)):

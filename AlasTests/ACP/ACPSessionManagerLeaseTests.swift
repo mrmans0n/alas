@@ -695,6 +695,7 @@ import Foundation
         await mgrB.refreshMirror(sessionId: "s")
         await mgrB.awaitBackfill(id: "s")
         #expect(mirrorSession.transcript.currentPlan == planItems)
+        let planCacheRebuilds = mirrorSession.transcript.planCacheRebuildCountForTests
 
         let changed: ACPMessage = .agent(
             id: UUID(),
@@ -710,6 +711,56 @@ import Foundation
 
         #expect(mirrorSession.transcript.messages.count == total)
         #expect(mirrorSession.transcript.currentPlan == planItems)
+        #expect(mirrorSession.transcript.planCacheRebuildCountForTests == planCacheRebuilds)
+    }
+
+    @Test("an unchanged mirror snapshot keeps hidden tool output truncated")
+    func unchangedMirrorSnapshotKeepsHiddenToolOutputTruncated() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-truncated-tool-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let toolCall: ACPMessage = .toolCall(.init(
+            toolCallId: "large-tool",
+            title: "read",
+            status: "completed",
+            content: String(repeating: "x", count: 32_768)
+        ))
+        try storeA.appendMessage(
+            sessionId: "s", id: "m0", kind: toolCall.kind, seq: 0,
+            payload: ACPMessageCodec.encode(toolCall), createdAt: 0)
+        for index in 1...(ACPTranscript.tailWindow + 1) {
+            let message: ACPMessage = .systemNotice(id: UUID(), text: "m\(index)")
+            try storeA.appendMessage(
+                sessionId: "s", id: "m\(index)", kind: message.kind,
+                seq: Int64(index), payload: ACPMessageCodec.encode(message),
+                createdAt: Int64(index))
+        }
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+        await mgrB.refreshMirror(sessionId: "s")
+        await mgrB.awaitBackfill(id: "s")
+
+        guard case .toolCall(let truncatedBeforeRefresh) = mirrorSession.transcript.messages[0] else {
+            Issue.record("expected hidden tool call")
+            return
+        }
+        #expect(truncatedBeforeRefresh.isContentTruncated)
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        guard case .toolCall(let truncatedAfterRefresh) = mirrorSession.transcript.messages[0] else {
+            Issue.record("expected hidden tool call")
+            return
+        }
+        #expect(truncatedAfterRefresh.isContentTruncated)
+        #expect(truncatedAfterRefresh.content.count == ACPMessage.ToolCall.truncatedTailBytes)
     }
 
     @Test("refreshMirror through hydrator does not touch lastOpenedAt")

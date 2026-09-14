@@ -1362,6 +1362,19 @@ final class ACPSession: ObservableObject, Identifiable {
         )
     }
 
+    func replaceTranscriptMessage(at index: Int, with message: ACPMessage, createdAt: Date) {
+        var message = message
+        if case .toolCall(var toolCall) = message,
+           case .toolCall(let previous) = transcript.messages[index] {
+            toolCall.contentRevision = previous.contentRevision
+            if toolCall.content != previous.content {
+                toolCall.contentRevision &+= 1
+            }
+            message = .toolCall(toolCall)
+        }
+        transcript.replaceMessage(at: index, with: message, createdAt: createdAt)
+    }
+
     private func messagesPreservingToolCallContentRevisions(_ messages: [ACPMessage]) -> [ACPMessage] {
         let previousToolCalls = transcript.messages.reduce(into: [String: ACPMessage.ToolCall]()) { result, message in
             if case .toolCall(let toolCall) = message {
