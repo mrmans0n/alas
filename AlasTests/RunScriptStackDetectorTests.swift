@@ -271,12 +271,33 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.flutter]?.usesFlutter == false)
     }
 
+    @Test func flutterRecognizesFlowStyleAndACommentBetweenFlutterAndSDK() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("pubspec.yaml", "name: app\ndependencies:\n  flutter: { sdk: flutter }\n", in: root)
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+
+        try write(
+            "pubspec.yaml",
+            "name: app\ndependencies:\n  flutter:\n    # pinned to the stable channel\n    sdk: flutter\n",
+            in: root
+        )
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+    }
+
     @Test func elixirReadsMixForPhoenix() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("mix.exs", "defp deps do\n  [{:phoenix, \"~> 1.7\"}]\nend\n", in: root)
         #expect(detect(root)[.elixir]?.usesPhoenix == true)
         try write("mix.exs", "defp deps do\n  []\nend\n", in: root)
+        #expect(detect(root)[.elixir]?.usesPhoenix == false)
+    }
+
+    @Test func elixirIgnoresACommentedOutPhoenixDependency() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("mix.exs", "defp deps do\n  [\n    # {:phoenix, \"~> 1.7\"}\n  ]\nend\n", in: root)
         #expect(detect(root)[.elixir]?.usesPhoenix == false)
     }
 

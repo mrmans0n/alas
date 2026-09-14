@@ -153,26 +153,70 @@ enum RunScriptStackDetector {
         return detections
     }
 
-    /// A `dependencies:` entry that pins the Flutter SDK, e.g.
+    /// A `dependencies:` entry that pins the Flutter SDK, in either the
+    /// common block form:
     /// ```yaml
     /// dependencies:
     ///   flutter:
     ///     sdk: flutter
     /// ```
-    /// A bare substring check would also fire on a Dart-only package whose
-    /// description mentions Flutter, or a `flutter_lints` dev dependency.
+    /// or flow form (`flutter: { sdk: flutter }`), tolerating a comment
+    /// between the two lines. A bare substring check would also fire on a
+    /// Dart-only package whose description mentions Flutter, or a
+    /// `flutter_lints` dev dependency.
     private static func pubspecDeclaresFlutterSDK(_ pubspec: String) -> Bool {
-        pubspec.range(
-            of: #"(?m)^\s*flutter:\s*\r?\n\s*sdk:\s*flutter\s*$"#,
-            options: .regularExpression
-        ) != nil
+        let lines = pubspec.components(separatedBy: .newlines)
+        for (index, rawLine) in lines.enumerated() {
+            guard let mapping = yamlMappingLine(stripLineComment(rawLine)), mapping.key == "flutter" else { continue }
+            if let value = mapping.value {
+                // Flow form: the "sdk: flutter" pair lives on the same line.
+                if value.range(of: #"sdk:\s*flutter\b"#, options: .regularExpression) != nil { return true }
+                continue // A non-flow, non-empty value can't be the SDK form.
+            }
+            // Block form: scan the nested lines for "sdk: flutter", skipping
+            // blank lines and comments, stopping once indentation returns to
+            // this level or shallower.
+            for candidate in lines[(index + 1)...] {
+                let stripped = stripLineComment(candidate)
+                if stripped.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                guard let child = yamlMappingLine(stripped), child.indent > mapping.indent else { break }
+                if child.key == "sdk", child.value?.trimmingCharacters(in: .whitespaces) == "flutter" {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// A `{:phoenix, ...}` dependency atom in mix.exs's deps list. A bare
     /// substring check on ":phoenix" also matches unrelated packages that
-    /// share the prefix, like `:phoenix_pubsub` or `:phoenix_live_view`.
+    /// share the prefix, like `:phoenix_pubsub` or `:phoenix_live_view`, and
+    /// would fire on a dependency left commented out.
     private static func mixDeclaresPhoenixDependency(_ mix: String) -> Bool {
-        mix.range(of: #":phoenix(?![A-Za-z0-9_])"#, options: .regularExpression) != nil
+        let stripped = mix.components(separatedBy: .newlines).map(stripLineComment).joined(separator: "\n")
+        return stripped.range(of: #":phoenix(?![A-Za-z0-9_])"#, options: .regularExpression) != nil
+    }
+
+    /// Everything before an unquoted `#`. Shared by pubspec.yaml (YAML) and
+    /// mix.exs (Elixir), whose comment syntax happens to match.
+    private static func stripLineComment(_ line: some StringProtocol) -> String {
+        guard let hashIndex = line.firstIndex(of: "#") else { return String(line) }
+        let before = line[line.startIndex..<hashIndex]
+        guard before.filter({ $0 == "\"" }).count.isMultiple(of: 2) else { return String(line) }
+        return String(before)
+    }
+
+    /// A minimal `key: value` YAML mapping line: leading indentation width,
+    /// the key, and the trimmed value (nil when the line only opens a nested
+    /// block, as a bare `flutter:` does).
+    private static func yamlMappingLine(_ line: some StringProtocol) -> (indent: Int, key: String, value: String?)? {
+        let indent = line.prefix { $0 == " " }.count
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let colonIndex = trimmed.firstIndex(of: ":") else { return nil }
+        let key = trimmed[trimmed.startIndex..<colonIndex].trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return nil }
+        let value = trimmed[trimmed.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+        return (indent, key, value.isEmpty ? nil : value)
     }
 
     /// The parts of package.json creation cares about. A manifest that fails
