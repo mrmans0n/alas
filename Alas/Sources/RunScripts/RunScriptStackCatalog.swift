@@ -56,11 +56,25 @@ enum PythonRunner: String, Sendable, Hashable, CaseIterable {
     case bare, uv, poetry
 }
 
+/// `module.yaml`/`project.yaml` is shared by legacy Amper and the Kotlin
+/// toolchain that replaced it, so a wrapper file's own name is the only way
+/// to tell which CLI a still-unmigrated repository actually has installed.
+enum KotlinToolchainWrapper: Sendable, Hashable {
+    /// `./amper` wrapper present — the repository has not migrated yet.
+    case amper
+    /// `./kotlin` wrapper present.
+    case kotlin
+    /// No project-local wrapper; fall back to the system `kotlin` command,
+    /// the tool JetBrains ships going forward.
+    case system
+}
+
 /// What creation-time detection learned about a stack. The defaults describe
 /// an undetected stack: system tools, no lockfile, every action worth offering.
 struct RunScriptStackContext: Equatable, Sendable {
-    /// A project-local wrapper (`gradlew`, `mvnw`, `kotlin`) was found.
+    /// A project-local wrapper (`gradlew`, `mvnw`) was found.
     var hasWrapper = false
+    var kotlinWrapper = KotlinToolchainWrapper.system
     var packageManager = JavaScriptPackageManager.npm
     /// `scripts` keys from package.json. Nil when no package.json was read,
     /// which offers every action rather than none.
@@ -79,6 +93,7 @@ struct RunScriptStackContext: Equatable, Sendable {
 
     init(
         hasWrapper: Bool = false,
+        kotlinWrapper: KotlinToolchainWrapper = .system,
         packageManager: JavaScriptPackageManager = .npm,
         packageScripts: Set<String>? = nil,
         pythonRunner: PythonRunner = .bare,
@@ -90,6 +105,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         usesPhoenix: Bool = true
     ) {
         self.hasWrapper = hasWrapper
+        self.kotlinWrapper = kotlinWrapper
         self.packageManager = packageManager
         self.packageScripts = packageScripts
         self.pythonRunner = pythonRunner
@@ -187,7 +203,12 @@ enum RunScriptStackCatalog {
                 .init("clean", "Clean", "\(mvn) -B clean"),
             ]
         case .kotlin:
-            let kotlin = context.hasWrapper ? "./kotlin" : "kotlin"
+            let kotlin: String
+            switch context.kotlinWrapper {
+            case .amper:  kotlin = "./amper"
+            case .kotlin: kotlin = "./kotlin"
+            case .system: kotlin = "kotlin"
+            }
             return [
                 .init("build", "Build", "\(kotlin) build"),
                 .init("test", "Test", "\(kotlin) test"),
@@ -259,10 +280,16 @@ enum RunScriptStackCatalog {
             let note = context.xcodeContainer == nil
                 ? "# Set the project (or workspace) and scheme for this repository."
                 : "# Adjust the scheme if it differs from the project name."
-            let target = "\(flag) \(AppState.shellQuote(container)) -scheme \(AppState.shellQuote(scheme)) -destination 'platform=macOS'"
+            // The container name alone doesn't say which platform the scheme
+            // targets, so a hard-coded macOS destination would break an
+            // iOS/watchOS/tvOS/visionOS-only scheme. Leave it to xcodebuild's
+            // own default and let the user pin a destination if they need one.
+            let destinationNote =
+                "# Add -destination if this scheme needs one, e.g. -destination 'platform=macOS' or 'generic/platform=iOS Simulator'."
+            let target = "\(flag) \(AppState.shellQuote(container)) -scheme \(AppState.shellQuote(scheme))"
             return [
-                .init("build", "Build", "\(note)\nxcodebuild \(target) build"),
-                .init("test", "Test", "\(note)\nxcodebuild \(target) test"),
+                .init("build", "Build", "\(note)\n\(destinationNote)\nxcodebuild \(target) build"),
+                .init("test", "Test", "\(note)\n\(destinationNote)\nxcodebuild \(target) test"),
             ]
         case .cmake:
             return [

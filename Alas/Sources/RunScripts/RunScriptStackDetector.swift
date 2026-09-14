@@ -79,8 +79,19 @@ enum RunScriptStackDetector {
                 guard has("pom.xml") else { continue }
                 add(stack, .init(hasWrapper: entries.contains("mvnw")))
             case .kotlin:
+                // module.yaml/project.yaml is shared by legacy Amper and the
+                // Kotlin toolchain that replaced it; the wrapper's own name
+                // is what tells a not-yet-migrated repo from a migrated one.
                 guard has("module.yaml", "project.yaml") else { continue }
-                add(stack, .init(hasWrapper: entries.contains("kotlin") && isRegularFile("kotlin")))
+                let wrapper: KotlinToolchainWrapper
+                if isRegularFile("amper") {
+                    wrapper = .amper
+                } else if isRegularFile("kotlin") {
+                    wrapper = .kotlin
+                } else {
+                    wrapper = .system
+                }
+                add(stack, .init(kotlinWrapper: wrapper))
             case .dotnet:
                 guard names.contains(where: { $0.hasSuffix(".sln") || $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }) else { continue }
                 add(stack)

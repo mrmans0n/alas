@@ -46,8 +46,9 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.maven)["build"]?.body == "mvn -B -DskipTests package")
     }
 
-    @Test func kotlinToolchainPrefersWrapper() {
-        #expect(actions(.kotlin, .init(hasWrapper: true))["build"]?.body == "./kotlin build")
+    @Test func kotlinToolchainPicksWrapperByWhatIsActuallyInstalled() {
+        #expect(actions(.kotlin, .init(kotlinWrapper: .kotlin))["build"]?.body == "./kotlin build")
+        #expect(actions(.kotlin, .init(kotlinWrapper: .amper))["build"]?.body == "./amper build")
         #expect(actions(.kotlin)["run"]?.body == "kotlin run")
     }
 
@@ -91,9 +92,15 @@ struct RunScriptStackCatalogTests {
     @Test func xcodeUsesDetectedContainerAndScheme() {
         let workspace = actions(.xcode, .init(xcodeContainer: "Alas.xcworkspace"))["build"]?.body ?? ""
         #expect(workspace.contains("-workspace Alas.xcworkspace -scheme Alas"))
-        let project = actions(.xcode, .init(xcodeContainer: "Alas.xcodeproj"))["test"]?.body ?? ""
+        let testAction = actions(.xcode, .init(xcodeContainer: "Alas.xcodeproj"))["test"]
+        let project = testAction?.body ?? ""
         #expect(project.contains("-project Alas.xcodeproj -scheme Alas"))
-        #expect(project.contains("-destination 'platform=macOS'"))
+        // No destination is hard-coded on the actual xcodebuild invocation:
+        // the container name alone doesn't say whether the scheme even
+        // supports macOS. The hint comment is allowed to mention the flag.
+        let commandLine = testAction.map(NewRunScriptDialog.commandPreview(for:)) ?? ""
+        #expect(!commandLine.contains("-destination"))
+        #expect(project.contains("Add -destination if this scheme needs one"))
         let fallback = actions(.xcode)["build"]?.body ?? ""
         #expect(fallback.contains("-project App.xcodeproj -scheme App"))
     }

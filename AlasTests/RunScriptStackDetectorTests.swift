@@ -61,11 +61,24 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("module.yaml", in: root)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("kotlin"), withIntermediateDirectories: true)
-        #expect(detect(root)[.kotlin]?.hasWrapper == false)
+        #expect(detect(root)[.kotlin]?.kotlinWrapper == .system)
 
         try FileManager.default.removeItem(at: root.appendingPathComponent("kotlin"))
         try touch("kotlin", in: root)
-        #expect(detect(root)[.kotlin]?.hasWrapper == true)
+        #expect(detect(root)[.kotlin]?.kotlinWrapper == .kotlin)
+    }
+
+    /// module.yaml/project.yaml is shared by legacy Amper and the Kotlin
+    /// toolchain that replaced it; a repo that has not migrated still ships
+    /// an `amper` wrapper and must not be told to run `kotlin`.
+    @Test func kotlinToolchainPrefersAmperWrapperWhenNotYetMigrated() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("module.yaml", "amper", in: root)
+        #expect(detect(root)[.kotlin]?.kotlinWrapper == .amper)
+
+        try touch("kotlin", in: root)
+        #expect(detect(root)[.kotlin]?.kotlinWrapper == .amper)
     }
 
     @Test func kotlinToolchainDetectsProjectFile() throws {
