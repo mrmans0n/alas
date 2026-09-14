@@ -4,6 +4,27 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.4] - 2026-09-14
+
+### ✨ Features
+
+- Group remote sessions by worktree (#1230).
+- Improve workspace recovery with guided repair actions (#1229).
+- Add agent icons to the ACP fork menu (#1227).
+- Add a material rail to the editor minimap (#1225).
+- Refine notification inbox badges and grouping (#1231).
+
+### 🐛 Fixes
+
+- Preserve transcript scrolling over Markdown tables (#1226).
+- Prevent read-only mirrored transcripts from flashing during updates (#1228).
+
+### 🎨 Changed
+
+- Show larger GG pull-request chips and the current branch PR in the Commits header (#1224).
+- Align Run tab preview controls with the toolbar (#1223).
+- Use the worker glyph for agents in the right rail (#1222).
+
 ## [0.17.3] - 2026-09-14
 
 ### ✨ Features
