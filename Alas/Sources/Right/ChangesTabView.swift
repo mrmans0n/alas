@@ -913,7 +913,9 @@ struct ChangesTabView: View {
             stackCodeHostKind: rps.commitRemote?.kind,
             onGGAction: { action, commit in
                 rps.handleGGCommitAction(action, commit: commit, appState: appState)
-            }
+            },
+            reviewRequest: rps.reviewLoop.snapshot?.reviewRequest,
+            onOpenReviewRequest: { rps.openReviewLoopProviderPage() }
         )
     }
 

@@ -111,6 +111,10 @@ struct CommitsSectionView: View {
     let ggStack: GGStack?
     let stackCodeHostKind: CodeHostKind?
     let onGGAction: (GGCommitAction, CommitInfo) -> Void
+    /// The branch's PR/MR when not in gg mode. A gg stack carries PR state
+    /// per entry instead, so the header chip is skipped there.
+    var reviewRequest: ReviewRequest? = nil
+    var onOpenReviewRequest: (() -> Void)? = nil
 
     var body: some View {
         Section {
@@ -131,6 +135,12 @@ struct CommitsSectionView: View {
                 onToggle: { expanded.toggle() }
         ) {
             HStack(spacing: 6) {
+                    if let request = Self.headerReviewRequest(reviewRequest, ggStack: ggStack) {
+                        if let status = GGCIStatus.rollup(of: request) {
+                            GGCIDot(status: status)
+                        }
+                        GGStackChip(model: .model(for: request), onTap: onOpenReviewRequest)
+                    }
                     if let s = behindBase {
                         BehindChip(count: s.count, label: baseBranch, role: .base)
                             .help("\(s.count) behind \(s.ref)")
@@ -158,6 +168,10 @@ struct CommitsSectionView: View {
                     BranchOpsMenu(rps: rps)
             }
         }
+    }
+
+    static func headerReviewRequest(_ request: ReviewRequest?, ggStack: GGStack?) -> ReviewRequest? {
+        ggStack == nil ? request : nil
     }
 
     static func sectionCount(primary: [CommitInfo], older: [CommitInfo]) -> Int? {
