@@ -195,7 +195,12 @@ enum RunScriptStackDetector {
                 add(stack)
             case .php:
                 guard has("composer.json"), !hasArtisan else { continue }
-                add(stack, .init(hasPHPUnit: composerDeclaresPHPUnit(contents("composer.json") ?? "") || isRegularFile("vendor/bin/phpunit")))
+                let composer = composerInfo(contents("composer.json") ?? "")
+                let phpUnitBinaryPath = "\(composer.binDirectory)/phpunit"
+                add(stack, .init(
+                    hasPHPUnit: composer.declaresPHPUnit || isRegularFile(phpUnitBinaryPath),
+                    phpUnitBinaryPath: phpUnitBinaryPath
+                ))
             case .swiftPackage:
                 guard has("Package.swift") else { continue }
                 let manifest = contents("Package.swift") ?? ""
@@ -1444,7 +1449,7 @@ enum RunScriptStackDetector {
         }
     }
 
-    private static func goBuildTags(fromGOFLAGS goflags: String) -> Set<String> {
+    static func goBuildTags(fromGOFLAGS goflags: String) -> Set<String> {
         var tags: Set<String> = []
         var pendingTagsValue = false
         for token in goflags.split(whereSeparator: \.isWhitespace).map(String.init) {
@@ -1460,6 +1465,9 @@ enum RunScriptStackDetector {
             if token.hasPrefix("-tags=") {
                 tags.formUnion(goBuildTags(fromTagsFlagValue: String(token.dropFirst("-tags=".count))))
             }
+            if let toolModeTag = goToolModeBuildTag(fromGOFLAGSFlag: token) {
+                tags.insert(toolModeTag)
+            }
         }
         return tags
     }
@@ -1468,15 +1476,34 @@ enum RunScriptStackDetector {
         Set(value.split { $0 == "," || $0 == " " || $0 == "\t" }.map(String.init).filter { !$0.isEmpty })
     }
 
-    private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
+    private static func goToolModeBuildTag(fromGOFLAGSFlag flag: String) -> String? {
+        switch flag {
+        case "-race": "race"
+        case "-msan": "msan"
+        case "-asan": "asan"
+        default: nil
+        }
+    }
+
+    private static func composerInfo(_ composerJSON: String) -> (declaresPHPUnit: Bool, binDirectory: String) {
         guard let data = composerJSON.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return false }
+        else { return (false, "vendor/bin") }
         let dependencyKeys = ["require", "require-dev"].flatMap { key -> [String] in
             guard let dependencies = object[key] as? [String: Any] else { return [] }
             return Array(dependencies.keys)
         }
-        return dependencyKeys.contains("phpunit/phpunit")
+        let config = object["config"] as? [String: Any]
+        let binDirectory = (config?["bin-dir"] as? String).map(composerBinDirectory)
+        return (dependencyKeys.contains("phpunit/phpunit"), binDirectory?.isEmpty == false ? binDirectory! : "vendor/bin")
+    }
+
+    private static func composerBinDirectory(_ configuredValue: String) -> String {
+        var path = configuredValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        while path.count > 1, path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
     }
 
     private static func countOccurrences(of pattern: String, in text: String) -> Int {

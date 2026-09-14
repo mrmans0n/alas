@@ -1192,6 +1192,22 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.go]?.goRunTarget == nil)
     }
 
+    @Test func goResolvesGOFLAGSToolModeTagsFromTheDetectedToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !race\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [], buildTags: RunScriptStackDetector.goBuildTags(fromGOFLAGS: "-race"))
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
+    }
+
     @Test func goResolvesCGOTagFromTheDetectedToolchain() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1710,6 +1726,11 @@ struct RunScriptStackDetectorTests {
 
         try write("composer.json", #"{"require-dev":{"phpunit/phpunit":"^11"}}"#, in: root)
         #expect(detect(root)[.php]?.hasPHPUnit == true)
+        #expect(detect(root)[.php]?.phpUnitBinaryPath == "vendor/bin/phpunit")
+
+        try write("composer.json", #"{"require-dev":{"phpunit/phpunit":"^11"},"config":{"bin-dir":"bin"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == true)
+        #expect(detect(root)[.php]?.phpUnitBinaryPath == "bin/phpunit")
 
         try write("composer.json", #"{"scripts":{"test":"vendor/bin/phpunit"}}"#, in: root)
         #expect(detect(root)[.php]?.hasPHPUnit == false)
