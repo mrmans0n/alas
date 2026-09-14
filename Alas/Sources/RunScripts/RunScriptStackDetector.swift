@@ -245,7 +245,105 @@ enum RunScriptStackDetector {
     /// distinguishes a runnable command from a library package.
     private static func goFileDeclaresPackageMain(_ contents: String?) -> Bool {
         guard let contents else { return false }
-        return contents.range(of: #"(?m)^\s*package\s+main\s*$"#, options: .regularExpression) != nil
+        let stripped = stripGoCommentsAndStrings(contents)
+        guard let regex = try? NSRegularExpression(pattern: #"(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\b"#) else { return false }
+        let range = NSRange(stripped.startIndex..., in: stripped)
+        guard let match = regex.firstMatch(in: stripped, range: range),
+              let packageRange = Range(match.range(at: 1), in: stripped)
+        else { return false }
+        return stripped[packageRange] == "main"
+    }
+
+    private static func stripGoCommentsAndStrings(_ text: String) -> String {
+        var stripped = ""
+        stripped.reserveCapacity(text.count)
+        var inLineComment = false
+        var inBlockComment = false
+        var inInterpretedString = false
+        var inRawString = false
+        var isEscaped = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let char = text[index]
+            let next = text.index(after: index)
+            let nextChar = next < text.endIndex ? text[next] : nil
+
+            if inLineComment {
+                if char == "\n" {
+                    inLineComment = false
+                    stripped.append(char)
+                } else {
+                    stripped.append(" ")
+                }
+                index = next
+                continue
+            }
+            if inBlockComment {
+                if char == "\n" {
+                    stripped.append(char)
+                } else {
+                    stripped.append(" ")
+                }
+                if char == "*", nextChar == "/" {
+                    stripped.append(" ")
+                    index = text.index(after: next)
+                    inBlockComment = false
+                } else {
+                    index = next
+                }
+                continue
+            }
+            if inInterpretedString {
+                stripped.append(char == "\n" ? "\n" : " ")
+                if isEscaped {
+                    isEscaped = false
+                } else if char == "\\" {
+                    isEscaped = true
+                } else if char == "\"" {
+                    inInterpretedString = false
+                }
+                index = next
+                continue
+            }
+            if inRawString {
+                stripped.append(char == "\n" ? "\n" : " ")
+                if char == "`" {
+                    inRawString = false
+                }
+                index = next
+                continue
+            }
+
+            if char == "/", nextChar == "/" {
+                stripped.append(" ")
+                stripped.append(" ")
+                index = text.index(after: next)
+                inLineComment = true
+                continue
+            }
+            if char == "/", nextChar == "*" {
+                stripped.append(" ")
+                stripped.append(" ")
+                index = text.index(after: next)
+                inBlockComment = true
+                continue
+            }
+            if char == "\"" {
+                stripped.append(" ")
+                inInterpretedString = true
+                index = next
+                continue
+            }
+            if char == "`" {
+                stripped.append(" ")
+                inRawString = true
+                index = next
+                continue
+            }
+            stripped.append(char)
+            index = next
+        }
+        return stripped
     }
 
     /// The path argument for `go run` that actually contains `package main`:
@@ -583,6 +681,14 @@ enum RunScriptStackDetector {
 
     private static func swiftConditionIsActive(_ condition: String) -> Bool {
         let trimmed = condition.trimmingCharacters(in: .whitespaces)
+        let orParts = trimmed.components(separatedBy: "||")
+        if orParts.count > 1 {
+            return orParts.contains { swiftConditionIsActive($0) }
+        }
+        let andParts = trimmed.components(separatedBy: "&&")
+        if andParts.count > 1 {
+            return andParts.allSatisfy { swiftConditionIsActive($0) }
+        }
         if trimmed.hasPrefix("!") {
             return !swiftConditionIsActive(String(trimmed.dropFirst()))
         }
@@ -612,15 +718,33 @@ enum RunScriptStackDetector {
     }
 
     private static func goFilenameSupportsCurrentHost(_ name: String) -> Bool {
-        let base = String(name.dropLast(3))
-        let suffixes = base.split(separator: "_").dropFirst()
-        let operatingSystems: Set<Substring> = ["aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"]
-        let architectures: Set<Substring> = ["386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm"]
-        return suffixes.allSatisfy { suffix in
-            (!operatingSystems.contains(suffix) || suffix == "darwin")
-                && (!architectures.contains(suffix) || suffix == currentGoArchitecture)
+        var parts = String(name.dropLast(3)).split(separator: "_")
+        guard parts.count > 1 else { return true }
+        let operatingSystems = goOperatingSystems
+        let architectures = goArchitectures
+        if let architecture = parts.last, architectures.contains(architecture) {
+            guard architecture == currentGoArchitecture else { return false }
+            parts.removeLast()
+            if let operatingSystem = parts.last, operatingSystems.contains(operatingSystem) {
+                return operatingSystem == "darwin"
+            }
+            return true
         }
+        if let operatingSystem = parts.last, operatingSystems.contains(operatingSystem) {
+            return operatingSystem == "darwin"
+        }
+        return true
     }
+
+    private static let goOperatingSystems: Set<Substring> = [
+        "aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd",
+        "plan9", "solaris", "wasip1", "windows",
+    ]
+
+    private static let goArchitectures: Set<Substring> = [
+        "386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le",
+        "riscv64", "s390x", "wasm",
+    ]
 
     private static var currentGoArchitecture: Substring {
 #if arch(arm64)

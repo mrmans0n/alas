@@ -297,7 +297,7 @@ enum RunScriptStackCatalog {
                 .init("test", "Test", "go test ./..."),
                 .init("vet", "Vet", "go vet ./..."),
                 .init(
-                    "run", "Run", "go run \(context.goRunTarget ?? ".")",
+                    "run", "Run", "go run \(AppState.shellQuote(context.goRunTarget ?? "."))",
                     checked: context.goRunTarget != nil, onExit: .keep
                 ),
             ]

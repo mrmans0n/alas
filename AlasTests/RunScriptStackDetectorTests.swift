@@ -352,6 +352,25 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInInactiveCompoundOSBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            let package = Package(targets: [
+            #if os(Linux) && swift(>=5.9)
+                .executableTarget(name: "LinuxTool"),
+            #endif
+                .target(name: "Lib"),
+            ])
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -432,6 +451,37 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
 
         try write("main.go", "// +build linux\n\npackage main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goOnlyUsesTrailingFilenameBuildConstraints() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main_linux_helper.go", "package main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == ".")
+    }
+
+    @Test func goReadsTheActualPackageClause() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write(
+            "main.go",
+            """
+            /*
+            package main
+            */
+            package library
+
+            const text = `
+            package main
+            `
+            """,
+            in: root
+        )
+
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 

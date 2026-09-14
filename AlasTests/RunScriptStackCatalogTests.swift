@@ -162,6 +162,7 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.go, .init(goRunTarget: "."))["run"]?.isCheckedByDefault == true)
         #expect(actions(.go, .init(goRunTarget: "./cmd/tool"))["run"]?.body == "go run ./cmd/tool")
         #expect(actions(.go, .init(goRunTarget: "./cmd/tool"))["run"]?.isCheckedByDefault == true)
+        #expect(actions(.go, .init(goRunTarget: "./cmd/$(touch$IFS/tmp/pwn)"))["run"]?.body == "go run './cmd/$(touch$IFS/tmp/pwn)'")
     }
 
     @Test func dotnetRunUsesTheDetectedExecutableProject() {
