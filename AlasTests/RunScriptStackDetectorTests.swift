@@ -102,6 +102,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
     }
 
+    @Test func gradleIgnoresPluginsDeclaredOnlyInSettings() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("settings.gradle", "pluginManagement { plugins { id 'java' } }\n", in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -332,6 +340,28 @@ struct RunScriptStackDetectorTests {
 
             [[bin]]
             name = "tool"
+            path = "src/main.rs"
+            required-features = ['cli']
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
+    @Test func cargoParsesSingleQuotedBinNamesBeforeCheckingFeatures() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [[bin]]
+            name = 'tool'
             path = "src/main.rs"
             required-features = ['cli']
             """,
@@ -594,6 +624,25 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInsideStringLiterals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            #"""
+            let docs = """
+            .executableTarget(name: "Fake")
+            """
+            let package = Package(targets: [
+                .target(name: "Lib"),
+            ])
+            """#,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -749,6 +798,17 @@ struct RunScriptStackDetectorTests {
         try write("main.go", "//go:build !gc\n\npackage main\n\nfunc main() {}\n", in: root)
 
         #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goRequiresAMainFunctionBeforePreselectingRun() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "package main\n\nfunc helper() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+
+        try write("main.go", "package main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == ".")
     }
 
     /// A root library with the command living under cmd/ is not itself

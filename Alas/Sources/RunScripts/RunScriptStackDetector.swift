@@ -85,7 +85,7 @@ enum RunScriptStackDetector {
                 ))
             case .gradle:
                 guard has("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts") else { continue }
-                let buildFiles = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+                let buildFiles = ["build.gradle", "build.gradle.kts"]
                     .compactMap { contents($0) }
                 add(stack, .init(hasWrapper: entries.contains("gradlew"), gradleTasks: gradleDeclaredTasks(buildFiles.joined(separator: "\n"))))
             case .maven:
@@ -267,7 +267,8 @@ enum RunScriptStackDetector {
         guard let match = regex.firstMatch(in: stripped, range: range),
               let packageRange = Range(match.range(at: 1), in: stripped)
         else { return false }
-        return stripped[packageRange] == "main"
+        guard stripped[packageRange] == "main" else { return false }
+        return stripped.range(of: #"(?m)^\s*func\s+main\s*\(\s*\)"#, options: .regularExpression) != nil
     }
 
     private static func stripGoCommentsAndStrings(_ text: String) -> String {
@@ -528,8 +529,8 @@ enum RunScriptStackDetector {
     private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?, requiredFeatures: Set<String>)] {
         guard let blockRegex = try? NSRegularExpression(
             pattern: #"(?ms)^\s*\[\[bin\]\]\s*(.*?)(?=^\s*\[\[bin\]\]|\z)"#
-        ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#),
-           let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#),
+        ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*["']([^"']+)["']"#),
+           let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*["']([^"']+)["']"#),
            let requiredFeaturesRegex = try? NSRegularExpression(pattern: #"(?m)^\s*required-features\s*=\s*\[([^\]]*)\]"#),
            let quotedValueRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
         else { return [] }
@@ -567,7 +568,7 @@ enum RunScriptStackDetector {
         let escapedKey = NSRegularExpression.escapedPattern(for: key)
         guard let regex = try? NSRegularExpression(
             pattern: #"(?ms)^\s*\[package\]\s*(.*?)(?=^\s*\[|\z)"#
-        ), let valueRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"# + escapedKey + #"\s*=\s*\"([^\"]+)\""#)
+        ), let valueRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"# + escapedKey + #"\s*=\s*["']([^"']+)["']"#)
         else { return nil }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         guard let packageMatch = regex.firstMatch(in: cargoToml, range: fullRange),
@@ -720,7 +721,9 @@ enum RunScriptStackDetector {
            let targetNameRegex = try? NSRegularExpression(pattern: #""([^"]+)""#)
         else { return [] }
         let fullRange = NSRange(manifest.startIndex..., in: manifest)
+        let stringRanges = swiftStringLiteralRanges(manifest)
         return regex.matches(in: manifest, range: fullRange).compactMap { match in
+            guard !stringRanges.contains(where: { NSLocationInRange(match.range.location, $0) }) else { return nil }
             guard let nameRange = Range(match.range(at: 1), in: manifest),
                   let bodyRange = Range(match.range(at: 2), in: manifest)
             else { return nil }
@@ -749,9 +752,53 @@ enum RunScriptStackDetector {
     private static func swiftDeclarationNames(matching pattern: String, in manifest: String) -> Set<String> {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
         let fullRange = NSRange(manifest.startIndex..., in: manifest)
+        let stringRanges = swiftStringLiteralRanges(manifest)
         return Set(regex.matches(in: manifest, range: fullRange).compactMap { match in
-            Range(match.range(at: 1), in: manifest).map { String(manifest[$0]) }
+            guard !stringRanges.contains(where: { NSLocationInRange(match.range.location, $0) }) else { return nil }
+            return Range(match.range(at: 1), in: manifest).map { String(manifest[$0]) }
         })
+    }
+
+    private static func swiftStringLiteralRanges(_ text: String) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index] == "\"" {
+                let start = index
+                if text[index...].hasPrefix("\"\"\"") {
+                    index = text.index(index, offsetBy: 3)
+                    while index < text.endIndex {
+                        if text[index...].hasPrefix("\"\"\"") {
+                            index = text.index(index, offsetBy: 3)
+                            ranges.append(NSRange(start..<index, in: text))
+                            break
+                        }
+                        index = text.index(after: index)
+                    }
+                    if index >= text.endIndex {
+                        ranges.append(NSRange(start..<text.endIndex, in: text))
+                    }
+                    continue
+                }
+                index = text.index(after: index)
+                var isEscaped = false
+                while index < text.endIndex {
+                    let char = text[index]
+                    index = text.index(after: index)
+                    if isEscaped {
+                        isEscaped = false
+                    } else if char == "\\" {
+                        isEscaped = true
+                    } else if char == "\"" {
+                        break
+                    }
+                }
+                ranges.append(NSRange(start..<index, in: text))
+                continue
+            }
+            index = text.index(after: index)
+        }
+        return ranges
     }
 
     private static func stripInactiveSwiftConditionalBranches(_ swift: String) -> String {
