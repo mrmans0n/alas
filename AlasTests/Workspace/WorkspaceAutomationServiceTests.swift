@@ -33,7 +33,10 @@ struct WorkspaceAutomationServiceTests {
         #expect(try await loaded(store).checkouts.count == 2)
     }
 
-    @Test func focusRequiresExplicitAvailableMemberAndNeverUsesRepositoryFocusImplicitly() async throws {
+    // MainActor-isolated because the navigation callbacks are
+    // `@MainActor @Sendable`, so they record into a main-actor object rather
+    // than mutable locals (a `@Sendable` closure cannot capture those).
+    @Test @MainActor func focusRequiresExplicitAvailableMemberAndNeverUsesRepositoryFocusImplicitly() async throws {
         let checkoutID = UUID()
         let available = UUID()
         let unavailable = UUID()
@@ -43,20 +46,18 @@ struct WorkspaceAutomationServiceTests {
                 member(id: unavailable, projectID: "project-b", availability: .missing),
             ]),
         ]))
-        var selectedCheckout: UUID?
-        var focusedMember: (checkout: UUID, member: UUID)?
-        var events: [String] = []
+        let recorder = NavigationRecorder()
         let service = WorkspaceAutomationService(
             store: store,
             isEnabled: { true },
-            refreshNavigation: { events.append("refresh") },
+            refreshNavigation: { recorder.events.append("refresh") },
             selectCheckout: {
-                events.append("select")
-                selectedCheckout = $0
+                recorder.events.append("select")
+                recorder.selectedCheckout = $0
             },
             focusMember: {
-                events.append("focus")
-                focusedMember = ($0, $1)
+                recorder.events.append("focus")
+                recorder.focusedMember = ($0, $1)
             },
             observer: AutomationObserver(results: [
                 available: .exactLineage("available-lineage"),
@@ -70,9 +71,9 @@ struct WorkspaceAutomationServiceTests {
 
         #expect(target.checkoutID == checkoutID)
         #expect(target.memberID == available)
-        #expect(selectedCheckout == checkoutID)
-        #expect(focusedMember?.member == available)
-        #expect(events == ["refresh", "select", "refresh", "focus"])
+        #expect(recorder.selectedCheckout == checkoutID)
+        #expect(recorder.focusedMember?.member == available)
+        #expect(recorder.events == ["refresh", "select", "refresh", "focus"])
         await #expect(throws: WorkspaceAutomationError.memberUnavailable) {
             try await service.focusMember(checkoutID: checkoutID, memberID: unavailable)
         }
@@ -209,4 +210,13 @@ private struct AutomationObserver: WorkspaceCheckoutObserving {
     func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
         results[member.id] ?? result
     }
+}
+
+/// Main-actor recorder for the service's navigation callbacks, which are
+/// `@MainActor @Sendable` and therefore cannot capture mutable locals.
+@MainActor
+private final class NavigationRecorder {
+    var selectedCheckout: UUID?
+    var focusedMember: (checkout: UUID, member: UUID)?
+    var events: [String] = []
 }

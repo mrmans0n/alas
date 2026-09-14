@@ -1314,7 +1314,6 @@ final class RightPaneState: GGSplitCommitServicing {
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)
             async let remotesProbe = git.remotes(worktreePath: worktree.path)
             async let stashProbe = git.stashes(worktreePath: worktree.path)
-            async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
@@ -1322,7 +1321,9 @@ final class RightPaneState: GGSplitCommitServicing {
             let resolvedUpstream = try? await upstream
             let remotes = (try? await remotesProbe) ?? []
             let stashes = (try? await stashProbe) ?? []
-            _ = await mergeRefresh
+            // Sequential rather than an `async let`: `MergeOperationState` is
+            // main-actor isolated and cannot leave that context.
+            await mergeOp.refresh()
             let indexFingerprint: String
             if let lsResult = try? await Process.git(
                 ["ls-files", "-s", "-z"],

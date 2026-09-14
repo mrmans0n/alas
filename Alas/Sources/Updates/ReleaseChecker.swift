@@ -2,14 +2,14 @@ import Foundation
 
 /// Queries GitHub for the release on the build's track and produces a verdict.
 /// Network access is injected via `fetch` so tests run offline.
-struct ReleaseChecker {
+struct ReleaseChecker: Sendable {
     enum CheckResult: Equatable {
         case upToDate
         case updateAvailable(ReleaseInfo)
         case failed(String)
     }
 
-    typealias Fetch = (URL) async throws -> Data
+    typealias Fetch = @Sendable (URL) async throws -> Data
 
     let stableReleaseURL: URL
     let nightlyReleaseURL: URL
@@ -22,7 +22,7 @@ struct ReleaseChecker {
         nightlyReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/tags/nightly")!,
         nightlyTagRefURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/git/ref/tags/nightly")!,
         arch: String = HostArch.assetSlug,
-        fetch: @escaping Fetch = ReleaseChecker.defaultFetch
+        fetch: @escaping Fetch = { try await ReleaseChecker.defaultFetch($0) }
     ) {
         self.stableReleaseURL = stableReleaseURL
         self.nightlyReleaseURL = nightlyReleaseURL

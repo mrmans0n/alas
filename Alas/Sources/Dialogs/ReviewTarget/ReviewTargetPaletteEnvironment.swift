@@ -5,8 +5,12 @@ import Foundation
 struct ReviewTargetPaletteEnvironment {
     var worktrees: () -> [Worktree]
     var currentWorktreeId: () -> String?
-    var loadCommitsAhead: (Worktree) async throws -> (commits: [CommitInfo], comparisonRef: String?)
-    var loadBranches: (Worktree) async throws -> [String]
+    /// `@Sendable` because the palette fans these two out concurrently — one
+    /// child task per worktree for `loadCommitsAhead`, and an `async let` pair
+    /// in `loadTargets`. The live implementations snapshot every MainActor
+    /// value they need before the closure is formed.
+    var loadCommitsAhead: @Sendable (Worktree) async throws -> (commits: [CommitInfo], comparisonRef: String?)
+    var loadBranches: @Sendable (Worktree) async throws -> [String]
     var resolveRevision: (Worktree, String) async throws -> String
     var currentBranch: (Worktree) async throws -> String
     var resolveTrackedRevision: (Worktree, String) async throws -> TrackedRevisionCandidate

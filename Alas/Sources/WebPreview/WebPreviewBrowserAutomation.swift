@@ -117,18 +117,28 @@ struct AutomationOperation {
     var token: String { id.uuidString }
 }
 
+/// `CheckedContinuation.resume(returning:)` takes its value as `sending`,
+/// which the watchdog cannot satisfy: the produced value (a `WKWebView`
+/// snapshot or JavaScript result) is main-actor isolated by construction.
+/// Every producer and the sole consumer are main-actor isolated too, so the
+/// value never leaves the main actor and the `@unchecked` conformance is
+/// sound — it only hides a transfer that never actually crosses a domain.
+private struct AutomationValueTransfer<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 @MainActor
 private final class AutomationAsyncCompletion<Value> {
-    private var continuation: CheckedContinuation<Value, Error>?
+    private var continuation: CheckedContinuation<AutomationValueTransfer<Value>, Error>?
 
-    init(_ continuation: CheckedContinuation<Value, Error>) {
+    init(_ continuation: CheckedContinuation<AutomationValueTransfer<Value>, Error>) {
         self.continuation = continuation
     }
 
     func resume(returning value: Value) -> Bool {
         let pending = continuation
         continuation = nil
-        pending?.resume(returning: value)
+        pending?.resume(returning: AutomationValueTransfer(value: value))
         return pending != nil
     }
 
@@ -583,7 +593,7 @@ extension WebPreviewBrowser {
                                                isAuthorized: @escaping @MainActor () -> Bool,
                                                work: @escaping @MainActor () async throws -> Value) async throws -> Value {
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Value, Error>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AutomationValueTransfer<Value>, Error>) in
             let completion = AutomationAsyncCompletion(continuation)
             var worker: Task<Void, Never>?
             var watchdog: Task<Void, Never>?
@@ -622,7 +632,7 @@ extension WebPreviewBrowser {
                     try? await Task.sleep(for: .milliseconds(min(50, remainingMS)))
                 }
             }
-            }
+            }.value
         } onCancel: {
             Task { @MainActor in
                 guard self.automationState.activeOperationToken == operation.token else { return }

@@ -53,7 +53,7 @@ struct WebPageMetadataFetcher: Sendable {
         return Self.parse(html: html, url: response.url)
     }
 
-    static let live = Self(fetch: defaultFetch)
+    static let live = Self(fetch: { try await WebPageMetadataFetcher.defaultFetch($0) })
 
     static func parse(html: String, url: URL) -> WebPageMetadata {
         let metadata = metaValues(in: html)

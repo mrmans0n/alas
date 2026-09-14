@@ -78,7 +78,7 @@ actor WorkspaceStore {
     /// workers use this rather than separate load/checkpoint calls so one
     /// member cannot overwrite another member's checkpoint.
     func mutate<Value: Sendable>(
-        _ update: (inout WorkspaceStateFile) throws -> Value
+        _ update: @Sendable (inout WorkspaceStateFile) throws -> Value
     ) throws -> Value {
         try withExclusiveLock {
             var state: WorkspaceStateFile
