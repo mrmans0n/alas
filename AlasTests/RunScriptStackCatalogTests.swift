@@ -198,6 +198,15 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.compose)["up"]?.body == "docker compose up")
     }
 
+    /// "deno task dev" only works if deno.json actually declares that task;
+    /// unlike npm's built-in commands, Deno has no generic fallback.
+    @Test func denoDevIsOnlyCheckedWhenTheTaskIsDeclared() {
+        #expect(actions(.deno)["dev"]?.isCheckedByDefault == false)
+        #expect(actions(.deno, .init(denoTasks: []))["dev"]?.isCheckedByDefault == false)
+        #expect(actions(.deno, .init(denoTasks: ["dev"]))["dev"]?.isCheckedByDefault == true)
+        #expect(actions(.deno)["test"]?.isCheckedByDefault == true)
+    }
+
     private func zshSyntaxIsValid(_ contents: String) throws -> Bool {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sh")
         try Data(contents.utf8).write(to: url)

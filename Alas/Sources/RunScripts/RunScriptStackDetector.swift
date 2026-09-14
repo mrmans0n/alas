@@ -138,7 +138,13 @@ enum RunScriptStackDetector {
                 add(stack, .init(usesPhoenix: mixDeclaresPhoenixDependency(mix)))
             case .deno:
                 guard has("deno.json", "deno.jsonc") else { continue }
-                add(stack)
+                let denoTasks = (contents("deno.json") ?? contents("deno.jsonc")).flatMap { text -> Set<String>? in
+                    guard let data = text.data(using: .utf8),
+                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return nil }
+                    return Set((object["tasks"] as? [String: Any])?.keys.map { $0 } ?? [])
+                }
+                add(stack, .init(denoTasks: denoTasks))
             case .zig:
                 guard has("build.zig") else { continue }
                 add(stack)
@@ -188,8 +194,11 @@ enum RunScriptStackDetector {
         }
         // Fallback for a fully flow-style dependencies block, e.g.
         // `dependencies: { flutter: { sdk: flutter } }`, where "flutter" is
-        // never a line's own key because the whole map is inline.
-        return pubspec.range(
+        // never a line's own key because the whole map is inline. Comments
+        // are stripped first so a mention inside one, e.g.
+        // `# flutter: { sdk: flutter }`, doesn't count.
+        let commentsStripped = lines.map(stripLineComment).joined(separator: "\n")
+        return commentsStripped.range(
             of: #"flutter\s*:\s*\{\s*sdk\s*:\s*['"]?flutter['"]?\s*\}"#,
             options: .regularExpression
         ) != nil

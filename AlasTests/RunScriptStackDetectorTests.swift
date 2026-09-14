@@ -304,6 +304,19 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.flutter]?.usesFlutter == true)
     }
 
+    /// The inline-flow fallback must not fire on a mention left inside a
+    /// comment for a Dart-only package.
+    @Test func flutterInlineFallbackIgnoresComments() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pubspec.yaml",
+            "name: tool\n# flutter: { sdk: flutter }\ndependencies:\n  args: ^2.0.0\n",
+            in: root
+        )
+        #expect(detect(root)[.flutter]?.usesFlutter == false)
+    }
+
     @Test func elixirReadsMixForPhoenix() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -355,5 +368,22 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.zig] != nil)
         #expect(stacks[.bazel] != nil)
         #expect(stacks[.compose] != nil)
+    }
+
+    @Test func denoReadsDeclaredTaskNames() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("deno.json", #"{"tasks":{"dev":"deno run --watch main.ts"}}"#, in: root)
+        #expect(detect(root)[.deno]?.denoTasks == ["dev"])
+
+        try write("deno.json", #"{"tasks":{"build":"deno compile main.ts"}}"#, in: root)
+        #expect(detect(root)[.deno]?.denoTasks == ["build"])
+    }
+
+    @Test func denoWithUnreadableConfigLeavesTasksUnknown() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("deno.jsonc", "// a comment deno.json can't have\n{\"tasks\": {}}", in: root)
+        #expect(detect(root)[.deno]?.denoTasks == nil)
     }
 }

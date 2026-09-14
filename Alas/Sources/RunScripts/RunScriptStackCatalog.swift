@@ -90,6 +90,11 @@ struct RunScriptStackContext: Equatable, Sendable {
     var usesFlutter = true
     /// mix.exs depends on Phoenix, so there is a dev server to run.
     var usesPhoenix = true
+    /// `tasks` keys from deno.json/deno.jsonc. Nil when the file couldn't be
+    /// read or parsed, which — unlike package.json — leaves "Dev server"
+    /// unchecked rather than assuming a task exists: `deno task dev` has no
+    /// generic fallback the way `npm test` does.
+    var denoTasks: Set<String>?
 
     init(
         hasWrapper: Bool = false,
@@ -102,7 +107,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasRubocopConfig: Bool = false,
         hasRequirementsFile: Bool = false,
         usesFlutter: Bool = true,
-        usesPhoenix: Bool = true
+        usesPhoenix: Bool = true,
+        denoTasks: Set<String>? = nil
     ) {
         self.hasWrapper = hasWrapper
         self.kotlinWrapper = kotlinWrapper
@@ -115,6 +121,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.hasRequirementsFile = hasRequirementsFile
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
+        self.denoTasks = denoTasks
     }
 }
 
@@ -330,8 +337,14 @@ enum RunScriptStackCatalog {
             }
             return actions
         case .deno:
+            // Unlike the rest of Deno's actions, "dev" runs a user-defined
+            // task rather than a built-in subcommand, so it only exists if
+            // deno.json actually declares one.
             return [
-                .init("dev", "Dev server", "\(devServerHint)\ndeno task dev", onExit: .keep),
+                .init(
+                    "dev", "Dev server", "\(devServerHint)\ndeno task dev",
+                    checked: context.denoTasks?.contains("dev") ?? false, onExit: .keep
+                ),
                 .init("test", "Test", "deno test"),
                 .init("lint", "Lint", "deno lint"),
                 .init("format-check", "Format check", "deno fmt --check"),
