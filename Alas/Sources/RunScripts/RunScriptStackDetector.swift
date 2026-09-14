@@ -107,7 +107,12 @@ enum RunScriptStackDetector {
                 add(stack, .init(kotlinWrapper: wrapper))
             case .dotnet:
                 guard names.contains(where: { $0.hasSuffix(".sln") || $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }) else { continue }
-                add(stack, .init(dotnetRunProject: dotnetExecutableProjectPath(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
+                let buildTarget = dotnetRootBuildTarget(rootEntries: names)
+                add(stack, .init(
+                    dotnetRunProject: dotnetExecutableProjectPath(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager),
+                    dotnetBuildTarget: buildTarget.target,
+                    dotnetCommandsChecked: buildTarget.isUnambiguous
+                ))
             case .go:
                 guard has("go.mod") else { continue }
                 add(stack, .init(goRunTarget: goRunnableTarget(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
@@ -203,7 +208,8 @@ enum RunScriptStackDetector {
             if let value = dependencies.value {
                 // Fully flow-style dependencies map:
                 // `dependencies: { flutter: { sdk: flutter } }`.
-                return value.range(
+                let flowValue = yamlFlowValue(startingWith: value, continuingWith: lines.dropFirst(index + 1))
+                return flowValue.range(
                     of: #"flutter\s*:\s*\{\s*sdk\s*:\s*['"]?flutter['"]?\s*\}"#,
                     options: .regularExpression
                 ) != nil
@@ -468,9 +474,19 @@ enum RunScriptStackDetector {
         return stripped
     }
 
+    private static func stripZigMultilineStrings(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .map { line in
+                line.trimmingCharacters(in: .whitespaces).hasPrefix("\\\\")
+                    ? String(repeating: " ", count: line.count)
+                    : line
+            }
+            .joined(separator: "\n")
+    }
+
     private static func zigBuildSteps(_ buildZig: String) -> Set<String> {
         guard let regex = try? NSRegularExpression(pattern: #"\.step\s*\(\s*\"([^\"]+)\""#) else { return [] }
-        let stripped = stripCStyleComments(buildZig)
+        let stripped = stripZigMultilineStrings(stripCStyleComments(buildZig))
         let stringRanges = cStringLiteralRanges(stripped)
         let range = NSRange(stripped.startIndex..., in: stripped)
         return Set(regex.matches(in: stripped, range: range).compactMap { match in
@@ -506,11 +522,13 @@ enum RunScriptStackDetector {
             #"\bid\s*\(\s*["']([^"']+)["']\s*\)"#,
             #"\bapply\s+plugin:\s*["']([^"']+)["']"#,
         ]
+        let stringRanges = cStringLiteralRanges(gradleBuild)
         var pluginIDs = Set(patterns.flatMap { pattern -> [String] in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
             let range = NSRange(gradleBuild.startIndex..., in: gradleBuild)
             return regex.matches(in: gradleBuild, range: range).compactMap { match in
-                Range(match.range(at: 1), in: gradleBuild).map { String(gradleBuild[$0]) }
+                guard !stringRanges.contains(where: { NSLocationInRange(match.range.location, $0) }) else { return nil }
+                return Range(match.range(at: 1), in: gradleBuild).map { String(gradleBuild[$0]) }
             }
         })
         pluginIDs.formUnion(gradleKotlinDSLPluginAccessors(gradleBuild))
@@ -522,7 +540,9 @@ enum RunScriptStackDetector {
               let accessorRegex = try? NSRegularExpression(pattern: #"(?m)^\s*`?(java|java-library|application|groovy)`?\s*$"#)
         else { return [] }
         let fullRange = NSRange(gradleBuild.startIndex..., in: gradleBuild)
+        let stringRanges = cStringLiteralRanges(gradleBuild)
         return Set(blockRegex.matches(in: gradleBuild, range: fullRange).flatMap { block -> [String] in
+            guard !stringRanges.contains(where: { NSLocationInRange(block.range.location, $0) }) else { return [] }
             guard let blockRange = Range(block.range(at: 1), in: gradleBuild) else { return [] }
             let body = String(gradleBuild[blockRange])
             let bodyRange = NSRange(body.startIndex..., in: body)
@@ -694,6 +714,17 @@ enum RunScriptStackDetector {
             return dotnetProjectIsExecutable(text)
         }
         return executableProjects.count == 1 ? executableProjects[0] : nil
+    }
+
+    private static func dotnetRootBuildTarget(rootEntries: [String]) -> (target: String?, isUnambiguous: Bool) {
+        let solutions = rootEntries.filter { $0.hasSuffix(".sln") }.sorted()
+        if solutions.count == 1 { return (solutions[0], true) }
+        if solutions.count > 1 { return (nil, false) }
+
+        let projects = rootEntries.filter { $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }.sorted()
+        if projects.count == 1 { return (projects[0], true) }
+        if projects.count > 1 { return (nil, false) }
+        return (nil, true)
     }
 
     private static func dotnetProjectIsExecutable(_ project: String) -> Bool {
@@ -894,6 +925,12 @@ enum RunScriptStackDetector {
         if let architecture = swiftArchitectureConditionName(trimmed) {
             return architecture == currentSwiftArchitecture
         }
+        if let condition = swiftVersionCondition(trimmed, function: "swift") {
+            return swiftVersion(currentSwiftLanguageVersion, satisfies: condition)
+        }
+        if let condition = swiftVersionCondition(trimmed, function: "compiler") {
+            return swiftVersion(currentSwiftCompilerVersion, satisfies: condition)
+        }
         // Unknown manifest conditions may depend on SwiftPM settings. Keep
         // them rather than hiding real executable declarations.
         return true
@@ -971,6 +1008,43 @@ enum RunScriptStackDetector {
         return String(condition[nameRange])
     }
 
+    private static func swiftVersionCondition(_ condition: String, function: String) -> (operatorText: String, version: (major: Int, minor: Int))? {
+        let escapedFunction = NSRegularExpression.escapedPattern(for: function)
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^"# + escapedFunction + #"\(\s*(>=|>|<=|<)\s*([0-9]+)(?:\.([0-9]+))?\s*\)$"#
+        ) else { return nil }
+        let range = NSRange(condition.startIndex..., in: condition)
+        guard let match = regex.firstMatch(in: condition, range: range),
+              let operatorRange = Range(match.range(at: 1), in: condition),
+              let majorRange = Range(match.range(at: 2), in: condition)
+        else { return nil }
+        let minor: Int
+        if match.range(at: 3).location != NSNotFound,
+           let minorRange = Range(match.range(at: 3), in: condition)
+        {
+            minor = Int(condition[minorRange]) ?? 0
+        } else {
+            minor = 0
+        }
+        return (
+            String(condition[operatorRange]),
+            (Int(condition[majorRange]) ?? 0, minor)
+        )
+    }
+
+    private static func swiftVersion(_ current: (major: Int, minor: Int), satisfies condition: (operatorText: String, version: (major: Int, minor: Int))) -> Bool {
+        let comparison = current.major == condition.version.major
+            ? current.minor - condition.version.minor
+            : current.major - condition.version.major
+        switch condition.operatorText {
+        case ">=": return comparison >= 0
+        case ">": return comparison > 0
+        case "<=": return comparison <= 0
+        case "<": return comparison < 0
+        default: return false
+        }
+    }
+
     private static var currentSwiftArchitecture: String {
 #if arch(arm64)
         "arm64"
@@ -978,6 +1052,34 @@ enum RunScriptStackDetector {
         "x86_64"
 #else
         ""
+#endif
+    }
+
+    private static var currentSwiftCompilerVersion: (major: Int, minor: Int) {
+#if compiler(>=6.2)
+        (6, 2)
+#elseif compiler(>=6.1)
+        (6, 1)
+#elseif compiler(>=6.0)
+        (6, 0)
+#elseif compiler(>=5.10)
+        (5, 10)
+#elseif compiler(>=5.9)
+        (5, 9)
+#else
+        (5, 0)
+#endif
+    }
+
+    private static var currentSwiftLanguageVersion: (major: Int, minor: Int) {
+#if swift(>=6.0)
+        (6, 0)
+#elseif swift(>=5.10)
+        (5, 10)
+#elseif swift(>=5.9)
+        (5, 9)
+#else
+        (5, 0)
 #endif
     }
 
@@ -1480,6 +1582,28 @@ enum RunScriptStackDetector {
         guard !key.isEmpty else { return nil }
         let value = trimmed[trimmed.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
         return (indent, key, value.isEmpty ? nil : value)
+    }
+
+    private static func yamlFlowValue(startingWith firstLineValue: String, continuingWith remainingLines: ArraySlice<String>) -> String {
+        var value = stripLineComment(firstLineValue)
+        var depth = yamlFlowBraceDepth(value)
+        guard depth > 0 else { return value }
+        for rawLine in remainingLines {
+            let line = stripLineComment(rawLine)
+            value += "\n\(line)"
+            depth += yamlFlowBraceDepth(line)
+            if depth <= 0 { break }
+        }
+        return value
+    }
+
+    private static func yamlFlowBraceDepth(_ text: String) -> Int {
+        var depth = 0
+        for character in text {
+            if character == "{" { depth += 1 }
+            if character == "}" { depth -= 1 }
+        }
+        return depth
     }
 
     /// Strips a matching pair of surrounding quotes from a YAML scalar, so

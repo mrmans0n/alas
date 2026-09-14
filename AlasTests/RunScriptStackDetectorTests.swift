@@ -110,6 +110,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == [])
     }
 
+    @Test func gradleIgnoresPluginSyntaxInsideStringLiterals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("build.gradle", #"def documentation = "id 'java'""#, in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -638,6 +646,31 @@ struct RunScriptStackDetectorTests {
                 .executableTarget(name: "OtherTool"),
             ])
             #endif
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    @Test func swiftPackageLeavesRunUncheckedForUnresolvedConditions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            let package = Package(
+                name: "App",
+                products: [
+            #if swift(>=999.0)
+                    .executable(name: "App", targets: ["App"]),
+            #else
+                    .library(name: "App", targets: ["App"]),
+            #endif
+                ],
+                targets: [.target(name: "App")]
+            )
             """,
             in: root
         )
@@ -1215,6 +1248,18 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
     }
 
+    @Test func dotnetRecordsAnUnambiguousRootBuildTarget() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("App.sln", "", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetBuildTarget == "App.sln")
+        #expect(detect(root)[.dotnet]?.dotnetCommandsChecked == true)
+
+        try write("Other.sln", "", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetBuildTarget == nil)
+        #expect(detect(root)[.dotnet]?.dotnetCommandsChecked == false)
+    }
+
     @Test func flutterReadsPubspecForTheSDK() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1267,6 +1312,22 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("pubspec.yaml", "name: app\ndependencies: { flutter: { sdk: flutter } }\n", in: root)
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+    }
+
+    @Test func flutterRecognizesMultilineFlowDependenciesBlock() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pubspec.yaml",
+            """
+            name: app
+            dependencies: {
+              flutter: { sdk: flutter }
+            }
+            """,
+            in: root
+        )
         #expect(detect(root)[.flutter]?.usesFlutter == true)
     }
 
@@ -1407,6 +1468,25 @@ struct RunScriptStackDetectorTests {
             """
             pub fn build(b: *std.Build) void {
                 const help = ".step(\\"test\\", \\"example\\")";
+                _ = b.step("run", "Run the app");
+            }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.zig]?.zigBuildSteps == ["run"])
+    }
+
+    @Test func zigIgnoresBuildStepsInsideMultilineStrings() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.zig",
+            """
+            pub fn build(b: *std.Build) void {
+                const help =
+                    \\\\.step("test", "example")
+                ;
                 _ = b.step("run", "Run the app");
             }
             """,

@@ -173,6 +173,20 @@ struct RunScriptStackCatalogTests {
         #expect(withProject?.isCheckedByDefault == true)
     }
 
+    @Test func dotnetBuildActionsTargetTheDetectedSolution() {
+        let solution = actions(.dotnet, .init(dotnetBuildTarget: "App.sln"))
+        #expect(solution["restore"]?.body == "dotnet restore App.sln")
+        #expect(solution["build"]?.body == "dotnet build App.sln")
+        #expect(solution["test"]?.body == "dotnet test App.sln")
+        #expect(solution["restore"]?.isCheckedByDefault == true)
+
+        let ambiguous = actions(.dotnet, .init(dotnetCommandsChecked: false))
+        #expect(ambiguous["restore"]?.body == "dotnet restore")
+        #expect(ambiguous["restore"]?.isCheckedByDefault == false)
+        #expect(ambiguous["build"]?.isCheckedByDefault == false)
+        #expect(ambiguous["test"]?.isCheckedByDefault == false)
+    }
+
     @Test func makeTestAndCleanAreOnlyCheckedWhenDeclared() {
         #expect(actions(.make)["build"]?.isCheckedByDefault == true)
         #expect(actions(.make)["test"]?.isCheckedByDefault == false)

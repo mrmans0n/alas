@@ -131,6 +131,12 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// current directory alone, so a root .sln with projects in
     /// subdirectories otherwise has nothing to run.
     var dotnetRunProject: String?
+    /// A single root solution or project file for `dotnet restore/build/test`.
+    /// Nil means the generic command can run from the root, unless
+    /// `dotnetCommandsChecked` is false because multiple root containers make
+    /// the CLI ambiguous.
+    var dotnetBuildTarget: String?
+    var dotnetCommandsChecked = true
     /// Whether the Makefile declares a `test` rule of its own.
     var hasMakeTestTarget = false
     /// Whether the Makefile declares a `clean` rule of its own.
@@ -159,6 +165,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasRunnableTarget: Bool = false,
         goRunTarget: String? = nil,
         dotnetRunProject: String? = nil,
+        dotnetBuildTarget: String? = nil,
+        dotnetCommandsChecked: Bool = true,
         hasMakeTestTarget: Bool = false,
         hasMakeCleanTarget: Bool = false
     ) {
@@ -182,6 +190,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.denoTasks = denoTasks
         self.zigBuildSteps = zigBuildSteps
         self.dotnetRunProject = dotnetRunProject
+        self.dotnetBuildTarget = dotnetBuildTarget
+        self.dotnetCommandsChecked = dotnetCommandsChecked
         self.hasMakeTestTarget = hasMakeTestTarget
         self.hasMakeCleanTarget = hasMakeCleanTarget
         self.hasRunnableTarget = hasRunnableTarget
@@ -290,10 +300,11 @@ enum RunScriptStackCatalog {
         case .dotnet:
             let runCommand = context.dotnetRunProject
                 .map { "dotnet run --project \(AppState.shellQuote($0))" } ?? "dotnet run"
+            let buildTarget = context.dotnetBuildTarget.map { " \(AppState.shellQuote($0))" } ?? ""
             return [
-                .init("restore", "Restore", "dotnet restore"),
-                .init("build", "Build", "dotnet build"),
-                .init("test", "Test", "dotnet test"),
+                .init("restore", "Restore", "dotnet restore\(buildTarget)", checked: context.dotnetCommandsChecked),
+                .init("build", "Build", "dotnet build\(buildTarget)", checked: context.dotnetCommandsChecked),
+                .init("test", "Test", "dotnet test\(buildTarget)", checked: context.dotnetCommandsChecked),
                 .init("run", "Run", runCommand, checked: context.dotnetRunProject != nil, onExit: .keep),
             ]
         case .go:
