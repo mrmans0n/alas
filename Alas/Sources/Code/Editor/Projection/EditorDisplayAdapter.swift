@@ -12,6 +12,7 @@ final class EditorDisplayAdapter {
     private var selectionObserver: UUID?
     private var hints: [EditorDisplayHint] = []
     private var sourceSnapshot: String
+    private(set) var sourceLineStarts: [Int]
     private var deferredHints: (revision: Int, hints: [EditorDisplayHint])?
     private(set) var isApplyingSourceEdit = false
     private(set) var isRebuilding = false
@@ -20,6 +21,7 @@ final class EditorDisplayAdapter {
         self.buffer = buffer
         self.view = view
         sourceSnapshot = buffer.storage.string
+        sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
         document = try EditorDisplayDocument(source: buffer.storage, revision: buffer.editGeneration, hints: [])
         editObserver = buffer.onTextEdit { [weak self] _ in self?.sourceChanged() }
         selectionObserver = buffer.observeSourceSelection { [weak self] ranges in
@@ -67,7 +69,10 @@ final class EditorDisplayAdapter {
     }
 
     func displayRange(forSource range: NSRange) -> NSRange? {
-        guard let start = try? document.map.displayOffset(forSource: range.location, affinity: .afterHints),
+        guard document.map.revision == buffer.editGeneration,
+              range.location >= 0, range.location <= buffer.storage.length, range.length >= 0,
+              range.length <= buffer.storage.length - range.location,
+              let start = try? document.map.displayOffset(forSource: range.location, affinity: .afterHints),
               let end = try? document.map.displayOffset(forSource: NSMaxRange(range), affinity: range.length == 0 ? .afterHints : .beforeHints)
         else { return nil }
         return NSRange(location: start, length: max(0, end - start))
@@ -106,7 +111,15 @@ final class EditorDisplayAdapter {
     private func sourceChanged() {
         if composition.isActive, !isApplyingSourceEdit { composition.invalidate() }
         hints = [] // Server anchors are stale after every source character edit.
+        sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
         rebuild()
+        if let view { NotificationCenter.default.post(name: .editorSourceDidChange, object: view) }
+    }
+
+    static func lineStarts(in text: String) -> [Int] {
+        var result = [0]
+        for (offset, unit) in text.utf16.enumerated() where unit == 10 { result.append(offset + 1) }
+        return result
     }
 
     func rebuild() {
@@ -117,6 +130,13 @@ final class EditorDisplayAdapter {
         let selections = view.selectedRanges.compactMap { try? document.map.sourceRange(forDisplay: $0.rangeValue) }.map(NSValue.init(range:))
         let typingAttributes = view.typingAttributes
         let scroll = captureScrollAnchor()
+        if let layout = view.layoutManager {
+            let range = NSRange(location: 0, length: document.storage.length)
+            for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .underlineStyle, .underlineColor,
+                        NSAttributedString.Key("alas.editorFindHighlightMarker"), NSAttributedString.Key("alas.editorFindPreviousBackgroundColor")] {
+                layout.removeTemporaryAttribute(key, forCharacterRange: range)
+            }
+        }
         do {
             try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
         } catch {
@@ -146,6 +166,10 @@ final class EditorDisplayAdapter {
         if buffer.storage.length == 0 { view.typingAttributes = typingAttributes }
         restoreScrollAnchor(scroll)
         view.inputContext?.invalidateCharacterCoordinates()
+        if view.snippetChoiceWindow.isVisible, let rect = view.completionAnchorRect() {
+            view.snippetChoiceWindow.reposition(anchor: rect, in: view)
+        }
+        NotificationCenter.default.post(name: .editorDisplayProjectionDidChange, object: view)
     }
 
     struct ScrollAnchor { let sourceLine: Int

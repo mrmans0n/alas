@@ -39,8 +39,9 @@ final class EditorDisplayDocument {
             // Hints inherit local layout attributes, including the paragraph's
             // writing direction and tab stops. They own their attachment value.
             if source.length > 0 {
-                var attributes = source.attributes(at: min(offset, source.length - 1), effectiveRange: nil)
-                attributes.removeValue(forKey: .attachment)
+                let attributes = source.attributes(at: min(offset, source.length - 1), effectiveRange: nil).filter {
+                    [.font, .paragraphStyle, .writingDirection].contains($0.key)
+                }
                 attachment.addAttributes(attributes, range: NSRange(location: 0, length: 1))
             }
             display.append(attachment)

@@ -84,7 +84,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
         )
 
         let attributes = labelAttributes(font: textView.font)
-        let string = textView.string as NSString
+        let string = textView.sourceString as NSString
         var lastDrawnLineIndex: Int?
 
         if visibleGlyphRange.location != NSNotFound {
@@ -92,8 +92,10 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
                 let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
                 guard characterRange.location != NSNotFound else { return }
 
-                let lineRange = string.lineRange(for: NSRange(location: characterRange.location, length: 0))
-                guard characterRange.location == lineRange.location else { return }
+                guard let sourceRange = textView.sourceRange(forNative: characterRange) else { return }
+                let lineRange = string.lineRange(for: NSRange(location: sourceRange.location, length: 0))
+                let firstDisplay = textView.displayAdapter.flatMap { try? $0.document.map.displayOffset(forSource: lineRange.location, affinity: .beforeHints) } ?? lineRange.location
+                guard NSLocationInRange(firstDisplay, characterRange) else { return }
 
                 let lineIndex = self.lineIndex(containing: lineRange.location)
                 guard lineIndex != lastDrawnLineIndex else { return }
@@ -109,7 +111,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             }
         }
 
-        if shouldDrawExtraLineFragment(for: string) {
+        if shouldDrawExtraLineFragment(for: string), lastDrawnLineIndex != lineStarts.count - 1 {
             let extraLineRect = layoutManager.extraLineFragmentRect
             if extraLineRect.height > 0, extraLineRect.intersects(visibleTextContainerRect) {
                 drawLineNumber(
@@ -206,18 +208,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
         }
 
         cachedTextStorage = textView.textStorage
-        let string = textView.string as NSString
-        var starts = [0]
-        var searchLocation = 0
-        while searchLocation < string.length {
-            let range = NSRange(location: searchLocation, length: string.length - searchLocation)
-            let newlineRange = string.range(of: "\n", options: [], range: range)
-            guard newlineRange.location != NSNotFound else { break }
-            searchLocation = NSMaxRange(newlineRange)
-            starts.append(searchLocation)
-        }
-
-        lineStarts = starts
+        lineStarts = textView.sourceLineStarts
         updateThickness()
     }
 

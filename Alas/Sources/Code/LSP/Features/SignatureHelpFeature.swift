@@ -336,12 +336,12 @@ final class SignatureHelpFeature {
 
     private func scheduleAutomatic() {
         guard let textView, isEnabled(), textView.isEditable,
-              textView.selectedRanges.count == 1, textView.selectedRange().length == 0 else {
+              textView.sourceSelectedRanges.count == 1, textView.sourceSelectedRange.length == 0 else {
             dismiss()
             return
         }
-        let text = textView.string
-        let caret = textView.selectedRange().location
+        let text = textView.sourceString
+        let caret = textView.sourceSelectedRange.location
         guard let callStart = Self.callStart(text: text, caret: caret) else {
             cancelAndDismiss()
             return
@@ -356,9 +356,9 @@ final class SignatureHelpFeature {
             let retriggers = await client.signatureHelpRetriggerCharacters
             guard !Task.isCancelled,
                   generation == self.automaticGeneration,
-                  self.textView?.string == text,
-                  self.textView?.selectedRange().location == caret,
-                  self.textView?.selectedRange().length == 0 else { return }
+                  self.textView?.sourceString == text,
+                  self.textView?.sourceSelectedRange.location == caret,
+                  self.textView?.sourceSelectedRange.length == 0 else { return }
             let visible = self.windowController.isVisible
             let activeSignatureHelp = visible ? self.signatureHelpForRetrigger() : nil
             let context = Self.requestContext(
@@ -389,13 +389,13 @@ final class SignatureHelpFeature {
 
     private func request(context: LSPSignatureHelpContext) {
         guard let textView, isEnabled(), textView.isEditable,
-              textView.selectedRanges.count == 1, textView.selectedRange().length == 0,
+              textView.sourceSelectedRanges.count == 1, textView.sourceSelectedRange.length == 0,
               let uri = getURI() else {
             dismiss()
             return
         }
-        let caret = textView.selectedRange().location
-        guard context.triggerKind == .invoked || Self.callStart(text: textView.string, caret: caret) != nil else {
+        let caret = textView.sourceSelectedRange.location
+        guard context.triggerKind == .invoked || Self.callStart(text: textView.sourceString, caret: caret) != nil else {
             cancelAndDismiss()
             return
         }
@@ -419,7 +419,7 @@ final class SignatureHelpFeature {
                     context: context
                 )
             } else if self.synchronizeRequest == nil, let fallbackClient,
-                      let position = TextEditCoordinates.lspPosition(utf16Offset: caret, in: textView.string) {
+                      let position = TextEditCoordinates.lspPosition(utf16Offset: caret, in: textView.sourceString) {
                 response = try? await fallbackClient.signatureHelp(uri: uri, position: position, context: context)
             } else {
                 response = nil
@@ -433,8 +433,8 @@ final class SignatureHelpFeature {
                         contextIsCurrent: requestContext.map(self.isContextCurrent) ?? true
                       ),
                       self.getURI() == uri,
-                      self.textView?.selectedRange().location == caret,
-                      self.textView?.selectedRange().length == 0
+                      self.textView?.sourceSelectedRange.location == caret,
+                      self.textView?.sourceSelectedRange.length == 0
                 else { return }
                 self.applyCurrentResponse(response, caret: caret)
             }
@@ -449,7 +449,7 @@ final class SignatureHelpFeature {
         help = response
         selectedSignatureIndex = Self.activeSignatureIndex(in: response)
         shownCaret = caret
-        shownCallStart = Self.callStart(text: textView?.string ?? "", caret: caret)
+        shownCallStart = Self.callStart(text: textView?.sourceString ?? "", caret: caret)
         present()
     }
 
@@ -479,7 +479,7 @@ final class SignatureHelpFeature {
     private func reposition() {
         guard windowController.isVisible else { return }
         guard let textView, let caret = shownCaret,
-              textView.selectedRange().location == caret,
+              textView.sourceSelectedRange.location == caret,
               let anchor = textView.completionAnchorRect() else {
             dismiss()
             return

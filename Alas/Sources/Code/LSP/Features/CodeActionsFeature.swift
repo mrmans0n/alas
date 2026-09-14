@@ -165,7 +165,7 @@ final class CodeActionsFeature {
             let original = session.context
             let plan = try await edits.prepare(edit, context: original, generations: session.generations)
             guard !Task.isCancelled, id == generation, isCurrent(original), let textView else { return .cancelled }
-            let expectedText = plan.finalSnapshots[original.document]?.content ?? Data(textView.string.utf8)
+            let expectedText = plan.finalSnapshots[original.document]?.content ?? Data(textView.sourceString.utf8)
             let model = edits.makePreviewModel(plan: plan, context: original)
             let accepted = await presentation.present(model, parent: textView.window, forcePreview: true)
             guard accepted else { return .init(applied: false, failureReason: model.errorMessage ?? "Workspace edit preview cancelled.") }
@@ -188,10 +188,10 @@ final class CodeActionsFeature {
                                                                      applied: applied, actual: actual)
             // Only executor-confirmed edits may advance captured generations. Preserve every
             // untouched owner and reject changes during snapshots or synchronization as well.
-            guard !Task.isCancelled, id == generation, Data(textView.string.utf8) == expectedText,
+            guard !Task.isCancelled, id == generation, Data(textView.sourceString.utf8) == expectedText,
                   let refreshed = await synchronize(NSRange(location: 0, length: 0)), refreshed.0 === client,
                   refreshed.1.document == original.document, refreshed.1.serverGeneration == original.serverGeneration,
-                  Data(textView.string.utf8) == expectedText, isCurrent(refreshed.1),
+                  Data(textView.sourceString.utf8) == expectedText, isCurrent(refreshed.1),
                   tabs.workspaceEditGenerations(host: original.document.host, worktreeID: original.document.worktreeID) == refreshedGenerations else { return .cancelled }
             session.context = refreshed.1
             session.generations = refreshedGenerations

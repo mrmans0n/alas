@@ -25,6 +25,7 @@ final class DefinitionFeature {
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
     private let snippetCache = DefinitionSnippetCache()
+    private var pickerSourcePosition: LSPPosition?
 
     init(
         textView: CodeTextView,
@@ -48,6 +49,11 @@ final class DefinitionFeature {
     func notifyScrolled() { dismiss() }
     func notifyCaretChanged() { dismiss() }
     func notifyWindowResized() { dismiss() }
+
+    func notifyProjectionChanged() {
+        guard let textView, let position = pickerSourcePosition, let rect = textView.firstRect(for: position) else { return }
+        popover?.positioningRect = rect
+    }
 
     func goToTypeDefinition(range: NSRange) {
         requestFromCommand(.typeDefinition, range: range)
@@ -76,7 +82,7 @@ final class DefinitionFeature {
     private func requestFromCommand(_ method: RequestMethod, range: NSRange) {
         guard let textView,
               let uri = getURI(),
-              let position = TextEditCoordinates.lspPosition(utf16Offset: range.location, in: textView.string),
+              let position = TextEditCoordinates.lspPosition(utf16Offset: range.location, in: textView.sourceString),
               let rect = textView.firstRect(for: position)
         else { return }
         request(
@@ -96,6 +102,7 @@ final class DefinitionFeature {
         anchorPoint: NSPoint
     ) {
         let fallbackClient = getClient()
+        let sourceSnapshot = textView?.sourceString
         inFlight?.cancel()
         requestID += 1
         let currentRequestID = requestID
@@ -137,11 +144,11 @@ final class DefinitionFeature {
                       self.requestID == currentRequestID,
                       self.getURI() == uri,
                       context.map(self.isContextCurrent) ?? true,
-                      self.textView?.lspPosition(at: anchorPoint) == position
+                      self.textView?.sourceString == sourceSnapshot
                 else { return }
                 self.handle(
                     locations: locations,
-                    anchorPoint: anchorPoint,
+                    anchorPoint: self.textView?.firstRect(for: position).map { NSPoint(x: $0.midX, y: $0.midY) } ?? anchorPoint,
                     sourcePosition: context?.range.start ?? position
                 )
             }
@@ -195,6 +202,7 @@ final class DefinitionFeature {
         )
         popover.contentViewController = host
         let anchorRect = NSRect(origin: point, size: NSSize(width: 1, height: 1))
+        pickerSourcePosition = sourcePosition
         popover.show(relativeTo: anchorRect, of: textView, preferredEdge: .maxY)
         self.popover = popover
     }

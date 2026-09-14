@@ -110,7 +110,7 @@ final class RenameFeature {
         task = Task { [weak self] in
             guard let self, let request = await synchronize(range), let textView,
                   id == requestID, isCurrent(request.1) else { return }
-            let text = textView.string
+            let text = textView.sourceString
             let generations = tabs.workspaceEditGenerations(host: request.1.document.host, worktreeID: request.1.document.worktreeID)
             let fallback = (text as NSString).rangeOfWord(at: range.location)
             do {
@@ -159,7 +159,7 @@ final class RenameFeature {
             guard let self, let request = await synchronize(range), let textView,
                   id == requestID, isCurrent(request.1) else { return }
             let generations = tabs.workspaceEditGenerations(host: request.1.document.host, worktreeID: request.1.document.worktreeID)
-            let options = Self.formattingOptions(text: textView.string)
+            let options = Self.formattingOptions(text: textView.sourceString)
             do {
                 let edits = try await selectionOnly
                     ? request.0.rangeFormatting(uri: request.1.document.uri, range: request.1.range, options: options)

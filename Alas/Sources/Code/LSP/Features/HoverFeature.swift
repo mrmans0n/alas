@@ -92,6 +92,12 @@ final class HoverFeature {
     func notifyCaretChanged() { dismiss() }
     func notifyWindowResized() { dismiss() }
 
+    func notifyProjectionChanged() {
+        guard let textView, let range = shownSymbolRange ?? currentSymbolRange,
+              let rect = textView.symbolAnchorRect(for: range) else { return }
+        windowController.reposition(anchor: rect, in: textView)
+    }
+
     /// Returns true if the popover was visible and consumed the Esc key.
     func handleEscape() -> Bool {
         guard isShowingPopover else { return false }
@@ -100,7 +106,7 @@ final class HoverFeature {
     }
 
     /// Presents protocol diagnostic metadata in the existing hover overlay.
-    /// The range here is a display-only `NSRange`; callers retain the original
+    /// The range here is a source `NSRange`; callers retain the original
     /// `LSPDiagnostic` for all LSP follow-up requests.
     func showDiagnosticDetails(
         _ diagnostic: LSPDiagnostic,
@@ -567,16 +573,23 @@ extension CodeTextView {
             y: point.y - textContainerInset.height
         )
         let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        guard rect.contains(containerPoint) else { return nil }
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         guard charIndex < (storage.string as NSString).length else { return nil }
+        if let adapter = displayAdapter {
+            guard !adapter.document.map.hintRuns.contains(where: { $0.displayOffset == charIndex }) else { return nil }
+            return adapter.sourceRange(forDisplay: NSRange(location: charIndex, length: 0))?.location
+        }
         return charIndex
     }
 
     /// Resolves an `LSPPosition` (line, UTF-16 character) for a point in the
     /// view's coordinate space. Returns nil if outside the text area.
     func lspPosition(at point: NSPoint) -> LSPPosition? {
-        guard let charIndex = utf16Offset(at: point), let storage = textStorage else { return nil }
-        let nsString = storage.string as NSString
+        guard let charIndex = utf16Offset(at: point) else { return nil }
+        let nsString = sourceString as NSString
         var line = 0
         var lineStart = 0
         var i = 0
@@ -593,20 +606,9 @@ extension CodeTextView {
     /// Returns the rect (in view coords) of the character at `position`,
     /// or nil if the position is invalid.
     func firstRect(for position: LSPPosition) -> NSRect? {
-        guard let storage = textStorage, let layoutManager else { return nil }
-        let nsString = storage.string as NSString
-        var charIndex = 0
-        var line = 0
-        while line < position.line {
-            let r = nsString.range(of: "\n", options: [], range: NSRange(location: charIndex, length: nsString.length - charIndex))
-            if r.location == NSNotFound { return nil }
-            charIndex = r.location + 1
-            line += 1
-        }
-        charIndex += position.character
-        guard charIndex < nsString.length else { return nil }
-        let glyph = layoutManager.glyphIndexForCharacter(at: charIndex)
-        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer!)
-        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        guard let offset = try? LSPPositionCodec.offset(position, in: sourceString) else { return nil }
+        if offset == sourceAttributedText.length { return sourceInsertionRect(inViewAt: offset) }
+        let range = (sourceString as NSString).rangeOfComposedCharacterSequence(at: offset)
+        return sourceRects(inViewFor: range).first
     }
 }

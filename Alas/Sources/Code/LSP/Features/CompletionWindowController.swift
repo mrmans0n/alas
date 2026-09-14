@@ -57,4 +57,8 @@ final class CompletionWindowController {
         mermaidCancellation.cancel()
         overlay.hide()
     }
+
+    func reposition(anchor: NSRect, in textView: CodeTextView) {
+        overlay.reposition(anchor: anchor, in: textView)
+    }
 }

@@ -45,6 +45,10 @@ final class HoverWindowController {
         mermaidCancellation.cancel()
         overlay.hide()
     }
+
+    func reposition(anchor: NSRect, in textView: CodeTextView) {
+        overlay.reposition(anchor: anchor, in: textView)
+    }
 }
 
 struct HoverPopupView: View {

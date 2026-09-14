@@ -48,6 +48,11 @@ final class EditorOverlayPanel {
         panel?.orderOut(nil)
     }
 
+    func reposition(anchor: NSRect, in hostView: NSView) {
+        guard let panel, panel.isVisible else { return }
+        panel.setFrame(frame(for: panel.frame.size, anchor: anchor, in: hostView), display: true, animate: false)
+    }
+
     private func ensurePanel(size: NSSize) -> OverlayPanel {
         if let panel { return panel }
         let panel = OverlayPanel(

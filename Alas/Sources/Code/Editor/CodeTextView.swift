@@ -229,10 +229,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         guard let editorCommandRouter else { return nativeMenu }
 
         let point = convert(event.locationInWindow, from: nil)
-        let offset = utf16Offset(at: point) ?? selectedRange().location
+        let offset = utf16Offset(at: point) ?? sourceSelectedRange.location
         commandTargetRange = EditorCommandRouter.targetRange(
             clickOffset: offset,
-            selection: selectedRange()
+            selection: sourceSelectedRange
         )
 
         let commands = editorCommandRouter.availableCommands()
@@ -278,20 +278,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     private func invokeEditorCommand(_ command: EditorCommandID) {
-        let range = commandTargetRange ?? selectedRange()
+        let range = commandTargetRange ?? sourceSelectedRange
         editorCommandRouter?.invoke(command, range: range)
         commandTargetRange = nil
     }
 
     func triggerCommandClick(atUTF16Offset offset: Int) {
-        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: string),
+        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: sourceString),
               let rect = firstRect(for: position)
         else { return }
         commandClickHandler?(NSPoint(x: rect.midX, y: rect.midY))
     }
 
     func triggerHover(atUTF16Offset offset: Int) {
-        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: string),
+        guard let position = TextEditCoordinates.lspPosition(utf16Offset: offset, in: sourceString),
               let rect = firstRect(for: position)
         else { return }
         hoverHandler?(NSPoint(x: rect.midX, y: rect.midY))
@@ -304,8 +304,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         popover.contentViewController = NSViewController()
         popover.contentViewController?.view = NSTextField(labelWithString: message)
         popover.contentViewController?.view.frame = NSRect(x: 0, y: 0, width: 220, height: 28)
-        let range = commandTargetRange ?? selectedRange()
-        let rect = (TextEditCoordinates.lspPosition(utf16Offset: range.location, in: string)).flatMap(firstRect(for:))
+        let range = commandTargetRange ?? sourceSelectedRange
+        let rect = (TextEditCoordinates.lspPosition(utf16Offset: range.location, in: sourceString)).flatMap(firstRect(for:))
             ?? NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
         popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
         commandStatusPopover = popover
@@ -1289,7 +1289,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         return localInsertionRect(at: selection.location)
     }
 
-    private func localInsertionRect(at location: Int) -> NSRect? {
+    func localInsertionRect(at location: Int) -> NSRect? {
         guard let layoutManager, let textContainer else { return nil }
         layoutManager.ensureLayout(for: textContainer)
         return fallbackInsertionRect(at: location, layoutManager: layoutManager, textContainer: textContainer)
@@ -1550,7 +1550,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
                 updated[updated.count - 1] = word
             }
             setSourceSelectedRanges(updated.map(NSValue.init(range:)))
-            scrollRangeToVisible(word)
+            scrollSourceRangeToVisible(word)
             return
         }
 
@@ -1559,7 +1559,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         let searchStart = NSMaxRange(activeRange)
         guard let next = nextUnselectedOccurrence(of: needle, after: searchStart, selected: ranges) else { return }
         setSourceSelectedRanges(sourceSelectedRanges + [NSValue(range: next)])
-        scrollRangeToVisible(next)
+        scrollSourceRangeToVisible(next)
     }
 
     private func nextUnselectedOccurrence(of needle: String, after location: Int, selected: [NSRange]) -> NSRange? {
@@ -1842,14 +1842,8 @@ extension CodeTextView {
     /// `point`, or nil if the point is outside the text or not over an
     /// identifier character (`[A-Za-z0-9_]`). Used by hover and ⌘-underline.
     func symbolRange(at point: NSPoint) -> NSRange? {
-        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
-        let containerPoint = NSPoint(
-            x: point.x - textContainerInset.width,
-            y: point.y - textContainerInset.height
-        )
-        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
-        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-        let nsString = storage.string as NSString
+        guard let charIndex = utf16Offset(at: point) else { return nil }
+        let nsString = sourceString as NSString
         guard charIndex < nsString.length else { return nil }
         let range = nsString.rangeOfWord(at: charIndex)
         return range.length == 0 ? nil : range
@@ -1859,10 +1853,7 @@ extension CodeTextView {
     /// `textContainerInset`) of the first character of `range`. Used to anchor
     /// the hover popover under a token.
     func symbolAnchorRect(for range: NSRange) -> NSRect? {
-        guard range.length > 0, let layoutManager, let textContainer else { return nil }
-        let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
-        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
-        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        sourceRects(inViewFor: range).first
     }
 }
 

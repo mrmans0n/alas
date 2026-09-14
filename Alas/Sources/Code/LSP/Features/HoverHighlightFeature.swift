@@ -19,6 +19,10 @@ final class HoverHighlightFeature {
     private var commandHeld: Bool = false
     private(set) var lastUnderlinedRange: NSRange?
     private var inFlight: Task<Void, Never>?
+    private var projectionObserver: NSObjectProtocol?
+    private var underlineRevision: Int?
+
+    deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
 
     private let debounceNanos: UInt64 = 80_000_000 // 80 ms
 
@@ -34,6 +38,14 @@ final class HoverHighlightFeature {
         self.getURI = getURI
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let view = self.textView, let range = self.lastUnderlinedRange else { return }
+                guard self.underlineRevision == view.displayAdapter?.buffer.editGeneration else { self.clearUnderline()
+                return }
+                view.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
+            }
+        }
         // Chain all three handlers so coexisting features (HoverFeature's
         // ⌥-peek) keep receiving their events. Coordinator constructs
         // HoverFeature first, then this feature — without chaining we'd
@@ -140,30 +152,30 @@ final class HoverHighlightFeature {
     }
 
     private func applyUnderline(at position: LSPPosition) {
-        guard let textView, let storage = textView.textStorage,
-              let layoutManager = textView.layoutManager else { return }
-        guard let offset = try? LSPPositionCodec.offset(position, in: storage.string) else { return }
-        let nsString = storage.string as NSString
+        guard let textView else { return }
+        guard let offset = try? LSPPositionCodec.offset(position, in: textView.sourceString) else { return }
+        let nsString = textView.sourceString as NSString
         guard offset < nsString.length else { return }
         let wordRange = nsString.rangeOfWord(at: offset)
         clearUnderline()
         if wordRange.length == 0 { return }
-        layoutManager.addTemporaryAttributes(
+        textView.addSourceTemporaryAttributes(
             [.underlineStyle: NSUnderlineStyle.single.rawValue],
-            forCharacterRange: wordRange
+            range: wordRange
         )
         lastUnderlinedRange = wordRange
+        underlineRevision = textView.displayAdapter?.buffer.editGeneration
         NSCursor.pointingHand.set()
     }
 
     private func clearUnderline() {
         defer { restoreCursor() }
-        guard let textView, let layoutManager = textView.layoutManager,
+        guard let textView,
               let range = lastUnderlinedRange else {
             lastUnderlinedRange = nil
             return
         }
-        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
+        textView.removeSourceTemporaryAttribute(.underlineStyle, range: range)
         lastUnderlinedRange = nil
     }
 

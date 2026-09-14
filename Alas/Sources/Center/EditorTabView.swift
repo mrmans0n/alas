@@ -204,8 +204,8 @@ struct EditorTabView: View {
                             ?? worktreePath.appendingPathComponent(relativePath).lspURI
                         let sourcePosition = activeTextView.flatMap {
                             TextEditCoordinates.lspPosition(
-                                utf16Offset: $0.selectedRange().location,
-                                in: $0.string
+                                utf16Offset: $0.sourceSelectedRange.location,
+                                in: $0.sourceString
                             )
                         } ?? LSPPosition(line: 0, character: 0)
                         let source = EditorNavigationTarget(
@@ -254,7 +254,7 @@ struct EditorTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { notification in
             handleFindRequest(notification)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification).merge(with: NotificationCenter.default.publisher(for: .editorSourceDidChange))) { notification in
             guard let textView = notification.object as? CodeTextView,
                   textView === activeTextView else { return }
             handleEditorTextChanged()
@@ -479,8 +479,8 @@ struct EditorTabView: View {
 
     private func navigationAnchor(for direction: EditorFindBarView.FindDirection) -> Int? {
         guard let textView = activeTextView else { return nil }
-        let selection = textView.selectedRange()
-        let textLength = (textView.string as NSString).length
+        let selection = textView.sourceSelectedRange
+        let textLength = (textView.sourceString as NSString).length
         guard selection.location != NSNotFound,
               selection.location >= 0,
               NSMaxRange(selection) <= textLength else { return nil }
@@ -510,11 +510,11 @@ struct EditorTabView: View {
 
     private func selectedSingleLineText() -> String? {
         guard let textView = activeTextView else { return nil }
-        guard textView.selectedRanges.count == 1 else { return nil }
-        let selectedRange = textView.selectedRange()
+        guard textView.sourceSelectedRanges.count == 1 else { return nil }
+        let selectedRange = textView.sourceSelectedRange
         guard selectedRange.location != NSNotFound, selectedRange.length > 0 else { return nil }
 
-        let text = textView.string as NSString
+        let text = textView.sourceString as NSString
         guard selectedRange.location >= 0, NSMaxRange(selectedRange) <= text.length else { return nil }
 
         let selectedText = text.substring(with: selectedRange)

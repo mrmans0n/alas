@@ -34,6 +34,7 @@ final class CodeEditorCoordinator {
     private var pendingReveal: (tabId: TabID, line: Int, endLine: Int?, character: Int, revision: Int)?
     private var revealHighlightTask: Task<Void, Never>?
     private var revealHighlightRange: NSRange?
+    private var revealHighlightRevision: Int?
     private var currentExternalAbsolutePath: String?
     private var currentExternalEditable: Bool = false
     private var currentOriginatingWorktreeRoot: URL?
@@ -536,7 +537,7 @@ final class CodeEditorCoordinator {
             // start the highlight: stale diagnostics would otherwise be
             // re-applied to the new storage by the async highlight task.
             diagnosticsFeature.reset()
-            textView?.setSelectedRange(NSRange(location: 0, length: 0))
+            textView?.setSourceSelectedRange(NSRange(location: 0, length: 0))
         }
         applyBaseStyle(theme: theme)
         configureSemanticTokens(theme: theme)
@@ -694,6 +695,20 @@ final class CodeEditorCoordinator {
     private func installHoverObservers(textView: CodeTextView) {
         clearHoverObservers()
         let nc = NotificationCenter.default
+        let projectionToken = nc.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let view = self.textView else { return }
+                self.hover?.notifyProjectionChanged()
+                self.definition?.notifyProjectionChanged()
+                self.completion?.notifyProjectionChanged()
+                self.signatureHelp?.notifyScrolled()
+                if let range = self.revealHighlightRange, self.revealHighlightRevision == self.buffer?.editGeneration {
+                    view.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: NSColor.systemYellow.withAlphaComponent(0.9)], range: range)
+                }
+                self.scheduleSemanticRefresh(visibleRangeChanged: true)
+            }
+        }
+        hoverObservers.append(projectionToken)
 
         if let clipView = textView.enclosingScrollView?.contentView {
             clipView.postsBoundsChangedNotifications = true
@@ -702,6 +717,7 @@ final class CodeEditorCoordinator {
                 object: clipView,
                 queue: .main
             ) { [weak self] _ in
+                guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
                 self?.signatureHelp?.notifyScrolled()
@@ -759,7 +775,7 @@ final class CodeEditorCoordinator {
     // MARK: - Editor commands
 
     private func applyWorkspaceCompletion(_ completion: CompletionEditPlan, snapshot: String, context: EditorRequestContext) async -> Bool {
-        guard isLSPRequestCurrent(context), textView?.string == snapshot, let renameFeature else { return false }
+        guard isLSPRequestCurrent(context), textView?.sourceString == snapshot, let renameFeature else { return false }
         let coordinates = TextEditCoordinates.LineIndex(snapshot)
         var edits: [LSPTextEdit] = []
         for edit in completion.edits {
@@ -770,7 +786,7 @@ final class CodeEditorCoordinator {
         let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
         do {
             let plan = try await renameFeature.prepare(.init(changes: [context.document.uri: edits]), context: context, generations: generations)
-            guard !Task.isCancelled, isLSPRequestCurrent(context), textView?.string == snapshot, !plan.requiresPreview else { return false }
+            guard !Task.isCancelled, isLSPRequestCurrent(context), textView?.sourceString == snapshot, !plan.requiresPreview else { return false }
             return await renameFeature.makePreviewModel(plan: plan, context: context).apply()
         } catch { return false }
     }
@@ -816,12 +832,12 @@ final class CodeEditorCoordinator {
         router.register(.nextProblem, isAvailable: { [weak self] in
             !(self?.diagnosticsFeature.current.isEmpty ?? true)
         }) { [weak self, weak textView] _ in
-            self?.showProblem(from: textView?.selectedRange().location, backwards: false)
+            self?.showProblem(from: textView?.sourceSelectedRange.location, backwards: false)
         }
         router.register(.previousProblem, isAvailable: { [weak self] in
             !(self?.diagnosticsFeature.current.isEmpty ?? true)
         }) { [weak self, weak textView] _ in
-            self?.showProblem(from: textView?.selectedRange().location, backwards: true)
+            self?.showProblem(from: textView?.sourceSelectedRange.location, backwards: true)
         }
         router.register(.hover) { [weak textView] range in
             textView?.triggerHover(atUTF16Offset: range.location)
@@ -840,7 +856,7 @@ final class CodeEditorCoordinator {
             self?.codeActionsFeature?.show(range: range)
         }
         router.register(.formatSelection, isAvailable: { [weak textView] in
-            canEdit() && (textView?.selectedRange().length ?? 0) > 0
+            canEdit() && (textView?.sourceSelectedRange.length ?? 0) > 0
         }) { [weak self] range in
             guard range.length > 0 else { return }
             self?.renameFeature?.format(range: range, selectionOnly: true)
@@ -958,16 +974,16 @@ final class CodeEditorCoordinator {
     private func showProblem(from caretOffset: Int?, backwards: Bool) {
         guard let textView,
               let caretOffset,
-              let position = TextEditCoordinates.lspPosition(utf16Offset: caretOffset, in: textView.string),
+              let position = TextEditCoordinates.lspPosition(utf16Offset: caretOffset, in: textView.sourceString),
               let range = diagnosticsFeature.nextRange(after: position, backwards: backwards),
               let diagnostic = diagnosticsFeature.diagnostics(at: range.start).first(where: { $0.range == range }),
-              let displayRange = DiagnosticsFeature.nsRange(for: range, in: textView.string)
+              let displayRange = DiagnosticsFeature.nsRange(for: range, in: textView.sourceString)
         else {
             textView?.showCommandStatus("No visible problem at this location")
             return
         }
 
-        textView.setSelectedRange(displayRange)
+        textView.setSourceSelectedRange(displayRange)
         scrollRangeToVisiblePreservingHorizontalOffset(displayRange, in: textView)
         hover?.showDiagnosticDetails(
             diagnostic,
@@ -1035,6 +1051,7 @@ final class CodeEditorCoordinator {
     }
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
+        clearRevealHighlight()
         semanticFeature?.invalidate()
         if let worktreeID = currentWorktreeId {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
@@ -1229,7 +1246,7 @@ final class CodeEditorCoordinator {
 
     private func configureSemanticTokens(theme: Theme) {
         guard let layoutManager, lspBinding != nil else { return }
-        semanticLayer = EditorSemanticLayer(layoutManager: layoutManager, theme: EditorTheme(theme: theme), isCurrent: { [weak self] context in
+        semanticLayer = EditorSemanticLayer(layoutManager: layoutManager, theme: EditorTheme(theme: theme), textView: textView, isCurrent: { [weak self] context in
             guard let self, let buffer = self.buffer,
                   buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI == context.document.uri,
                   !self.hasPendingDidChange else { return false }
@@ -1293,8 +1310,8 @@ final class CodeEditorCoordinator {
             let rect = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
             let glyphs = layout.glyphRange(forBoundingRect: rect, in: container)
             let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-            guard characters.location <= storage.length, characters.length <= storage.length - characters.location else { return }
-            range = (storage.string as NSString).lineRange(for: characters)
+            guard let source = textView.sourceRange(forNative: characters) else { return }
+            range = (storage.string as NSString).lineRange(for: source)
         } else {
             range = NSRange(location: 0, length: storage.length)
         }
@@ -1484,7 +1501,7 @@ final class CodeEditorCoordinator {
         let charIndex = characterIndex(atLine: line, in: nsString) ?? nsString.length
         let target = min(charIndex + character, nsString.length)
         let range = NSRange(location: target, length: 0)
-        textView.setSelectedRange(range)
+        textView.setSourceSelectedRange(range)
         scrollRangeToVisiblePreservingHorizontalOffset(range, in: textView)
         let endTarget = endLine.map { characterIndex(atLine: $0, in: nsString) ?? nsString.length }
         highlightRevealLines(from: target, through: endTarget, in: nsString, textView: textView)
@@ -1519,13 +1536,13 @@ final class CodeEditorCoordinator {
 
     private func scrollRangeToVisiblePreservingHorizontalOffset(_ range: NSRange, in textView: CodeTextView) {
         guard let scrollView = textView.enclosingScrollView else {
-            textView.scrollRangeToVisible(range)
+            textView.scrollSourceRangeToVisible(range)
             return
         }
 
         let clipView = scrollView.contentView
         let originalX = clipView.bounds.origin.x
-        textView.scrollRangeToVisible(range)
+        textView.scrollSourceRangeToVisible(range)
 
         guard clipView.bounds.origin.x != originalX else { return }
         clipView.scroll(to: NSPoint(x: originalX, y: clipView.bounds.origin.y))
@@ -1551,9 +1568,9 @@ final class CodeEditorCoordinator {
         guard lineRange.location != NSNotFound, lineRange.length > 0 else { return }
 
         let color = NSColor.systemYellow.withAlphaComponent(0.9)
-        layoutManager.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.thick.rawValue, forCharacterRange: lineRange)
-        layoutManager.addTemporaryAttribute(.underlineColor, value: color, forCharacterRange: lineRange)
+        textView.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: color], range: lineRange)
         revealHighlightRange = lineRange
+        revealHighlightRevision = buffer?.editGeneration
         revealHighlightTask = Task { [weak self, weak textView] in
             try? await Task.sleep(for: .seconds(7))
             guard !Task.isCancelled else { return }
@@ -1573,15 +1590,15 @@ final class CodeEditorCoordinator {
             revealHighlightRange = nil
             return
         }
-        let textLength = (textView.string as NSString).length
+        let textLength = (textView.sourceString as NSString).length
         if range.location < textLength {
             let clampedRange = NSRange(
                 location: range.location,
                 length: min(range.length, textLength - range.location)
             )
             if clampedRange.length > 0 {
-                layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: clampedRange)
-                layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: clampedRange)
+                textView.removeSourceTemporaryAttribute(.underlineStyle, range: clampedRange)
+                textView.removeSourceTemporaryAttribute(.underlineColor, range: clampedRange)
             }
         }
         revealHighlightRange = nil

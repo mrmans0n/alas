@@ -49,6 +49,11 @@ final class CompletionFeature {
     private var selection: Int = 0
     private var selectedCandidateID: UUID?
     private let suggestionWindow = CompletionWindowController()
+
+    func notifyProjectionChanged() {
+        guard suggestionWindow.isVisible, let textView, let rect = textView.completionAnchorRect() else { return }
+        suggestionWindow.reposition(anchor: rect, in: textView)
+    }
     private var isRefreshing = false
 
     private let automaticDebounceNanos: UInt64 = 120_000_000
@@ -171,8 +176,8 @@ final class CompletionFeature {
         let configuredTriggers = await client.completionTriggerCharacters
         let triggers = configuredTriggers.isEmpty ? fallbackTriggerCharacters : configuredTriggers
         return CompletionEngine.completionTriggerSuffix(
-            in: textView.string,
-            caret: textView.selectedRange().location,
+            in: textView.sourceString,
+            caret: textView.sourceSelectedRange.location,
             triggers: triggers
         )
     }
@@ -191,8 +196,8 @@ final class CompletionFeature {
             return
         }
 
-        let caret = textView.selectedRange().location
-        let bufferText = textView.string
+        let caret = textView.sourceSelectedRange.location
+        let bufferText = textView.sourceString
         guard let prefix = CompletionEngine.prefix(in: bufferText, caret: caret),
               allowEmptyPrefix || !prefix.text.isEmpty else {
             cancelAndDismiss()
@@ -249,14 +254,14 @@ final class CompletionFeature {
                       contextToken.map(self.isContextCurrent) ?? true,
                       let activeTextView = self.textView,
                       self.hasSessionPreconditions(),
-                      activeTextView.selectedRange().location == caret,
-                      CompletionEngine.prefix(in: activeTextView.string, caret: caret) == prefix else {
+                      activeTextView.sourceSelectedRange.location == caret,
+                      CompletionEngine.prefix(in: activeTextView.sourceString, caret: caret) == prefix else {
                     return
                 }
                 self.present(
                     items: lspItems,
                     prefix: prefix,
-                    bufferText: activeTextView.string,
+                    bufferText: activeTextView.sourceString,
                     allowEmptyPrefix: allowEmptyPrefix,
                     allowBufferFallback: allowBufferFallback,
                     memberAccessOnly: memberAccessOnly
@@ -521,8 +526,8 @@ final class CompletionFeature {
         resolveTask?.cancel()
         resolvingCandidateID = candidate.id
         guard let item = candidate.lspItem, let client = getClient(), let textView else { return }
-        let snapshot = textView.string
-        let selectedRange = textView.selectedRange()
+        let snapshot = textView.sourceString
+        let selectedRange = textView.sourceSelectedRange
         let uri = getURI()
         let id = requestID
         resolveTask = Task { [weak self] in
@@ -530,7 +535,7 @@ final class CompletionFeature {
             guard let resolved = try? await client.resolveCompletion(item), !Task.isCancelled,
                   let self, self.requestID == id, self.getURI() == uri,
                   self.selectedCandidateID == candidate.id,
-                  self.textView?.string == snapshot, self.textView?.selectedRange() == selectedRange,
+                  self.textView?.sourceString == snapshot, self.textView?.sourceSelectedRange == selectedRange,
                   self.candidateContexts[candidate.id].map(self.isContextCurrent) ?? true else { return }
             self.resolvedDocumentation[candidate.id] = CompletionDocumentationRenderer.text(resolved.documentation)
             self.showPopup()
@@ -585,7 +590,7 @@ final class CompletionFeature {
             accepting: candidate,
             prefix: prefix,
             originalPrefix: candidateOrigins[candidate.id],
-            in: textView.string
+            in: textView.sourceString
         ) else {
             cancelAndDismiss()
             return
@@ -602,8 +607,8 @@ final class CompletionFeature {
         acceptTask?.cancel()
         debounceTask?.cancel()
         requestTask?.cancel()
-        let snapshot = textView.string
-        let selection = textView.selectedRange()
+        let snapshot = textView.sourceString
+        let selection = textView.sourceSelectedRange
         let uri = getURI()
         let id = requestID
         let origin = candidateOrigins[candidate.id]
@@ -623,7 +628,7 @@ final class CompletionFeature {
                 if let client, await client.supportsCompletionResolve { resolved = try await client.resolveCompletion(item) }
                 else { resolved = item }
                 guard !Task.isCancelled, requestID == id, getURI() == uri,
-                      textView.string == snapshot, textView.selectedRange() == selection,
+                      textView.sourceString == snapshot, textView.sourceSelectedRange == selection,
                       bound.map({ isContextCurrent($0.1) }) ?? true else { return }
                 if !(resolved.additionalTextEdits ?? []).isEmpty {
                     guard candidateSnapshot == snapshot, candidateContext.map(isContextCurrent) ?? true else { cancelAndDismiss()
@@ -644,14 +649,14 @@ final class CompletionFeature {
                 } else if applyWorkspaceCompletion != nil { applied = false }
                 else {
                     textView.applyCompletionEdits(plan.edits, finalSelection: plan.finalSelection)
-                    applied = textView.string == expected as String
+                    applied = textView.sourceString == expected as String
                 }
-                guard applied, getURI() == uri, textView.string == expected as String else { cancelAndDismiss()
+                guard applied, getURI() == uri, textView.sourceString == expected as String else { cancelAndDismiss()
                 return }
                 cancelAndDismiss()
                 if let expansion = accepted.snippet {
                     textView.startSnippet(expansion, offset: plan.finalSelection.location - expansion.text.utf16.count, theme: self.getTheme())
-                } else { textView.setSelectedRange(plan.finalSelection) }
+                } else { textView.setSourceSelectedRange(plan.finalSelection) }
                 if let command = resolved.command, let client { try await client.executeCommand(command) }
             } catch { cancelAndDismiss() }
         }
@@ -687,8 +692,8 @@ final class CompletionFeature {
 
         guard let textView,
               let updatedPrefix = CompletionEngine.prefix(
-                in: textView.string,
-                caret: textView.selectedRange().location
+                in: textView.sourceString,
+                caret: textView.sourceSelectedRange.location
               ),
               candidateAllowsEmptyPrefix || !updatedPrefix.text.isEmpty,
               previousPrefix?.range.location == updatedPrefix.range.location,
@@ -713,7 +718,7 @@ final class CompletionFeature {
             return
         }
 
-        let bufferText = textView.string
+        let bufferText = textView.sourceString
         let prefixDelta = updatedPrefix.range.length - previousPrefix.range.length
         let coordinateIndex = candidateCoordinateIndex?
             .adjustingOffsets(after: editRange.location, by: prefixDelta) ?? TextEditCoordinates.LineIndex(bufferText)
@@ -784,9 +789,9 @@ final class CompletionFeature {
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {
-        let text = textView.string
+        let text = textView.sourceString
         let length = (text as NSString).length
-        let currentSelection = textView.selectedRange()
+        let currentSelection = textView.sourceSelectedRange
         let caret = NSMaxRange(prefix.range)
 
         guard prefix.range.location != NSNotFound,
@@ -806,8 +811,8 @@ final class CompletionFeature {
               let textView,
               textView.isEditable,
               textView.snippetSession == nil,
-              textView.selectedRanges.count == 1,
-              textView.selectedRange().length == 0 else {
+              textView.sourceSelectedRanges.count == 1,
+              textView.sourceSelectedRange.length == 0 else {
             return false
         }
         return true
@@ -847,7 +852,7 @@ extension CompletionFeature {
         self.prefix = prefix
         candidatePrefix = prefix
         candidateOrigins = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, prefix) })
-        candidateCoordinateIndex = textView.map { TextEditCoordinates.LineIndex($0.string) }
+        candidateCoordinateIndex = textView.map { TextEditCoordinates.LineIndex($0.sourceString) }
         candidateBufferCache.removeAll()
         candidateMemberAccessOnly = memberAccessOnly
         candidateAllowsEmptyPrefix = prefix.text.isEmpty
