@@ -73,8 +73,8 @@ enum RunScriptStackDetector {
                     pythonRunner: pythonRunner,
                     hasRequirementsFile: hasRequirements,
                     hasPyprojectFile: has("pyproject.toml"),
-                    hasPytest: pyprojectDeclaresPythonTool(pyproject, tool: "pytest"),
-                    hasRuff: pyprojectDeclaresPythonTool(pyproject, tool: "ruff")
+                    hasPytest: pyprojectDeclaresPythonTool(pyproject, tool: "pytest", includeDependencyGroups: pythonRunner != .bare),
+                    hasRuff: pyprojectDeclaresPythonTool(pyproject, tool: "ruff", includeDependencyGroups: pythonRunner != .bare)
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
@@ -497,6 +497,7 @@ enum RunScriptStackDetector {
 
     private static func gradleDeclaredTasks(_ gradleBuild: String) -> Set<String> {
         let stripped = stripCStyleComments(gradleBuild)
+        let stringRanges = cStringLiteralRanges(stripped)
         let patterns = [
             #"tasks\.(?:register|create|named)\s*\(\s*["']([^"']+)["']"#,
             #"\btask\s*\(\s*["']([^"']+)["']"#,
@@ -506,7 +507,8 @@ enum RunScriptStackDetector {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
             let range = NSRange(stripped.startIndex..., in: stripped)
             return regex.matches(in: stripped, range: range).compactMap { match in
-                Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
+                guard !stringRanges.contains(where: { NSLocationInRange(match.range.location, $0) }) else { return nil }
+                return Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
             }
         })
         let pluginIDs = gradlePluginIDs(stripped)
@@ -1227,7 +1229,7 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static let goReleaseTags = Set((1...25).map { "go1.\($0)" })
+    private static let goReleaseTags = Set((1...24).map { "go1.\($0)" })
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
         guard let data = composerJSON.data(using: .utf8),
@@ -1493,7 +1495,7 @@ enum RunScriptStackDetector {
         }
     }
 
-    private static func pyprojectDeclaresPythonTool(_ pyproject: String, tool: String) -> Bool {
+    private static func pyprojectDeclaresPythonTool(_ pyproject: String, tool: String, includeDependencyGroups: Bool) -> Bool {
         let stripped = stripHashComments(pyproject)
         let escapedTool = NSRegularExpression.escapedPattern(for: tool)
         if stripped.range(of: #"(?m)^\s*\[tool\."# + escapedTool + #"(\.|\])"#, options: .regularExpression) != nil {
@@ -1506,8 +1508,11 @@ enum RunScriptStackDetector {
                 if tomlKeyedDependencyText(section.body, declares: tool, keys: ["dependencies"]) { return true }
             case "build-system":
                 if tomlKeyedDependencyText(section.body, declares: tool, keys: ["requires"]) { return true }
+            case "dependency-groups":
+                guard includeDependencyGroups else { continue }
+                if tomlDependencyText(section.body, declares: tool) { return true }
             default:
-                guard table.hasPrefix("project.optional-dependencies") || table == "dependency-groups"
+                guard table.hasPrefix("project.optional-dependencies")
                     || table == "tool.poetry.dev-dependencies"
                     || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
                 else { continue }
