@@ -13,12 +13,14 @@ struct ACPForkMessageBoundary: Equatable, Sendable {
 struct ACPSessionForkTarget: Identifiable, Equatable, Sendable {
     let id: String
     let displayName: String
+    let logoAssetName: String?
     let isSameAgent: Bool
 }
 
 struct ACPForkAgentOption: Equatable {
     let id: String
     let displayName: String
+    let logoAssetName: String?
 }
 
 enum ACPForkTargetPolicy {
@@ -39,7 +41,12 @@ enum ACPForkTargetPolicy {
         let current = ordered.filter { $0.id == sourceAgentID }
         let others = ordered.filter { $0.id != sourceAgentID }
         return (current + others).map {
-            .init(id: $0.id, displayName: $0.displayName, isSameAgent: $0.id == sourceAgentID)
+            .init(
+                id: $0.id,
+                displayName: $0.displayName,
+                logoAssetName: $0.logoAssetName,
+                isSameAgent: $0.id == sourceAgentID
+            )
         }
     }
 }

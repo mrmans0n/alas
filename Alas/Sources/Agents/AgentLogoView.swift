@@ -51,8 +51,12 @@ extension AgentLogoView {
     /// backing `NSImage` at its native pixel size. Pass this clamped copy
     /// to `Image(nsImage:)` so the icon appears at the intended point size.
     static func menuImage(for agent: AgentDefinition, size: CGFloat = 16) -> NSImage {
-        if let asset = agent.builtinLogoAssetName,
-           let source = NSImage(named: asset) {
+        menuImage(assetName: agent.builtinLogoAssetName, size: size)
+    }
+
+    static func menuImage(assetName: String?, size: CGFloat = 16) -> NSImage {
+        if let assetName,
+           let source = NSImage(named: assetName) {
             let copy = source.copy() as? NSImage ?? source
             copy.size = NSSize(width: size, height: size)
             return copy
