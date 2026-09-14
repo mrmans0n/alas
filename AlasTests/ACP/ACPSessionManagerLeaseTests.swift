@@ -624,6 +624,94 @@ import Foundation
         }
     }
 
+    @Test("an unchanged mirror snapshot does not replace the transcript")
+    func unchangedMirrorSnapshotDoesNotReplaceTranscript() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-unchanged-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let plan: ACPMessage = .plan(
+            id: UUID(),
+            [ACPMessage.PlanItem(content: "Keep the mirror still", status: "in_progress")]
+        )
+        try storeA.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: plan.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(plan),
+            createdAt: 0
+        )
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+        await mgrB.refreshMirror(sessionId: "s")
+        let generationAfterInitialRefresh = mirrorSession.transcript.messagesGeneration
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        #expect(mirrorSession.transcript.messagesGeneration == generationAfterInitialRefresh)
+        #expect(mirrorSession.transcript.currentPlan == [
+            ACPMessage.PlanItem(content: "Keep the mirror still", status: "in_progress")
+        ])
+    }
+
+    @Test("a changed mirror snapshot keeps the hydrated transcript mounted")
+    func changedMirrorSnapshotKeepsHydratedTranscriptMounted() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-changed-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let planItems = [ACPMessage.PlanItem(content: "Keep the plan visible", status: "in_progress")]
+        let plan: ACPMessage = .plan(id: UUID(), planItems)
+        try storeA.appendMessage(
+            sessionId: "s", id: "m0", kind: plan.kind, seq: 0,
+            payload: ACPMessageCodec.encode(plan), createdAt: 0)
+        let total = ACPTranscript.tailWindow + 2
+        for index in 1..<total {
+            let message: ACPMessage = .agent(
+                id: UUID(),
+                messageId: "agent-\(index)",
+                StreamingText("before \(index)")
+            )
+            try storeA.appendMessage(
+                sessionId: "s", id: "m\(index)", kind: message.kind,
+                seq: Int64(index), payload: ACPMessageCodec.encode(message),
+                createdAt: Int64(index))
+        }
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+        await mgrB.refreshMirror(sessionId: "s")
+        await mgrB.awaitBackfill(id: "s")
+        #expect(mirrorSession.transcript.currentPlan == planItems)
+
+        let changed: ACPMessage = .agent(
+            id: UUID(),
+            messageId: "agent-\(total - 1)",
+            StreamingText("after")
+        )
+        try storeA.updateMessagePayload(
+            id: "m\(total - 1)",
+            payload: ACPMessageCodec.encode(changed)
+        )
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        #expect(mirrorSession.transcript.messages.count == total)
+        #expect(mirrorSession.transcript.currentPlan == planItems)
+    }
+
     @Test("refreshMirror through hydrator does not touch lastOpenedAt")
     func mirrorRefreshDoesNotTouchLastOpenedAt() async throws {
         let url = FileManager.default.temporaryDirectory

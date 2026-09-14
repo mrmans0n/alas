@@ -81,6 +81,56 @@ enum ACPMessageWire: Sendable {
         }
     }
 
+    /// Materialise a persisted mirror row while retaining the identity of an
+    /// already-mounted row at the same transcript position. Unchanged rows
+    /// return the existing value, including its `StreamingText` object, so a
+    /// mirror refresh does not make the scroller rebuild and remeasure them.
+    @MainActor
+    func toMessage(preservingIdentityFrom existing: ACPMessage) -> ACPMessage {
+        switch (self, existing) {
+        case let (.user(messageId, text, attachments, delegatedSource),
+                  .user(id, existingMessageId, existingText, existingAttachments, existingDelegatedSource)):
+            guard messageId != existingMessageId
+                    || text != existingText
+                    || attachments != existingAttachments
+                    || delegatedSource != existingDelegatedSource
+            else { return existing }
+            return .user(
+                id: id,
+                messageId: messageId,
+                text: text,
+                attachments: attachments,
+                delegatedSource: delegatedSource
+            )
+        case let (.agent(messageId, text, phase, metadata),
+                  .agent(id, existingMessageId, existingText)):
+            guard messageId != existingMessageId
+                    || text != existingText.value
+                    || phase != existingText.phase
+                    || metadata != existingText.metadata
+            else { return existing }
+            return .agent(id: id, messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
+        case let (.thought(messageId, text, phase, metadata),
+                  .thought(id, existingMessageId, existingText)):
+            guard messageId != existingMessageId
+                    || text != existingText.value
+                    || phase != existingText.phase
+                    || metadata != existingText.metadata
+            else { return existing }
+            return .thought(id: id, messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
+        case let (.toolCall(toolCall), .toolCall(existingToolCall)):
+            return toolCall == existingToolCall ? existing : .toolCall(toolCall)
+        case let (.fileEdit(fileEdit), .fileEdit(id, existingFileEdit)):
+            return fileEdit == existingFileEdit ? existing : .fileEdit(id: id, fileEdit)
+        case let (.plan(items), .plan(id, existingItems)):
+            return items == existingItems ? existing : .plan(id: id, items)
+        case let (.systemNotice(text), .systemNotice(id, existingText)):
+            return text == existingText ? existing : .systemNotice(id: id, text: text)
+        default:
+            return toMessage()
+        }
+    }
+
     private struct TextPayload: Decodable {
         let messageId: String?
         let text: String

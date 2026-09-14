@@ -3036,6 +3036,9 @@ extension ACPSessionManager {
         session.restoreQueue(result.queue)
         scheduleScheduledQueueReconnect(sessionId: sessionId)
         guard !result.wireMessages.isEmpty else { return }
+        if applyMirrorSnapshotToHydratedTranscript(result.messages, in: session) {
+            return
+        }
         let tailStart = replaceTranscriptWithTail(
             result.messages,
             in: session,
@@ -3045,6 +3048,43 @@ extension ACPSessionManager {
             olderMessages: Array(result.messages.prefix(tailStart)),
             sessionId: sessionId,
             session: session)
+    }
+
+    /// Once the initial tail-first load has finished, keep the full transcript
+    /// mounted across mirror refreshes. Replacing it with the tail and
+    /// backfilling the prefix again makes the task pill disappear whenever the
+    /// current plan sits outside the tail window, and briefly collapses the
+    /// scroll document on every persisted streaming update.
+    private func applyMirrorSnapshotToHydratedTranscript(
+        _ messages: [ACPHydratedMessage],
+        in session: ACPSession
+    ) -> Bool {
+        let transcript = session.transcript
+        guard transcript.messageIndexOffset == 0,
+              !transcript.messages.isEmpty,
+              !transcript.isBackfillingOlderMessages
+        else { return false }
+
+        let existing = transcript.messages
+        var refreshed: [ACPMessage] = []
+        refreshed.reserveCapacity(messages.count)
+        for (index, hydrated) in messages.enumerated() {
+            if existing.indices.contains(index) {
+                refreshed.append(hydrated.wire.toMessage(preservingIdentityFrom: existing[index]))
+            } else {
+                refreshed.append(hydrated.wire.toMessage())
+            }
+        }
+        let createdAts = messages.map(\.createdAt)
+        let timestampsUnchanged = messages.count == existing.count
+            && createdAts.indices.allSatisfy { index in
+                transcript.createdAt(forMessageAt: index) == createdAts[index]
+            }
+        if refreshed == existing, timestampsUnchanged {
+            return true
+        }
+        session.replaceTranscriptMessages(refreshed, createdAts: createdAts)
+        return true
     }
 
     private func syncMirrorSessionMetadata(
