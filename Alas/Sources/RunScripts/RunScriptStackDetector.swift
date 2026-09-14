@@ -248,7 +248,7 @@ enum RunScriptStackDetector {
             return String(decoding: data, as: UTF8.self)
         }
         if rootEntries.contains(where: {
-            goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0))
+            $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0))
         }) {
             return "."
         }
@@ -263,7 +263,7 @@ enum RunScriptStackDetector {
                   let files = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent(subdir).path)
             else { continue }
             if files.contains(where: {
-                goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText("\(subdir)/\($0)"))
+                $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText("\(subdir)/\($0)"))
             }) {
                 return "./\(subdir)"
             }
@@ -365,13 +365,13 @@ enum RunScriptStackDetector {
         } else {
             candidates = rootEntries.filter { $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }
         }
-        for path in candidates.sorted() {
+        let executableProjects = candidates.sorted().filter { path in
             guard let text = fileText(path),
                   text.range(of: #"<OutputType>\s*(Exe|WinExe)\s*</OutputType>"#, options: [.regularExpression, .caseInsensitive]) != nil
-            else { continue }
-            return path
+            else { return false }
+            return true
         }
-        return nil
+        return executableProjects.count == 1 ? executableProjects[0] : nil
     }
 
     /// Extracts each referenced project's relative path from a .sln file's
@@ -397,9 +397,8 @@ enum RunScriptStackDetector {
         // anywhere else.
         let uncommented = stripCStyleComments(manifest)
         let executableProducts = countOccurrences(of: #"\.executable\s*\("#, in: uncommented)
-        if executableProducts > 0 { return executableProducts == 1 }
         let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: uncommented)
-        if executableTargets > 0 { return executableTargets == 1 }
+        if executableProducts + executableTargets > 0 { return executableProducts + executableTargets == 1 }
         // Older manifests declare an executable product via `type:
         // .executable` on a plain `.target` without a dedicated
         // .executableTarget entry; a single one is unambiguous the same way.
@@ -419,17 +418,20 @@ enum RunScriptStackDetector {
         let suffixes = base.split(separator: "_").dropFirst()
         let operatingSystems: Set<Substring> = ["aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"]
         let architectures: Set<Substring> = ["386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm"]
-#if arch(arm64)
-        let currentArchitecture: Substring = "arm64"
-#elseif arch(x86_64)
-        let currentArchitecture: Substring = "amd64"
-#else
-        let currentArchitecture: Substring = ""
-#endif
         return suffixes.allSatisfy { suffix in
             (!operatingSystems.contains(suffix) || suffix == "darwin")
-                && (!architectures.contains(suffix) || suffix == currentArchitecture)
+                && (!architectures.contains(suffix) || suffix == currentGoArchitecture)
         }
+    }
+
+    private static var currentGoArchitecture: Substring {
+#if arch(arm64)
+        "arm64"
+#elseif arch(x86_64)
+        "amd64"
+#else
+        ""
+#endif
     }
 
     private static func goBuildConstraintAllowsCurrentHost(_ contents: String) -> Bool {
@@ -440,7 +442,7 @@ enum RunScriptStackDetector {
         let tokens = expression.matches(of: /&&|\|\||!|\(|\)|[A-Za-z0-9_.]+/).map(\.output)
         guard tokens.joined() == expression.filter({ !$0.isWhitespace }) else { return false }
         var index = 0
-        let enabledTags: Set<Substring> = ["darwin", "unix", "arm64", "cgo"]
+        let enabledTags: Set<Substring> = ["darwin", "unix", currentGoArchitecture, "cgo"]
         func parsePrimary() -> Bool? {
             guard index < tokens.count else { return nil }
             if tokens[index] == "!" {

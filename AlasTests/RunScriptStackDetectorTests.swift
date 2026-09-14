@@ -291,6 +291,13 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
     }
 
+    @Test func swiftPackageLeavesMixedExecutableDeclarationsUnchecked() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Package.swift", "products: [.executable(name: \"Tool\", targets: [\"Tool\"])], targets: [.executableTarget(name: \"Other\")]", in: root)
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func xcodePrefersWorkspaceOverProject() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -327,6 +334,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
 
         try write("main.go", "//go:build linux\n\npackage main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goUsesTheCurrentArchitectureForBuildTags() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build amd64\n\npackage main\n", in: root)
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
@@ -507,6 +522,14 @@ struct RunScriptStackDetectorTests {
             in: root
         )
         #expect(detect(root)[.dotnet]?.dotnetRunProject == "src/App.Cli/App.Cli.csproj")
+    }
+
+    @Test func dotnetLeavesMultipleExecutableProjectsUnchecked() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("One.csproj", "<OutputType>Exe</OutputType>", in: root)
+        try write("Two.csproj", "<OutputType>WinExe</OutputType>", in: root)
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
     }
 
     @Test func flutterReadsPubspecForTheSDK() throws {
