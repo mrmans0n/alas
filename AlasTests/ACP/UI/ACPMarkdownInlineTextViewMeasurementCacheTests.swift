@@ -315,6 +315,30 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         #expect(transcriptResponder.receivedEvents[2] === vertical)
     }
 
+    @Test("ambiguous queued events survive momentum start")
+    func ambiguousQueuedEventsSurviveMomentumStart() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+
+        let ambiguousStart = try makeScrollEvent(deltaX: 10, deltaY: 10, phase: .began)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(deltaX: 5, deltaY: 5, phase: .changed)
+        textView.scrollWheel(with: ambiguousChange)
+
+        let momentumStart = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .ended, momentumPhase: .began)
+        textView.scrollWheel(with: momentumStart)
+
+        #expect(textView.superScrollEventsForTests.isEmpty)
+        #expect(transcriptResponder.receivedEvents.count == 3)
+        if transcriptResponder.receivedEvents.count == 3 {
+            #expect(transcriptResponder.receivedEvents[0] === ambiguousStart)
+            #expect(transcriptResponder.receivedEvents[1] === ambiguousChange)
+            #expect(transcriptResponder.receivedEvents[2] === momentumStart)
+        }
+    }
+
     @Test("ambiguous gesture starts are replayed once axis becomes horizontal")
     func ambiguousGestureStartIsReplayedOnceAxisBecomesHorizontal() throws {
         let textView = makeTextView("Table cell")

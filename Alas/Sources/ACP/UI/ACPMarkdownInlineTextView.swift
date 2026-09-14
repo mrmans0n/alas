@@ -239,9 +239,6 @@ struct ACPMarkdownScrollRoutingState {
             forwarding = nil
             pendingEvents.removeAll(keepingCapacity: true)
         }
-        if momentumPhase.contains(.began) {
-            pendingEvents.removeAll(keepingCapacity: true)
-        }
         if forwarding == nil && hasGesturePhase && !hasDominantAxis && !phase.contains(.ended), let pendingEvent {
             pendingEvents.append(pendingEvent)
         }
