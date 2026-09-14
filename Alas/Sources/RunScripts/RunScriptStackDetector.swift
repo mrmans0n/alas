@@ -160,8 +160,8 @@ enum RunScriptStackDetector {
                 }
                 add(stack, .init(denoTasks: denoTasks))
             case .zig:
-                guard has("build.zig") else { continue }
-                add(stack)
+                guard let buildZig = contents("build.zig") else { continue }
+                add(stack, .init(zigBuildSteps: zigBuildSteps(buildZig)))
             case .bazel:
                 guard has("MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel") else { continue }
                 add(stack)
@@ -259,6 +259,7 @@ enum RunScriptStackDetector {
         guard let cmdEntries = try? fileManager.contentsOfDirectory(
             atPath: worktreeRoot.appendingPathComponent("cmd").path
         ) else { return nil }
+        var commandTargets: [String] = []
         for name in cmdEntries.sorted() {
             let subdir = "cmd/\(name)"
             var isDirectory: ObjCBool = false
@@ -269,10 +270,10 @@ enum RunScriptStackDetector {
             if files.contains(where: {
                 $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText("\(subdir)/\($0)"))
             }) {
-                return "./\(subdir)"
+                commandTargets.append("./\(subdir)")
             }
         }
-        return nil
+        return commandTargets.count == 1 ? commandTargets[0] : nil
     }
 
     /// Whether `cargo run` has exactly one binary to pick, or an explicit
@@ -304,9 +305,17 @@ enum RunScriptStackDetector {
 
         guard !binaryPaths.isEmpty else { return false }
         guard binaryPaths.count == 1 else {
-            return cargoToml.range(of: #"(?m)^\s*default-run\s*="#, options: .regularExpression) != nil
+            return cargoPackageString(cargoToml, key: "default-run") != nil
         }
         return true
+    }
+
+    private static func zigBuildSteps(_ buildZig: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: #"\.step\s*\(\s*\"([^\"]+)\""#) else { return [] }
+        let range = NSRange(buildZig.startIndex..., in: buildZig)
+        return Set(regex.matches(in: buildZig, range: range).compactMap { match in
+            Range(match.range(at: 1), in: buildZig).map { String(buildZig[$0]) }
+        })
     }
 
     private static func cargoBinTargetPaths(worktreeRoot: URL, fileManager: FileManager) -> Set<String> {

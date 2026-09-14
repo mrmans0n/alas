@@ -103,6 +103,9 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// unchecked rather than assuming a task exists: `deno task dev` has no
     /// generic fallback the way `npm test` does.
     var denoTasks: Set<String>?
+    /// User-declared `zig build <step>` names from build.zig. Nil when
+    /// build.zig could not be read, which leaves optional steps unchecked.
+    var zigBuildSteps: Set<String>?
     /// Shared by Cargo and Swift Package: whether the repository has an
     /// actual runnable target (a `[[bin]]`/`src/bin`, an executable
     /// product). Defaults to false — "Run" fails outright against a
@@ -141,6 +144,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         usesFlutter: Bool = true,
         usesPhoenix: Bool = true,
         denoTasks: Set<String>? = nil,
+        zigBuildSteps: Set<String>? = nil,
         hasRunnableTarget: Bool = false,
         goRunTarget: String? = nil,
         dotnetRunProject: String? = nil,
@@ -162,6 +166,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
+        self.zigBuildSteps = zigBuildSteps
         self.dotnetRunProject = dotnetRunProject
         self.hasMakeTestTarget = hasMakeTestTarget
         self.hasMakeCleanTarget = hasMakeCleanTarget
@@ -402,8 +407,8 @@ enum RunScriptStackCatalog {
         case .zig:
             return [
                 .init("build", "Build", "zig build"),
-                .init("test", "Test", "zig build test"),
-                .init("run", "Run", "zig build run", onExit: .keep),
+                .init("test", "Test", "zig build test", checked: context.zigBuildSteps?.contains("test") ?? false),
+                .init("run", "Run", "zig build run", checked: context.zigBuildSteps?.contains("run") ?? false, onExit: .keep),
             ]
         case .bazel:
             return [

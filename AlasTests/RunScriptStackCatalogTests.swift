@@ -245,6 +245,14 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.compose)["up"]?.body == "docker compose up")
     }
 
+    @Test func zigOptionalStepsAreUncheckedUnlessDeclared() {
+        #expect(actions(.zig)["build"]?.isCheckedByDefault == true)
+        #expect(actions(.zig)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.zig)["run"]?.isCheckedByDefault == false)
+        #expect(actions(.zig, .init(zigBuildSteps: ["test"]))["test"]?.isCheckedByDefault == true)
+        #expect(actions(.zig, .init(zigBuildSteps: ["run"]))["run"]?.isCheckedByDefault == true)
+    }
+
     /// "deno task dev" only works if deno.json actually declares that task;
     /// unlike npm's built-in commands, Deno has no generic fallback.
     @Test func denoDevIsOnlyCheckedWhenTheTaskIsDeclared() {

@@ -129,6 +129,26 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
+    @Test func cargoDefaultRunMustBeDeclaredByThePackageTable() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "lib"
+
+            [package.metadata.alas]
+            default-run = "one"
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin"), withIntermediateDirectories: true)
+        try touch("src/bin/one.rs", "src/bin/two.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
     @Test func cargoDoesNotDoubleCountAnExplicitRootMainBinary() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -408,6 +428,19 @@ struct RunScriptStackDetectorTests {
 
         try Data("package main\n\nfunc main() {}\n".utf8).write(to: cmdToolDir.appendingPathComponent("main.go"))
         #expect(detect(root)[.go]?.goRunTarget == "./cmd/tool")
+    }
+
+    @Test func goLeavesRunUncheckedWhenMultipleCommandsExist() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("go.mod", "module example.com/tools\n", in: root)
+        for name in ["api", "worker"] {
+            let commandDirectory = root.appendingPathComponent("cmd/\(name)", isDirectory: true)
+            try FileManager.default.createDirectory(at: commandDirectory, withIntermediateDirectories: true)
+            try Data("package main\n\nfunc main() {}\n".utf8).write(to: commandDirectory.appendingPathComponent("main.go"))
+        }
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
     @Test func pythonPicksRunnerFromLockfile() throws {
@@ -742,6 +775,23 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.zig] != nil)
         #expect(stacks[.bazel] != nil)
         #expect(stacks[.compose] != nil)
+    }
+
+    @Test func zigRecordsDeclaredBuildSteps() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.zig",
+            """
+            pub fn build(b: *std.Build) void {
+                _ = b.step("test", "Run unit tests");
+                _ = b.step("run", "Run the app");
+            }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.zig]?.zigBuildSteps == ["test", "run"])
     }
 
     @Test func denoReadsDeclaredTaskNames() throws {
