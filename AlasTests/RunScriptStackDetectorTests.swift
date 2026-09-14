@@ -1087,17 +1087,13 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        #if arch(arm64)
-        let featureTag = "arm64.v8.1"
-        #else
         let featureTag = "amd64.v2"
-        #endif
         try write("main.go", "//go:build !\(featureTag)\n\npackage main\n\nfunc main() {}\n", in: root)
 
         let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
             worktreeRoot: root,
             goToolchainEnvironment: { _ in
-                .init(minorVersion: 25, architectureFeatures: [featureTag])
+                .init(minorVersion: 25, operatingSystem: "darwin", architecture: "amd64", architectureFeatures: [featureTag])
             }
         ).map { ($0.stack, $0.context) })
 
@@ -1105,10 +1101,41 @@ struct RunScriptStackDetectorTests {
     }
 
     @Test func goParsesARM64FeatureLevelsWithExtensions() {
-        #if arch(arm64)
-        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v8.2,lse").contains("arm64.v8.1"))
-        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v9.3,crypto").contains("arm64.v9.3"))
-        #endif
+        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v8.2,lse", architecture: "arm64").contains("arm64.v8.1"))
+        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v9.3,crypto", architecture: "arm64").contains("arm64.v9.3"))
+        #expect(RunScriptStackDetector.goArchitectureFeatureTags(level: "v3", architecture: "amd64").contains("amd64.v2"))
+    }
+
+    @Test func goResolvesFilenameArchitectureFromTheDetectedToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main_arm64.go", "package main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, operatingSystem: "darwin", architecture: "amd64", architectureFeatures: ["amd64.v1"])
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goResolvesCoreBuildTagsFromTheDetectedToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build arm64\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, operatingSystem: "darwin", architecture: "amd64", architectureFeatures: ["amd64.v1"])
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
     }
 
     @Test func goResolvesCGOTagFromTheDetectedToolchain() throws {
@@ -1295,6 +1322,12 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
         try write("Rakefile", "docs = <<~TEXT\n  task :test\nTEXT\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "docs = \"\"\"\n  task :test\n\"\"\"\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "docs = '\n  task :test\n'\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)

@@ -211,6 +211,17 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.python, .init(hasRuff: true))["lint"]?.isCheckedByDefault == true)
     }
 
+    @Test func barePythonInstallsPyprojectWhenCheckedToolsComeFromPyproject() {
+        let requirementsOnly = actions(.python, .init(hasRequirementsFile: true, hasPyprojectFile: true))
+        #expect(requirementsOnly["install"]?.body == "python3 -m pip install -r requirements.txt")
+
+        let withPytest = actions(.python, .init(hasRequirementsFile: true, hasPyprojectFile: true, hasPytest: true))
+        #expect(withPytest["install"]?.body == "python3 -m pip install -e .")
+
+        let withRuff = actions(.python, .init(hasRequirementsFile: true, hasPyprojectFile: true, hasRuff: true))
+        #expect(withRuff["install"]?.body == "python3 -m pip install -e .")
+    }
+
     @Test func oneShotCommandsCloseAndServersKeepThePane() {
         #expect(actions(.cargo)["build"]?.onExit == .close)
         #expect(actions(.cargo)["run"]?.onExit == .keep)

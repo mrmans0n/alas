@@ -461,7 +461,9 @@ enum RunScriptStackCatalog {
         case .uv:     ("uv sync", "uv run ")
         case .poetry: ("poetry install", "poetry run ")
         case .bare:
-            context.hasRequirementsFile
+            context.hasPyprojectFile && (context.hasPytest || context.hasRuff)
+                ? ("python3 -m pip install -e .", "")
+                : context.hasRequirementsFile
                 ? ("python3 -m pip install -r requirements.txt", "")
                 : ("python3 -m pip install -e .", "")
         }

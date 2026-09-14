@@ -9,8 +9,24 @@ struct RunScriptStackDetection: Identifiable, Equatable, Sendable {
 
 struct GoToolchainEnvironment: Equatable, Sendable {
     var minorVersion: Int?
+    var operatingSystem = Self.hostOperatingSystem
+    var architecture = Self.hostArchitecture
     var architectureFeatures: Set<String>
     var cgoEnabled = false
+
+    static var hostOperatingSystem: String {
+        "darwin"
+    }
+
+    static var hostArchitecture: String {
+        #if arch(arm64)
+        "arm64"
+        #elseif arch(x86_64)
+        "amd64"
+        #else
+        ""
+        #endif
+    }
 }
 
 /// Creation-time stack detection from marker files at the worktree root.
@@ -1186,27 +1202,27 @@ enum RunScriptStackDetector {
         guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
               let firstCharacter = name.first, firstCharacter != ".", firstCharacter != "_",
               let contents, goFileDeclaresPackageMain(contents),
-              goFilenameSupportsCurrentHost(name),
+              goFilenameSupportsCurrentHost(name, toolchainEnvironment: toolchainEnvironment),
               goBuildConstraintAllowsCurrentHost(contents, toolchainEnvironment: toolchainEnvironment)
         else { return false }
         return true
     }
 
-    private static func goFilenameSupportsCurrentHost(_ name: String) -> Bool {
+    private static func goFilenameSupportsCurrentHost(_ name: String, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         var parts = String(name.dropLast(3)).split(separator: "_")
         guard parts.count > 1 else { return true }
         let operatingSystems = goOperatingSystems
         let architectures = goArchitectures
         if let architecture = parts.last, architectures.contains(architecture) {
-            guard architecture == currentGoArchitecture else { return false }
+            guard architecture == toolchainEnvironment.architecture[...] else { return false }
             parts.removeLast()
             if let operatingSystem = parts.last, operatingSystems.contains(operatingSystem) {
-                return operatingSystem == "darwin"
+                return operatingSystem == toolchainEnvironment.operatingSystem[...]
             }
             return true
         }
         if let operatingSystem = parts.last, operatingSystems.contains(operatingSystem) {
-            return operatingSystem == "darwin"
+            return operatingSystem == toolchainEnvironment.operatingSystem[...]
         }
         return true
     }
@@ -1220,16 +1236,6 @@ enum RunScriptStackDetector {
         "386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le",
         "riscv64", "s390x", "wasm",
     ]
-
-    private static var currentGoArchitecture: Substring {
-#if arch(arm64)
-        "arm64"
-#elseif arch(x86_64)
-        "amd64"
-#else
-        ""
-#endif
-    }
 
     private static func goBuildConstraintAllowsCurrentHost(_ contents: String, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let lines = contents.components(separatedBy: .newlines)
@@ -1297,28 +1303,39 @@ enum RunScriptStackDetector {
 
     private static func goBuildTagIsEnabled(_ tag: Substring, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let tag = String(tag)
-        return goCoreBuildTags.contains(tag)
+        return goCoreBuildTags(toolchainEnvironment: toolchainEnvironment).contains(tag)
             || (tag == "cgo" && toolchainEnvironment.cgoEnabled)
             || toolchainEnvironment.architectureFeatures.contains(tag)
             || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
     }
 
-    private static var goCoreBuildTags: Set<String> {
-        ["darwin", "unix", String(currentGoArchitecture), "gc"]
+    private static func goCoreBuildTags(toolchainEnvironment: GoToolchainEnvironment) -> Set<String> {
+        var tags: Set<String> = [
+            toolchainEnvironment.operatingSystem,
+            toolchainEnvironment.architecture,
+            "gc",
+        ]
+        if goUnixOperatingSystems.contains(toolchainEnvironment.operatingSystem) {
+            tags.insert("unix")
+        }
+        return tags
     }
 
-    private static var defaultGoArchitectureFeatureTags: Set<String> {
-#if arch(arm64)
-        ["arm64.v8.0"]
-#elseif arch(x86_64)
-        ["amd64.v1"]
-#else
-        []
-#endif
+    private static let goUnixOperatingSystems: Set<String> = [
+        "aix", "android", "darwin", "dragonfly", "freebsd", "hurd", "illumos", "ios", "linux", "netbsd", "openbsd",
+        "solaris",
+    ]
+
+    private static func defaultGoArchitectureFeatureTags(architecture: String = GoToolchainEnvironment.hostArchitecture) -> Set<String> {
+        switch architecture {
+        case "arm64": ["arm64.v8.0"]
+        case "amd64": ["amd64.v1"]
+        default: []
+        }
     }
 
     private static var defaultGoToolchainEnvironment: GoToolchainEnvironment {
-        .init(minorVersion: 25, architectureFeatures: defaultGoArchitectureFeatureTags, cgoEnabled: true)
+        .init(minorVersion: 25, architectureFeatures: defaultGoArchitectureFeatureTags(), cgoEnabled: true)
     }
 
     private static func goReleaseTags(minorVersion: Int?) -> Set<String> {
@@ -1334,7 +1351,7 @@ enum RunScriptStackDetector {
     private static func currentGoToolchainEnvironment(worktreeRoot: URL) -> GoToolchainEnvironment? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["go", "env", "GOVERSION", "GOAMD64", "GOARM64", "CGO_ENABLED"]
+        process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED"]
         process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
@@ -1357,12 +1374,21 @@ enum RunScriptStackDetector {
         let lines = String(decoding: data, as: UTF8.self)
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let version = lines.first ?? ""
-        let architectureFeatureLevel = lines.dropFirst().first { !$0.isEmpty }
-        let cgoValue = lines.dropFirst(3).first
+        func line(_ index: Int) -> String? {
+            lines.indices.contains(index) ? lines[index] : nil
+        }
+        let version = line(0) ?? ""
+        let operatingSystem = line(1).flatMap { $0.isEmpty ? nil : $0 } ?? GoToolchainEnvironment.hostOperatingSystem
+        let architecture = line(2).flatMap { $0.isEmpty ? nil : $0 } ?? GoToolchainEnvironment.hostArchitecture
+        let architectureFeatureLevel = architecture == "arm64" ? line(4)
+            : architecture == "amd64" ? line(3)
+            : nil
+        let cgoValue = line(5)
         return .init(
             minorVersion: goToolchainMinorVersion(from: version),
-            architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel),
+            operatingSystem: operatingSystem,
+            architecture: architecture,
+            architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel, architecture: architecture),
             cgoEnabled: cgoValue != "0"
         )
     }
@@ -1376,11 +1402,12 @@ enum RunScriptStackDetector {
         return Int(version[minorRange])
     }
 
-    static func goArchitectureFeatureTags(level: String?) -> Set<String> {
-        guard let level else { return defaultGoArchitectureFeatureTags }
-        #if arch(arm64)
+    static func goArchitectureFeatureTags(level: String?, architecture: String = GoToolchainEnvironment.hostArchitecture) -> Set<String> {
+        guard let level else { return defaultGoArchitectureFeatureTags(architecture: architecture) }
+        switch architecture {
+        case "arm64":
         let baseLevel = level.split(separator: ",", maxSplits: 1).first.map(String.init) ?? level
-        guard let regex = try? NSRegularExpression(pattern: #"^v([0-9]+)\.([0-9]+)$"#) else { return defaultGoArchitectureFeatureTags }
+        guard let regex = try? NSRegularExpression(pattern: #"^v([0-9]+)\.([0-9]+)$"#) else { return defaultGoArchitectureFeatureTags(architecture: architecture) }
         let range = NSRange(baseLevel.startIndex..., in: baseLevel)
         guard let match = regex.firstMatch(in: baseLevel, range: range),
               let majorRange = Range(match.range(at: 1), in: baseLevel),
@@ -1389,7 +1416,7 @@ enum RunScriptStackDetector {
               let minor = Int(baseLevel[minorRange]),
               major >= 8,
               minor >= 0
-        else { return defaultGoArchitectureFeatureTags }
+        else { return defaultGoArchitectureFeatureTags(architecture: architecture) }
         var tags: Set<String> = []
         if major >= 8 {
             let v8UpperBound = major == 8 ? minor : 9
@@ -1399,15 +1426,15 @@ enum RunScriptStackDetector {
             tags.formUnion((0...minor).map { "arm64.v9.\($0)" })
         }
         return tags
-        #elseif arch(x86_64)
+        case "amd64":
         let baseLevel = level.split(separator: ",", maxSplits: 1).first.map(String.init) ?? level
-        guard baseLevel.hasPrefix("v") else { return defaultGoArchitectureFeatureTags }
+        guard baseLevel.hasPrefix("v") else { return defaultGoArchitectureFeatureTags(architecture: architecture) }
         let levelText = baseLevel.dropFirst()
-        guard let version = Int(levelText), version >= 1 else { return defaultGoArchitectureFeatureTags }
+        guard let version = Int(levelText), version >= 1 else { return defaultGoArchitectureFeatureTags(architecture: architecture) }
         return Set((1...version).map { "amd64.v\($0)" })
-        #else
+        default:
         return []
-        #endif
+        }
     }
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
@@ -1490,7 +1517,7 @@ enum RunScriptStackDetector {
     }
 
     private static func rakefileDeclaresTask(_ rakefile: String, task: String) -> Bool {
-        let stripped = stripRubyHeredocs(stripHashComments(rakefile))
+        let stripped = stripRubyStringLiterals(stripRubyHeredocs(stripHashComments(rakefile)))
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
         guard let taskRegex = try? NSRegularExpression(
             pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)"#
@@ -1538,6 +1565,37 @@ enum RunScriptStackDetector {
             terminator = String(line[terminatorRange])
         }
         return output.joined(separator: "\n")
+    }
+
+    private static func stripRubyStringLiterals(_ ruby: String) -> String {
+        var stripped = ""
+        stripped.reserveCapacity(ruby.count)
+        var index = ruby.startIndex
+        while index < ruby.endIndex {
+            let char = ruby[index]
+            guard char == "\"" || char == "'" || char == "`" else {
+                stripped.append(char)
+                index = ruby.index(after: index)
+                continue
+            }
+            let quote = char
+            stripped.append(" ")
+            index = ruby.index(after: index)
+            var isEscaped = false
+            while index < ruby.endIndex {
+                let inner = ruby[index]
+                stripped.append(inner == "\n" ? "\n" : " ")
+                index = ruby.index(after: index)
+                if isEscaped {
+                    isEscaped = false
+                } else if inner == "\\" {
+                    isEscaped = true
+                } else if inner == quote {
+                    break
+                }
+            }
+        }
+        return stripped
     }
 
     private static func rubyBlockOpens(_ trimmedLine: String) -> Bool {
