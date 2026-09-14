@@ -213,7 +213,7 @@ struct DiffContextExpansionRow: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-struct DiffDisplayRow: Identifiable, Equatable {
+struct DiffDisplayRow: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Hashable {
         case context
         case add
@@ -295,7 +295,7 @@ final class DiffDisplayRowsSnapshot {
     }
 }
 
-struct DiffDisplayGroup: Identifiable, Equatable {
+struct DiffDisplayGroup: Identifiable, Equatable, Sendable {
     let id: String
     let header: String
     let sourceHunk: ParsedDiff.Hunk
@@ -366,7 +366,7 @@ struct DiffDisplayGroup: Identifiable, Equatable {
     }
 }
 
-struct DiffDisplayModel: Equatable {
+struct DiffDisplayModel: Equatable, Sendable {
     let filePath: String
     let groups: [DiffDisplayGroup]
 
