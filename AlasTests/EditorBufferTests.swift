@@ -1370,6 +1370,9 @@ struct EditorBufferTests {
         textView.setSelectedRanges(expectedSelections, affinity: .downstream, stillSelecting: false)
         scrollView.contentView.scroll(to: expectedOrigin)
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        // A rebind cancels presentation but must not detach signature-help handlers.
+        #expect(textView.signatureHelpManualTriggerHandler != nil)
+        #expect(textView.signatureHelpChangeHandler != nil)
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
 
         let deadline = Date(timeIntervalSinceNow: 1)

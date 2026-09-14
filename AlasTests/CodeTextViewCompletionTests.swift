@@ -42,6 +42,25 @@ struct CodeTextViewCompletionTests {
         #expect(textView.string == "let value = open")
     }
 
+    @Test("Escape dismisses completion before signature or hover overlays")
+    func escapePrioritizesCompletionDismissal() {
+        let textView = makeTextView("call(")
+        var events: [String] = []
+        textView.completionKeyHandler = { action in
+            guard action == .dismiss else { return false }
+            events.append("completion")
+            return true
+        }
+        textView.escapeHandler = {
+            events.append("overlay")
+            return true
+        }
+
+        textView.cancelOperation(nil)
+
+        #expect(events == ["completion"])
+    }
+
     @Test func insertNewlineRoutesAcceptSelectedAndDoesNotMutateTextWhenHandled() {
         let textView = makeTextView("let value = open")
         var actions: [CodeTextView.CompletionKeyAction] = []

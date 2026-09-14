@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Protocol shapes
 
-enum LSPSignatureDocumentation: Codable, Equatable, Sendable {
+enum LSPSignatureDocumentation: Codable, Equatable, Hashable, Sendable {
     case plain(String)
     case markup(kind: String, value: String)
 
@@ -32,13 +32,13 @@ enum LSPSignatureDocumentation: Codable, Equatable, Sendable {
         }
     }
 
-    private struct Markup: Codable, Equatable, Sendable {
+    private struct Markup: Codable, Equatable, Hashable, Sendable {
         let kind: String
         let value: String
     }
 }
 
-enum LSPSignatureParameterLabel: Codable, Equatable, Sendable {
+enum LSPSignatureParameterLabel: Codable, Equatable, Hashable, Sendable {
     case string(String)
     case offsets(start: Int, end: Int)
 
@@ -66,19 +66,19 @@ enum LSPSignatureParameterLabel: Codable, Equatable, Sendable {
     }
 }
 
-struct LSPSignatureParameter: Codable, Equatable, Sendable {
+struct LSPSignatureParameter: Codable, Equatable, Hashable, Sendable {
     let label: LSPSignatureParameterLabel
     let documentation: LSPSignatureDocumentation?
 }
 
-struct LSPSignatureInformation: Codable, Equatable, Sendable {
+struct LSPSignatureInformation: Codable, Equatable, Hashable, Sendable {
     let label: String
     let documentation: LSPSignatureDocumentation?
     let parameters: [LSPSignatureParameter]?
     let activeParameter: Int?
 }
 
-struct LSPSignatureHelp: Codable, Equatable, Sendable {
+struct LSPSignatureHelp: Codable, Equatable, Hashable, Sendable {
     let signatures: [LSPSignatureInformation]
     let activeSignature: Int?
     let activeParameter: Int?
@@ -94,6 +94,31 @@ struct LSPSignatureHelpContext: Codable, Hashable, Sendable {
     let triggerKind: LSPSignatureHelpTriggerKind
     let triggerCharacter: String?
     let isRetrigger: Bool
+    let activeSignatureHelp: LSPSignatureHelp?
+
+    init(
+        triggerKind: LSPSignatureHelpTriggerKind,
+        triggerCharacter: String?,
+        isRetrigger: Bool,
+        activeSignatureHelp: LSPSignatureHelp?
+    ) {
+        self.triggerKind = triggerKind
+        self.triggerCharacter = triggerCharacter
+        self.isRetrigger = isRetrigger
+        self.activeSignatureHelp = activeSignatureHelp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case triggerKind, triggerCharacter, isRetrigger, activeSignatureHelp
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(triggerKind, forKey: .triggerKind)
+        try container.encodeIfPresent(triggerCharacter, forKey: .triggerCharacter)
+        try container.encode(isRetrigger, forKey: .isRetrigger)
+        try container.encodeIfPresent(activeSignatureHelp, forKey: .activeSignatureHelp)
+    }
 }
 
 struct LSPSignatureHelpParams: Codable, Hashable, Sendable {
@@ -118,10 +143,13 @@ final class SignatureHelpFeature {
     private let windowController = SignatureHelpWindowController()
 
     private var requestTask: Task<Void, Never>?
+    private var automaticTask: Task<Void, Never>?
     private var requestID: UInt64 = 0
+    private var automaticGeneration: UInt64 = 0
     private var help: LSPSignatureHelp?
     private var selectedSignatureIndex: Int?
     private var shownCaret: Int?
+    private var shownCallStart: Int?
 
     init(
         textView: CodeTextView,
@@ -154,21 +182,22 @@ final class SignatureHelpFeature {
     static let manualRequestContext = LSPSignatureHelpContext(
         triggerKind: .invoked,
         triggerCharacter: nil,
-        isRetrigger: false
+        isRetrigger: false,
+        activeSignatureHelp: nil
     )
 
     static func activeSignatureIndex(in help: LSPSignatureHelp) -> Int? {
         guard !help.signatures.isEmpty else { return nil }
-        guard let active = help.activeSignature else { return 0 }
-        guard help.signatures.indices.contains(active) else { return nil }
+        guard let active = help.activeSignature, help.signatures.indices.contains(active) else { return 0 }
         return active
     }
 
     static func activeParameter(in help: LSPSignatureHelp) -> Int? {
         guard let signatureIndex = activeSignatureIndex(in: help) else { return nil }
         let signature = help.signatures[signatureIndex]
-        let active = signature.activeParameter ?? help.activeParameter
-        guard let active, signature.parameters?.indices.contains(active) == true else { return nil }
+        guard let parameters = signature.parameters, !parameters.isEmpty else { return nil }
+        let active = signature.activeParameter ?? help.activeParameter ?? 0
+        guard parameters.indices.contains(active) else { return 0 }
         return active
     }
 
@@ -177,17 +206,94 @@ final class SignatureHelpFeature {
         caret: Int,
         triggerCharacters: [String],
         retriggerCharacters: [String],
-        isVisible: Bool
+        isVisible: Bool,
+        activeSignatureHelp: LSPSignatureHelp? = nil
     ) -> LSPSignatureHelpContext? {
-        guard caret >= 0, caret <= (text as NSString).length, hasCallContext(text: text, caret: caret) else { return nil }
+        guard caret >= 0, caret <= (text as NSString).length, callStart(text: text, caret: caret) != nil else { return nil }
         let prefix = (text as NSString).substring(to: caret)
         if let trigger = triggerCharacters.sorted(by: { $0.count > $1.count }).first(where: { prefix.hasSuffix($0) }) {
-            return LSPSignatureHelpContext(triggerKind: .triggerCharacter, triggerCharacter: trigger, isRetrigger: isVisible)
+            return LSPSignatureHelpContext(
+                triggerKind: .triggerCharacter,
+                triggerCharacter: trigger,
+                isRetrigger: isVisible,
+                activeSignatureHelp: isVisible ? activeSignatureHelp : nil
+            )
         }
-        if let retrigger = retriggerCharacters.sorted(by: { $0.count > $1.count }).first(where: { prefix.hasSuffix($0) }) {
-            return LSPSignatureHelpContext(triggerKind: .triggerCharacter, triggerCharacter: retrigger, isRetrigger: true)
+        if isVisible,
+           let retrigger = retriggerCharacters.sorted(by: { $0.count > $1.count }).first(where: { prefix.hasSuffix($0) }) {
+            return LSPSignatureHelpContext(
+                triggerKind: .triggerCharacter,
+                triggerCharacter: retrigger,
+                isRetrigger: true,
+                activeSignatureHelp: activeSignatureHelp
+            )
         }
         return nil
+    }
+
+    static func contentChangeContext(
+        text: String,
+        caret: Int,
+        previousCallStart: Int?,
+        isVisible: Bool,
+        activeSignatureHelp: LSPSignatureHelp? = nil
+    ) -> LSPSignatureHelpContext? {
+        guard isVisible,
+              let callStart = callStart(text: text, caret: caret),
+              callStart != previousCallStart else { return nil }
+        return LSPSignatureHelpContext(
+            triggerKind: .contentChange,
+            triggerCharacter: nil,
+            isRetrigger: true,
+            activeSignatureHelp: activeSignatureHelp
+        )
+    }
+
+    static func callStart(text: String, caret: Int) -> Int? {
+        let length = (text as NSString).length
+        guard caret >= 0, caret <= length else { return nil }
+        let prefix = (text as NSString).substring(to: caret)
+        var openParens: [Int] = []
+        var utf16Offset = 0
+        for scalar in prefix.unicodeScalars {
+            switch scalar {
+            case "(":
+                openParens.append(utf16Offset)
+            case ")":
+                _ = openParens.popLast()
+            default:
+                break
+            }
+            utf16Offset += scalar.utf16.count
+        }
+        return openParens.last
+    }
+
+    static func parameterRange(in signature: LSPSignatureInformation, index: Int) -> NSRange? {
+        guard let parameters = signature.parameters, parameters.indices.contains(index) else { return nil }
+        let label = signature.label as NSString
+        switch parameters[index].label {
+        case .offsets(let start, let end):
+            guard start >= 0, end >= start, end <= label.length else { return nil }
+            return NSRange(location: start, length: end - start)
+        case .string:
+            var searchStart = 0
+            for (parameterIndex, parameter) in parameters.enumerated() {
+                let range: NSRange
+                switch parameter.label {
+                case .offsets(let start, let end):
+                    guard start >= 0, end >= start, end <= label.length else { return nil }
+                    range = NSRange(location: start, length: end - start)
+                case .string(let value):
+                    let searchRange = NSRange(location: searchStart, length: label.length - searchStart)
+                    range = label.range(of: value, options: [], range: searchRange)
+                    guard range.location != NSNotFound else { return nil }
+                }
+                if parameterIndex == index { return range }
+                searchStart = max(searchStart, NSMaxRange(range))
+            }
+            return nil
+        }
     }
 
     static func isResponseCurrent(requestID: UInt64, currentRequestID: UInt64, contextIsCurrent: Bool) -> Bool {
@@ -204,12 +310,21 @@ final class SignatureHelpFeature {
 
     func handleEscape() -> Bool {
         guard windowController.isVisible else { return false }
-        dismiss()
+        cancelAndDismiss()
         return true
     }
 
-    func tearDown() {
+    /// Cancels work and hides the overlay while retaining the text-view handlers.
+    /// A coordinator rebind uses this so signature help remains installed.
+    func cancelAndDismiss() {
+        automaticTask?.cancel()
+        automaticTask = nil
+        automaticGeneration &+= 1
         dismiss()
+    }
+
+    func tearDown() {
+        cancelAndDismiss()
         textView?.signatureHelpManualTriggerHandler = nil
         textView?.signatureHelpChangeHandler = nil
         textView?.signatureHelpSelectionChangeHandler = nil
@@ -227,28 +342,46 @@ final class SignatureHelpFeature {
         }
         let text = textView.string
         let caret = textView.selectedRange().location
-        guard Self.hasCallContext(text: text, caret: caret) else {
-            dismiss()
+        guard let callStart = Self.callStart(text: text, caret: caret) else {
+            cancelAndDismiss()
             return
         }
         let client = getClient()
-        Task { [weak self] in
+        automaticTask?.cancel()
+        automaticGeneration &+= 1
+        let generation = automaticGeneration
+        automaticTask = Task { [weak self] in
             guard let self, let client else { return }
-            let context = Self.requestContext(
-                text: text,
-                caret: caret,
-                triggerCharacters: await client.signatureHelpTriggerCharacters,
-                retriggerCharacters: await client.signatureHelpRetriggerCharacters,
-                isVisible: self.windowController.isVisible
-            )
+            let triggers = await client.signatureHelpTriggerCharacters
+            let retriggers = await client.signatureHelpRetriggerCharacters
             guard !Task.isCancelled,
+                  generation == self.automaticGeneration,
                   self.textView?.string == text,
                   self.textView?.selectedRange().location == caret,
                   self.textView?.selectedRange().length == 0 else { return }
+            let visible = self.windowController.isVisible
+            let activeSignatureHelp = visible ? self.signatureHelpForRetrigger() : nil
+            let context = Self.requestContext(
+                text: text,
+                caret: caret,
+                triggerCharacters: triggers,
+                retriggerCharacters: retriggers,
+                isVisible: visible,
+                activeSignatureHelp: activeSignatureHelp
+            )
             if let context {
+                self.request(context: context)
+            } else if let context = Self.contentChangeContext(
+                text: text,
+                caret: caret,
+                previousCallStart: self.shownCallStart,
+                isVisible: visible,
+                activeSignatureHelp: activeSignatureHelp
+            ) {
                 self.request(context: context)
             } else {
                 self.shownCaret = caret
+                self.shownCallStart = callStart
                 self.reposition()
             }
         }
@@ -262,8 +395,8 @@ final class SignatureHelpFeature {
             return
         }
         let caret = textView.selectedRange().location
-        guard context.triggerKind == .invoked || Self.hasCallContext(text: textView.string, caret: caret) else {
-            dismiss()
+        guard context.triggerKind == .invoked || Self.callStart(text: textView.string, caret: caret) != nil else {
+            cancelAndDismiss()
             return
         }
         requestTask?.cancel()
@@ -301,16 +434,23 @@ final class SignatureHelpFeature {
                       ),
                       self.getURI() == uri,
                       self.textView?.selectedRange().location == caret,
-                      self.textView?.selectedRange().length == 0,
-                      let response,
-                      Self.activeSignatureIndex(in: response) != nil
+                      self.textView?.selectedRange().length == 0
                 else { return }
-                self.help = response
-                self.selectedSignatureIndex = Self.activeSignatureIndex(in: response)
-                self.shownCaret = caret
-                self.present()
+                self.applyCurrentResponse(response, caret: caret)
             }
         }
+    }
+
+    private func applyCurrentResponse(_ response: LSPSignatureHelp?, caret: Int) {
+        guard let response, Self.activeSignatureIndex(in: response) != nil else {
+            cancelAndDismiss()
+            return
+        }
+        help = response
+        selectedSignatureIndex = Self.activeSignatureIndex(in: response)
+        shownCaret = caret
+        shownCallStart = Self.callStart(text: textView?.string ?? "", caret: caret)
+        present()
     }
 
     private func present() {
@@ -350,15 +490,39 @@ final class SignatureHelpFeature {
     private func selectSignature(_ index: Int) {
         guard let help, help.signatures.indices.contains(index) else { return }
         selectedSignatureIndex = index
+        self.help = LSPSignatureHelp(
+            signatures: help.signatures,
+            activeSignature: index,
+            activeParameter: help.activeParameter
+        )
         present()
+        if windowController.isVisible {
+            request(context: LSPSignatureHelpContext(
+                triggerKind: .contentChange,
+                triggerCharacter: nil,
+                isRetrigger: true,
+                activeSignatureHelp: signatureHelpForRetrigger()
+            ))
+        }
     }
 
     private func activeParameter(for signatureIndex: Int, in help: LSPSignatureHelp) -> Int? {
         guard help.signatures.indices.contains(signatureIndex) else { return nil }
         let signature = help.signatures[signatureIndex]
-        let active = signature.activeParameter ?? (signatureIndex == Self.activeSignatureIndex(in: help) ? help.activeParameter : nil)
-        guard let active, signature.parameters?.indices.contains(active) == true else { return nil }
+        guard let parameters = signature.parameters, !parameters.isEmpty else { return nil }
+        let active = signature.activeParameter ?? (signatureIndex == Self.activeSignatureIndex(in: help) ? help.activeParameter : nil) ?? 0
+        guard parameters.indices.contains(active) else { return 0 }
         return active
+    }
+
+    private func signatureHelpForRetrigger() -> LSPSignatureHelp? {
+        guard let help else { return nil }
+        guard let selectedSignatureIndex else { return help }
+        return LSPSignatureHelp(
+            signatures: help.signatures,
+            activeSignature: selectedSignatureIndex,
+            activeParameter: help.activeParameter
+        )
     }
 
     private func dismiss() {
@@ -368,17 +532,22 @@ final class SignatureHelpFeature {
         help = nil
         selectedSignatureIndex = nil
         shownCaret = nil
+        shownCallStart = nil
         windowController.hide()
     }
 
-    private static func hasCallContext(text: String, caret: Int) -> Bool {
-        let prefix = (text as NSString).substring(to: min(max(caret, 0), (text as NSString).length))
-        var depth = 0
-        for scalar in prefix.unicodeScalars {
-            if scalar == "(" { depth += 1 }
-            if scalar == ")" { depth = max(0, depth - 1) }
-        }
-        return depth > 0
+    struct TestingSnapshot: Equatable {
+        let help: LSPSignatureHelp?
+        let selectedSignatureIndex: Int?
+        let shownCallStart: Int?
+    }
+
+    var testingSnapshot: TestingSnapshot {
+        TestingSnapshot(help: help, selectedSignatureIndex: selectedSignatureIndex, shownCallStart: shownCallStart)
+    }
+
+    func testingApplyCurrentResponse(_ response: LSPSignatureHelp?, caret: Int) {
+        applyCurrentResponse(response, caret: caret)
     }
 }
 
@@ -538,22 +707,6 @@ private final class SignatureHelpContentController: NSViewController {
     }
 
     private func parameterRange(index: Int) -> NSRange? {
-        guard let parameters = signature.parameters, parameters.indices.contains(index) else { return nil }
-        switch parameters[index].label {
-        case .offsets(let start, let end):
-            guard start >= 0, end >= start, end <= (signature.label as NSString).length else { return nil }
-            return NSRange(location: start, length: end - start)
-        case .string:
-            var searchStart = 0
-            for (parameterIndex, parameter) in parameters.enumerated() {
-                guard case .string(let value) = parameter.label else { return nil }
-                let searchRange = NSRange(location: searchStart, length: (signature.label as NSString).length - searchStart)
-                let range = (signature.label as NSString).range(of: value, options: [], range: searchRange)
-                guard range.location != NSNotFound else { return nil }
-                if parameterIndex == index { return range }
-                searchStart = NSMaxRange(range)
-            }
-            return nil
-        }
+        SignatureHelpFeature.parameterRange(in: signature, index: index)
     }
 }

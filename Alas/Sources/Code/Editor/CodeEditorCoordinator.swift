@@ -347,7 +347,7 @@ final class CodeEditorCoordinator {
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
-            signatureHelp?.tearDown()
+            signatureHelp?.cancelAndDismiss()
             reportedInitialHighlightReady = false
             didChangeTask?.cancel()
             hasPendingDidChange = false
@@ -723,7 +723,8 @@ final class CodeEditorCoordinator {
         hoverObservers.append(resizeToken)
 
         textView.escapeHandler = { [weak self] in
-            self?.signatureHelp?.handleEscape() ?? self?.hover?.handleEscape() ?? false
+            if self?.signatureHelp?.handleEscape() == true { return true }
+            return self?.hover?.handleEscape() ?? false
         }
     }
 

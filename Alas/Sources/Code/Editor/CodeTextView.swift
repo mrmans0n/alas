@@ -696,8 +696,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func cancelOperation(_ sender: Any?) {
-        if escapeHandler?() == true { return }
         if routeCompletionKey(.dismiss) { return }
+        if escapeHandler?() == true { return }
         super.cancelOperation(sender)
     }
 
