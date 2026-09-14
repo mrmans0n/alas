@@ -56,6 +56,7 @@ struct EditorNavigationResultsView: View {
                     .font(.system(size: 11))
                     .accessibilityLabel("Rerun reference search")
             }
+            if store.isLoading { Button("Cancel") { store.cancelRequest() }.buttonStyle(.plain) }
             if let statusMessage = store.statusMessage {
                 Text(statusMessage)
                     .font(.system(size: 11))
@@ -100,6 +101,7 @@ struct EditorNavigationResultsView: View {
                             .padding(.top, 5)
                         ForEach(group.targets, id: \.self) { target in
                             Button {
+                                store.selectedResult = target
                                 onOpen(target)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -115,21 +117,41 @@ struct EditorNavigationResultsView: View {
                             .buttonStyle(.plain)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 3)
+                            .background(store.selectedResult == target ? Color.accentColor.opacity(0.15) : .clear)
+                            .accessibilityAddTraits(store.selectedResult == target ? .isSelected : [])
                             .accessibilityLabel("Open \(target.document.uri), line \(target.position.line + 1)")
                             .task { store.loadSnippet(for: target) }
+                            .onChange(of: store.snippetRevision) { _, _ in store.loadSnippet(for: target) }
+                            .onDisappear { store.releaseSnippet(for: target) }
                         }
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 6)
             }
+            .focusable()
+            .onKeyPress(.downArrow) { store.moveResultSelection(by: 1)
+                return .handled
+            }
+            .onKeyPress(.upArrow) { store.moveResultSelection(by: -1)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                guard let target = store.selectedResult else { return .ignored }
+                onOpen(target)
+                return .handled
+            }
         }
     }
 
     private var grouped: [(document: EditorDocumentID, targets: [EditorNavigationTarget])] {
         store.groupedResults
-            .map { (document: $0.key, targets: $0.value.sorted { $0.position.line < $1.position.line }) }
-            .sorted { $0.document.uri < $1.document.uri }
+            .map { (document: $0.key, targets: $0.value.sorted {
+                $0.position.line == $1.position.line ? $0.position.character < $1.position.character : $0.position.line < $1.position.line
+            }) }
+            .sorted {
+                $0.document.uri == $1.document.uri ? ($0.document.host ?? "") < ($1.document.host ?? "") : $0.document.uri < $1.document.uri
+            }
     }
 
     private func documentLabel(_ document: EditorDocumentID) -> String {

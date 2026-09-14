@@ -201,7 +201,11 @@ final class CodeEditorCoordinator {
                 self?.navigation?.cancelPendingRequest()
             },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
-            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            snippetStore: { [weak self] in
+                guard let self, let id = self.currentWorktreeId else { return nil }
+                return self.appState.tabs.navigationStore(forWorktreeId: id)
+            }
         )
         let initialNavigationStore = appState.tabs.navigationStore(forWorktreeId: worktreeId)
         navigation = NavigationFeature(
@@ -210,7 +214,12 @@ final class CodeEditorCoordinator {
                 return self.appState.tabs.navigationStore(forWorktreeId: self.currentWorktreeId ?? worktreeId)
             },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
-            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            isQueryCurrent: { [weak tabs = appState.tabs, weak manager = appState.lsp] context in
+                guard let buffer = tabs?.workspaceEditBuffer(for: context.document) else { return false }
+                return ObjectIdentifier(buffer) == context.bufferID && buffer.editGeneration == context.sourceGeneration
+                    && manager?.isCurrent(context) == true
+            }
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
@@ -259,6 +268,9 @@ final class CodeEditorCoordinator {
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
             applyWorkspaceCompletion: { [weak self] plan, snapshot, context in
                 await self?.applyWorkspaceCompletion(plan, snapshot: snapshot, context: context) ?? false
+            },
+            executeFollowup: { [weak self] command, client, context in
+                await self?.codeActionsFeature?.performCompletionCommand(command, client: client, context: context)
             }
         )
         signatureHelp = SignatureHelpFeature(
@@ -500,6 +512,12 @@ final class CodeEditorCoordinator {
     }
 
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        lspBinding?.invalidate()
+        hover?.notifyCaretChanged()
+        definition?.notifyCaretChanged()
+        navigation?.cancelPendingRequest()
+        renameFeature?.cancel()
+        codeActionsFeature?.cancel()
         stopSemanticTokens()
         textView?.displayAdapter?.composition.commit()
         textView?.bindUndo(to: nil)
@@ -517,11 +535,12 @@ final class CodeEditorCoordinator {
         textView?.bindUndo(to: buffer)
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
-        if let worktreeID = currentWorktreeId, !buffer.isExternal {
+        if let worktreeID = currentWorktreeId {
             lspBinding = EditorLSPBinding(
                 manager: appState.lsp,
                 buffer: buffer,
                 worktreeID: worktreeID,
+                holderRoot: currentOriginatingWorktreeRoot,
                 flushPendingChanges: { [weak self] in
                     await self?.flushPendingLSPDidChangeForCompletion()
                 }
@@ -529,6 +548,7 @@ final class CodeEditorCoordinator {
         } else {
             lspBinding = nil
         }
+        if isRebind, let textView { installEditorCommands(on: textView) }
         let ext = LanguageServerRegistry.extensionKey(forPath: buffer.relativePath)
         let freshlyInferred = appState.lsp.language(forFileExtension: ext)
         // Layer a pre-existing override on top of the freshly inferred
@@ -665,6 +685,7 @@ final class CodeEditorCoordinator {
         completion = nil
         signatureHelp?.tearDown()
         signatureHelp = nil
+        lspBinding?.invalidate()
         lspBinding = nil
         editorCommandStatusTask?.cancel()
         renameFeature?.cancel()
@@ -1072,6 +1093,9 @@ final class CodeEditorCoordinator {
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
         clearRevealHighlight()
+        hover?.notifyCaretChanged()
+        definition?.notifyCaretChanged()
+        codeActionsFeature?.invalidatePicker()
         inlayFeature?.invalidate()
         semanticFeature?.invalidate()
         if let worktreeID = currentWorktreeId {

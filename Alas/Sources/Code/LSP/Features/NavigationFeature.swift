@@ -13,6 +13,7 @@ final class NavigationFeature {
 
     private let synchronizeRequest: SynchronizeRequest
     private let isContextCurrent: (EditorRequestContext) -> Bool
+    private let isQueryCurrent: (EditorRequestContext) -> Bool
     private let currentStore: () -> EditorNavigationStore
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
@@ -21,11 +22,13 @@ final class NavigationFeature {
     init(
         store: @escaping () -> EditorNavigationStore,
         synchronizeRequest: @escaping SynchronizeRequest,
-        isContextCurrent: @escaping (EditorRequestContext) -> Bool
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool,
+        isQueryCurrent: ((EditorRequestContext) -> Bool)? = nil
     ) {
         currentStore = store
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        self.isQueryCurrent = isQueryCurrent ?? isContextCurrent
     }
 
     func perform(_ action: Action, range: NSRange) {
@@ -34,13 +37,15 @@ final class NavigationFeature {
         let currentRequestID = requestID
         let requestStore = currentStore()
         requestStore.beginLoading()
+        requestStore.cancelRequestHandler = { [weak self] in self?.cancelPendingRequest() }
         inFlightReferenceStore = requestStore
         inFlight = Task { [weak self] in
             guard let self else { return }
             guard let (client, context) = await synchronizeRequest(range), !Task.isCancelled else {
-                await MainActor.run { [weak self] in self?.finishLoading(requestID: currentRequestID, store: requestStore) }
+                if requestID == currentRequestID { requestStore.showUnavailable("Language server unavailable") }
                 return
             }
+            requestStore.retainReferenceQuery(client: client, context: context, isCurrent: isQueryCurrent)
             do {
                 let locations = try await client.references(
                     uri: context.document.uri,

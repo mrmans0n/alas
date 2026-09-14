@@ -17,12 +17,12 @@ actor LSPClient {
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
     private var serverRequests = LSPServerRequests()
-    private struct InboundRequest {
+    struct InboundRequest {
         let generation: UUID
         let method: String
         let task: Task<Void, Never>
     }
-    private var inbound: [LSPID: InboundRequest] = [:]
+    private(set) var inbound: [LSPID: InboundRequest] = [:]
     private var commandSession: UUID?
     private var commandEditFailure: String?
     private(set) var supportsCodeActionResolve = false
@@ -747,7 +747,7 @@ actor LSPClient {
         }
     }
 
-    private func handle(frame: Data) {
+    func handle(frame: Data) {
         guard state != .dead else { return }
         // Classify by `(id, method)` rather than blindly trying `LSPResponse`
         // first — server-initiated requests carry both `id` *and* `method`,

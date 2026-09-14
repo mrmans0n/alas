@@ -3,6 +3,14 @@ import Testing
 @testable import Alas
 
 struct WorkspaceEditPlannerTests {
+    @Test func rejectsCreateOverOpenBufferBeforeExecution() {
+        let owner = document("file:///workspace/a.swift")
+        let edit = LSPWorkspaceEdit(documentChanges: [.create(uri: owner.uri, options: .init(overwrite: true), annotationID: nil)])
+        #expect(throws: (any Swift.Error).self) {
+            try WorkspaceEditPlanner.plan(edit: edit, context: context(for: owner), snapshots: [owner: snapshot(owner, content: "dirty", open: true, dirty: true)])
+        }
+    }
+
     @Test func decodesResourceOperationWithoutDroppingIt() throws {
         let data = Data(#"{"documentChanges":[{"kind":"rename","oldUri":"file:///a","newUri":"file:///b"}]}"#.utf8)
         let edit = try JSONDecoder().decode(LSPWorkspaceEdit.self, from: data)
@@ -134,10 +142,10 @@ struct WorkspaceEditPlannerTests {
         ])
 
         let ignoredPlan = try WorkspaceEditPlanner.plan(edit: ignored, context: context(for: source), snapshots: base)
-        let overwritePlan = try WorkspaceEditPlanner.plan(edit: overwrite, context: context(for: source), snapshots: base)
-
         #expect(ignoredPlan.steps[0].before == ignoredPlan.steps[0].after)
-        #expect(overwritePlan.warnings.contains(.destinationOverwriteWithUnsavedContent(destination)))
+        #expect(throws: (any Swift.Error).self) {
+            try WorkspaceEditPlanner.plan(edit: overwrite, context: context(for: source), snapshots: base)
+        }
     }
 
     @Test func requiresExplicitSnapshotsForEveryResourceTargetAndSource() {

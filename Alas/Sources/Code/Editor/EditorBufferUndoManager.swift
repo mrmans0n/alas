@@ -8,6 +8,7 @@ final class EditorBufferUndoManager: UndoManager {
         let id: UUID
         let beforePosition: Int
         let activate: (Bool) -> Void
+        let removed: () -> Void
     }
 
     private final class Segment {
@@ -18,6 +19,7 @@ final class EditorBufferUndoManager: UndoManager {
 
     private var segments: [Segment] = [Segment()]
     private var markers: [Marker] = []
+    var reachableMarkerIDs: Set<UUID> { Set(markers.map(\.id)) }
     private var cursor = 0
     private var typingGroupOpen = false
     private var lastTypingRange: NSRange?
@@ -75,10 +77,12 @@ final class EditorBufferUndoManager: UndoManager {
 
     override func removeAllActions() {
         breakTypingCoalescing()
+        let removed = markers
         segments = [Segment()]
         markers.removeAll()
         cursor = 0
         super.removeAllActions()
+        removed.forEach { $0.removed() }
     }
 
     func registerBufferUndo(target: EditorBuffer, actionName: String, coalescingRange: NSRange? = nil,
@@ -122,10 +126,12 @@ final class EditorBufferUndoManager: UndoManager {
         lastTypingRange = nil
     }
 
-    func installMarker(_ id: UUID, activate: @escaping (Bool) -> Void) {
+    func installMarker(_ id: UUID, removed: @escaping () -> Void = {}, activate: @escaping (Bool) -> Void) {
         breakTypingCoalescing()
         guard !markers.contains(where: { $0.id == id }), current.groupingLevel == 0 else { return }
+        var discarded: [Marker] = []
         if cursor < markers.count {
+            discarded = Array(markers[cursor...])
             markers.removeSubrange(cursor...)
             segments.removeSubrange((cursor + 1)...)
         }
@@ -136,9 +142,10 @@ final class EditorBufferUndoManager: UndoManager {
         current.registerUndo(withTarget: sentinel) { _ in }
         current.endUndoGrouping()
         current.removeAllActions(withTarget: sentinel)
-        markers.append(Marker(id: id, beforePosition: segments[cursor].position, activate: activate))
+        markers.append(Marker(id: id, beforePosition: segments[cursor].position, activate: activate, removed: removed))
         segments.append(Segment())
         cursor += 1
+        discarded.forEach { $0.removed() }
     }
 
     func isAtMarker(_ id: UUID, redo: Bool) -> Bool {

@@ -1,5 +1,22 @@
 import AppKit
 
+@MainActor
+private final class EditorContextCommandTarget: NSObject {
+    weak var view: CodeTextView?
+    let command: EditorCommandID
+    let range: NSRange
+
+    init(view: CodeTextView, command: EditorCommandID, range: NSRange) {
+        self.view = view
+        self.command = command
+        self.range = range
+    }
+
+    @objc func invoke(_ sender: Any?) {
+        view?.editorCommandRouter?.invoke(command, range: range)
+    }
+}
+
 /// Editable `NSTextView` subclass. The coordinator wires hover and
 /// Cmd-click callbacks; the storage is owned and managed by an
 /// `EditorBuffer` outside this view. Editing is enabled but undo/redo,
@@ -96,6 +113,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     private static let indentationClosingDelimiters: Set<Character> = [")", "]", "}"]
 
     var hoverHandler: ((NSPoint) -> Void)?
+    var cancelSourceHoverHandler: (() -> Void)?
     var inlayHoverHandler: ((NSPoint?) -> Bool)?
     var inlayClickHandler: ((NSPoint) -> Bool)?
     var inlayAccessibilityActions: ((String) -> [NSAccessibilityCustomAction])?
@@ -138,7 +156,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var decreaseFontSizeHandler: (() -> Void)?
     var resetFontSizeHandler: (() -> Void)?
     var editorCommandRouter: EditorCommandRouter?
-    private var commandTargetRange: NSRange?
     private var commandStatusPopover: NSPopover?
 
     private var multiCursorSelectedRanges: [NSValue]?
@@ -233,7 +250,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
         let point = convert(event.locationInWindow, from: nil)
         let offset = utf16Offset(at: point) ?? sourceSelectedRange.location
-        commandTargetRange = EditorCommandRouter.targetRange(
+        let commandTargetRange = EditorCommandRouter.targetRange(
             clickOffset: offset,
             selection: sourceSelectedRange
         )
@@ -251,9 +268,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
 
         nativeMenu.addItem(.separator())
-        appendCommandGroup([.definition, .typeDefinition, .implementation, .references], to: nativeMenu, available: commands)
-        appendCommandGroup([.rename, .codeActions, .formatSelection, .formatDocument], to: nativeMenu, available: commands)
-        appendCommandGroup([.hover, .signatureHelp, .nextProblem, .previousProblem], to: nativeMenu, available: commands)
+        appendCommandGroup([.definition, .typeDefinition, .implementation, .references], to: nativeMenu, available: commands, range: commandTargetRange)
+        appendCommandGroup([.rename, .codeActions, .formatSelection, .formatDocument], to: nativeMenu, available: commands, range: commandTargetRange)
+        appendCommandGroup([.hover, .signatureHelp, .nextProblem, .previousProblem], to: nativeMenu, available: commands, range: commandTargetRange)
         return nativeMenu
     }
 
@@ -264,7 +281,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         return editorCommandRouter?.availableCommands().contains(command) == true
     }
 
-    private func appendCommandGroup(_ commands: [EditorCommandID], to menu: NSMenu, available: [EditorCommandID]) {
+    private func appendCommandGroup(_ commands: [EditorCommandID], to menu: NSMenu, available: [EditorCommandID], range: NSRange) {
         let group = commands.filter { available.contains($0) }
         guard !group.isEmpty else { return }
         if menu.items.last?.isSeparatorItem == false { menu.addItem(.separator()) }
@@ -275,15 +292,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
                 keyEquivalent: Self.keyEquivalent(for: command)
             )
             item.keyEquivalentModifierMask = Self.keyEquivalentModifiers(for: command)
-            item.target = self
+            item.representedObject = EditorContextCommandTarget(view: self, command: command, range: range)
+            item.target = item.representedObject as AnyObject
+            item.action = #selector(EditorContextCommandTarget.invoke(_:))
             menu.addItem(item)
         }
     }
 
     private func invokeEditorCommand(_ command: EditorCommandID) {
-        let range = commandTargetRange ?? sourceSelectedRange
-        editorCommandRouter?.invoke(command, range: range)
-        commandTargetRange = nil
+        editorCommandRouter?.invoke(command, range: sourceSelectedRange)
     }
 
     func triggerCommandClick(atUTF16Offset offset: Int) {
@@ -307,7 +324,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         popover.contentViewController = NSViewController()
         popover.contentViewController?.view = NSTextField(labelWithString: message)
         popover.contentViewController?.view.frame = NSRect(x: 0, y: 0, width: 220, height: 28)
-        let range = commandTargetRange ?? sourceSelectedRange
+        let range = sourceSelectedRange
         let rect = (TextEditCoordinates.lspPosition(utf16Offset: range.location, in: sourceString)).flatMap(firstRect(for:))
             ?? NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
         popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
@@ -1407,7 +1424,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         let p = convert(event.locationInWindow, from: nil)
-        if inlayHoverHandler?(p) == true { return }
+        if inlayHoverHandler?(p) == true {
+            cancelSourceHoverHandler?()
+            return
+        }
         hoverHandler?(p)
     }
 

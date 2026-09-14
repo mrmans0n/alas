@@ -24,6 +24,14 @@ final class WorkspaceEditExecutor {
         guard !isApplying else { return .conflict(plan.steps.map(\.document)) }
         isApplying = true
         defer { isApplying = false }
+        // Validate every ownership transition before journaling or writing. Later
+        // steps describe virtual state after preceding moves/deletes, not disk now.
+        if let unsupported = plan.steps.first(where: { step in
+            step.kind == .create && step.before.isOpen && step.before.content != step.after.content
+                || step.kind == .rename && step.after.document != step.document && step.destinationBefore?.isOpen == true
+        }) {
+            return .conflict([unsupported.destination ?? unsupported.document])
+        }
         var record: WorkspaceEditJournal.Record
         do { record = try journal.recordPrepared(plan) }
         catch { return .recovered("Could not prepare workspace edit recovery data.") }

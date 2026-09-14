@@ -60,6 +60,14 @@ final class WorkspaceEditJournal {
         try JSONDecoder().decode(Record.self, from: Data(contentsOf: url(id)))
     }
 
+    /// Retire only the specified owner's confirmed history. Other worktrees
+    /// may share this journal directory and still hold their own markers.
+    func retireSuccessfulRecord(_ id: UUID) throws {
+        let record = try record(id)
+        guard record.status == .applied || record.status == .recovered else { return }
+        try FileManager.default.removeItem(at: url(id))
+    }
+
     func records() throws -> [Record] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)

@@ -38,32 +38,64 @@ final class CodeActionsFeature {
         presentation.cancel()
     }
 
+    func invalidatePicker() {
+        if popover != nil { cancel() }
+    }
+
     /// `diagnosticContext` is the original server diagnostic selected from
     /// details UI. It intentionally bypasses display-range reconstruction so
     /// opaque data and wire coordinates reach `textDocument/codeAction`.
     func show(range: NSRange, only: [String]? = nil, diagnosticContext: [LSPDiagnostic]? = nil) {
         cancel()
         let id = generation
+        let model = CodeActionPickerModel(actions: [])
+        model.isLoading = true
+        if let textView, textView.window != nil {
+            let popover = NSPopover()
+            popover.behavior = .applicationDefined
+            popover.contentViewController = NSHostingController(rootView: CodeActionPicker(model: model, select: { action in model.select?(action) },
+                organizeImports: { [weak self] in
+                    guard let self, self.generation == id else { return }
+                    self.show(range: range, only: ["source.organizeImports"], diagnosticContext: diagnosticContext)
+                }, cancel: { [weak self] in
+                    guard let self, self.generation == id else { return }
+                    self.cancel()
+                }))
+            self.popover = popover
+            popover.show(relativeTo: textView.symbolAnchorRect(for: range) ?? .zero, of: textView, preferredEdge: .maxY)
+        }
         task = Task { [weak self] in
-            guard let self, let (client, context) = await synchronize(range), id == generation,
-                  isCurrent(context), let textView else { return }
+            guard let self else { return }
+            guard let (client, context) = await synchronize(range), id == generation, isCurrent(context) else {
+                if id == generation { model.isLoading = false
+                    model.message = "Language server unavailable"
+                }
+                return
+            }
             let generations = tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
             let selectedDiagnostics = diagnosticContext ?? Self.diagnostics(diagnostics(), intersecting: context.range)
             do {
+                guard await client.capabilities.supports(.codeActions) else {
+                    guard id == generation, isCurrent(context) else { return }
+                    model.isLoading = false
+                    model.message = "Code actions are not supported by this server"
+                    return
+                }
                 let actions = try await client.codeActions(uri: context.document.uri, range: context.range, diagnostics: selectedDiagnostics, only: only)
-                guard !Task.isCancelled, id == generation, isCurrent(context), textView.window != nil else { return }
-                let model = CodeActionPickerModel(actions: actions)
-                let popover = NSPopover()
-                popover.behavior = .applicationDefined
-                popover.contentViewController = NSHostingController(rootView: CodeActionPicker(model: model, select: { [weak self] action in
-                    guard let self else { return }
+                guard !Task.isCancelled, id == generation, isCurrent(context) else { return }
+                model.rows = actions.map { .init(action: $0) }
+                model.isLoading = false
+                model.select = { [weak self] action in
+                    guard let self, self.generation == id, self.isCurrent(context) else { return }
                     self.popover?.close()
                     self.popover = nil
                     self.task = Task { await self.run(action, client: client, context: context, generations: generations, id: id) }
-                }, organizeImports: { [weak self] in self?.show(range: range, only: ["source.organizeImports"], diagnosticContext: diagnosticContext) }, cancel: { [weak self] in self?.cancel() }))
-                self.popover = popover
-                popover.show(relativeTo: textView.symbolAnchorRect(for: range) ?? .zero, of: textView, preferredEdge: .maxY)
-            } catch { showStatus(RenameFeature.message(for: error)) }
+                }
+            } catch {
+                guard id == generation, isCurrent(context) else { return }
+                model.isLoading = false
+                model.message = RenameFeature.message(for: error)
+            }
         }
     }
 
@@ -115,22 +147,40 @@ final class CodeActionsFeature {
             }, apply: { edit in
                 await self.apply(edit, session: session, client: client, id: id)
             }, execute: { command in
-                let token = try await client.beginCommandSession { [weak self] edit in
-                    guard let self else { return .cancelled }
+                try await Self.executeCommand(command, client: client, isCurrent: {
+                    self.isCurrent(session, id: id)
+                }, apply: { edit in
                     return await self.apply(edit, session: session, client: client, id: id)
-                }
-                do {
-                    try Task.checkCancellation()
-                    guard self.isCurrent(session, id: id) else { throw CancellationError() }
-                    try await client.executeCommand(command)
-                    try await client.finishCommandSession(token)
-                } catch {
-                    await client.endCommandSession(token)
-                    throw error
-                }
+                })
             })
+            guard id == generation else { return }
             showStatus(result.failureReason ?? (result.applied ? "Code action completed" : "Code action cancelled"))
-        } catch { showStatus(RenameFeature.message(for: error)) }
+        } catch { if id == generation { showStatus(RenameFeature.message(for: error)) } }
+    }
+
+    static func executeCommand(_ command: LSPCommand, client: LSPClient,
+                               isCurrent: @escaping @MainActor () -> Bool,
+                               apply: @escaping LSPServerRequests.EditHandler) async throws {
+        let token = try await client.beginCommandSession(applyEdit: apply)
+        do {
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+            try await client.executeCommand(command)
+            try await client.finishCommandSession(token)
+        } catch {
+            await client.endCommandSession(token)
+            throw error
+        }
+    }
+
+    func performCompletionCommand(_ command: LSPCommand, client: LSPClient, context: EditorRequestContext) async {
+        guard isCurrent(context), let action = try? LSPCodeAction(wireValue: .object([
+            "title": .string(command.title), "command": .string(command.command),
+            "arguments": command.arguments.map(LSPJSONValue.array) ?? .null
+        ])) else { return }
+        performInlayAction(action, client: client, context: context,
+                           generations: tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID))
+        await task?.value
     }
 
     private func showStatus(_ message: String) {
@@ -302,7 +352,10 @@ final class CodeActionPickerModel {
         let id = UUID()
         let action: LSPCodeAction
     }
-    let rows: [Row]
+    var rows: [Row]
+    var isLoading = false
+    var message: String?
+    var select: ((LSPCodeAction) -> Void)?
     var query = ""
     init(actions: [LSPCodeAction]) { rows = actions.map { Row(action: $0) } }
     var filtered: [Row] {
@@ -331,7 +384,9 @@ struct CodeActionPicker: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.plain).disabled(row.action.disabled != nil).padding(4)
                     }
-                    if model.filtered.isEmpty { Text("No code actions").foregroundStyle(.secondary) }
+                    if model.isLoading { ProgressView("Finding code actions…") }
+                    else if let message = model.message { Text(message).foregroundStyle(.secondary) }
+                    else if model.filtered.isEmpty { Text("No code actions").foregroundStyle(.secondary) }
                 }
             }.frame(maxHeight: 280)
             HStack {

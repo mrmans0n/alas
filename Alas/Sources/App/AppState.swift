@@ -7417,6 +7417,7 @@ final class AppState {
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
+        if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }
     }
 
     func closeAllTabs(worktreeId: String) {

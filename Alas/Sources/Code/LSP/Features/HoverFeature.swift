@@ -62,6 +62,7 @@ final class HoverFeature {
         }
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        textView.cancelSourceHoverHandler = { [weak self] in self?.dismiss() }
 
         let priorHover = textView.hoverHandler
         textView.hoverHandler = { [weak self] p in

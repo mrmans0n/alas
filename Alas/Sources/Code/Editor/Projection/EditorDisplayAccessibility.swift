@@ -16,7 +16,10 @@ extension CodeTextView {
             case .visibleCharacterRange: NSValue(range: accessibilityVisibleCharacterRange())
             case .insertionPointLineNumber: accessibilityInsertionPointLineNumber()
             case .sharedCharacterRange: NSValue(range: NSRange(location: 0, length: sourceAttributedText.length))
-            case .children: accessibilityChildren()
+            case .children:
+                // NSTextView's modern fallback calls this legacy entry point.
+                // Forward an unbound view directly to the native implementation.
+                displayAdapter == nil ? super.accessibilityAttributeValue(attribute) : accessibilityChildren()
             default: super.accessibilityAttributeValue(attribute)
             }
         }

@@ -4,6 +4,23 @@ import Testing
 
 @MainActor
 struct WorkspaceEditExecutorTests {
+    @Test(arguments: [false, true])
+    func unsupportedLaterResourceOwnershipPerformsZeroWrites(rename: Bool) async throws {
+        let f = try WorkspaceEditFixture()
+        defer { f.remove() }
+        let first = try #require(f.plan.steps.first)
+        let open = WorkspaceFileSnapshot(document: f.b, content: Data("open".utf8), isOpen: true)
+        let last = WorkspaceEditPlanStep(kind: rename ? .rename : .create,
+                                        document: rename ? f.a : f.b, destination: rename ? f.b : nil,
+                                        before: rename ? first.after : open,
+                                        after: rename ? first.after.replacing(document: f.b, content: first.after.content) : open.replacing(content: Data()),
+                                        destinationBefore: rename ? open : nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [first, last], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        #expect(await f.executor.apply(plan) == .conflict([f.b]))
+        #expect(!f.access.calls.contains { $0.hasPrefix("write:") || $0.hasPrefix("move:") })
+        #expect(try f.journal.records().isEmpty)
+    }
+
     @Test func unconfirmedDeletionPreservesRecreatedDiskContent() async throws {
         let fixture = try WorkspaceEditFixture()
         defer { fixture.remove() }
@@ -278,7 +295,7 @@ struct WorkspaceEditExecutorTests {
         let fixture = try await LocalWorkspaceEditFixture()
         defer { fixture.remove() }
         let before = try await fixture.access.snapshot(fixture.document)
-        guard case .recovered = await fixture.executor.apply(fixture.plan(fixture.step(kind: .create, before: before, content: Data()))) else {
+        guard case .conflict = await fixture.executor.apply(fixture.plan(fixture.step(kind: .create, before: before, content: Data()))) else {
             Issue.record("Expected conservative refusal")
             return
         }

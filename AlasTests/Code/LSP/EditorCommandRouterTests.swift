@@ -5,6 +5,44 @@ import Testing
 
 @MainActor
 struct EditorCommandRouterTests {
+    @Test(arguments: [false, true]) func dismissedMenuDoesNotRetargetKeyboardCommand(nativeAction: Bool) throws {
+        let view = makeTextView("first second")
+        var invoked: NSRange?
+        let router = EditorCommandRouter(capabilities: try LSPCapabilities(json: Data(#"{"referencesProvider":true}"#.utf8)), isServerReady: true,
+                                         handlers: [.references: { invoked = $0 }])
+        view.editorCommandRouter = router
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: .init(x: 4, y: 4), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        _ = view.menu(for: event)
+        if nativeAction { view.selectAll(nil) }
+        view.setSourceSelectedRange(NSRange(location: 8, length: 0))
+        view.findReferences(nil)
+        #expect(invoked == NSRange(location: 8, length: 0))
+    }
+
+    @Test func installedContextShortcutsAreBareFunctionKeysAndActionOwnsClickedRange() throws {
+        let view = makeTextView("first second")
+        var invoked: NSRange?
+        view.editorCommandRouter = EditorCommandRouter(capabilities: .init(supportedCommands: [.definition, .rename]), isServerReady: true,
+            handlers: [.definition: { invoked = $0 }, .rename: { invoked = $0 }])
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: .init(x: 4, y: 4), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let menu = try #require(view.menu(for: event))
+        let definition = try #require(menu.items.first { $0.title == "Go to Definition" })
+        let rename = try #require(menu.items.first { $0.title == "Rename Symbol" })
+        #expect(definition.keyEquivalentModifierMask.isEmpty)
+        #expect(rename.keyEquivalentModifierMask.isEmpty)
+        #expect(definition.keyEquivalent.unicodeScalars.first?.value == UInt32(NSF12FunctionKey))
+        #expect(rename.keyEquivalent.unicodeScalars.first?.value == UInt32(NSF2FunctionKey))
+        #expect(NSApp.sendAction(try #require(definition.action), to: definition.target, from: definition))
+        let menuRange = try #require(invoked)
+        invoked = nil
+        view.setSourceSelectedRange(.init(location: 8, length: 0))
+        #expect(NSApp.sendAction(try #require(definition.action), to: definition.target, from: definition))
+        #expect(invoked == menuRange)
+        #expect(invoked != NSRange(location: 8, length: 0))
+        view.goToDefinition(nil)
+        #expect(invoked == NSRange(location: 8, length: 0))
+    }
+
     @Test func clickInsideSelectionPreservesRange() {
         let selection = NSRange(location: 4, length: 5)
         #expect(EditorCommandRouter.targetRange(clickOffset: 6,

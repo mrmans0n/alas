@@ -1,10 +1,175 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
 @MainActor
 @Suite(.serialized)
 struct WorkspaceEditUndoTests {
+    @Test func closingUnchangedInitiatorDoesNotBlockAnotherParticipantUndo() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let target = f.documents[1]
+        let before = try await f.access.snapshot(target)
+        let after = before.replacing(content: Data("changed".utf8))
+        let step = WorkspaceEditPlanStep(kind: .text, document: target, destination: nil, before: before, after: after, destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [target: after], reviewAnnotations: [:], warnings: [], requiresPreview: false)
+        guard case .applied(let id) = await f.undo.executor.apply(plan) else { Issue.record("Apply failed")
+        return }
+        f.undo.register(operationID: id, affectedDocuments: [target], initiatingDocument: f.documents[0])
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        #expect(f.undo.retainedJournalIDs.contains(id))
+        f.view(for: f.b).undoManager?.undo()
+        for _ in 0..<200 where f.undo.lastOutcome == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(f.undo.lastOutcome == .applied(id))
+        #expect(f.b.storage.string == "old")
+    }
+
+    @Test func pendingRecoverySurvivesLaterOutcomesAndConfirmationNeverRetargets() async throws {
+        let f = try WorkspaceEditFixture(host: "ssh-host")
+        defer { f.remove() }
+        let owner = try await UndoFixture()
+        defer { owner.remove() }
+        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: {
+            $0 == owner.documents[0] ? owner.a : $0 == owner.documents[1] ? owner.b : nil
+        })
+        let original = f.access.files
+        guard case .applied(let first) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
+        return }
+        undo.register(operationID: first, affectedDocuments: [f.a, f.b], initiatingDocument: owner.documents[0])
+        let applied = f.access.files
+        // A second independent user transaction has the same confirmed bytes.
+        f.access.files = original
+        guard case .applied(let second) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
+        return }
+        undo.register(operationID: second, affectedDocuments: [f.a, f.b], initiatingDocument: owner.documents[1])
+        f.access.disconnectAfterWrite = f.b
+        guard case .recoveryRequired = await undo.undo(operationID: first) else { Issue.record("Expected first recovery")
+        return }
+        #expect(undo.recoveryOperationID == first)
+        f.access.disconnected = false
+        f.access.files = applied
+        guard case .recoveryRequired = await undo.undo(operationID: second) else { Issue.record("Expected second recovery")
+        return }
+        #expect(undo.pendingRecoveryCount == 2)
+        #expect(undo.recoveryOperationID == first)
+        #expect(await undo.undo(operationID: UUID()) == .conflict([]))
+        #expect(undo.lastOutcome == .conflict([]))
+        #expect(undo.displayedOperationID == first)
+        #expect(undo.affectedPaths == ["/workspace/a", "/workspace/b"])
+        let calls = f.access.calls.count
+        #expect(await undo.recoverPresentedOperation(operationID: second) == .conflict([]))
+        #expect(f.access.calls.count == calls)
+        f.access.disconnected = false
+        f.access.disconnectAfterWrite = nil
+        guard case .recovered = await undo.recoverPresentedOperation(operationID: first) else { Issue.record("Expected recovery")
+        return }
+        #expect(undo.pendingRecoveryCount == 1)
+        #expect(undo.recoveryOperationID == second)
+        let afterRecovery = f.access.calls.count
+        #expect(await undo.recoverPresentedOperation(operationID: first) == .conflict([]))
+        #expect(f.access.calls.count == afterRecovery)
+        guard case .recovered = await undo.recoverPresentedOperation(operationID: second) else { Issue.record("Expected second recovery")
+        return }
+        #expect(undo.pendingRecoveryCount == 0)
+        undo.disposeHistory()
+        #expect(undo.retainedJournalIDs.isEmpty)
+    }
+
+    @Test func closedOnlyEditUsesUnchangedInitiatingEditorUndoAndRetiresOnFinalClose() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let target = f.documents[2]
+        let context = EditorRequestContext(document: f.documents[0], version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        let before = try await f.access.snapshot(target)
+        let after = before.replacing(content: Data("closed edit".utf8))
+        let step = WorkspaceEditPlanStep(kind: .text, document: target, destination: nil, before: before, after: after, destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [target: after], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        let view = f.view(for: f.a)
+        let feature = RenameFeature(textView: view, tabs: f.tabs, root: f.root, synchronize: { _ in nil }, isCurrent: { _ in true })
+        let model = feature.makePreviewModel(plan: plan, context: context)
+        #expect(await model.apply())
+        #expect(f.a.storage.string == "old")
+        #expect(!f.a.dirty)
+        #expect(f.a.undoManager.canUndo)
+        #expect(!f.b.undoManager.canUndo)
+        f.type("later", in: f.a)
+        view.undoManager?.undo()
+        #expect(f.a.storage.string == "old")
+        #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "closed edit")
+        view.undoManager?.undo()
+        for _ in 0..<200 where f.undo.lastOutcome == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(f.undo.affectedPaths == [f.root.appendingPathComponent("c.txt").path])
+        #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "old")
+        #expect(!f.a.dirty)
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        #expect(f.undo.retainedJournalIDs.isEmpty)
+        #expect(try f.journal.records().isEmpty)
+    }
+
+    @Test func successWithoutLiveUndoOwnerRetiresImmediately() async throws {
+        let f = try WorkspaceEditFixture()
+        defer { f.remove() }
+        guard case .applied(let id) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
+        return }
+        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: { _ in nil })
+        undo.register(operationID: id, affectedDocuments: [f.a, f.b])
+        #expect(undo.retainedJournalIDs.isEmpty)
+        #expect(try f.journal.records().isEmpty)
+    }
+
+    @Test func closingLastParticipantRetiresHistoryButViewDetachDoesNot() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        let view = f.view(for: f.a)
+        view.bindUndo(to: nil)
+        #expect(f.undo.retainedJournalIDs.contains(id))
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "a")
+        #expect(f.undo.retainedJournalIDs.contains(id))
+        f.tabs.discardBuffer(worktreeId: "w", tabId: "b")
+        #expect(f.undo.retainedJournalIDs.isEmpty)
+        #expect(try f.journal.records().isEmpty)
+    }
+
+    @Test func replacingSharedRedoBranchRetiresItsJournal() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        #expect(await f.undo.undo(operationID: id) == .applied(id))
+        _ = try await f.rename()
+        #expect(!f.undo.retainedJournalIDs.contains(id))
+        #expect(try f.journal.records().count == 1)
+    }
+
+    @Test func normalBufferUndoPublishesConflictPathsInRecoveryView() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        try Data("outside".utf8).write(to: f.root.appendingPathComponent("c.txt"))
+        let view = f.view(for: f.a)
+        let recovery = NSHostingController(rootView: WorkspaceEditRecoveryView(coordinator: f.undo))
+        _ = recovery.view
+        view.undoManager?.undo()
+        for _ in 0..<200 where f.undo.lastOutcome == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(f.undo.lastOperationID == id)
+        #expect(f.undo.lastOutcome == .conflict([f.documents[2]]))
+        #expect(f.undo.affectedPaths == [f.root.appendingPathComponent("c.txt").path])
+        #expect(f.undo.statusMessage != nil)
+        #expect(f.undo.recoveryOperationID == nil)
+    }
+
+    @Test func clearingLastParticipantHistoryRetiresSuccessfulJournals() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let id = try await f.rename()
+        f.a.undoManager.removeAllActions()
+        #expect(f.undo.retainedJournalIDs.contains(id))
+        f.b.undoManager.removeAllActions()
+        #expect(f.undo.retainedJournalIDs.isEmpty)
+        #expect(try f.journal.records().isEmpty)
+    }
+
     @Test func localRedoPrecedesAnEarlierSharedBoundary() async throws {
         let f = try await UndoFixture()
         defer { f.remove() }
@@ -64,7 +229,8 @@ struct WorkspaceEditUndoTests {
         ], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
         guard case .applied(let id) = await f.undo.executor.apply(plan) else { Issue.record("Apply failed")
         return }
-        f.undo.register(operationID: id, affectedDocuments: [a, d])
+        // The other live participant retains reachability while this tab closes.
+        f.undo.register(operationID: id, affectedDocuments: [a, d, f.documents[1]])
         if undoneBeforeClose { #expect(await f.undo.undo(operationID: id) == .applied(id)) }
         #expect(!f.a.dirty)
         let closedDocument = undoneBeforeClose ? a : d
@@ -81,7 +247,8 @@ struct WorkspaceEditUndoTests {
             let outcome = undoneBeforeClose ? await f.undo.redo(operationID: id) : await f.undo.undo(operationID: id)
             #expect(outcome == .conflict([closedDocument]))
             #expect(reopened.storage.string == "outside")
-            #expect(undoneBeforeClose ? f.a.undoManager.canRedo : f.a.undoManager.canUndo)
+            #expect(!f.a.undoManager.canUndo && !f.a.undoManager.canRedo)
+            #expect(undoneBeforeClose ? f.b.undoManager.canRedo : f.b.undoManager.canUndo)
         } else {
             #expect(undoneBeforeClose ? reopened.undoManager.canRedo : reopened.undoManager.canUndo)
             if undoneBeforeClose { reopened.undoManager.redo() } else { reopened.undoManager.undo() }
@@ -123,11 +290,13 @@ struct WorkspaceEditUndoTests {
     @Test func oneAsyncInverseRunsAtATime() async throws {
         let f = try WorkspaceEditFixture(host: "ssh-host")
         defer { f.remove() }
+        let owner = try await UndoFixture()
+        defer { owner.remove() }
         guard case .applied(let id) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
         return }
         let access = PausingUndoAccess(base: f.access)
-        let undo = WorkspaceEditUndoCoordinator(access: access, journal: f.journal, bufferForDocument: { _ in nil })
-        undo.register(operationID: id, affectedDocuments: [f.a, f.b])
+        let undo = WorkspaceEditUndoCoordinator(access: access, journal: f.journal, bufferForDocument: { $0 == owner.documents[0] ? owner.a : nil })
+        undo.register(operationID: id, affectedDocuments: [f.a, f.b], initiatingDocument: owner.documents[0])
         access.pauseNextSnapshot = true
         let first = Task { await undo.undo(operationID: id) }
         defer { access.resume()
@@ -136,9 +305,12 @@ struct WorkspaceEditUndoTests {
         #expect(undo.isRunning)
         #expect(await undo.undo(operationID: id) == .conflict([f.a, f.b]))
         #expect(f.access.files[f.b]?.content == Data("new disk".utf8))
+        undo.bufferWillClose(owner.a)
+        #expect(undo.retainedJournalIDs.contains(id))
         access.resume()
         #expect(await first.value == .applied(id))
         #expect(f.access.files[f.b]?.content == Data("old disk".utf8))
+        #expect(undo.retainedJournalIDs.isEmpty)
     }
 
     @Test func unconfirmedJournalCannotArmUndo() throws {
@@ -283,27 +455,41 @@ struct WorkspaceEditUndoTests {
     @Test func unknownSSHUndoRetainsOriginalMarkerAndRecoveryJournal() async throws {
         let f = try WorkspaceEditFixture(host: "ssh-host")
         defer { f.remove() }
+        let owner = try await UndoFixture()
+        defer { owner.remove() }
         guard case .applied(let id) = await f.executor.apply(f.plan) else { Issue.record("Apply failed")
         return }
-        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: { _ in nil })
-        undo.register(operationID: id, affectedDocuments: [f.a, f.b])
+        let undo = WorkspaceEditUndoCoordinator(access: f.access, journal: f.journal, bufferForDocument: { $0 == owner.documents[0] ? owner.a : nil })
+        undo.register(operationID: id, affectedDocuments: [f.a, f.b], initiatingDocument: owner.documents[0])
         f.access.disconnectAfterWrite = f.b
-        guard case .recoveryRequired(let recoveryID, _) = await undo.undo(operationID: id) else { Issue.record("Expected unknown SSH result")
+        let view = owner.view(for: owner.a)
+        let recovery = NSHostingController(rootView: WorkspaceEditRecoveryView(coordinator: undo))
+        _ = recovery.view
+        view.undoManager?.undo()
+        for _ in 0..<200 where undo.lastOutcome == nil { try await Task.sleep(for: .milliseconds(10)) }
+        guard case .recoveryRequired(let recoveryID, _) = undo.lastOutcome else { Issue.record("Expected unknown SSH result")
         return }
         #expect(recoveryID != id)
         #expect(undo.retainedJournalIDs.contains(id))
         #expect(undo.retainedJournalIDs.contains(recoveryID))
+        #expect(undo.lastOperationID == id)
+        #expect(undo.recoveryOperationID == id)
+        #expect(undo.statusMessage != nil)
         let writes = f.access.calls.filter { $0.hasPrefix("write:") }.count
         guard case .recoveryRequired = await undo.undo(operationID: id) else { Issue.record("Expected retained unknown result")
         return }
         #expect(f.access.calls.filter { $0.hasPrefix("write:") }.count == writes)
+        undo.bufferWillClose(owner.a)
+        #expect(undo.retainedJournalIDs.contains(id))
+        #expect(undo.retainedJournalIDs.contains(recoveryID))
         f.access.disconnected = false
         f.access.disconnectAfterWrite = nil
         guard case .recovered = await undo.recover(operationID: id) else { Issue.record("Expected explicit recovery after reconnect")
         return }
         #expect(f.access.files[f.b]?.content == Data("new disk".utf8))
-        #expect(await undo.undo(operationID: id) == .applied(id))
-        #expect(f.access.files[f.b]?.content == Data("old disk".utf8))
+        // With no live buffer markers, recovered history is now retired.
+        #expect(undo.retainedJournalIDs.isEmpty)
+        #expect(await undo.undo(operationID: id) == .conflict([]))
     }
 
     @Test func formattingAndEarlierTypingKeepTheirOwnUndoGroups() async throws {

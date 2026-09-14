@@ -6,6 +6,91 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayIntegrationTests {
+    @Test func reusedCoordinatorRebindsCaptureMutationRootAndExternalRequests() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mounted-binding-\(UUID())")
+        let firstRoot = directory.appendingPathComponent("first")
+        let nextRoot = directory.appendingPathComponent("second")
+        for root in [firstRoot, nextRoot] {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("value".utf8).write(to: root.appendingPathComponent("file.swift"))
+        }
+        let external = directory.appendingPathComponent("external.swift")
+        try Data("value".utf8).write(to: external)
+        var transports: [FakeTransport] = []
+        var externalMethods = Set<String>()
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, language, uri in
+            let transport = FakeTransport()
+            transports.append(transport)
+            transport.onSend = { sent in
+                Task { @MainActor in
+                    guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+                    let method = request["method"]?.stringValue ?? ""
+                    if request["params"]?["textDocument"]?["uri"] == .string(external.lspURI) { externalMethods.insert(method) }
+                    let result: LSPJSONValue
+                    switch method {
+                    case "initialize": result = .object(["capabilities": .object(["hoverProvider": .bool(true), "definitionProvider": .bool(true), "documentFormattingProvider": .bool(true)])])
+                    case "textDocument/formatting": result = .array([Self.edit(line: 0, start: 0, end: 5, text: "formatted")])
+                    case "textDocument/definition": result = .array([])
+                    default: result = .null
+                    }
+                    transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["id": id, "result": result]).encodedData(), as: UTF8.self))
+                }
+            }
+            return LSPClient(transport: transport, language: language, rootURI: uri)
+        })
+        let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: directory.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: directory.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: directory.appendingPathComponent("journal")))
+        let app = AppState(tabsManager: tabs, lspManager: manager)
+        let first = tabs.buffer(worktreeId: "first", tabId: "first", worktreeRoot: firstRoot, relativePath: "file.swift")
+        let next = tabs.buffer(worktreeId: "next", tabId: "next", worktreeRoot: nextRoot, relativePath: "file.swift")
+        await first.awaitLoadForTesting()
+        await next.awaitLoadForTesting()
+        await first.awaitWorkspaceEditLifecycle()
+        await next.awaitWorkspaceEditLifecycle()
+        first.stopWatching()
+        next.stopWatching()
+        let layout = CodeEditorLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
+        window.contentView = view
+        window.orderFront(nil)
+        let coordinator = CodeEditorCoordinator(appState: app)
+        let theme = try ThemeStore().current
+        coordinator.attach(textView: view, buffer: first, layoutManager: layout, worktreeId: "first", worktreeRoot: firstRoot, tabId: "first", revealLine: nil, revealCharacter: nil, theme: theme)
+        defer {
+            coordinator.detach()
+            window.orderOut(nil)
+            window.contentView = nil
+            first.close(persistDirtySnapshot: false)
+            next.close(persistDirtySnapshot: false)
+            transports.forEach { $0.finish() }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let oldBinding: EditorLSPBinding = try #require(Self.stored("lspBinding", in: coordinator))
+        let old = try #require(await oldBinding.synchronizeRequest(range: .init(location: 0, length: 0), language: "swift"))
+        coordinator.updateIfNeeded(worktreeId: "next", worktreeRoot: nextRoot, relativePath: "file.swift", tabId: "next", revealLine: nil, revealCharacter: nil, theme: theme)
+        let binding: EditorLSPBinding = try #require(Self.stored("lspBinding", in: coordinator))
+        #expect(manager.isCurrent(old.1))
+        #expect(!binding.isCurrent(old.1))
+        #expect(!oldBinding.isCurrent(old.1))
+        let captured = try #require(await binding.synchronizeRequest(range: .init(location: 0, length: 0), language: "swift"))
+        view.insertText("x", replacementRange: NSRange(location: 0, length: 1))
+        #expect(!binding.isCurrent(captured.1))
+        let rename: RenameFeature = try #require(Self.stored("renameFeature", in: coordinator))
+        rename.format(range: .init(location: 0, length: 0), selectionOnly: false)
+        await rename.awaitRequestForTesting()
+        #expect(next.storage.string == "formatted")
+        #expect(first.storage.string == "value")
+        coordinator.updateIfNeeded(worktreeId: "next", worktreeRoot: nextRoot, relativePath: "external.swift", tabId: "external", revealLine: nil, revealCharacter: nil, theme: theme, externalAbsolutePath: external.path, originatingRelativePath: "file.swift")
+        try await Self.eventually { manager.isDocumentOpen(fileURL: external, worktreeRoot: nextRoot) }
+        view.triggerCommandClick(atUTF16Offset: 1)
+        view.triggerHover(atUTF16Offset: 1)
+        try await Self.eventually { externalMethods.contains("textDocument/definition") && externalMethods.contains("textDocument/hover") }
+        #expect(!view.isEditable)
+        tabs.discardBuffer(worktreeId: "next", tabId: "external")
+    }
+
     @Test func twoSecondServerDelayDoesNotBlockNativeTypingOrMenu() async throws {
         let fixture = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
         defer { fixture.remove() }
@@ -52,6 +137,7 @@ struct EditorDisplayIntegrationTests {
             EditorNavigationTarget(document: .init(host: nil, worktreeID: "large", uri: fixture.root.appendingPathComponent("test.txt").lspURI), position: .init(line: line * 400, character: 0))
         }
         let snippetStart = ContinuousClock.now
+        snippets.replaceResults(targets)
         for target in targets { snippets.loadSnippet(for: target) }
         try await Self.eventually("large-file reference snippets") { snippets.snippets.count == 20 }
         #expect(snippets.snippets.values.allSatisfy { $0 == "let value = 1" })
@@ -191,7 +277,8 @@ struct EditorDisplayIntegrationTests {
         #expect(f.view.sourceString == "ab\n🙂z")
     }
 
-    @Test func coordinatorCompletionPayloadAndImportUndoSurviveHintRefresh() async throws {
+    @Test(arguments: ["cancel", "accept", "stale"])
+    func coordinatorCompletionPayloadAndImportUndoSurviveHintRefresh(acceptFollowup: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -212,6 +299,11 @@ struct EditorDisplayIntegrationTests {
                 result = try! LSPJSONValue.decode(from: Data(#"{"capabilities":{"completionProvider":{},"definitionProvider":true,"signatureHelpProvider":{"triggerCharacters":["("]},"renameProvider":{"prepareProvider":true},"codeActionProvider":true}}"#.utf8))
             case "textDocument/completion": completionRequest = request
                 return
+            case "workspace/executeCommand":
+                transport.deliverFrame("""
+                {"id":"completion-followup","method":"workspace/applyEdit","params":{"edit":{"changes":{"\(file.lspURI)":[{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":1}},"newText":"P"}]}}}}
+                """)
+                result = .null
             case "textDocument/definition": definitionRequest = request
                 result = .array([])
             case "textDocument/signatureHelp": signatureRequest = request
@@ -259,7 +351,7 @@ struct EditorDisplayIntegrationTests {
         #expect(request["params"]?["position"]?["line"] == .number("1"))
         #expect(request["params"]?["position"]?["character"] == .number("2"))
         try view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 1, label: "changed", size: CGSize(width: 90, height: 16))], revision: buffer.editGeneration)
-        let item = try LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}]}"#.utf8))
+        let item = try LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}],"command":{"title":"Complete import","command":"completion.followup"}}"#.utf8))
         let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": try #require(request["id"]), "result": .array([item])])
         transport.deliverFrame(String(decoding: try response.encodedData(), as: UTF8.self))
         try await Self.eventually {
@@ -270,6 +362,24 @@ struct EditorDisplayIntegrationTests {
         #expect(buffer.storage.string == "import Foo\n\nprint")
         for _ in 0..<200 where view.sourceSelectedRange != NSRange(location: 17, length: 0) { try await Task.sleep(for: .milliseconds(10)) }
         #expect(view.sourceSelectedRange == NSRange(location: 17, length: 0))
+        try await Self.eventually("completion command edit preview") { window.attachedSheet != nil }
+        let followup = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
+        if acceptFollowup == "stale" {
+            view.insertText(" user", replacementRange: NSRange(location: buffer.storage.length, length: 0))
+            #expect(await followup.model.apply() == false)
+            followup.close()
+            #expect(buffer.storage.string == "import Foo\n\nprint user")
+            buffer.undoManager.undo()
+            #expect(buffer.storage.string == "import Foo\n\nprint")
+        } else if acceptFollowup == "accept" {
+            #expect(await followup.model.apply())
+            followup.close()
+            #expect(buffer.storage.string == "import Foo\n\nPrint")
+            buffer.undoManager.undo()
+            try await Self.eventually { buffer.storage.string == "import Foo\n\nprint" }
+        } else { followup.cancel?() }
+        try await Self.eventually { window.attachedSheet == nil }
+        #expect(buffer.storage.string == "import Foo\n\nprint")
         buffer.undoManager.undo()
         for _ in 0..<200 where buffer.storage.string != "\npr" { try await Task.sleep(for: .milliseconds(10)) }
         #expect(buffer.storage.string == "\npr")
@@ -304,6 +414,7 @@ struct EditorDisplayIntegrationTests {
         try await Self.eventually { Self.popover(in: actions)?.isShown == true }
         let actionsPopover = try #require(Self.popover(in: actions))
         let picker = try #require(actionsPopover.contentViewController as? NSHostingController<CodeActionPicker>).rootView
+        try await Self.eventually { !picker.model.isLoading }
         let action = try #require(picker.model.filtered.first?.action)
         #expect(action.title == "Replace source symbol")
         picker.select(action)

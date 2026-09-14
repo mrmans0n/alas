@@ -7,10 +7,18 @@ protocol WorkspaceEditFileAccess {
     func move(from: EditorDocumentID, to: EditorDocumentID, expectedSource: WorkspaceFileSnapshot, expectedDestination: WorkspaceFileSnapshot) async throws
 }
 
-enum WorkspaceEditAccessError: Error {
+enum WorkspaceEditAccessError: LocalizedError {
     case conflict(EditorDocumentID)
     case unsupportedTarget(EditorDocumentID)
     case ambiguousMutation(EditorDocumentID)
+
+    var errorDescription: String? {
+        switch self {
+        case .conflict: return "A workspace edit target changed. No conflicting content was overwritten."
+        case .unsupportedTarget: return "This workspace edit path is unsupported. Targets must use the worktree's exact canonical path spelling; aliases such as /tmp versus /private/tmp are not supported."
+        case .ambiguousMutation: return "The workspace edit result could not be confirmed. Explicit recovery is required."
+        }
+    }
 }
 
 struct WorkspaceEditBufferGeneration: Equatable {

@@ -215,8 +215,8 @@ final class RenameFeature {
                 // The initiating editor owns an accessible undo entry even
                 // when every edited target is unopened. Inverse writes still
                 // come exclusively from the confirmed plan journal.
-                let owners = Set(plan.steps.flatMap { [$0.document, $0.destination].compactMap { $0 } }).union([context.document])
-                coordinator.register(operationID: id, affectedDocuments: owners)
+                let affected = Set(plan.steps.flatMap { [$0.document, $0.destination].compactMap { $0 } })
+                coordinator.register(operationID: id, affectedDocuments: affected, initiatingDocument: context.document)
             }
             return outcome
         }

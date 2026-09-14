@@ -25,6 +25,7 @@ final class CompletionFeature {
     private let synchronizeRequest: SynchronizeRequest?
     private let isContextCurrent: (EditorRequestContext) -> Bool
     private let applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)?
+    private let executeFollowup: ((LSPCommand, LSPClient, EditorRequestContext) async -> Void)?
     private var resolveTask: Task<Void, Never>?
     private var acceptTask: Task<Void, Never>?
     private var resolvingCandidateID: UUID?
@@ -74,7 +75,8 @@ final class CompletionFeature {
         prepareForCompletionRequest: @escaping @MainActor () async -> Void = {},
         synchronizeRequest: SynchronizeRequest? = nil,
         isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true },
-        applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)? = nil
+        applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)? = nil,
+        executeFollowup: ((LSPCommand, LSPClient, EditorRequestContext) async -> Void)? = nil
     ) {
         self.textView = textView
         self.getClient = getClient
@@ -87,6 +89,7 @@ final class CompletionFeature {
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
         self.applyWorkspaceCompletion = applyWorkspaceCompletion
+        self.executeFollowup = executeFollowup
 
         textView.completionManualTriggerHandler = { [weak self] in
             self?.triggerManual()
@@ -657,7 +660,21 @@ final class CompletionFeature {
                 if let expansion = accepted.snippet {
                     textView.startSnippet(expansion, offset: plan.finalSelection.location - expansion.text.utf16.count, theme: self.getTheme())
                 } else { textView.setSourceSelectedRange(plan.finalSelection) }
-                if let command = resolved.command, let client { try await client.executeCommand(command) }
+                if let command = resolved.command, let client {
+                    if let executeFollowup, let original = bound?.1 {
+                        let insertedGeneration = textView.displayAdapter?.buffer.editGeneration
+                        guard let refreshed = await synchronizeRequest?(plan.finalSelection),
+                              refreshed.0 === client, refreshed.1.document == original.document,
+                              refreshed.1.serverGeneration == original.serverGeneration,
+                              refreshed.1.bindingID == original.bindingID,
+                              textView.displayAdapter?.buffer.editGeneration == insertedGeneration,
+                              textView.sourceString == expected as String,
+                              isContextCurrent(refreshed.1) else { return }
+                        await executeFollowup(command, client, refreshed.1)
+                    } else if synchronizeRequest == nil {
+                        try await CodeActionsFeature.executeCommand(command, client: client, isCurrent: { self.getURI() == uri && textView.sourceString == expected as String }, apply: { _ in .cancelled })
+                    }
+                }
             } catch { cancelAndDismiss() }
         }
     }

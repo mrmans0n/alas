@@ -35,6 +35,7 @@ struct LSPServerRequestsTests {
         let shutdown = Task { await client.shutdown() }
         var startedIterator = started.stream.makeAsyncIterator()
         _ = await startedIterator.next()
+        let processing = try #require(await client.inbound[.string("suspended")]?.task)
         var ids = shutdownIDs.stream.makeAsyncIterator()
         let id = try #require(await ids.next())
         transport.deliverFrame(String(decoding: try LSPJSONValue.object(["id": id, "result": .null]).encodedData(), as: UTF8.self))
@@ -42,7 +43,7 @@ struct LSPServerRequestsTests {
         #expect(await client.state == .dead)
         let count = transport.sent.count
         permission.continuation.yield(())
-        try await Task.sleep(for: .milliseconds(100))
+        await processing.value
         #expect(transport.sent.count == count)
     }
 
@@ -62,9 +63,10 @@ struct LSPServerRequestsTests {
         await client.shutdown()
         let count = transport.sent.count
         for (id, method) in [("semantic", "workspace/semanticTokens/refresh"), ("inlay", "workspace/inlayHint/refresh"), ("configuration", "workspace/configuration")] {
-            transport.deliverFrame(String(decoding: try LSPJSONValue.object(["id": .string(id), "method": .string(method), "params": .object(["items": .array([])])]).encodedData(), as: UTF8.self))
+            // Await the same actor-isolated frame handler used by consume().
+            // Completion proves each late frame crossed the shutdown guard.
+            await client.handle(frame: try LSPJSONValue.object(["id": .string(id), "method": .string(method), "params": .object(["items": .array([])])]).encodedData())
         }
-        try await Task.sleep(for: .milliseconds(100))
         #expect(transport.sent.count == count)
         #expect(await client.state == .dead)
     }

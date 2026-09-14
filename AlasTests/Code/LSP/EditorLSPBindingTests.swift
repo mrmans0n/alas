@@ -92,6 +92,15 @@ struct EditorLSPBindingTests {
         ))
         #expect(binding.isCurrent(request.1))
 
+        // A source edit must invalidate the capture before didChange is sent.
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: " ")
+        #expect(!binding.isCurrent(request.1))
+
+        let interrupted = EditorLSPBinding(manager: manager, buffer: buffer, worktreeID: "worktree", flushPendingChanges: {
+            buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: " ")
+        })
+        #expect(await interrupted.synchronizeRequest(range: NSRange(location: 0, length: 0), language: "swift") == nil)
+
         await manager.restartHolder(forFile: file, worktreeRoot: root, languageId: "swift")
         #expect(!binding.isCurrent(request.1))
     }

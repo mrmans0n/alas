@@ -1,9 +1,104 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
 @Suite("Code actions", .serialized)
 struct CodeActionsFeatureTests {
+    @Test @MainActor func cancellingCompletionFollowupCancelsItsOutstandingServerCommand() async throws {
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        let commands = AsyncStream<Void>.makeStream()
+        defer { commands.continuation.finish() }
+        transport.onSend = { sent in
+            guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)) else { return }
+            if frame["method"] == .string("workspace/executeCommand") { commands.continuation.yield(()) }
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///fixture")
+        let context = EditorRequestContext(document: .init(host: nil, worktreeID: "fixture", uri: "file:///fixture/a.swift"), version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        let view = CodeTextView(frame: .zero, textContainer: nil)
+        let feature = CodeActionsFeature(textView: view, tabs: TabsManager(), root: URL(fileURLWithPath: "/fixture"), synchronize: { _ in (client, context) }, isCurrent: { _ in true }, diagnostics: { [] })
+        let command = try LSPCommand(wireValue: .object(["title": .string("Follow up"), "command": .string("followup")]))
+        let execution = Task { await feature.performCompletionCommand(command, client: client, context: context) }
+        var iterator = commands.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        feature.cancel()
+        await execution.value
+        #expect(transport.sent.contains { $0.contains("$/cancelRequest") })
+        // A cancelled follow-up must release its session rather than holding
+        // this client until the server eventually answers the old command.
+        let token = try await client.beginCommandSession { _ in .cancelled }
+        await client.endCommandSession(token)
+    }
+
+    @Test(arguments: ["unavailable", "unsupported", "empty", "failure", "cancel"])
+    @MainActor func mountedPickerShowsImmediateLoadingAndDistinctResults(state: String) async throws {
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        transport.onSend = { sent in
+            guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = frame["id"] else { return }
+            var response: [String: LSPJSONValue] = ["id": id]
+            if frame["method"] == .string("initialize") {
+                response["result"] = .object(["capabilities": .object(["codeActionProvider": .bool(state != "unsupported")])])
+            } else if state == "failure" {
+                response["error"] = .object(["code": .number("-32603"), "message": .string("Action fixture failure")])
+            } else { response["result"] = .array([]) }
+            transport.deliverFrame(String(decoding: try! LSPJSONValue.object(response).encodedData(), as: UTF8.self))
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///fixture")
+        try await client.initialize()
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200), textContainer: nil)
+        view.string = "symbol"
+        let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
+        window.contentView = view
+        window.orderFront(nil)
+        defer { window.orderOut(nil)
+        window.contentView = nil }
+        let context = EditorRequestContext(document: .init(host: nil, worktreeID: "fixture", uri: "file:///fixture/a.swift"), version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
+        let started = AsyncStream<Void>.makeStream()
+        defer { started.continuation.finish() }
+        var resume: CheckedContinuation<(LSPClient, EditorRequestContext)?, Never>?
+        let feature = CodeActionsFeature(textView: view, tabs: TabsManager(), root: URL(fileURLWithPath: "/fixture"), synchronize: { _ in
+            await withCheckedContinuation { resume = $0
+            started.continuation.yield(()) }
+        }, isCurrent: { _ in true }, diagnostics: { [] })
+        defer { feature.cancel() }
+        func picker() throws -> CodeActionPicker {
+            let popover = try #require(Mirror(reflecting: feature).children.first { $0.label == "popover" }?.value as? NSPopover)
+            return try #require(popover.contentViewController as? NSHostingController<CodeActionPicker>).rootView
+        }
+        feature.show(range: .init(location: 0, length: 0))
+        let original = try picker()
+        #expect(original.model.isLoading)
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        if state == "cancel" {
+            original.cancel()
+            resume?.resume(returning: (client, context))
+            feature.show(range: .init(location: 1, length: 0))
+            let replacement = try picker()
+            _ = await iterator.next()
+            original.cancel()
+            original.organizeImports()
+            #expect(try picker().model === replacement.model)
+            #expect(replacement.model.isLoading)
+            resume?.resume(returning: nil)
+            for _ in 0..<200 where replacement.model.isLoading { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(replacement.model.message == "Language server unavailable")
+            return
+        }
+        resume?.resume(returning: state == "unavailable" ? nil : (client, context))
+        for _ in 0..<200 where original.model.isLoading { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!original.model.isLoading)
+        switch state {
+        case "unavailable": #expect(original.model.message == "Language server unavailable")
+        case "unsupported": #expect(original.model.message?.contains("not supported") == true)
+        case "failure": #expect(original.model.message?.contains("Action fixture failure") == true)
+        default: #expect(original.model.message == nil)
+        #expect(original.model.filtered.isEmpty)
+        }
+    }
+
     @Test @MainActor func lateSheetCompletionCannotAcceptTheNextPreview() async throws {
         let fixture = try WorkspaceEditFixture()
         defer { fixture.remove() }

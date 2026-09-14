@@ -1,7 +1,13 @@
 import Foundation
+import Observation
+import SwiftUI
 
-@MainActor
+@MainActor @Observable
 final class WorkspaceEditUndoCoordinator {
+    private struct MissingParticipant {
+        let document: EditorDocumentID
+        let canReattach: Bool
+    }
     private final class Operation {
         var recordID: UUID
         let documents: Set<EditorDocumentID>
@@ -9,11 +15,15 @@ final class WorkspaceEditUndoCoordinator {
         var reopenedWatchGenerations: [EditorDocumentID: Int] = [:]
         var undone = false
         var pendingRecovery: UUID?
+        var recoveryMessage: String?
+        var journalIDs: Set<UUID>
+        var missing: [EditorDocumentID: MissingParticipant] = [:]
 
         init(recordID: UUID, documents: Set<EditorDocumentID>, buffers: [EditorDocumentID: EditorBuffer]) {
             self.recordID = recordID
             self.documents = documents
             self.buffers = buffers
+            journalIDs = [recordID]
         }
     }
 
@@ -25,6 +35,32 @@ final class WorkspaceEditUndoCoordinator {
     private(set) var isRunning = false
     private(set) var retainedJournalIDs: Set<UUID> = []
     private(set) var lastOutcome: WorkspaceEditOutcome?
+    private(set) var lastOperationID: UUID?
+    private var displayedRecoveryID: UUID?
+
+    var recoveryOperationID: UUID? {
+        if let id = displayedRecoveryID, operations[id]?.pendingRecovery != nil { return id }
+        return operations.keys.filter { operations[$0]?.pendingRecovery != nil }.sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    var pendingRecoveryCount: Int { operations.values.filter { $0.pendingRecovery != nil }.count }
+    var displayedOperationID: UUID? { recoveryOperationID ?? lastOperationID }
+
+    var affectedPaths: [String] {
+        if recoveryOperationID == nil, case .conflict(let documents) = lastOutcome { return documents.map { URL(string: $0.uri)?.path ?? $0.uri } }
+        guard let id = displayedOperationID else { return [] }
+        return operations[id]?.documents.map { URL(string: $0.uri)?.path ?? $0.uri }.sorted() ?? []
+    }
+
+    var statusMessage: String? {
+        if isRunning { return "Applying workspace undo operation…" }
+        if let id = recoveryOperationID { return operations[id]?.recoveryMessage ?? "A workspace edit needs explicit recovery." }
+        switch lastOutcome {
+        case .conflict: return "Workspace undo is blocked by changed files or unavailable buffer history."
+        case .recoveryRequired(_, let message), .recovered(let message): return message
+        default: return nil
+        }
+    }
 
     init(access: any WorkspaceEditFileAccess, journal: WorkspaceEditJournal, bufferForDocument: @escaping (EditorDocumentID) -> EditorBuffer?) {
         self.access = access
@@ -35,13 +71,13 @@ final class WorkspaceEditUndoCoordinator {
 
     /// Only a fully confirmed executor journal can arm shared undo markers.
     /// Each marker addresses this one entry, including its inverse journals.
-    func register(operationID: UUID, affectedDocuments: Set<EditorDocumentID>) {
+    func register(operationID: UUID, affectedDocuments: Set<EditorDocumentID>, initiatingDocument: EditorDocumentID? = nil) {
         guard operations[operationID] == nil,
               let record = try? journal.record(operationID), record.status == .applied,
               !record.entries.isEmpty, record.entries.allSatisfy({ $0.state == .confirmed }) else { return }
         let documents = affectedDocuments.union(record.entries.flatMap { [$0.step.document, $0.step.destination].compactMap { $0 } })
         var buffers: [EditorDocumentID: EditorBuffer] = [:]
-        for document in documents {
+        for document in documents.union(initiatingDocument.map { [$0] } ?? []) {
             if let buffer = bufferForDocument(document) { buffers[document] = buffer }
         }
         operations[operationID] = Operation(recordID: operationID, documents: documents, buffers: buffers)
@@ -49,6 +85,7 @@ final class WorkspaceEditUndoCoordinator {
         for buffer in buffers.values {
             installMarker(operationID, in: buffer, undone: false)
         }
+        retireIfUnreachable(operationID)
     }
 
     /// Closing a clean tab ends its local typing history. A new buffer may
@@ -60,11 +97,7 @@ final class WorkspaceEditUndoCoordinator {
               !buffer.undoManager.canUndo, !buffer.undoManager.canRedo else { return }
         for (id, operation) in operations {
             guard operation.pendingRecovery == nil,
-                  let participant = operation.buffers.first(where: { key, old in
-                      key.worktreeID == document.worktreeID && old.workspaceEditHost == document.host
-                          && old.worktreeRoot.appendingPathComponent(old.relativePath).lspURI == document.uri
-                  }), participant.value !== buffer, !participant.value.dirty,
-                  participant.value.undoManager.isAtMarker(id, redo: operation.undone),
+                  let participant = operation.missing.first(where: { $0.value.document == document && $0.value.canReattach }),
                   let record = try? journal.record(operation.recordID), record.status == .applied,
                   let expected = record.entries.reversed().lazy.compactMap({ entry in
                       entry.observedAfter?.first { $0.document == document }
@@ -74,6 +107,7 @@ final class WorkspaceEditUndoCoordinator {
                   expected.content == Data(buffer.storage.string.utf8),
                   expected.diskContent == Data(buffer.originalText.utf8) else { continue }
             operation.buffers[participant.key] = buffer
+            operation.missing.removeValue(forKey: participant.key)
             operation.reopenedWatchGenerations[document] = buffer.fileWatchGeneration
             installMarker(id, in: buffer, undone: operation.undone)
             return
@@ -81,22 +115,28 @@ final class WorkspaceEditUndoCoordinator {
     }
 
     private func installMarker(_ id: UUID, in buffer: EditorBuffer, undone: Bool) {
-        buffer.undoManager.installMarker(id) { [weak self] redo in
+        buffer.undoManager.installMarker(id, removed: { [weak self, weak buffer] in
+            guard let self, let buffer else { return }
+            self.markerRemoved(id, buffer: buffer)
+        }) { [weak self] redo in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.lastOutcome = await self.perform(operationID: id, redo: redo)
+                if redo { _ = await self.redo(operationID: id) }
+                else { _ = await self.undo(operationID: id) }
             }
         }
         if undone { buffer.undoManager.completeMarker(id, redo: false) }
     }
 
     func undo(operationID: UUID) async -> WorkspaceEditOutcome {
+        lastOperationID = operationID
         let outcome = await perform(operationID: operationID, redo: false)
         lastOutcome = outcome
         return outcome
     }
 
     func redo(operationID: UUID) async -> WorkspaceEditOutcome {
+        lastOperationID = operationID
         let outcome = await perform(operationID: operationID, redo: true)
         lastOutcome = outcome
         return outcome
@@ -105,6 +145,7 @@ final class WorkspaceEditUndoCoordinator {
     /// Explicit recovery rolls back an uncertain attempt before it can retry.
     /// It does not move the shared marker to the other side of the operation.
     func recover(operationID: UUID) async -> WorkspaceEditOutcome {
+        lastOperationID = operationID
         guard !isRunning, let operation = operations[operationID], let id = operation.pendingRecovery else {
             return .conflict([])
         }
@@ -113,11 +154,24 @@ final class WorkspaceEditUndoCoordinator {
         managers.forEach { $0.workspaceActionInFlight = true }
         defer { isRunning = false
             managers.forEach { $0.workspaceActionInFlight = false }
+            for id in Array(operations.keys) { retireIfUnreachable(id) }
         }
         let outcome = await executor.recover(id)
-        if case .recovered = outcome { operation.pendingRecovery = nil }
+        if case .recovered = outcome {
+            operation.pendingRecovery = nil
+            operation.recoveryMessage = nil
+            if displayedRecoveryID == operationID { displayedRecoveryID = nil }
+            displayedRecoveryID = recoveryOperationID
+        }
         lastOutcome = outcome
+        retireIfUnreachable(operationID)
         return outcome
+    }
+
+    /// A confirmation must still refer to the operation the user reviewed.
+    func recoverPresentedOperation(operationID: UUID) async -> WorkspaceEditOutcome {
+        guard recoveryOperationID == operationID, !isRunning else { return .conflict([]) }
+        return await recover(operationID: operationID)
     }
 
     private func perform(operationID: UUID, redo: Bool) async -> WorkspaceEditOutcome {
@@ -127,6 +181,7 @@ final class WorkspaceEditUndoCoordinator {
         if let id = operation.pendingRecovery {
             return .recoveryRequired(id, "Recover the previous workspace undo attempt before retrying.")
         }
+        guard operation.missing.isEmpty else { return .conflict(operation.missing.values.map(\.document).sorted { $0.uri < $1.uri }) }
         let intervening = operation.buffers.compactMap { document, buffer -> EditorDocumentID? in
             guard !buffer.undoManager.isAtMarker(operationID, redo: redo) else { return nil }
             return EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: document.worktreeID,
@@ -138,6 +193,7 @@ final class WorkspaceEditUndoCoordinator {
         managers.forEach { $0.workspaceActionInFlight = true }
         defer { isRunning = false
             managers.forEach { $0.workspaceActionInFlight = false }
+            for id in Array(operations.keys) { retireIfUnreachable(id) }
         }
         do {
             let record = try journal.record(operation.recordID)
@@ -165,14 +221,18 @@ final class WorkspaceEditUndoCoordinator {
             switch outcome {
             case .applied(let id):
                 retainedJournalIDs.insert(id)
+                operation.journalIDs.insert(id)
                 operation.recordID = id
                 operation.reopenedWatchGenerations.removeAll()
                 operation.undone.toggle()
                 managers.forEach { $0.completeMarker(operationID, redo: redo) }
                 return .applied(operationID)
-            case .recoveryRequired(let id, _):
+            case .recoveryRequired(let id, let message):
                 retainedJournalIDs.insert(id)
+                operation.journalIDs.insert(id)
                 operation.pendingRecovery = id
+                operation.recoveryMessage = message
+                if displayedRecoveryID == nil { displayedRecoveryID = recoveryOperationID }
             case .conflict, .recovered:
                 break
             }
@@ -182,6 +242,49 @@ final class WorkspaceEditUndoCoordinator {
         } catch {
             return .recoveryRequired(operation.recordID, "Could not verify workspace undo targets. No new inverse was started.")
         }
+    }
+
+    func bufferWillClose(_ buffer: EditorBuffer) {
+        for (id, operation) in operations {
+            for (key, participant) in operation.buffers where participant === buffer {
+                let document = EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: key.worktreeID,
+                                                uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
+                if operation.documents.contains(key) {
+                    operation.missing[key] = MissingParticipant(document: document, canReattach: !buffer.dirty && buffer.undoManager.isAtMarker(id, redo: operation.undone))
+                }
+                operation.buffers.removeValue(forKey: key)
+            }
+        }
+        buffer.undoManager.removeAllActions()
+        for id in Array(operations.keys) { retireIfUnreachable(id) }
+    }
+
+    func disposeHistory() {
+        let buffers = operations.values.flatMap { Array($0.buffers.values) }
+        for buffer in buffers { bufferWillClose(buffer) }
+        for id in Array(operations.keys) { retireIfUnreachable(id) }
+    }
+
+    private func markerRemoved(_ id: UUID, buffer: EditorBuffer) {
+        guard let operation = operations[id] else { return }
+        for (key, participant) in operation.buffers where participant === buffer {
+            if operation.documents.contains(key) {
+                operation.missing[key] = MissingParticipant(document: .init(host: buffer.workspaceEditHost, worktreeID: key.worktreeID,
+                                                                       uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI), canReattach: false)
+            }
+            operation.buffers.removeValue(forKey: key)
+        }
+        retireIfUnreachable(id)
+    }
+
+    private func retireIfUnreachable(_ id: UUID) {
+        guard !isRunning, let operation = operations[id], operation.pendingRecovery == nil,
+              !operation.buffers.values.contains(where: { $0.undoManager.reachableMarkerIDs.contains(id) }) else { return }
+        for journalID in operation.journalIDs {
+            try? journal.retireSuccessfulRecord(journalID)
+            retainedJournalIDs.remove(journalID)
+        }
+        operations.removeValue(forKey: id)
     }
 
     private static func sameBoundary(_ actual: WorkspaceFileSnapshot, _ expected: WorkspaceFileSnapshot, reopenedWatchGeneration: Int?) -> Bool {
@@ -220,6 +323,46 @@ final class WorkspaceEditUndoCoordinator {
             }
         }
         return WorkspaceEditPlan(steps: steps, finalSnapshots: current, reviewAnnotations: [:], warnings: [], requiresPreview: false)
+    }
+}
+
+struct WorkspaceEditRecoveryView: View {
+    let coordinator: WorkspaceEditUndoCoordinator
+    @State private var confirmRecovery = false
+    @State private var recoveryCandidate: UUID?
+
+    var body: some View {
+        if let message = coordinator.statusMessage {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    if coordinator.isRunning { ProgressView().controlSize(.small) }
+                    Text(message).font(.caption)
+                    Spacer()
+                    if coordinator.recoveryOperationID != nil {
+                        Button("Recover Workspace Edit…") {
+                            recoveryCandidate = coordinator.recoveryOperationID
+                            confirmRecovery = true
+                        }
+                            .disabled(coordinator.isRunning)
+                    }
+                }
+                if coordinator.pendingRecoveryCount > 1 {
+                    Text("\(coordinator.pendingRecoveryCount) workspace edits need recovery").font(.caption)
+                }
+                if let id = coordinator.displayedOperationID {
+                    Text("Operation \(id.uuidString)").font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                Text(coordinator.affectedPaths.joined(separator: "\n"))
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+            }
+            .padding(8)
+            .confirmationDialog("Roll back the uncertain workspace edit attempt? Files are checked again before recovery.", isPresented: $confirmRecovery) {
+                Button("Recover Workspace Edit") {
+                    guard let id = recoveryCandidate else { return }
+                    Task { _ = await coordinator.recoverPresentedOperation(operationID: id) }
+                }
+            }
+        }
     }
 }
 

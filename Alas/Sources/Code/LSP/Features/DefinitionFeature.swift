@@ -24,8 +24,10 @@ final class DefinitionFeature {
     private var popover: NSPopover?
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
-    private let snippetCache = DefinitionSnippetCache()
     private var pickerSourcePosition: LSPPosition?
+    private var pickerContext: EditorRequestContext?
+    private let snippetStore: () -> EditorNavigationStore?
+    private var pickerSnippetSession: (store: EditorNavigationStore, id: UUID)?
 
     init(
         textView: CodeTextView,
@@ -34,7 +36,8 @@ final class DefinitionFeature {
         openTarget: @escaping (URL, Int, Int, LSPPosition) -> Void,
         cancelPendingNavigation: @escaping () -> Void = {},
         synchronizeRequest: SynchronizeRequest? = nil,
-        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true },
+        snippetStore: @escaping () -> EditorNavigationStore? = { nil }
     ) {
         self.textView = textView
         self.getClient = getClient
@@ -43,6 +46,7 @@ final class DefinitionFeature {
         self.cancelPendingNavigation = cancelPendingNavigation
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        self.snippetStore = snippetStore
         textView.commandClickHandler = { [weak self] p in self?.onClick(at: p) }
     }
 
@@ -64,10 +68,12 @@ final class DefinitionFeature {
     }
 
     private func dismiss() {
+        endPickerSnippets()
         requestID += 1
         inFlight?.cancel()
         inFlight = nil
         popover?.close()
+        pickerContext = nil
     }
 
     private func onClick(at point: NSPoint) {
@@ -101,58 +107,85 @@ final class DefinitionFeature {
         offset: Int,
         anchorPoint: NSPoint
     ) {
+        endPickerSnippets()
         let fallbackClient = getClient()
         let sourceSnapshot = textView?.sourceString
         inFlight?.cancel()
         requestID += 1
         let currentRequestID = requestID
+        showRequestStatus("Finding navigation targets…", loading: true, id: currentRequestID)
         inFlight = Task { [weak self] in
             guard let self else { return }
             let bound: (LSPClient, EditorRequestContext)?
             if let synchronizeRequest {
                 bound = await synchronizeRequest(NSRange(location: offset, length: 0))
-                guard bound != nil else { return }
+                guard bound != nil else {
+                    if self.requestID == currentRequestID { self.showRequestStatus("Language server unavailable", id: currentRequestID) }
+                    return
+                }
             } else {
                 bound = nil
             }
             let context = bound?.1
-            let locations: [LSPLocation]
-            if let bound {
-                switch method {
-                case .definition:
-                    locations = (try? await bound.0.definition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
-                case .typeDefinition:
-                    locations = (try? await bound.0.typeDefinition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
-                case .implementation:
-                    locations = (try? await bound.0.implementation(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
-                }
-            } else if let fallbackClient {
-                switch method {
-                case .definition:
-                    locations = (try? await fallbackClient.definition(uri: uri, position: position)) ?? []
-                case .typeDefinition:
-                    locations = (try? await fallbackClient.typeDefinition(uri: uri, position: position)) ?? []
-                case .implementation:
-                    locations = (try? await fallbackClient.implementation(uri: uri, position: position)) ?? []
-                }
-            } else {
-                locations = []
+            guard let client = bound?.0 ?? fallbackClient else {
+                if self.requestID == currentRequestID { self.showRequestStatus("Language server unavailable", id: currentRequestID) }
+                return
             }
-            guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                guard let self,
+            do {
+                let command: EditorCommandID
+                switch method {
+                case .definition: command = .definition
+                case .typeDefinition: command = .typeDefinition
+                case .implementation: command = .implementation
+                }
+                let capabilities = await client.capabilities
+                guard self.requestID == currentRequestID, context.map(self.isContextCurrent) ?? true else { return }
+                guard capabilities.supports(command) else {
+                    self.showRequestStatus("This navigation command is not supported by the server", id: currentRequestID)
+                    return
+                }
+                let locations: [LSPLocation]
+                let requestURI = context?.document.uri ?? uri
+                let requestPosition = context?.range.start ?? position
+                switch method {
+                case .definition:
+                    locations = try await client.definition(uri: requestURI, position: requestPosition)
+                case .typeDefinition:
+                    locations = try await client.typeDefinition(uri: requestURI, position: requestPosition)
+                case .implementation:
+                    locations = try await client.implementation(uri: requestURI, position: requestPosition)
+                }
+                guard !Task.isCancelled,
                       self.requestID == currentRequestID,
                       self.getURI() == uri,
                       context.map(self.isContextCurrent) ?? true,
                       self.textView?.sourceString == sourceSnapshot
                 else { return }
+                self.pickerContext = context
+                self.popover?.close()
                 self.handle(
                     locations: locations,
                     anchorPoint: self.textView?.firstRect(for: position).map { NSPoint(x: $0.midX, y: $0.midY) } ?? anchorPoint,
                     sourcePosition: context?.range.start ?? position
                 )
+            } catch {
+                guard !Task.isCancelled, self.requestID == currentRequestID, context.map(self.isContextCurrent) ?? true else { return }
+                self.showRequestStatus(RenameFeature.message(for: error), id: currentRequestID)
             }
         }
+    }
+
+    private func showRequestStatus(_ message: String, loading: Bool = false, id: UInt64) {
+        guard let textView, textView.window != nil, requestID == id else { return }
+        popover?.close()
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.contentViewController = NSHostingController(rootView: DefinitionRequestStatusView(message: message, loading: loading, cancel: { [weak self] in
+            guard let self, self.requestID == id else { return }
+            self.dismiss()
+        }))
+        self.popover = popover
+        popover.show(relativeTo: textView.symbolAnchorRect(for: textView.sourceSelectedRange) ?? .zero, of: textView, preferredEdge: .maxY)
     }
 
     private func handle(
@@ -161,7 +194,7 @@ final class DefinitionFeature {
         sourcePosition: LSPPosition
     ) {
         switch locations.count {
-        case 0: return
+        case 0: showRequestStatus("No navigation targets found", id: requestID)
         case 1: openLocation(locations[0], sourcePosition: sourcePosition)
         default: presentPicker(locations: locations, anchor: anchorPoint, sourcePosition: sourcePosition)
         }
@@ -179,6 +212,12 @@ final class DefinitionFeature {
         sourcePosition: LSPPosition
     ) {
         guard let textView else { return }
+        let store = snippetStore()
+        let session = store?.beginSnippetSession()
+        if let store, let session { pickerSnippetSession = (store, session) }
+        let targets = pickerContext.map { context in
+            locations.map { EditorNavigationTarget(document: .init(host: context.document.host, worktreeID: context.document.worktreeID, uri: $0.uri), position: $0.range.start) }
+        } ?? []
         let entries = locations.map { loc -> DefinitionPickerEntry in
             let url = URL(string: loc.uri)
                 ?? URL(fileURLWithPath: loc.uri.removingPercentEncoding ?? loc.uri)
@@ -187,16 +226,18 @@ final class DefinitionFeature {
             // The picker is rendered synchronously. Remote snippets are
             // loaded by the persistent navigation surface instead of routing
             // an SSH path through local file APIs while opening this menu.
-            let snippet = url.isRemoteAlasPath ? "" : snippetCache.line(at: url, line: loc.range.start.line)
+            let snippet = store == nil ? "Snippet unavailable" : "Loading snippet…"
             return DefinitionPickerEntry(displayPath: display, snippet: snippet)
         }
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 380, height: max(60, min(320, 24 + entries.count * 36)))
         let host = NSHostingController(
-            rootView: DefinitionPicker(entries: entries) { [weak self, weak popover] choice in
+            rootView: DefinitionPicker(entries: entries, snippetStore: store, snippetSessionID: session, targets: targets) { [weak self, weak popover, id = requestID] choice in
                 popover?.close()
-                guard let self, let choice else { return }
+                guard let self, self.requestID == id else { return }
+                self.endPickerSnippets()
+                guard let choice, self.pickerContext.map(self.isContextCurrent) ?? true else { return }
                 self.openLocation(locations[choice], sourcePosition: sourcePosition)
             }
         )
@@ -205,5 +246,23 @@ final class DefinitionFeature {
         pickerSourcePosition = sourcePosition
         popover.show(relativeTo: anchorRect, of: textView, preferredEdge: .maxY)
         self.popover = popover
+    }
+
+    private func endPickerSnippets() {
+        if let session = pickerSnippetSession { session.store.endSnippetSession(session.id) }
+        pickerSnippetSession = nil
+    }
+}
+
+struct DefinitionRequestStatusView: View {
+    let message: String
+    let loading: Bool
+    let cancel: () -> Void
+    var body: some View {
+        HStack {
+            if loading { ProgressView().controlSize(.small) }
+            Text(message)
+            Button(loading ? "Cancel" : "Close", action: cancel).keyboardShortcut(.cancelAction)
+        }.padding(10)
     }
 }

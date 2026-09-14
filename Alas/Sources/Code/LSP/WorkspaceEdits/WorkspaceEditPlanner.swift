@@ -120,6 +120,7 @@ enum WorkspaceEditPlanner {
         case symbolicLinkAmbiguity
         case nonTextInput
         case unknownAnnotation
+        case unsupportedResourceOwnership
     }
 
     static func plan(
@@ -175,6 +176,7 @@ enum WorkspaceEditPlanner {
                 let exists = before.content != nil
                 if exists && !options.overwrite && !options.ignoreIfExists { throw Error.targetAlreadyExists }
                 let after = options.ignoreIfExists && !options.overwrite && exists ? before : before.replacing(content: Data())
+                guard !before.isOpen || before.content == after.content else { throw Error.unsupportedResourceOwnership }
                 state[document] = after
                 if exists && options.overwrite && before.isOpen && before.isDirty {
                     warnings.append(.destinationOverwriteWithUnsavedContent(document))
@@ -203,6 +205,7 @@ enum WorkspaceEditPlanner {
                     continue
                 }
                 let destinationAfter = before.replacing(document: destination, content: before.content)
+                guard !destinationBefore.isOpen else { throw Error.unsupportedResourceOwnership }
                 let sourceAfter = before.removingResource(keepingBuffer: false)
                 state[source] = sourceAfter
                 state[destination] = destinationAfter

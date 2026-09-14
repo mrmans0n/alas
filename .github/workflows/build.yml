@@ -375,6 +375,7 @@ jobs:
             -only-testing AlasTests/EditorNavigationHistoryTests \
             -only-testing AlasTests/NavigationFeatureTests \
             -only-testing AlasTests/DefinitionSnippetCacheTests \
+            -only-testing AlasTests/HoverFeatureBehaviorTests \
             -only-testing AlasTests/CompletionFeatureTests \
             -only-testing AlasTests/SnippetSessionTests \
             -only-testing AlasTests/SignatureHelpFeatureTests \

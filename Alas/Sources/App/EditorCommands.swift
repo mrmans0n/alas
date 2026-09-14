@@ -7,7 +7,7 @@ struct EditorCommands: Commands {
     var body: some Commands {
         CommandMenu("Code") {
             Button("Go to Definition") { send(.definition) }
-                .keyboardShortcut(functionKey(12))
+                .keyboardShortcut(functionKey(12), modifiers: [])
                 .disabled(!availability.isAvailable(.definition))
             Button("Go to Type Definition") { send(.typeDefinition) }
                 .disabled(!availability.isAvailable(.typeDefinition))
@@ -18,7 +18,7 @@ struct EditorCommands: Commands {
                 .disabled(!availability.isAvailable(.references))
             Divider()
             Button("Rename Symbol") { send(.rename) }
-                .keyboardShortcut(functionKey(2))
+                .keyboardShortcut(functionKey(2), modifiers: [])
                 .disabled(!availability.isAvailable(.rename))
             Button("Code Actions") { send(.codeActions) }
                 .keyboardShortcut(.return, modifiers: .option)

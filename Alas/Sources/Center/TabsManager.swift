@@ -108,7 +108,7 @@ final class TabsManager {
 
     func navigationStore(forWorktreeId worktreeId: String) -> EditorNavigationStore {
         if let store = navigationStores[worktreeId] { return store }
-        let store = EditorNavigationStore()
+        let store = EditorNavigationStore(openBuffer: { [weak self] document in self?.workspaceEditBuffer(for: document) })
         navigationStores[worktreeId] = store
         return store
     }
@@ -121,6 +121,12 @@ final class TabsManager {
         }
         workspaceUndoCoordinators[worktreeId] = coordinator
         return coordinator
+    }
+
+    func disposeWorkspaceEditHistory(worktreeId: String) {
+        workspaceUndoCoordinators[worktreeId]?.disposeHistory()
+        if workspaceUndoCoordinators[worktreeId]?.retainedJournalIDs.isEmpty == true { workspaceUndoCoordinators.removeValue(forKey: worktreeId) }
+        navigationStores.removeValue(forKey: worktreeId)?.close()
     }
 
     /// Opens an LSP target using the worktree's explicit host context. In
@@ -2302,6 +2308,9 @@ final class TabsManager {
                 }
             }
             openedExternalDocs.remove(tabId)
+            if let buffer = bufferStore.peekExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url) {
+                workspaceUndoCoordinators[ext.worktreeId]?.bufferWillClose(buffer)
+            }
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }
@@ -2323,6 +2332,7 @@ final class TabsManager {
         if buffers[key] === buffer {
             buffers.removeValue(forKey: key)
         }
+        workspaceUndoCoordinators[worktreeId]?.bufferWillClose(buffer)
         buffer.close(persistDirtySnapshot: false)
     }
 

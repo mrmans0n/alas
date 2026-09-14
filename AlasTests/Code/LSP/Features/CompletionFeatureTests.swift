@@ -109,6 +109,7 @@ struct CompletionFeatureTests {
         var commandText: String?
         var resolves = 0
         transport.onSend = { sent in
+            Task { @MainActor in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
             let method = request["method"]?.stringValue
             var result: LSPJSONValue = .null
@@ -124,13 +125,14 @@ struct CompletionFeatureTests {
             else { return }
             let response = try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData()
             transport.deliverFrame(String(decoding: response, as: UTF8.self))
+            }
         }
         try await client.initialize()
         let feature = CompletionFeature(textView: view, getClient: { client }, getURI: { "file:///tmp/file.swift" }, isEnabled: { true })
         let item = try LSPCompletionItem(wireValue: .object(["label": .string("print"), "data": .object(["token": .string("opaque")])]))
         feature.testingPresent(items: [item], prefix: .init(text: "pr", range: .init(location: 1, length: 2)), bufferText: view.string)
         view.insertTab(nil)
-        for _ in 0..<100 where resolves == 0 || (!invalid && commandText == nil) { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<100 where resolves == 0 || (invalid ? !feature.testingSnapshot.candidateLabels.isEmpty : commandText == nil) { try await Task.sleep(for: .milliseconds(10)) }
         if invalid {
             #expect(view.string == "\npr")
             #expect(commandText == nil)

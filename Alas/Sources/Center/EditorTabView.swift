@@ -197,6 +197,7 @@ struct EditorTabView: View {
                     onTextViewDetached: { detachFindController(from: $0) },
                     onInitialHighlightReady: onStartupRecoveryReady
                 )
+                WorkspaceEditRecoveryView(coordinator: appState.tabs.workspaceEditUndoCoordinator(forWorktreeId: worktreeId, worktreeRoot: worktreePath))
                 EditorNavigationResultsView(
                     store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
                     onOpen: { target in
@@ -233,7 +234,7 @@ struct EditorTabView: View {
                         }
                     },
                     onRerun: {
-                        activeTextView?.findReferences(nil)
+                        appState.tabs.navigationStore(forWorktreeId: worktreeId).rerunReferences()
                     },
                     onReturnFocus: {
                         activeTextView?.window?.makeFirstResponder(activeTextView)
