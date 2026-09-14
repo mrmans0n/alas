@@ -4,6 +4,71 @@ import Testing
 
 @Suite("LSP server requests", .serialized)
 struct LSPServerRequestsTests {
+    @Test func suspendedResponseDoesNotWriteAfterShutdown() async throws {
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        let started = AsyncStream<Void>.makeStream()
+        let permission = AsyncStream<Void>.makeStream()
+        let shutdownIDs = AsyncStream<LSPJSONValue>.makeStream()
+        defer {
+            started.continuation.finish()
+            permission.continuation.finish()
+            shutdownIDs.continuation.finish()
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        await client.setConfigurationHandler { _, _ in
+            started.continuation.yield(())
+            var iterator = permission.stream.makeAsyncIterator()
+            _ = await iterator.next()
+            return .null
+        }
+        transport.onSend = { sent in
+            guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = frame["id"] else { return }
+            if frame["method"] == .string("initialize") {
+                transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["id": id, "result": .object(["capabilities": .object([:])])]).encodedData(), as: UTF8.self))
+            } else if frame["method"] == .string("shutdown") {
+                transport.deliverFrame(#"{"id":"suspended","method":"workspace/configuration","params":{"items":[{}]}}"#)
+                shutdownIDs.continuation.yield(id)
+            }
+        }
+        try await client.initialize()
+        let shutdown = Task { await client.shutdown() }
+        var startedIterator = started.stream.makeAsyncIterator()
+        _ = await startedIterator.next()
+        var ids = shutdownIDs.stream.makeAsyncIterator()
+        let id = try #require(await ids.next())
+        transport.deliverFrame(String(decoding: try LSPJSONValue.object(["id": id, "result": .null]).encodedData(), as: UTF8.self))
+        await shutdown.value
+        #expect(await client.state == .dead)
+        let count = transport.sent.count
+        permission.continuation.yield(())
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(transport.sent.count == count)
+    }
+
+    @Test func shutdownRejectsLateRefreshAndConfigurationRequests() async throws {
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = frame["id"] else { return }
+            if frame["method"] == .string("initialize") {
+                transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["id": id, "result": .object(["capabilities": .object([:])])]).encodedData(), as: UTF8.self))
+            } else if frame["method"] == .string("shutdown") {
+                transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["id": id, "result": .null]).encodedData(), as: UTF8.self))
+            }
+        }
+        try await client.initialize()
+        await client.shutdown()
+        let count = transport.sent.count
+        for (id, method) in [("semantic", "workspace/semanticTokens/refresh"), ("inlay", "workspace/inlayHint/refresh"), ("configuration", "workspace/configuration")] {
+            transport.deliverFrame(String(decoding: try LSPJSONValue.object(["id": .string(id), "method": .string(method), "params": .object(["items": .array([])])]).encodedData(), as: UTF8.self))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(transport.sent.count == count)
+        #expect(await client.state == .dead)
+    }
+
     @Test func configurationMatchesItemCountAndScope() async throws {
         let requests = LSPServerRequests(configuration: { scope, section in
             scope == "file:///tmp/a" && section == "editor" ? .object(["tabSize": .number("4")]) : .null

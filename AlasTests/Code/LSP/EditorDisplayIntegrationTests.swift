@@ -6,6 +6,138 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayIntegrationTests {
+    @Test func twoSecondServerDelayDoesNotBlockNativeTypingOrMenu() async throws {
+        let fixture = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
+        defer { fixture.remove() }
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        var received = false
+        var replied = false
+        var delayed: Task<Void, Never>?
+        defer { delayed?.cancel() }
+        transport.onSend = { sent in
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+            received = true
+            delayed = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .null]).encodedData(), as: UTF8.self))
+                replied = true
+            }
+        }
+        let request = Task { try await client.hover(uri: "file:///tmp/file.swift", position: .init(line: 0, character: 0)) }
+        defer { request.cancel() }
+        try await Self.eventually("delayed hover request") { received }
+        let router = EditorCommandRouter(capabilities: .init(supportedCommands: [.hover]), isServerReady: true, handlers: [.hover: { _ in }])
+        fixture.view.editorCommandRouter = router
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 4, y: 4), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let start = ContinuousClock.now
+        fixture.view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        fixture.view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let menu = fixture.view.menu(for: event)
+        let duration = start.duration(to: .now)
+        #expect(fixture.buffer.storage.string.hasPrefix("xlet value"))
+        #expect(menu?.items.contains { $0.title == "Show Hover" } == true)
+        #expect(!replied)
+        #expect(duration < .seconds(1))
+        print("EDITOR_LSP_RESPONSIVENESS sourceUTF16=140000 lines=10000 delaySeconds=2 typingAndMenu=\(duration)")
+        _ = try await request.value
+        #expect(replied)
+        let snippets = EditorNavigationStore()
+        let targets = (0..<20).map { line in
+            EditorNavigationTarget(document: .init(host: nil, worktreeID: "large", uri: fixture.root.appendingPathComponent("test.txt").lspURI), position: .init(line: line * 400, character: 0))
+        }
+        let snippetStart = ContinuousClock.now
+        for target in targets { snippets.loadSnippet(for: target) }
+        try await Self.eventually("large-file reference snippets") { snippets.snippets.count == 20 }
+        #expect(snippets.snippets.values.allSatisfy { $0 == "let value = 1" })
+        print("EDITOR_LSP_SNIPPETS fileBytes=140000 targets=20 elapsed=\(snippetStart.duration(to: .now))")
+    }
+
+    @Test func mountedInlayEditUsesPreviewExecutorAndGuardedUndo() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("file.swift")
+        try Data("let value = 1\n".utf8).write(to: file)
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+            let result: LSPJSONValue
+            switch request["method"]?.stringValue {
+            case "initialize": result = .object(["capabilities": .object(["inlayHintProvider": .bool(true)])])
+            case "textDocument/inlayHint":
+                result = .array([.object([
+                    "position": .object(["line": .number("0"), "character": .number("9")]),
+                    "label": .string(": Int"),
+                    "textEdits": .array([Self.edit(line: 0, start: 9, end: 9, text: ": Int")])
+                ])])
+            default: result = .null
+            }
+            transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData(), as: UTF8.self))
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
+        let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
+        let app = AppState(tabsManager: tabs, lspManager: manager)
+        app.config.code.inlayHints = .init()
+        app.config.code.inlayHintsByLanguage = [:]
+        let buffer = tabs.buffer(worktreeId: "inlay-action", tabId: "tab", worktreeRoot: root, relativePath: "file.swift")
+        await buffer.awaitLoadForTesting()
+        await buffer.awaitWorkspaceEditLifecycle()
+        buffer.stopWatching()
+        let layout = CodeEditorLayoutManager(), container = NSTextContainer(size: CGSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
+        window.contentView = view
+        window.orderFront(nil)
+        let coordinator = CodeEditorCoordinator(appState: app)
+        coordinator.attach(textView: view, buffer: buffer, layoutManager: layout, worktreeId: "inlay-action", worktreeRoot: root, tabId: "tab", revealLine: nil, revealCharacter: nil, theme: try ThemeStore().current)
+        defer {
+            coordinator.detach()
+            window.orderOut(nil)
+            window.contentView = nil
+            buffer.close(persistDirtySnapshot: false)
+            transport.finish()
+        }
+        try await Self.eventually("mounted inlay") { view.displayAdapter?.document.map.hintRuns.count == 1 }
+        let inlay: EditorInlayLayout = try #require(Self.stored("inlayLayout", in: coordinator))
+        let originalID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
+        #expect(inlay.activate(.edits, id: originalID))
+        try await Self.eventually("inlay preview") { window.attachedSheet != nil }
+        let preview = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
+        #expect(preview.model.plan.steps.count == 1)
+        #expect(preview.model.plan.steps.first?.document.uri == file.lspURI)
+        #expect(buffer.storage.string == "let value = 1\n")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "let value = 1\n")
+        #expect(await preview.model.apply())
+        preview.close()
+        try await Self.eventually("applied inlay with undo") { buffer.storage.string == "let value: Int = 1\n" && buffer.undoManager.canUndo && window.attachedSheet == nil }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "let value = 1\n")
+        #expect(!inlay.activate(.edits, id: originalID))
+        buffer.undoManager.undo()
+        try await Self.eventually("inlay undo") { buffer.storage.string == "let value = 1\n" && buffer.undoManager.canRedo }
+        #expect(!buffer.undoManager.canUndo)
+        buffer.undoManager.redo()
+        try await Self.eventually("inlay redo") { buffer.storage.string == "let value: Int = 1\n" && buffer.undoManager.canUndo }
+        buffer.undoManager.undo()
+        try await Self.eventually("fresh inlay after undo") { buffer.storage.string == "let value = 1\n" && view.displayAdapter?.document.map.hintRuns.count == 1 }
+        let freshID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
+        #expect(inlay.activate(.edits, id: freshID))
+        try await Self.eventually("second preview") { window.attachedSheet != nil }
+        let stale = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
+        view.setSourceSelectedRange(NSRange(location: buffer.storage.length, length: 0))
+        view.insertText("// user edit\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!inlay.activate(.edits, id: freshID))
+        #expect(await stale.model.apply() == false)
+        stale.close()
+        #expect(buffer.storage.string == "let value = 1\n// user edit\n")
+        #expect(try String(contentsOf: file, encoding: .utf8) == "let value = 1\n")
+    }
+
     @Test func zeroWidthEOFWarningKeepsItsMarkerTooltipWithHints() async throws {
         let f = try await Fixture("a\u{200B}")
         defer { f.remove() }

@@ -76,6 +76,11 @@ final class LSPTransport: @unchecked Sendable {
     }
 
     func start() throws {
+        // A server can close stdin before its exit event reaches the client.
+        // Keep EPIPE as a thrown write error, without changing process signals.
+        guard fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard let self else { return }

@@ -535,7 +535,7 @@ actor LSPClient {
                 return }
                 pending[id] = cont
                 do {
-                    try transport.send(data)
+                    try send(data)
                 } catch {
                     pending.removeValue(forKey: id)
                     cont.resume(throwing: error)
@@ -671,10 +671,17 @@ actor LSPClient {
         return rollingText == nextText ? changes : nil
     }
 
-    private nonisolated func sendNotification(method: String, params: Any?) throws {
+    private func send(_ data: Data) throws {
+        // Recheck at the write boundary: an inbound handler can suspend while
+        // shutdown sends exit, then resume with a response for a dead server.
+        guard state != .dead else { throw LSPError.transportClosed }
+        try transport.send(data)
+    }
+
+    private func sendNotification(method: String, params: Any?) throws {
         let note = LSPNotification(method: method, params: params.map { AnyEncodable($0) })
         let data = try Self.outgoingJSONEncoder().encode(note)
-        try transport.send(data)
+        try send(data)
     }
 
     private nonisolated static func outgoingJSONEncoder() -> JSONEncoder {
@@ -712,9 +719,9 @@ actor LSPClient {
 
     private func consume() async {
         defer {
+            state = .dead
             stopSemanticRequests()
             cancelInboundRequests()
-            state = .dead
             for continuation in pending.values { continuation.resume(throwing: LSPError.transportClosed) }
             pending.removeAll()
             for continuation in diagnosticsSubscribers.values { continuation.finish() }
@@ -727,9 +734,9 @@ actor LSPClient {
             case .stderr:
                 continue
             case .exited:
+                state = .dead
                 stopSemanticRequests()
                 cancelInboundRequests()
-                state = .dead
                 for (_, cont) in pending {
                     cont.resume(throwing: LSPError.transportClosed)
                 }
@@ -741,6 +748,7 @@ actor LSPClient {
     }
 
     private func handle(frame: Data) {
+        guard state != .dead else { return }
         // Classify by `(id, method)` rather than blindly trying `LSPResponse`
         // first — server-initiated requests carry both `id` *and* `method`,
         // and `LSPResponse`'s `result`/`error` are optional, so a naive
@@ -793,7 +801,7 @@ actor LSPClient {
             case .string(let string): idValue = .string(string) }
             // Acknowledge before waking consumers. Never await highlighting here.
             if let reply = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": .null]).encodedData() {
-                try? transport.send(reply)
+                try? send(reply)
             }
             let subscribers = method == "workspace/inlayHint/refresh" ? inlaySubscribers : semanticSubscribers
             for subscriber in subscribers.values { subscriber.yield(()) }
@@ -836,12 +844,12 @@ actor LSPClient {
             switch id { case .int(let value): idValue = .number(String(value))
             case .string(let value): idValue = .string(value) }
             if let data = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": reply.result ?? .null]).encodedData() {
-                try? transport.send(data)
+                try? send(data)
             }
         }
     }
 
-    private nonisolated func sendErrorResponse(id: LSPID, code: Int, message: String) throws {
+    private func sendErrorResponse(id: LSPID, code: Int, message: String) throws {
         let idValue: Any
         switch id {
         case .int(let i):    idValue = i
@@ -853,7 +861,7 @@ actor LSPClient {
             "error": ["code": code, "message": message] as [String: Any]
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [])
-        try transport.send(data)
+        try send(data)
     }
 }
 

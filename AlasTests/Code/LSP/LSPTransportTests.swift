@@ -4,6 +4,22 @@ import Testing
 
 @Suite("LSPTransport.framing")
 struct LSPTransportFramingTests {
+    @Test("a live server closing stdin causes a write error without terminating the app")
+    func closedServerInputThrowsInsteadOfSignallingPipe() async throws {
+        let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "exec 0<&-; printf input-closed >&2; sleep 5"], environment: nil)
+        defer { transport.terminate() }
+        try transport.start()
+        var ready = false
+        for await event in transport.incoming {
+            if case .stderr(let data) = event, String(decoding: data, as: UTF8.self).contains("input-closed") {
+                ready = true
+                break
+            }
+        }
+        try #require(ready)
+        #expect(throws: (any Error).self) { try transport.send(Data(#"{"jsonrpc":"2.0","method":"probe"}"#.utf8)) }
+    }
+
     @Test("decodes a single frame")
     func singleFrame() async throws {
         let body = #"{"jsonrpc":"2.0","id":1,"result":null}"#
@@ -130,9 +146,13 @@ private extension String {
 
     func signalsCachedDescendantsFromTerminationHandler() -> Bool {
         guard let handler = range(of: "process.terminationHandler"),
-              let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants"),
-              let cachedSignal = range(of: "for d in Self.currentlyMatching(cachedTargets)"),
-              let finish = range(of: "self.continuation?.finish()") else {
+              let run = range(of: "try process.run()", range: handler.upperBound..<endIndex) else {
+            return false
+        }
+        let handlerBody = handler.upperBound..<run.lowerBound
+        guard let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants", range: handlerBody),
+              let cachedSignal = range(of: "for d in Self.currentlyMatching(cachedTargets)", range: handlerBody),
+              let finish = range(of: "self.continuation?.finish()", range: handlerBody) else {
             return false
         }
         return handler.lowerBound < cachedTargets.lowerBound &&
