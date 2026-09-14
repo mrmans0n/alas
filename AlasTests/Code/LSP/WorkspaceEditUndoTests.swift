@@ -6,6 +6,39 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct WorkspaceEditUndoTests {
+    @Test func nativeInverseRemainsDisabledAfterPathRebindUntilJournalConfirmation() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let a = f.documents[0]
+        let d = EditorDocumentID(host: nil, worktreeID: "w", uri: f.root.appendingPathComponent("d.txt").lspURI)
+        let source = try await f.access.snapshot(a)
+        let missing = try await f.access.snapshot(d)
+        let plan = WorkspaceEditPlan(steps: [
+            .init(kind: .rename, document: a, destination: d, before: source, after: source.replacing(document: d, content: source.content), destinationBefore: missing, annotationID: nil, annotationIDs: [], resourceOptions: nil)
+        ], finalSnapshots: [:], reviewAnnotations: [:], warnings: [], requiresPreview: true)
+        guard case .applied(let id) = await f.undo.executor.apply(plan) else { Issue.record("Apply failed")
+            return
+        }
+        let access = PausingUndoAccess(base: f.access)
+        let undo = WorkspaceEditUndoCoordinator(access: access, journal: f.journal, bufferForDocument: { f.tabs.workspaceEditBuffer(for: $0) })
+        undo.register(operationID: id, affectedDocuments: [a, d])
+        access.pauseAfterMove = true
+        defer { access.resume() }
+        f.a.undoManager.undo()
+        var paused = access.paused.stream.makeAsyncIterator()
+        _ = await paused.next()
+        #expect(f.a.relativePath == "a.txt")
+        #expect(undo.isRunning)
+        #expect(f.a.undoManager.workspaceActionInFlight)
+        #expect(!f.a.undoManager.canRedo)
+        f.a.undoManager.redo()
+        #expect(f.a.relativePath == "a.txt")
+        access.resume()
+        try await awaitWorkspaceMarker(undo, buffer: f.a, id: id, redo: true)
+        #expect(await undo.redo(operationID: id) == .applied(id))
+        #expect(f.a.relativePath == "d.txt")
+    }
+
     @Test func closingUnchangedInitiatorDoesNotBlockAnotherParticipantUndo() async throws {
         let f = try await UndoFixture()
         defer { f.remove() }
@@ -174,9 +207,9 @@ struct WorkspaceEditUndoTests {
         let f = try await UndoFixture()
         defer { f.remove() }
         f.type("earlier", in: f.a)
-        _ = try await f.rename()
+        let id = try await f.rename()
         f.a.undoManager.undo()
-        for _ in 0..<100 where f.a.storage.string != "earlier" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.a, id: id, redo: true)
         f.a.undoManager.undo()
         #expect(f.a.storage.string == "old")
         #expect(f.a.undoManager.redoActionName == "Typing")
@@ -184,7 +217,7 @@ struct WorkspaceEditUndoTests {
         #expect(f.a.storage.string == "earlier")
         #expect(f.b.storage.string == "old")
         f.a.undoManager.redo()
-        for _ in 0..<100 where f.a.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.a, id: id, redo: false)
         #expect(f.a.storage.string == "new")
         #expect(f.b.storage.string == "new")
     }
@@ -253,11 +286,11 @@ struct WorkspaceEditUndoTests {
             #expect(undoneBeforeClose ? reopened.undoManager.canRedo : reopened.undoManager.canUndo)
             if undoneBeforeClose { reopened.undoManager.redo() } else { reopened.undoManager.undo() }
             let inversePath = undoneBeforeClose ? "d.txt" : "a.txt"
-            for _ in 0..<100 where reopened.relativePath != inversePath { try await Task.sleep(nanoseconds: 10_000_000) }
+            try await awaitWorkspaceMarker(f.undo, buffer: reopened, id: id, redo: !undoneBeforeClose)
             #expect(reopened.relativePath == inversePath)
             #expect(try String(contentsOf: f.root.appendingPathComponent(inversePath), encoding: .utf8) == "old")
             if undoneBeforeClose { reopened.undoManager.undo() } else { reopened.undoManager.redo() }
-            for _ in 0..<100 where reopened.relativePath != closedPath { try await Task.sleep(nanoseconds: 10_000_000) }
+            try await awaitWorkspaceMarker(f.undo, buffer: reopened, id: id, redo: undoneBeforeClose)
             #expect(reopened.relativePath == closedPath)
             #expect(try String(contentsOf: f.root.appendingPathComponent(closedPath), encoding: .utf8) == "old")
         }
@@ -266,7 +299,7 @@ struct WorkspaceEditUndoTests {
     @Test func normalRedoReachesSharedBoundaryAfterUndoingLaterTyping() async throws {
         let f = try await UndoFixture()
         defer { f.remove() }
-        _ = try await f.rename()
+        let id = try await f.rename()
         let layout = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: 800, height: 600))
         layout.addTextContainer(container)
@@ -274,14 +307,15 @@ struct WorkspaceEditUndoTests {
         let view = CodeTextView(frame: .zero, textContainer: container)
         view.bindUndo(to: f.a)
         #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
-        for _ in 0..<100 where f.a.storage.string != "old" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.a, id: id, redo: true)
         #expect(f.a.storage.string == "old")
         view.insertText("later", replacementRange: NSRange(location: 0, length: 3))
+        #expect(f.a.storage.string == "later")
         #expect(view.tryToPerform(NSSelectorFromString("undo:"), with: nil))
         #expect(f.a.storage.string == "old")
         #expect(view.undoManager?.redoActionName == "Workspace Edit")
         #expect(view.tryToPerform(NSSelectorFromString("redo:"), with: nil))
-        for _ in 0..<100 where f.a.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.a, id: id, redo: false)
         #expect(f.a.storage.string == "new")
         #expect(f.b.storage.string == "new")
         #expect(try String(contentsOf: f.root.appendingPathComponent("c.txt"), encoding: .utf8) == "new")
@@ -422,15 +456,13 @@ struct WorkspaceEditUndoTests {
         try Data("new".utf8).write(to: f.root.appendingPathComponent("c.txt"))
         f.a.undoManager.undo()
         f.b.undoManager.undo()
-        for _ in 0..<100 where f.undo.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
-        // Marker callbacks start asynchronous work on the next actor turn.
-        for _ in 0..<100 where f.a.storage.string != "old" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.a, id: id, redo: true)
         #expect(f.a.storage.string == "old")
         #expect(f.b.storage.string == "old")
         #expect(try f.journal.records().filter { $0.status == .applied }.count == 2)
         #expect(await f.undo.undo(operationID: id) != .applied(id))
         f.b.undoManager.redo()
-        for _ in 0..<100 where f.b.storage.string != "new" { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await awaitWorkspaceMarker(f.undo, buffer: f.b, id: id, redo: false)
         #expect(f.a.storage.string == "new")
         #expect(f.b.storage.string == "new")
     }
@@ -548,6 +580,15 @@ struct WorkspaceEditUndoTests {
 }
 
 @MainActor
+private func awaitWorkspaceMarker(_ undo: WorkspaceEditUndoCoordinator, buffer: EditorBuffer, id: UUID, redo: Bool) async throws {
+    for _ in 0..<100 {
+        if !undo.isRunning, !buffer.undoManager.workspaceActionInFlight, buffer.undoManager.isAtMarker(id, redo: redo) { return }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    try #require(!undo.isRunning && !buffer.undoManager.workspaceActionInFlight && buffer.undoManager.isAtMarker(id, redo: redo), "Workspace inverse must finish and publish its reciprocal marker")
+}
+
+@MainActor
 private struct UndoFixture {
     let root: URL
     let tabs: TabsManager
@@ -625,16 +666,21 @@ private final class UndoTestFormatter: DocumentFormatter {
 
 @MainActor
 private final class PausingUndoAccess: WorkspaceEditFileAccess {
-    let base: MemoryWorkspaceEditAccess
+    let base: any WorkspaceEditFileAccess
     var pauseNextSnapshot = false
+    var pauseAfterMove = false
+    let paused = AsyncStream<Void>.makeStream()
     var continuation: CheckedContinuation<Void, Never>?
-    init(base: MemoryWorkspaceEditAccess) { self.base = base }
+    init(base: any WorkspaceEditFileAccess) { self.base = base }
     func resume() { continuation?.resume()
     continuation = nil }
     func snapshot(_ document: EditorDocumentID) async throws -> WorkspaceFileSnapshot {
         if pauseNextSnapshot {
             pauseNextSnapshot = false
-            await withCheckedContinuation { continuation = $0 }
+            await withCheckedContinuation {
+                continuation = $0
+                paused.continuation.yield(())
+            }
         }
         return try await base.snapshot(document)
     }
@@ -643,5 +689,9 @@ private final class PausingUndoAccess: WorkspaceEditFileAccess {
     }
     func move(from: EditorDocumentID, to: EditorDocumentID, expectedSource: WorkspaceFileSnapshot, expectedDestination: WorkspaceFileSnapshot) async throws {
         try await base.move(from: from, to: to, expectedSource: expectedSource, expectedDestination: expectedDestination)
+        if pauseAfterMove {
+            pauseAfterMove = false
+            pauseNextSnapshot = true
+        }
     }
 }

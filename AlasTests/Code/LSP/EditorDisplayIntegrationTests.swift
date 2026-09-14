@@ -397,7 +397,7 @@ struct EditorDisplayIntegrationTests {
         let item = try LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}],"command":{"title":"Complete import","command":"completion.followup"}}"#.utf8))
         let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": try #require(request["id"]), "result": .array([item])])
         transport.deliverFrame(String(decoding: try response.encodedData(), as: UTF8.self))
-        try await Self.eventually {
+        try await Self.eventually("completion popup") {
             window.childWindows?.contains(where: { ($0.contentViewController as? NSHostingController<CompletionPopup>)?.rootView.rows.contains(where: { $0.label == "print" }) == true }) == true
         }
         view.insertTab(nil)
@@ -419,9 +419,10 @@ struct EditorDisplayIntegrationTests {
             followup.close()
             #expect(buffer.storage.string == "import Foo\n\nPrint")
             buffer.undoManager.undo()
-            try await Self.eventually { buffer.storage.string == "import Foo\n\nprint" }
+            try await Self.eventually("completion follow-up undo") { buffer.storage.string == "import Foo\n\nprint" && !buffer.undoManager.workspaceActionInFlight }
+            #expect(!buffer.undoManager.workspaceActionInFlight, "Completion undo must finish before the next native action")
         } else { followup.cancel?() }
-        try await Self.eventually { window.attachedSheet == nil }
+        try await Self.eventually("completion sheet dismissal") { window.attachedSheet == nil }
         #expect(buffer.storage.string == "import Foo\n\nprint")
         buffer.undoManager.undo()
         for _ in 0..<200 where buffer.storage.string != "\npr" { try await Task.sleep(for: .milliseconds(10)) }
@@ -437,7 +438,7 @@ struct EditorDisplayIntegrationTests {
         view.setSourceSelectedRange(NSRange(location: 1, length: 2))
         view.renameSymbol(nil)
         let rename: RenameFeature = try #require(Self.stored("renameFeature", in: coordinator))
-        try await Self.eventually { Self.popover(in: rename)?.isShown == true }
+        try await Self.eventually("rename picker") { Self.popover(in: rename)?.isShown == true }
         let renamePopover = try #require(Self.popover(in: rename))
         let renameView = try #require(renamePopover.contentViewController as? NSHostingController<RenameNameView>).rootView
         #expect(renameView.model.name == "renamed")
@@ -448,31 +449,33 @@ struct EditorDisplayIntegrationTests {
         #expect(renameEditRequest?["params"]?["position"]?["line"] == .number("1"))
         #expect(renameEditRequest?["params"]?["position"]?["character"] == .number("0"))
         buffer.undoManager.undo()
-        try await Self.eventually { buffer.storage.string == "\npr" }
+        try await Self.eventually("rename undo") { buffer.storage.string == "\npr" && !buffer.undoManager.workspaceActionInFlight }
+        #expect(!buffer.undoManager.workspaceActionInFlight, "Rename undo must finish before code actions can run")
         #expect(!buffer.undoManager.canUndo)
         view.setSourceSelectedRange(NSRange(location: 1, length: 2))
         try view.displayAdapter?.updateHints([.init(id: "action", sourceOffset: 1, label: "action", size: CGSize(width: 200, height: 30))], revision: buffer.editGeneration)
         view.showCodeActions(nil)
         let actions: CodeActionsFeature = try #require(Self.stored("codeActionsFeature", in: coordinator))
-        try await Self.eventually { Self.popover(in: actions)?.isShown == true }
+        try await Self.eventually("code action picker") { Self.popover(in: actions)?.isShown == true }
         let actionsPopover = try #require(Self.popover(in: actions))
         let picker = try #require(actionsPopover.contentViewController as? NSHostingController<CodeActionPicker>).rootView
-        try await Self.eventually { !picker.model.isLoading }
+        try await Self.eventually("code actions loaded") { !picker.model.isLoading }
         let action = try #require(picker.model.filtered.first?.action)
         #expect(action.title == "Replace source symbol")
         picker.select(action)
-        try await Self.eventually { window.attachedSheet != nil }
+        try await Self.eventually("code action edit preview") { window.attachedSheet != nil }
         let preview = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
         #expect(preview.model.plan.steps.count == 1)
         #expect(preview.model.plan.steps.first?.document.uri == file.lspURI)
         #expect(buffer.storage.string == "\npr")
         #expect(await preview.model.apply())
         preview.close()
-        try await Self.eventually { buffer.storage.string == "\nfixed" && window.attachedSheet == nil }
+        try await Self.eventually("code action applied and sheet dismissed") { buffer.storage.string == "\nfixed" && window.attachedSheet == nil }
         #expect(actionsRequest?["params"]?["range"]?["start"]?["character"] == .number("0"))
         #expect(actionsRequest?["params"]?["range"]?["end"]?["character"] == .number("2"))
         buffer.undoManager.undo()
-        try await Self.eventually { buffer.storage.string == "\npr" }
+        try await Self.eventually("code action undo") { buffer.storage.string == "\npr" && !buffer.undoManager.workspaceActionInFlight }
+        #expect(!buffer.undoManager.workspaceActionInFlight, "Code action undo must finish before navigation can run")
         #expect(!buffer.undoManager.canUndo)
 
         let diagnostic = try JSONDecoder().decode(LSPDiagnostic.self, from: Data("""
@@ -484,7 +487,7 @@ struct EditorDisplayIntegrationTests {
         view.nextProblem(nil)
         #expect(view.sourceSelectedRange == NSRange(location: 2, length: 1))
         #expect(view.selectedRange() == NSRange(location: 3, length: 1))
-        try await Self.eventually { Self.documentationView(in: window) != nil }
+        try await Self.eventually("diagnostic details after code action undo") { Self.documentationView(in: window) != nil }
         let documentation = try #require(Self.documentationView(in: window))
         let link = URL(string: "alas-diagnostic://related/0")!
         #expect(documentation.delegate?.textView?(documentation, clickedOnLink: link, at: 0) == true)
