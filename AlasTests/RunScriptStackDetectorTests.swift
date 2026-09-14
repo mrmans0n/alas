@@ -295,6 +295,15 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.flutter]?.usesFlutter == true)
     }
 
+    /// A fully inline dependencies block: "flutter" is never a line's own
+    /// key because the whole map lives on one line.
+    @Test func flutterRecognizesAFullyInlineDependenciesBlock() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("pubspec.yaml", "name: app\ndependencies: { flutter: { sdk: flutter } }\n", in: root)
+        #expect(detect(root)[.flutter]?.usesFlutter == true)
+    }
+
     @Test func elixirReadsMixForPhoenix() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

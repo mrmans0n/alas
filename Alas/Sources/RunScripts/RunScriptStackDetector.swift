@@ -186,7 +186,13 @@ enum RunScriptStackDetector {
                 }
             }
         }
-        return false
+        // Fallback for a fully flow-style dependencies block, e.g.
+        // `dependencies: { flutter: { sdk: flutter } }`, where "flutter" is
+        // never a line's own key because the whole map is inline.
+        return pubspec.range(
+            of: #"flutter\s*:\s*\{\s*sdk\s*:\s*['"]?flutter['"]?\s*\}"#,
+            options: .regularExpression
+        ) != nil
     }
 
     /// A `{:phoenix, ...}` dependency atom in mix.exs's deps list. A bare
