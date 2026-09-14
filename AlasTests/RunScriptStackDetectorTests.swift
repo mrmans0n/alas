@@ -301,6 +301,19 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.elixir]?.usesPhoenix == false)
     }
 
+    /// A word mention inside a string literal — a package description, say —
+    /// is not a dependency declaration.
+    @Test func elixirIgnoresAPhoenixMentionInsideAStringLiteral() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "mix.exs",
+            "def project do\n  [description: \"Utilities for :phoenix integrations\"]\nend\ndefp deps do\n  []\nend\n",
+            in: root
+        )
+        #expect(detect(root)[.elixir]?.usesPhoenix == false)
+    }
+
     /// `:phoenix_pubsub` and `:phoenix_live_view` share a prefix with
     /// `:phoenix` but are not the Phoenix web framework itself.
     @Test func elixirDoesNotTreatPhoenixPrefixedPackagesAsPhoenix() throws {

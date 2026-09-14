@@ -194,7 +194,10 @@ enum RunScriptStackDetector {
     /// would fire on a dependency left commented out.
     private static func mixDeclaresPhoenixDependency(_ mix: String) -> Bool {
         let stripped = mix.components(separatedBy: .newlines).map(stripLineComment).joined(separator: "\n")
-        return stripped.range(of: #":phoenix(?![A-Za-z0-9_])"#, options: .regularExpression) != nil
+        // Anchor to the actual dependency-tuple shape `{:phoenix, ...}` rather
+        // than any occurrence of the atom: a bare ":phoenix" also matches
+        // inside an unrelated string literal, e.g. a package description.
+        return stripped.range(of: #"\{\s*:phoenix\s*,"#, options: .regularExpression) != nil
     }
 
     /// Everything before an unquoted `#`. Shared by pubspec.yaml (YAML) and
