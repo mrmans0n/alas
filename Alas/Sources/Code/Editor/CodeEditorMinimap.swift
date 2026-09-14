@@ -8,6 +8,8 @@ final class CodeEditorScrollView: MinimapScrollView {
     private var pendingDrawing: DispatchWorkItem?
     private var minimapTheme: Theme?
 
+    override var minimapBackgroundMaterial: NSVisualEffectView.Material? { .contentBackground }
+
     func configureMinimap(shown: Bool, theme: Theme) {
         let wasShown = showsMinimap
         showsMinimap = shown
@@ -16,7 +18,7 @@ final class CodeEditorScrollView: MinimapScrollView {
             minimap.update(drawing: MinimapDrawing())
             return
         }
-        minimap.backgroundColor = NSColor(theme.color("bg-1"))
+        minimap.backgroundColor = .clear
         minimap.indicatorColor = NSColor(theme.color("fg-muted"))
         if !minimap.preservesLineScale { minimap.preservesLineScale = true }
         minimap.onNavigate = { [weak self] value in

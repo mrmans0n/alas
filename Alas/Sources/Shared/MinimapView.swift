@@ -287,6 +287,8 @@ class MinimapScrollView: NSScrollView {
         }
     }
 
+    var minimapBackgroundMaterial: NSVisualEffectView.Material? { nil }
+
     func updateMinimapVisibility(availableWidth: CGFloat) {}
 }
 
@@ -294,11 +296,15 @@ class MinimapScrollView: NSScrollView {
 /// never expand and shrink the clip view around hosted document content.
 final class MinimapContainerView<ScrollView: MinimapScrollView>: NSView {
     let scrollView: ScrollView
+    private let minimapMaterial = NSVisualEffectView()
 
     init(scrollView: ScrollView) {
         self.scrollView = scrollView
         super.init(frame: scrollView.frame)
+        minimapMaterial.blendingMode = .withinWindow
+        minimapMaterial.state = .active
         addSubview(scrollView)
+        addSubview(minimapMaterial)
         addSubview(scrollView.minimap)
         scrollView.minimap.onScrollWheel = { [weak scrollView] event in
             scrollView?.scrollWheel(with: event)
@@ -320,6 +326,9 @@ final class MinimapContainerView<ScrollView: MinimapScrollView>: NSView {
         let scrollFrame = CGRect(x: bounds.minX, y: bounds.minY, width: max(0, bounds.width - width), height: bounds.height)
         if scrollView.frame != scrollFrame { scrollView.frame = scrollFrame }
         let minimapFrame = CGRect(x: bounds.maxX - width, y: bounds.minY, width: width, height: bounds.height)
+        minimapMaterial.isHidden = !scrollView.showsMinimap || scrollView.minimapBackgroundMaterial == nil
+        if let material = scrollView.minimapBackgroundMaterial { minimapMaterial.material = material }
+        if minimapMaterial.frame != minimapFrame { minimapMaterial.frame = minimapFrame }
         if scrollView.minimap.frame != minimapFrame { scrollView.minimap.frame = minimapFrame }
         super.layout()
     }
