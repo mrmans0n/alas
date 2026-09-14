@@ -543,7 +543,9 @@ final class EditorBuffer {
     /// from / written to disk. Computed from `storage.string` against
     /// `originalText` (cheap for files under ~1 MB).
     var dirty: Bool {
-        guard !readOnly else { return false }
+        // Losing navigation trust disables input, but must not hide a recovered
+        // draft from snapshot persistence or Save All's error reporting.
+        guard !readOnly || navigationResolvedRoot != nil else { return false }
         return !EditorSourceText.exactlyEqual(storage.string, originalText)
     }
 
@@ -692,6 +694,10 @@ final class EditorBuffer {
         if restoredContent, loadKind != .loaded {
             loadKind = .loaded
             readOnly = false
+        }
+        // Restoring draft text must not restore trust in a retargeted path.
+        if navigationResolvedRoot != nil {
+            readOnly = readOnly || navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath())
         }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
@@ -1280,6 +1286,7 @@ final class EditorBuffer {
     func save() throws {
         guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         switch saveDisposition {
         case .blockedByLoad:
@@ -1298,6 +1305,7 @@ final class EditorBuffer {
     func saveAwaitingRemote() async throws {
         guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         switch saveDisposition {
         case .blockedByLoad:
@@ -1315,7 +1323,7 @@ final class EditorBuffer {
     }
 
     private func saveLocal() throws {
-        let url = try localSaveURL()
+        let url = try localMutationURL(relativePath: relativePath)
         if dirty,
            let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
            onDiskMtime != originalMtime {
@@ -1332,25 +1340,39 @@ final class EditorBuffer {
         notifyDidSave(url: absoluteFileURL)
     }
 
-    private func localSaveURL() throws -> URL {
+    private func localMutationURL(relativePath: String, allowMissingDirectories: Bool = false) throws -> URL {
         let logicalRoot = worktreeRoot.standardizedFileURL
-        let logicalURL = absoluteFileURL.standardizedFileURL
+        let logicalURL = worktreeRoot.appendingPathComponent(relativePath).standardizedFileURL
         guard let localSaveRoot,
               logicalURL.pathComponents.count > logicalRoot.pathComponents.count,
               logicalURL.pathComponents.starts(with: logicalRoot.pathComponents),
               worktreeRoot.resolvingSymlinksInPath().standardizedFileURL == localSaveRoot else {
             throw SaveError.localSaveTargetChanged
         }
-        // Resolve the existing parent separately: a missing final file can stop
-        // whole-path symlink resolution. Keep the original root as the boundary
-        // even when the logical worktree root is itself a retargeted symlink.
-        let directory = logicalURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        // Resolve the nearest existing parent before creating any directories.
+        // Whole-path resolution can stop at a missing component; lstat also
+        // keeps a dangling symlink from being mistaken for a missing directory.
+        var ancestor = logicalURL.deletingLastPathComponent()
+        var missingDirectories: [String] = []
+        var value = stat()
+        while lstat(ancestor.path, &value) != 0 {
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            guard allowMissingDirectories,
+                  ancestor.pathComponents.count > logicalRoot.pathComponents.count else {
+                throw SaveError.localSaveTargetChanged
+            }
+            missingDirectories.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        var directory = ancestor.resolvingSymlinksInPath().standardizedFileURL
         guard directory.pathComponents.starts(with: localSaveRoot.pathComponents),
               (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
             throw SaveError.localSaveTargetChanged
         }
+        for component in missingDirectories.reversed() {
+            directory.appendPathComponent(component, isDirectory: true)
+        }
         let url = directory.appendingPathComponent(logicalURL.lastPathComponent)
-        var value = stat()
         if lstat(url.path, &value) == 0 {
             guard value.st_mode & S_IFMT == S_IFREG else { throw SaveError.localSaveTargetChanged }
         } else if errno != ENOENT {
@@ -1360,6 +1382,13 @@ final class EditorBuffer {
         // cannot redirect the write. Replacing this canonical parent concurrently
         // retains the atomic writer's existing external-process race.
         return url
+    }
+
+    private func validateNavigationWriteTrust() throws {
+        guard navigationResolvedRoot != nil else { return }
+        if navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath()) {
+            throw SaveError.localSaveTargetChanged
+        }
     }
 
     /// A navigation decision belongs to the root resolved when the tab opened,
@@ -1471,6 +1500,7 @@ final class EditorBuffer {
     func saveAs(relativePath newRelativePath: String) throws {
         guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
         if remoteHost != nil { throw remotePathOperationError() }
@@ -1478,7 +1508,7 @@ final class EditorBuffer {
             throw CocoaError(.fileWriteFileExists)
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
-        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let newURL = try localMutationURL(relativePath: newRelativePath, allowMissingDirectories: true)
         let canonical = storage.string
         stopWatching()
         languageReopenTask?.cancel()
@@ -1493,7 +1523,7 @@ final class EditorBuffer {
             discardSnapshot()
             notifyDidClose(url: oldURL)
             notifyDidOpen()
-            notifyDidSave(url: newURL)
+            notifyDidSave(url: absoluteFileURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
@@ -1505,6 +1535,7 @@ final class EditorBuffer {
     func moveTo(relativePath newRelativePath: String) throws {
         guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
         if remoteHost != nil { throw remotePathOperationError() }
@@ -1512,19 +1543,20 @@ final class EditorBuffer {
             throw CocoaError(.fileWriteFileExists)
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
-        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let sourceURL = try localMutationURL(relativePath: relativePath)
+        let newURL = try localMutationURL(relativePath: newRelativePath, allowMissingDirectories: true)
         stopWatching()
         languageReopenTask?.cancel()
         languageReopenTask = nil
         do {
             try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: newURL.path) {
-                guard sameExistingFile(oldURL, newURL) else {
+                guard sameExistingFile(sourceURL, newURL) else {
                     throw CocoaError(.fileWriteFileExists)
                 }
-                try renameItem(at: oldURL, to: newURL)
+                try renameItem(at: sourceURL, to: newURL)
             } else {
-                try FileManager.default.moveItem(at: oldURL, to: newURL)
+                try FileManager.default.moveItem(at: sourceURL, to: newURL)
             }
             relativePath = newRelativePath
             language = lsp?.language(forPath: newRelativePath)

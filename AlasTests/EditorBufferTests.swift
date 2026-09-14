@@ -354,6 +354,138 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: originalURL, encoding: .utf8) == "hello\n")
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func retargetedDestinationsCannotSaveAsOrMoveOutsideRoot(retargetRoot: Bool, move: Bool) async throws {
+        try await checkRetargetedPathOperation(retargetRoot: retargetRoot, move: move)
+    }
+
+    @Test(arguments: [false, true])
+    func retargetedSaveAsCannotOverwriteOutsideFile(retargetRoot: Bool) async throws {
+        try await checkRetargetedPathOperation(retargetRoot: retargetRoot, move: false, overwrite: true)
+    }
+
+    private func checkRetargetedPathOperation(retargetRoot: Bool, move: Bool, overwrite: Bool = false) async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let original = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(original, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        let alias = fixture.appendingPathComponent(retargetRoot ? "root-alias" : "root/destination")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: original)
+        let root = retargetRoot ? alias : original
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "draft")
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        let leaf = overwrite ? "file.txt" : "nested/new.txt"
+        let destination = retargetRoot ? leaf : "destination/\(leaf)"
+
+        do {
+            if move { try buffer.moveTo(relativePath: destination) }
+            else { try buffer.saveAs(relativePath: destination) }
+            Issue.record("A retargeted destination must refuse filesystem changes")
+        } catch {}
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("nested").path))
+        #expect(buffer.relativePath == "file.txt")
+        #expect(buffer.storage.string == "draft")
+        #expect(buffer.dirty)
+    }
+
+    @Test(arguments: ["../outside/file.txt", "dangling/nested/new.txt", "leaf-link.txt"], [false, true])
+    func pathOperationsRefuseTraversalAndSymlinks(destination: String, move: Bool) async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let root = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(root, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("dangling"), withDestinationURL: outside.appendingPathComponent("missing"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("leaf-link.txt"), withDestinationURL: outsideFile)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+
+        #expect(throws: (any Error).self) {
+            if move { try buffer.moveTo(relativePath: destination) }
+            else { try buffer.saveAs(relativePath: destination) }
+        }
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("missing").path))
+        #expect(buffer.relativePath == "file.txt")
+    }
+
+    @Test func moveRefusesRetargetedSourceEvenWithContainedDestination() async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let root = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(root, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        let alias = root.appendingPathComponent("source")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "source/file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+
+        do {
+            try buffer.moveTo(relativePath: "nested/moved.txt")
+            Issue.record("Moving an outside source must be refused")
+        } catch {}
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("nested").path))
+        #expect(buffer.relativePath == "source/file.txt")
+    }
+
+    @Test(arguments: [false, true])
+    func pathOperationsPreserveContainedAliases(move: Bool) async throws {
+        let root = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("internal"), withDestinationURL: directory)
+        let source = try writeFile(root, "file.txt", "original")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "draft")
+        var changedPath: (String, String)?
+        buffer.onPathChanged = { changedPath = ($0, $1) }
+
+        if move { try buffer.moveTo(relativePath: "internal/nested/new.txt") }
+        else { try buffer.saveAs(relativePath: "internal/nested/new.txt") }
+
+        #expect(buffer.relativePath == "internal/nested/new.txt")
+        #expect(changedPath?.0 == "file.txt")
+        #expect(changedPath?.1 == "internal/nested/new.txt")
+        #expect(FileManager.default.fileExists(atPath: source.path) == !move)
+        #expect(try String(contentsOf: directory.appendingPathComponent("nested/new.txt"), encoding: .utf8) == (move ? "original" : "draft"))
+        try buffer.save()
+        #expect(try String(contentsOf: directory.appendingPathComponent("nested/new.txt"), encoding: .utf8) == "draft")
+        #expect(!buffer.dirty)
+    }
+
     @Test func saveAsWritesNewPathAndLeavesOriginalFile() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")

@@ -159,7 +159,12 @@ struct EditorNavigationHistoryTests {
         try await checkLazyNavigationRetarget(retargetRoot: true, restoreTabs: true, snapshotOnlySave: true)
     }
 
-    @MainActor private func checkLazyNavigationRetarget(retargetRoot: Bool, restoreTabs: Bool, snapshotOnlySave: Bool = false) async throws {
+    @Test(arguments: [false, true])
+    @MainActor func restoredNavigationDraftRemainsReadOnlyAfterRetarget(retargetRoot: Bool) async throws {
+        try await checkLazyNavigationRetarget(retargetRoot: retargetRoot, restoreTabs: true, restoreDraft: true)
+    }
+
+    @MainActor private func checkLazyNavigationRetarget(retargetRoot: Bool, restoreTabs: Bool, snapshotOnlySave: Bool = false, restoreDraft: Bool = false) async throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("navigation-lazy-retarget-\(UUID())", isDirectory: true)
         let originalDirectory = fixture.appendingPathComponent("root/sub", isDirectory: true)
@@ -191,7 +196,7 @@ struct EditorNavigationHistoryTests {
             return
         }
         #expect(manager.peekBuffer(tabId: state.id) == nil)
-        if snapshotOnlySave {
+        if snapshotOnlySave || restoreDraft {
             let mtime = try #require(FileManager.default.attributesOfItem(atPath: outsideFile.path)[.modificationDate] as? Date)
             try store.write(.init(relativePath: state.relativePath, content: "draft", originalText: "original", originalMtime: mtime, lineEnding: .lf), worktreeId: "w", tabId: state.id)
         }
@@ -213,6 +218,20 @@ struct EditorNavigationHistoryTests {
         buffer.stopWatching()
         #expect(buffer.readOnly)
         #expect(!buffer.acceptsSourceInput)
+        if restoreDraft {
+            #expect(buffer.storage.string == "draft")
+            #expect(buffer.dirty)
+            try? buffer.saveAs(relativePath: "copy.swift")
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("copy.swift").path))
+            try? buffer.moveTo(relativePath: "moved.swift")
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("moved.swift").path))
+            buffer.snapshotNow()
+            #expect(try store.read(worktreeId: "w", tabId: state.id)?.content == "draft")
+            #expect(throws: (any Error).self) { try buffer.save() }
+            #expect(manager.saveAll(worktreeRoots: ["w": root]).count == 1)
+            #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+            return
+        }
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "changed")
         // A read-only buffer may no-op; a retained save boundary may refuse.
         try? buffer.save()
