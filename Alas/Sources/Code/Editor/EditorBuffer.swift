@@ -101,6 +101,7 @@ struct RemoteHelperFileWatchMatcher {
 final class EditorBuffer {
     enum SaveError: LocalizedError {
         case loadPending
+        case localSaveTargetChanged
         case remoteSaveRequiresAwait
         case remoteSaveConflict
 
@@ -108,6 +109,8 @@ final class EditorBuffer {
             switch self {
             case .loadPending:
                 "File is still loading. Try saving again after it finishes."
+            case .localSaveTargetChanged:
+                "The file's directory or symbolic links changed. Reopen it before saving."
             case .remoteSaveRequiresAwait:
                 "Remote saves must finish before this action can continue."
             case .remoteSaveConflict:
@@ -117,6 +120,7 @@ final class EditorBuffer {
     }
 
     let worktreeRoot: URL
+    private let localSaveRoot: URL?
     private(set) var relativePath: String
 
     /// `true` when this buffer represents a file outside the worktree (e.g.
@@ -603,9 +607,11 @@ final class EditorBuffer {
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        self.remoteHost = RemoteHostRegistry.shared.host(
+        let remoteHost = RemoteHostRegistry.shared.host(
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
         )
+        self.remoteHost = remoteHost
+        self.localSaveRoot = remoteHost == nil ? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -1304,7 +1310,7 @@ final class EditorBuffer {
     }
 
     private func saveLocal() throws {
-        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let url = try localSaveURL()
         if dirty,
            let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
            onDiskMtime != originalMtime {
@@ -1318,7 +1324,37 @@ final class EditorBuffer {
         updateOriginalMtime(from: url)
         startWatching()
         discardSnapshot()
-        notifyDidSave(url: url)
+        notifyDidSave(url: absoluteFileURL)
+    }
+
+    private func localSaveURL() throws -> URL {
+        let logicalRoot = worktreeRoot.standardizedFileURL
+        let logicalURL = absoluteFileURL.standardizedFileURL
+        guard let localSaveRoot,
+              logicalURL.pathComponents.count > logicalRoot.pathComponents.count,
+              logicalURL.pathComponents.starts(with: logicalRoot.pathComponents),
+              worktreeRoot.resolvingSymlinksInPath().standardizedFileURL == localSaveRoot else {
+            throw SaveError.localSaveTargetChanged
+        }
+        // Resolve the existing parent separately: a missing final file can stop
+        // whole-path symlink resolution. Keep the original root as the boundary
+        // even when the logical worktree root is itself a retargeted symlink.
+        let directory = logicalURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        guard directory.pathComponents.starts(with: localSaveRoot.pathComponents),
+              (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+            throw SaveError.localSaveTargetChanged
+        }
+        let url = directory.appendingPathComponent(logicalURL.lastPathComponent)
+        var value = stat()
+        if lstat(url.path, &value) == 0 {
+            guard value.st_mode & S_IFMT == S_IFREG else { throw SaveError.localSaveTargetChanged }
+        } else if errno != ENOENT {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        // Write via the resolved parent so later changes to the logical alias
+        // cannot redirect the write. Replacing this canonical parent concurrently
+        // retains the atomic writer's existing external-process race.
+        return url
     }
 
     /// Remote writes must not block the main actor. Keep the buffer dirty and

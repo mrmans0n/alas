@@ -141,6 +141,82 @@ struct EditorNavigationHistoryTests {
         )
     }
 
+    @Test(arguments: [false, true])
+    @MainActor func retargetedNavigationDirectoryCannotSaveOutsideWorktree(outsideFileExists: Bool) async throws {
+        try await checkRetargetedNavigationSave(retargetRoot: false, outsideFileExists: outsideFileExists)
+    }
+
+    @Test @MainActor func retargetedNavigationRootCannotSaveOutsideOriginalWorktree() async throws {
+        try await checkRetargetedNavigationSave(retargetRoot: true, outsideFileExists: false)
+    }
+
+    @MainActor private func checkRetargetedNavigationSave(retargetRoot: Bool, outsideFileExists: Bool) async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("navigation-retarget-\(UUID())", isDirectory: true)
+        let originalDirectory = fixture.appendingPathComponent("root/sub", isDirectory: true)
+        let outsideDirectory = fixture.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: originalDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let file = originalDirectory.appendingPathComponent("file.swift")
+        let outsideFile = outsideDirectory.appendingPathComponent("file.swift")
+        try Data("original".utf8).write(to: file)
+        if outsideFileExists {
+            try Data("outside".utf8).write(to: outsideFile)
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+            try FileManager.default.setAttributes([.modificationDate: attributes[.modificationDate]!], ofItemAtPath: outsideFile.path)
+        }
+        let link = fixture.appendingPathComponent(retargetRoot ? "root-alias" : "root/internal", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: originalDirectory)
+        let root = retargetRoot ? link : fixture.appendingPathComponent("root", isDirectory: true)
+        let logicalFile = link.appendingPathComponent("file.swift")
+        let manager = TabsManager(
+            bufferStore: EditorBufferStore(rootOverride: fixture.appendingPathComponent("buffers")),
+            tabsDirectory: fixture.appendingPathComponent("tabs")
+        )
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(host: nil, worktreeID: "w", uri: logicalFile.absoluteString),
+            position: LSPPosition(line: 0, character: 0)
+        )
+        #expect(manager.openNavigationTarget(target, worktreeRoot: root, originatingRelativePath: nil, language: "swift"))
+        guard case .editor(let state) = try #require(manager.activeTab(forWorktree: "w")) else {
+            Issue.record("Navigation did not open an editor")
+            return
+        }
+        #expect(state.externalAbsolutePath == nil)
+        let buffer = manager.buffer(worktreeId: "w", tabId: state.id, worktreeRoot: root, relativePath: state.relativePath)
+        defer { manager.discardBuffer(worktreeId: "w", tabId: state.id) }
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        #expect(!buffer.readOnly)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "changed")
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideDirectory)
+
+        do {
+            try buffer.save()
+            Issue.record("Saving through a retargeted directory must fail")
+        } catch {
+            #expect(buffer.dirty)
+        }
+
+        #expect(try String(contentsOf: file, encoding: .utf8) == "original")
+        if outsideFileExists {
+            #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: outsideFile.path))
+        }
+        #expect(buffer.storage.string == "changed")
+        #expect(buffer.dirty)
+
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: originalDirectory)
+        buffer.resolveConflictKeepingMine()
+        try buffer.save()
+        #expect(try String(contentsOf: file, encoding: .utf8) == "changed")
+        #expect(!buffer.dirty)
+    }
+
     @MainActor private func checkNavigationContainment(
         rootPath: String,
         targetPath: String,
