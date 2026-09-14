@@ -1,6 +1,6 @@
 import Foundation
 
-protocol RangeReviewGitClient {
+protocol RangeReviewGitClient: Sendable {
     func resolvedRangeTrees(worktreePath: URL, base: String, head: String, threeDot: Bool) async throws -> (before: String, after: String)
     func rangeDiff(worktreePath: URL, revisions: (before: String, after: String), file: String, originalPath: String?) async throws -> ParsedDiff
     func rangeContextSnapshot(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
@@ -27,13 +27,14 @@ struct RangeReviewLoader {
         self.git = git
     }
 
+    @MainActor
     func load(
         worktreePath: URL,
         base: String,
         head: String,
         threeDot: Bool,
         files: [CommitChangedFile],
-        openFileForPath: @escaping (String) -> (() -> Void)?
+        openFileForPath: @escaping @MainActor (String) -> (() -> Void)?
     ) async throws -> DiffReviewLoadedSession {
         var sections: [DiffReviewFileSectionModel] = []
         let revisions = try await git.resolvedRangeTrees(

@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-struct GitService {
+struct GitService: Sendable {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
     func isGitRepository(_ path: URL) async throws -> Bool {

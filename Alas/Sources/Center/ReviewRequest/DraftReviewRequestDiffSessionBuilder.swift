@@ -7,8 +7,8 @@ enum DraftReviewRequestDiffSessionBuilder {
         context: ReviewRequestDraftContext,
         worktreePath: URL,
         openFileForPath: @escaping (String) -> (() -> Void)?,
-        contextProviderForPath: @escaping (String, String?) -> DiffReviewContextProvider? = { _, _ in nil },
-        imageProviderForFile: @escaping (CommitChangedFile) -> DiffReviewImageProvider? = { _ in nil }
+        contextProviderForPath: @escaping @MainActor (String, String?) -> DiffReviewContextProvider? = { _, _ in nil },
+        imageProviderForFile: @escaping @MainActor (CommitChangedFile) -> DiffReviewImageProvider? = { _ in nil }
     ) async throws -> DiffReviewLoadedSession {
         _ = worktreePath
         var sections: [DiffReviewFileSectionModel] = []
@@ -23,10 +23,10 @@ enum DraftReviewRequestDiffSessionBuilder {
                 for: file,
                 diff: parsed,
                 openFile: openFileForPath(file.path),
-                contextProvider: contextProviderForPath(file.path, file.originalPath),
+                contextProvider: await contextProviderForPath(file.path, file.originalPath),
                 imageProvider: ImageFileType.isSupported(relativePath: file.path)
                     || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
-                    ? imageProviderForFile(file)
+                    ? await imageProviderForFile(file)
                     : nil
             ))
         }
@@ -39,7 +39,7 @@ enum DraftReviewRequestDiffSessionBuilder {
 
     static func parseDraftDiff(
         _ rawDiff: String,
-        parser: @escaping @Sendable (String) -> ParsedDiff = DiffParser.parse
+        parser: @escaping @Sendable (String) -> ParsedDiff = { DiffParser.parse($0) }
     ) async throws -> ParsedDiff {
         let parsed = await Task.detached(priority: .userInitiated) {
             parser(rawDiff)

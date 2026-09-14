@@ -1,6 +1,6 @@
 import Foundation
 
-protocol CommitReviewGitClient {
+protocol CommitReviewGitClient: Sendable {
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> ParsedDiff
     func commitContextSnapshot(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
     func commitImageProvider(worktreePath: URL, sha: String, file: CommitChangedFile) -> DiffReviewImageProvider
@@ -18,11 +18,12 @@ struct CommitReviewLoader {
     /// Loads commit review sections. `openFileForPath` is evaluated during
     /// loading and must be a lightweight, pure factory; put UI work in the
     /// returned closure instead of the factory itself.
+    @MainActor
     func load(
         worktreePath: URL,
         sha: String,
         files: [CommitChangedFile],
-        openFileForPath: @escaping (String) -> (() -> Void)?
+        openFileForPath: @escaping @MainActor (String) -> (() -> Void)?
     ) async throws -> DiffReviewLoadedSession {
         var sections: [DiffReviewFileSectionModel] = []
 

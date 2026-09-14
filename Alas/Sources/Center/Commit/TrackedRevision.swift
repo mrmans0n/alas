@@ -245,9 +245,9 @@ enum TrackedRevisionPolicy {
 }
 
 struct TrackedRevisionResolver {
-    var resolve: (URL, String) async throws -> String
-    var branch: (URL) async throws -> String
-    var stack: (URL) async throws -> GGStack? = { _ in nil }
+    var resolve: @Sendable (URL, String) async throws -> String
+    var branch: @Sendable (URL) async throws -> String
+    var stack: @Sendable (URL) async throws -> GGStack? = { _ in nil }
 
     static let live = TrackedRevisionResolver(
         resolve: { try await GitService().resolveRevision(at: $0, ref: $1) },
