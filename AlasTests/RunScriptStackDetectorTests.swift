@@ -608,6 +608,32 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInsideNestedBlockComments() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            let package = Package(
+                name: "Lib",
+                targets: [
+                    .target(name: "Lib"),
+                    /*
+                    /*
+                     Inner comment.
+                     */
+                    .executableTarget(name: "Fake")
+                    */
+                ]
+            )
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageIgnoresExecutableTargetsInInactiveCompoundOSBranches() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1132,6 +1158,34 @@ struct RunScriptStackDetectorTests {
             worktreeRoot: root,
             goToolchainEnvironment: { _ in
                 .init(minorVersion: 25, operatingSystem: "darwin", architecture: "amd64", architectureFeatures: ["amd64.v1"])
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goAcceptsLeadingWhitespaceOnBuildConstraints() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "  //go:build custom\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+
+        try write("main.go", "  // +build custom\n\npackage main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goResolvesGOFLAGSBuildTagsFromTheDetectedToolchain() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !enterprise\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [], buildTags: ["enterprise"])
             }
         ).map { ($0.stack, $0.context) })
 

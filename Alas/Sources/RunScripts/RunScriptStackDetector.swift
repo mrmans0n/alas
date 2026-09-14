@@ -12,6 +12,7 @@ struct GoToolchainEnvironment: Equatable, Sendable {
     var operatingSystem = Self.hostOperatingSystem
     var architecture = Self.hostArchitecture
     var architectureFeatures: Set<String>
+    var buildTags: Set<String> = []
     var cgoEnabled = false
 
     static var hostOperatingSystem: String {
@@ -1239,13 +1240,16 @@ enum RunScriptStackDetector {
 
     private static func goBuildConstraintAllowsCurrentHost(_ contents: String, toolchainEnvironment: GoToolchainEnvironment) -> Bool {
         let lines = contents.components(separatedBy: .newlines)
-        if let directive = lines.first(where: { $0.hasPrefix("//go:build ") }) {
+        if let directive = lines.map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { $0.hasPrefix("//go:build ") }) {
             let expression = String(directive.dropFirst("//go:build ".count))
             return goBuildExpressionAllowsCurrentHost(expression, toolchainEnvironment: toolchainEnvironment)
         }
         let legacyDirectives = lines.prefix { line in
-            line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("//")
-        }.filter { $0.hasPrefix("// +build ") }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty || trimmed.hasPrefix("//")
+        }
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { $0.hasPrefix("// +build ") }
         guard !legacyDirectives.isEmpty else { return true }
         return legacyDirectives.allSatisfy { directive in
             directive.dropFirst("// +build ".count).split { $0 == " " || $0 == "\t" }.contains { option in
@@ -1306,6 +1310,7 @@ enum RunScriptStackDetector {
         return goCoreBuildTags(toolchainEnvironment: toolchainEnvironment).contains(tag)
             || (tag == "cgo" && toolchainEnvironment.cgoEnabled)
             || toolchainEnvironment.architectureFeatures.contains(tag)
+            || toolchainEnvironment.buildTags.contains(tag)
             || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
     }
 
@@ -1351,7 +1356,7 @@ enum RunScriptStackDetector {
     private static func currentGoToolchainEnvironment(worktreeRoot: URL) -> GoToolchainEnvironment? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED"]
+        process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED", "GOFLAGS"]
         process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
@@ -1384,11 +1389,13 @@ enum RunScriptStackDetector {
             : architecture == "amd64" ? line(3)
             : nil
         let cgoValue = line(5)
+        let goflags = line(6) ?? ""
         return .init(
             minorVersion: goToolchainMinorVersion(from: version),
             operatingSystem: operatingSystem,
             architecture: architecture,
             architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel, architecture: architecture),
+            buildTags: goBuildTags(fromGOFLAGS: goflags),
             cgoEnabled: cgoValue != "0"
         )
     }
@@ -1435,6 +1442,30 @@ enum RunScriptStackDetector {
         default:
         return []
         }
+    }
+
+    private static func goBuildTags(fromGOFLAGS goflags: String) -> Set<String> {
+        var tags: Set<String> = []
+        var pendingTagsValue = false
+        for token in goflags.split(whereSeparator: \.isWhitespace).map(String.init) {
+            if pendingTagsValue {
+                tags.formUnion(goBuildTags(fromTagsFlagValue: token))
+                pendingTagsValue = false
+                continue
+            }
+            if token == "-tags" {
+                pendingTagsValue = true
+                continue
+            }
+            if token.hasPrefix("-tags=") {
+                tags.formUnion(goBuildTags(fromTagsFlagValue: String(token.dropFirst("-tags=".count))))
+            }
+        }
+        return tags
+    }
+
+    private static func goBuildTags(fromTagsFlagValue value: String) -> Set<String> {
+        Set(value.split { $0 == "," || $0 == " " || $0 == "\t" }.map(String.init).filter { !$0.isEmpty })
     }
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
@@ -1644,14 +1675,27 @@ enum RunScriptStackDetector {
                 }
                 if text[next] == "*" {
                     index = text.index(after: next)
-                    while index < text.endIndex {
-                        let isCloseStar = text[index] == "*" && text.index(after: index) < text.endIndex
-                            && text[text.index(after: index)] == "/"
-                        index = text.index(after: index)
-                        if isCloseStar {
-                            index = text.index(after: index)
-                            break
+                    var depth = 1
+                    while index < text.endIndex, depth > 0 {
+                        let nextIndex = text.index(after: index)
+                        if text[index] == "\n" {
+                            stripped.append("\n")
+                            index = nextIndex
+                            continue
                         }
+                        if nextIndex < text.endIndex {
+                            if text[index] == "/", text[nextIndex] == "*" {
+                                depth += 1
+                                index = text.index(after: nextIndex)
+                                continue
+                            }
+                            if text[index] == "*", text[nextIndex] == "/" {
+                                depth -= 1
+                                index = text.index(after: nextIndex)
+                                continue
+                            }
+                        }
+                        index = nextIndex
                     }
                     continue
                 }
