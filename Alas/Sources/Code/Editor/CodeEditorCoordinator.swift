@@ -799,6 +799,16 @@ final class CodeEditorCoordinator {
         }) { [weak self] _ in
             self?.activateHistoryTarget(direction: .forward)
         }
+        router.register(.nextProblem, isAvailable: { [weak self] in
+            !(self?.diagnosticsFeature.current.isEmpty ?? true)
+        }) { [weak self, weak textView] _ in
+            self?.showProblem(from: textView?.selectedRange().location, backwards: false)
+        }
+        router.register(.previousProblem, isAvailable: { [weak self] in
+            !(self?.diagnosticsFeature.current.isEmpty ?? true)
+        }) { [weak self, weak textView] _ in
+            self?.showProblem(from: textView?.selectedRange().location, backwards: true)
+        }
         router.register(.hover) { [weak textView] range in
             textView?.triggerHover(atUTF16Offset: range.location)
         }
@@ -825,6 +835,9 @@ final class CodeEditorCoordinator {
             self?.renameFeature?.format(range: range, selectionOnly: false)
         }
         editorCommandRouter = router
+        diagnosticsFeature.onChange = { [weak router] in
+            router?.refreshAvailability()
+        }
         currentNavigationStore?.setHistoryChangeHandler { [weak router] in
             router?.refreshAvailability()
         }
@@ -925,6 +938,60 @@ final class CodeEditorCoordinator {
         } else {
             store.recordActivationFailure(for: target)
             textView?.showCommandStatus("Could not open navigation target")
+        }
+    }
+
+    private func showProblem(from caretOffset: Int?, backwards: Bool) {
+        guard let textView,
+              let caretOffset,
+              let position = TextEditCoordinates.lspPosition(utf16Offset: caretOffset, in: textView.string),
+              let range = diagnosticsFeature.nextRange(after: position, backwards: backwards),
+              let diagnostic = diagnosticsFeature.diagnostics(at: range.start).first(where: { $0.range == range }),
+              let displayRange = DiagnosticsFeature.nsRange(for: range, in: textView.string)
+        else {
+            textView?.showCommandStatus("No visible problem at this location")
+            return
+        }
+
+        textView.setSelectedRange(displayRange)
+        scrollRangeToVisiblePreservingHorizontalOffset(displayRange, in: textView)
+        hover?.showDiagnosticDetails(
+            diagnostic,
+            at: displayRange,
+            openRelatedLocation: { [weak self] location in
+                self?.openDiagnosticRelatedLocation(location, sourcePosition: diagnostic.range.start)
+            },
+            showQuickFixes: { [weak self] in
+                self?.codeActionsFeature?.show(range: displayRange, diagnosticContext: [diagnostic])
+            }
+        )
+    }
+
+    private func openDiagnosticRelatedLocation(_ location: LSPLocation, sourcePosition: LSPPosition) {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot,
+              let source = navigationSource(at: sourcePosition)
+        else { return }
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                worktreeID: worktreeID,
+                uri: location.uri
+            ),
+            position: location.range.start
+        )
+        if appState.tabs.openNavigationTarget(
+            target,
+            worktreeRoot: root,
+            originatingRelativePath: currentExternalAbsolutePath == nil
+                ? currentRelativePath
+                : currentOriginatingRelativePath,
+            language: currentLanguage
+        ) {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordJump(from: source, to: target)
+        } else {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordActivationFailure(for: target)
+            textView?.showCommandStatus("Could not open related diagnostic location")
         }
     }
 

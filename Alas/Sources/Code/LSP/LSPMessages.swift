@@ -263,25 +263,61 @@ struct LSPDocumentSymbol: Decodable, Sendable {
     let children: [LSPDocumentSymbol]?
 }
 
+enum LSPDiagnosticCode: Hashable, Sendable {
+    case number(String)
+    case string(String)
+
+    var displayValue: String {
+        switch self {
+        case .number(let value), .string(let value): value
+        }
+    }
+
+    init?(wireValue: LSPJSONValue?) {
+        switch wireValue {
+        case .number(let value): self = .number(value)
+        case .string(let value): self = .string(value)
+        default: return nil
+        }
+    }
+}
+
+struct LSPDiagnosticCodeDescription: Codable, Hashable, Sendable {
+    let href: String
+}
+
+struct LSPDiagnosticRelatedInformation: Codable, Hashable, Sendable {
+    let location: LSPLocation
+    let message: String
+}
+
 struct LSPDiagnostic: Codable, Hashable, Sendable {
     /// Original protocol fields, including numeric codes, tags, related information and opaque data.
     var wireValue: LSPJSONValue?
     let range: LSPRange
     let severity: Int?       // 1=error 2=warning 3=info 4=hint
-    let code: String?
+    let code: LSPDiagnosticCode?
+    let codeDescription: LSPDiagnosticCodeDescription?
     let source: String?
+    let tags: [Int]?
+    let relatedInformation: [LSPDiagnosticRelatedInformation]?
+    let data: LSPJSONValue?
     let message: String
 
-    enum CodingKeys: String, CodingKey { case range, severity, code, source, message }
+    enum CodingKeys: String, CodingKey {
+        case range, severity, code, codeDescription, source, tags, relatedInformation, data, message
+    }
     init(from decoder: Decoder) throws {
         wireValue = try? LSPJSONValue(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         range = try c.decode(LSPRange.self, forKey: .range)
         severity = try c.decodeIfPresent(Int.self, forKey: .severity)
-        if let s = try? c.decodeIfPresent(String.self, forKey: .code) { code = s }
-        else if let i = try? c.decodeIfPresent(Int.self, forKey: .code) { code = String(i) }
-        else { code = nil }
+        code = LSPDiagnosticCode(wireValue: wireValue?["code"])
+        codeDescription = try c.decodeIfPresent(LSPDiagnosticCodeDescription.self, forKey: .codeDescription)
         source = try c.decodeIfPresent(String.self, forKey: .source)
+        tags = try c.decodeIfPresent([Int].self, forKey: .tags)
+        relatedInformation = try c.decodeIfPresent([LSPDiagnosticRelatedInformation].self, forKey: .relatedInformation)
+        data = wireValue?["data"]
         message = try c.decode(String.self, forKey: .message)
     }
     func encode(to encoder: Encoder) throws {
@@ -290,8 +326,21 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(range, forKey: .range)
         try c.encodeIfPresent(severity, forKey: .severity)
-        try c.encodeIfPresent(code, forKey: .code)
+        if let code {
+            switch code {
+            case .number(let value):
+                guard let number = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
+                    throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Invalid diagnostic code"))
+                }
+                try c.encode(number, forKey: .code)
+            case .string(let value): try c.encode(value, forKey: .code)
+            }
+        }
+        try c.encodeIfPresent(codeDescription, forKey: .codeDescription)
         try c.encodeIfPresent(source, forKey: .source)
+        try c.encodeIfPresent(tags, forKey: .tags)
+        try c.encodeIfPresent(relatedInformation, forKey: .relatedInformation)
+        if let data { try data.encode(to: c.superEncoder(forKey: .data)) }
         try c.encode(message, forKey: .message)
     }
 }

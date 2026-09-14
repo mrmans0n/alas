@@ -38,14 +38,17 @@ final class CodeActionsFeature {
         presentation.cancel()
     }
 
-    func show(range: NSRange, only: [String]? = nil) {
+    /// `diagnosticContext` is the original server diagnostic selected from
+    /// details UI. It intentionally bypasses display-range reconstruction so
+    /// opaque data and wire coordinates reach `textDocument/codeAction`.
+    func show(range: NSRange, only: [String]? = nil, diagnosticContext: [LSPDiagnostic]? = nil) {
         cancel()
         let id = generation
         task = Task { [weak self] in
             guard let self, let (client, context) = await synchronize(range), id == generation,
                   isCurrent(context), let textView else { return }
             let generations = tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
-            let selectedDiagnostics = Self.diagnostics(diagnostics(), intersecting: context.range)
+            let selectedDiagnostics = diagnosticContext ?? Self.diagnostics(diagnostics(), intersecting: context.range)
             do {
                 let actions = try await client.codeActions(uri: context.document.uri, range: context.range, diagnostics: selectedDiagnostics, only: only)
                 guard !Task.isCancelled, id == generation, isCurrent(context), textView.window != nil else { return }
@@ -57,7 +60,7 @@ final class CodeActionsFeature {
                     self.popover?.close()
                     self.popover = nil
                     self.task = Task { await self.run(action, client: client, context: context, generations: generations, id: id) }
-                }, organizeImports: { [weak self] in self?.show(range: range, only: ["source.organizeImports"]) }, cancel: { [weak self] in self?.cancel() }))
+                }, organizeImports: { [weak self] in self?.show(range: range, only: ["source.organizeImports"], diagnosticContext: diagnosticContext) }, cancel: { [weak self] in self?.cancel() }))
                 self.popover = popover
                 popover.show(relativeTo: textView.symbolAnchorRect(for: range) ?? .zero, of: textView, preferredEdge: .maxY)
             } catch { showStatus(RenameFeature.message(for: error)) }

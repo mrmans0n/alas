@@ -109,5 +109,5 @@ final class EditorCommandRouter {
         return selection
     }
 
-    private static let localCommands: Set<EditorCommandID> = [.back, .forward]
+    private static let localCommands: Set<EditorCommandID> = [.back, .forward, .nextProblem, .previousProblem]
 }

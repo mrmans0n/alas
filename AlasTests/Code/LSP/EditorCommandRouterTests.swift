@@ -58,6 +58,21 @@ struct EditorCommandRouterTests {
         #expect(router.availableCommands().contains(.back))
     }
 
+    @Test("problem navigation is locally available only when diagnostics exist")
+    func problemNavigationUsesItsAvailabilityCheck() {
+        var hasDiagnostics = false
+        let router = EditorCommandRouter()
+        router.register(.nextProblem, isAvailable: { hasDiagnostics }) { _ in }
+        router.register(.previousProblem, isAvailable: { hasDiagnostics }) { _ in }
+
+        #expect(!router.availableCommands().contains(.nextProblem))
+        #expect(!router.availableCommands().contains(.previousProblem))
+
+        hasDiagnostics = true
+        #expect(router.availableCommands().contains(.nextProblem))
+        #expect(router.availableCommands().contains(.previousProblem))
+    }
+
     @Test("app command availability exposes only registered active commands")
     func appCommandAvailabilityGatesFutureCommands() throws {
         let capabilities = try LSPCapabilities(json: Data(#"{"definitionProvider":true,"renameProvider":true}"#.utf8))

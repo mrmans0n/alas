@@ -99,6 +99,55 @@ final class HoverFeature {
         return true
     }
 
+    /// Presents protocol diagnostic metadata in the existing hover overlay.
+    /// The range here is a display-only `NSRange`; callers retain the original
+    /// `LSPDiagnostic` for all LSP follow-up requests.
+    func showDiagnosticDetails(
+        _ diagnostic: LSPDiagnostic,
+        at range: NSRange,
+        openRelatedLocation: @escaping (LSPLocation) -> Void,
+        showQuickFixes: @escaping () -> Void
+    ) {
+        guard let textView else { return }
+        let theme = getTheme()
+        let document = Document(parsing: DiagnosticsFeature.detailMarkdown(for: diagnostic))
+        let renderResult = MarkdownRenderer().render(
+            document: document,
+            theme: theme,
+            monospacedFontFamily: getMonoFontFamily(),
+            monospacedFontSize: getMonoFontSize(),
+            baseDirectory: URL(fileURLWithPath: "/"),
+            mermaidProfile: .compact
+        )
+        let anchor = textView.symbolAnchorRect(for: range)
+            ?? textView.firstRect(for: diagnostic.range.start)
+            ?? CGRect(origin: lastMousePoint ?? .zero, size: .zero)
+        windowController.show(
+            result: renderResult,
+            size: HoverFeatureTesting.computePreferredSize(for: renderResult),
+            theme: theme,
+            anchor: anchor,
+            in: textView,
+            onWillPresentMermaidViewer: { [weak self] in self?.dismiss() },
+            onOpenLink: { url in
+                guard url.scheme == "alas-diagnostic" else { return false }
+                if url.host == "actions" {
+                    showQuickFixes()
+                    return true
+                }
+                guard url.host == "related",
+                      let index = Int(url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
+                      let related = diagnostic.relatedInformation,
+                      related.indices.contains(index)
+                else { return true }
+                openRelatedLocation(related[index].location)
+                return true
+            }
+        )
+        shownSymbolRange = range
+        installMouseMonitor()
+    }
+
     // MARK: - Event entry points
 
     private func onMouseMoved(at point: NSPoint) {

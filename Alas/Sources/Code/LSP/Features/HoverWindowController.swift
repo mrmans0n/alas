@@ -17,13 +17,15 @@ final class HoverWindowController {
         theme: Theme,
         anchor: NSRect,
         in textView: NSTextView,
-        onWillPresentMermaidViewer: @escaping () -> Void
+        onWillPresentMermaidViewer: @escaping () -> Void,
+        onOpenLink: @escaping (URL) -> Bool = { _ in false }
     ) {
         let root = HoverPopupView(
             result: result,
             theme: theme,
             mermaidCancellation: mermaidCancellation,
-            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer,
+            onOpenLink: onOpenLink
         )
         if let hostingController {
             hostingController.rootView = root
@@ -50,13 +52,15 @@ struct HoverPopupView: View {
     let theme: Theme
     let mermaidCancellation: MermaidRenderCancellation
     let onWillPresentMermaidViewer: () -> Void
+    let onOpenLink: (URL) -> Bool
 
     var body: some View {
         HoverPopupContent(
             result: result,
             theme: theme,
             mermaidCancellation: mermaidCancellation,
-            onWillPresentMermaidViewer: onWillPresentMermaidViewer
+            onWillPresentMermaidViewer: onWillPresentMermaidViewer,
+            onOpenLink: onOpenLink
         )
             .background(Color(nsColor: NSColor(theme.color("bg-1"))))
             .overlay {
@@ -72,6 +76,7 @@ private struct HoverPopupContent: NSViewRepresentable {
     let theme: Theme
     let mermaidCancellation: MermaidRenderCancellation
     let onWillPresentMermaidViewer: () -> Void
+    let onOpenLink: (URL) -> Bool
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -106,7 +111,8 @@ private struct HoverPopupContent: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onWillPresentMermaidViewer: onWillPresentMermaidViewer,
-            mermaidCancellation: mermaidCancellation
+            mermaidCancellation: mermaidCancellation,
+            onOpenLink: onOpenLink
         )
     }
 
@@ -120,6 +126,7 @@ private struct HoverPopupContent: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let mermaidCoordinator: MermaidAttachmentCoordinator
+        let onOpenLink: (URL) -> Bool
         var appliedRevision: UUID?
 
         weak var textView: NSTextView? {
@@ -128,12 +135,14 @@ private struct HoverPopupContent: NSViewRepresentable {
 
         init(
             onWillPresentMermaidViewer: @escaping () -> Void,
-            mermaidCancellation: MermaidRenderCancellation
+            mermaidCancellation: MermaidRenderCancellation,
+            onOpenLink: @escaping (URL) -> Bool
         ) {
             self.mermaidCoordinator = MermaidAttachmentCoordinator(
                 mode: .compact,
                 onWillPresentViewer: onWillPresentMermaidViewer
             )
+            self.onOpenLink = onOpenLink
             super.init()
             mermaidCancellation.register { [weak self] in
                 self?.cancelRenders()
@@ -172,9 +181,9 @@ private struct HoverPopupContent: NSViewRepresentable {
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             if let url = link as? URL {
-                NSWorkspace.shared.open(url)
+                if !onOpenLink(url) { NSWorkspace.shared.open(url) }
             } else if let string = link as? String, let url = URL(string: string) {
-                NSWorkspace.shared.open(url)
+                if !onOpenLink(url) { NSWorkspace.shared.open(url) }
             }
             return true
         }
