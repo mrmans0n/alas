@@ -405,8 +405,9 @@ enum RunScriptStackDetector {
             }
         }
 
+        let defaultFeatures = cargoDefaultFeatures(cargoToml)
         for declaredBin in cargoDeclaredBins(cargoToml) {
-            binaries[declaredBin.name] = !declaredBin.requiredFeatures
+            binaries[declaredBin.name] = declaredBin.requiredFeatures.isSubset(of: defaultFeatures)
         }
 
         guard !binaries.isEmpty else { return false }
@@ -431,9 +432,11 @@ enum RunScriptStackDetector {
     private static func zigBuildSteps(_ buildZig: String) -> Set<String> {
         guard let regex = try? NSRegularExpression(pattern: #"\.step\s*\(\s*\"([^\"]+)\""#) else { return [] }
         let stripped = stripCStyleComments(buildZig)
+        let stringRanges = cStringLiteralRanges(stripped)
         let range = NSRange(stripped.startIndex..., in: stripped)
         return Set(regex.matches(in: stripped, range: range).compactMap { match in
-            Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
+            guard !stringRanges.contains(where: { NSLocationInRange(match.range.location, $0) }) else { return nil }
+            return Range(match.range(at: 1), in: stripped).map { String(stripped[$0]) }
         })
     }
 
@@ -452,7 +455,7 @@ enum RunScriptStackDetector {
             }
         })
         let pluginIDs = gradlePluginIDs(stripped)
-        if !pluginIDs.isDisjoint(with: ["java", "java-library", "application"]) {
+        if !pluginIDs.isDisjoint(with: ["java", "java-library", "application", "groovy"]) {
             tasks.formUnion(["assemble", "test", "check", "clean"])
         }
         return tasks
@@ -494,12 +497,13 @@ enum RunScriptStackDetector {
         return paths
     }
 
-    private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?, requiredFeatures: Bool)] {
+    private static func cargoDeclaredBins(_ cargoToml: String) -> [(name: String, path: String?, requiredFeatures: Set<String>)] {
         guard let blockRegex = try? NSRegularExpression(
             pattern: #"(?ms)^\s*\[\[bin\]\]\s*(.*?)(?=^\s*\[\[bin\]\]|\z)"#
         ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#),
            let pathRegex = try? NSRegularExpression(pattern: #"(?m)^\s*path\s*=\s*\"([^\"]+)\""#),
-           let requiredFeaturesRegex = try? NSRegularExpression(pattern: #"(?m)^\s*required-features\s*="#)
+           let requiredFeaturesRegex = try? NSRegularExpression(pattern: #"(?m)^\s*required-features\s*=\s*\[([^\]]*)\]"#),
+           let quotedValueRegex = try? NSRegularExpression(pattern: #"\"([^\"]+)\""#)
         else { return [] }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         return blockRegex.matches(in: cargoToml, range: fullRange).compactMap { block in
@@ -512,9 +516,17 @@ enum RunScriptStackDetector {
             let path = pathRegex.firstMatch(in: text, range: range).flatMap { match in
                 Range(match.range(at: 1), in: text).map { String(text[$0]) }
             }
+            let requiredFeatures = requiredFeaturesRegex.firstMatch(in: text, range: range).flatMap { match -> Set<String>? in
+                guard let featuresRange = Range(match.range(at: 1), in: text) else { return nil }
+                let features = String(text[featuresRange])
+                let featuresNSRange = NSRange(features.startIndex..., in: features)
+                return Set(quotedValueRegex.matches(in: features, range: featuresNSRange).compactMap { feature in
+                    Range(feature.range(at: 1), in: features).map { String(features[$0]) }
+                })
+            } ?? []
             return (
                 String(text[nameRange]), path,
-                requiredFeaturesRegex.firstMatch(in: text, range: range) != nil
+                requiredFeatures
             )
         }
     }
@@ -557,6 +569,43 @@ enum RunScriptStackDetector {
               let valueRange = Range(valueMatch.range(at: 1), in: package)
         else { return nil }
         return package[valueRange] == "true"
+    }
+
+    private static func cargoDefaultFeatures(_ cargoToml: String) -> Set<String> {
+        guard let featuresSectionRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*\[features\]\s*(.*?)(?=^\s*\[|\z)"#),
+              let featureRegex = try? NSRegularExpression(pattern: #"(?m)^\s*([A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]"#),
+              let quotedValueRegex = try? NSRegularExpression(pattern: #"\"([^\"]+)\""#)
+        else { return [] }
+        let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
+        guard let sectionMatch = featuresSectionRegex.firstMatch(in: cargoToml, range: fullRange),
+              let sectionRange = Range(sectionMatch.range(at: 1), in: cargoToml)
+        else { return [] }
+        let section = String(cargoToml[sectionRange])
+        let sectionNSRange = NSRange(section.startIndex..., in: section)
+        let featureMap = Dictionary(uniqueKeysWithValues: featureRegex.matches(in: section, range: sectionNSRange).compactMap { match -> (String, [String])? in
+            guard let nameRange = Range(match.range(at: 1), in: section),
+                  let valuesRange = Range(match.range(at: 2), in: section)
+            else { return nil }
+            let values = String(section[valuesRange])
+            let valuesNSRange = NSRange(values.startIndex..., in: values)
+            let features = quotedValueRegex.matches(in: values, range: valuesNSRange).compactMap { value -> String? in
+                guard let valueRange = Range(value.range(at: 1), in: values) else { return nil }
+                let feature = String(values[valueRange])
+                return feature.components(separatedBy: "/").first?.replacingOccurrences(of: "dep:", with: "")
+            }
+            return (String(section[nameRange]), features)
+        })
+        var enabled: Set<String> = []
+        func visit(_ feature: String) {
+            guard enabled.insert(feature).inserted else { return }
+            for dependency in featureMap[feature] ?? [] {
+                visit(dependency)
+            }
+        }
+        for feature in featureMap["default"] ?? [] {
+            visit(feature)
+        }
+        return enabled
     }
 
     /// The path (relative to the worktree root) of a project file declaring
@@ -735,6 +784,8 @@ enum RunScriptStackDetector {
         if trimmed.hasPrefix("!") {
             return !swiftConditionIsActive(String(trimmed.dropFirst()))
         }
+        if trimmed == "true" { return true }
+        if trimmed == "false" { return false }
         if let osName = swiftOSConditionName(trimmed) {
             return osName == "macOS" || osName == "Darwin"
         }
@@ -934,8 +985,10 @@ enum RunScriptStackDetector {
     }
 
     private static func goBuildTagIsEnabled(_ tag: Substring) -> Bool {
-        ["darwin", "unix", currentGoArchitecture, "cgo"].contains(tag)
+        ["darwin", "unix", currentGoArchitecture, "cgo"].contains(tag) || goReleaseTags.contains(String(tag))
     }
+
+    private static let goReleaseTags = Set((1...25).map { "go1.\($0)" })
 
     private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
         guard let data = composerJSON.data(using: .utf8),
@@ -993,7 +1046,7 @@ enum RunScriptStackDetector {
         let stripped = stripHashComments(rakefile)
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
         guard let taskRegex = try? NSRegularExpression(
-            pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["'])"#
+            pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)"#
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*\bdo\b"#)
         else { return false }
         var blockStack: [Bool] = []
@@ -1080,6 +1133,38 @@ enum RunScriptStackDetector {
             index = text.index(after: index)
         }
         return stripped
+    }
+
+    private static func cStringLiteralRanges(_ text: String) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var inString = false
+        var isEscaped = false
+        var index = text.startIndex
+        var stringStart = text.startIndex
+        while index < text.endIndex {
+            let char = text[index]
+            if inString {
+                if isEscaped {
+                    isEscaped = false
+                } else if char == "\\" {
+                    isEscaped = true
+                } else if char == "\"" {
+                    inString = false
+                    let end = text.index(after: index)
+                    ranges.append(NSRange(stringStart..<end, in: text))
+                }
+                index = text.index(after: index)
+                continue
+            }
+            if char == "\"" {
+                inString = true
+                stringStart = index
+                index = text.index(after: index)
+                continue
+            }
+            index = text.index(after: index)
+        }
+        return ranges
     }
 
     /// Strips comments and drops trailing commas so `JSONSerialization`

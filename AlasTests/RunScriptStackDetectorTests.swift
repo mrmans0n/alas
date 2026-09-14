@@ -80,6 +80,14 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
     }
 
+    @Test func gradleRecordsTasksSuppliedByTheGroovyPlugin() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("build.gradle", "plugins { id 'groovy' }\n", in: root)
+
+        #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
+    }
+
     @Test func mavenDetectsWrapper() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -271,6 +279,32 @@ struct RunScriptStackDetectorTests {
         try touch("src/bin/gated.rs", "src/bin/plain.rs", in: root)
 
         #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
+    @Test func cargoAllowsRequiredFeaturesEnabledByDefault() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [features]
+            default = ["cli"]
+            cli = []
+
+            [[bin]]
+            name = "tool"
+            path = "src/main.rs"
+            required-features = ["cli"]
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
@@ -482,6 +516,26 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInFalseBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            let package = Package(targets: [
+            #if false
+                .executableTarget(name: "NeverTool"),
+            #else
+                .target(name: "Lib"),
+            #endif
+            ])
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -621,6 +675,15 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
+    @Test func goUsesSatisfiedReleaseBuildTags() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !go1.20\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
     /// A root library with the command living under cmd/ is not itself
     /// runnable — `go run .` fails there even though `go run ./cmd/tool`
     /// would succeed.
@@ -711,6 +774,9 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
+
+        try write("Rakefile", "task test: :prepare do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
     }
 
@@ -1144,6 +1210,23 @@ struct RunScriptStackDetectorTests {
             """
             pub fn build(b: *std.Build) void {
                 // _ = b.step("test", "Run unit tests");
+                _ = b.step("run", "Run the app");
+            }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.zig]?.zigBuildSteps == ["run"])
+    }
+
+    @Test func zigIgnoresBuildStepsInsideStrings() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.zig",
+            """
+            pub fn build(b: *std.Build) void {
+                const help = ".step(\\"test\\", \\"example\\")";
                 _ = b.step("run", "Run the app");
             }
             """,
