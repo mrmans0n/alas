@@ -87,6 +87,8 @@ struct RunScriptStackContext: Equatable, Sendable {
     var xcodeContainer: String?
     /// `spec/` exists, so RSpec is the Ruby test runner.
     var hasSpecDirectory = false
+    /// Gemfile/Rakefile confirm that `bundle exec rake test` has a target.
+    var hasRakeTestTask = false
     var hasRubocopConfig = false
     var hasRequirementsFile = false
     /// Whether pyproject.toml mentions pytest/ruff anywhere — a dependency
@@ -140,6 +142,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         pythonRunner: PythonRunner = .bare,
         xcodeContainer: String? = nil,
         hasSpecDirectory: Bool = false,
+        hasRakeTestTask: Bool = false,
         hasRubocopConfig: Bool = false,
         hasRequirementsFile: Bool = false,
         hasPytest: Bool = false,
@@ -163,6 +166,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.pythonRunner = pythonRunner
         self.xcodeContainer = xcodeContainer
         self.hasSpecDirectory = hasSpecDirectory
+        self.hasRakeTestTask = hasRakeTestTask
         self.hasRubocopConfig = hasRubocopConfig
         self.hasRequirementsFile = hasRequirementsFile
         self.hasPytest = hasPytest
@@ -319,7 +323,7 @@ enum RunScriptStackCatalog {
             let test = context.hasSpecDirectory ? "bundle exec rspec" : "bundle exec rake test"
             return [
                 .init("install", "Install", "bundle install"),
-                .init("test", "Test", test),
+                .init("test", "Test", test, checked: context.hasSpecDirectory || context.hasRakeTestTask),
                 .init("lint", "Lint", "bundle exec rubocop", checked: context.hasRubocopConfig),
             ]
         case .laravel:

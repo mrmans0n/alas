@@ -119,7 +119,12 @@ enum RunScriptStackDetector {
             case .ruby:
                 // Rails owns the Ruby build; only offer plain Bundler otherwise.
                 guard has("Gemfile"), !hasRails else { continue }
-                add(stack, .init(hasSpecDirectory: hasSpec, hasRubocopConfig: hasRubocop))
+                add(stack, .init(
+                    hasSpecDirectory: hasSpec,
+                    hasRakeTestTask: gemfileDeclaresGem(contents("Gemfile") ?? "", gem: "rake")
+                        && rakefileDeclaresTask(contents("Rakefile") ?? contents("rakefile") ?? "", task: "test"),
+                    hasRubocopConfig: hasRubocop
+                ))
             case .laravel:
                 guard hasArtisan else { continue }
                 add(stack)
@@ -473,7 +478,7 @@ enum RunScriptStackDetector {
         // A commented-out `.executableTarget` must not count — Package.swift
         // is Swift source, so `//`/`/* */` comments are as valid here as
         // anywhere else.
-        let uncommented = stripCStyleComments(manifest)
+        let uncommented = stripInactiveSwiftConditionalBranches(stripCStyleComments(manifest))
         let executableProducts = swiftExecutableProducts(in: uncommented)
         let executableTargetNames = swiftExecutableTargetNames(in: uncommented)
         let legacyTargetNames = swiftLegacyExecutableTargetNames(in: uncommented)
@@ -529,6 +534,73 @@ enum RunScriptStackDetector {
         return Set(regex.matches(in: manifest, range: fullRange).compactMap { match in
             Range(match.range(at: 1), in: manifest).map { String(manifest[$0]) }
         })
+    }
+
+    private static func stripInactiveSwiftConditionalBranches(_ swift: String) -> String {
+        struct Frame {
+            let parentActive: Bool
+            var active: Bool
+            var branchTaken: Bool
+        }
+        var output: [String] = []
+        var stack: [Frame] = []
+        func isActive() -> Bool { stack.last?.active ?? true }
+        for line in swift.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#if ") {
+                let parent = isActive()
+                let condition = swiftConditionIsActive(String(trimmed.dropFirst(4)))
+                stack.append(.init(parentActive: parent, active: parent && condition, branchTaken: condition))
+                continue
+            }
+            if trimmed.hasPrefix("#elseif ") {
+                guard !stack.isEmpty else { continue }
+                let condition = swiftConditionIsActive(String(trimmed.dropFirst(8)))
+                var frame = stack.removeLast()
+                frame.active = frame.parentActive && !frame.branchTaken && condition
+                frame.branchTaken = frame.branchTaken || condition
+                stack.append(frame)
+                continue
+            }
+            if trimmed == "#else" {
+                guard !stack.isEmpty else { continue }
+                var frame = stack.removeLast()
+                frame.active = frame.parentActive && !frame.branchTaken
+                frame.branchTaken = true
+                stack.append(frame)
+                continue
+            }
+            if trimmed == "#endif" {
+                _ = stack.popLast()
+                continue
+            }
+            if isActive() {
+                output.append(line)
+            }
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private static func swiftConditionIsActive(_ condition: String) -> Bool {
+        let trimmed = condition.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("!") {
+            return !swiftConditionIsActive(String(trimmed.dropFirst()))
+        }
+        if let osName = swiftOSConditionName(trimmed) {
+            return osName == "macOS" || osName == "Darwin"
+        }
+        // Unknown manifest conditions may depend on SwiftPM settings. Keep
+        // them rather than hiding real executable declarations.
+        return true
+    }
+
+    private static func swiftOSConditionName(_ condition: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"^os\(\s*([A-Za-z0-9_]+)\s*\)$"#) else { return nil }
+        let range = NSRange(condition.startIndex..., in: condition)
+        guard let match = regex.firstMatch(in: condition, range: range),
+              let nameRange = Range(match.range(at: 1), in: condition)
+        else { return nil }
+        return String(condition[nameRange])
     }
 
     private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?) -> Bool {
@@ -670,6 +742,23 @@ enum RunScriptStackDetector {
             if names.contains(target) { return true }
         }
         return false
+    }
+
+    private static func gemfileDeclaresGem(_ gemfile: String, gem: String) -> Bool {
+        let stripped = stripHashComments(gemfile)
+        let escapedGem = NSRegularExpression.escapedPattern(for: gem)
+        return stripped.range(
+            of: #"(?m)^\s*gem\s+["']"# + escapedGem + #"["']"#, options: .regularExpression
+        ) != nil
+    }
+
+    private static func rakefileDeclaresTask(_ rakefile: String, task: String) -> Bool {
+        let stripped = stripHashComments(rakefile)
+        let escapedTask = NSRegularExpression.escapedPattern(for: task)
+        return stripped.range(
+            of: #"(?m)^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["'])"#,
+            options: .regularExpression
+        ) != nil
     }
 
     /// Strips `//` and `/* */` comments, respecting string literals so a URL

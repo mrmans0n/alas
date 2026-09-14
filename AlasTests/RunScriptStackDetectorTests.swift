@@ -333,6 +333,25 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInInactiveOSBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            let package = Package(targets: [
+            #if os(Linux)
+                .executableTarget(name: "LinuxTool"),
+            #endif
+                .target(name: "Lib"),
+            ])
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -493,6 +512,19 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.ruby] == nil)
         #expect(stacks[.rails]?.hasSpecDirectory == true)
         #expect(stacks[.rails]?.hasRubocopConfig == true)
+    }
+
+    @Test func rubyRecordsDeclaredRakeTestTask() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "# task :test\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
     }
 
     @Test func djangoDetectsManageAndSharesPythonRunner() throws {

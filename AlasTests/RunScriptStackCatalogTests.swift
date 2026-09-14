@@ -210,7 +210,10 @@ struct RunScriptStackCatalogTests {
 
     @Test func plainRubyFallsBackToRake() {
         #expect(actions(.ruby)["test"]?.body == "bundle exec rake test")
+        #expect(actions(.ruby)["test"]?.isCheckedByDefault == false)
         #expect(actions(.ruby, .init(hasSpecDirectory: true))["test"]?.body == "bundle exec rspec")
+        #expect(actions(.ruby, .init(hasSpecDirectory: true))["test"]?.isCheckedByDefault == true)
+        #expect(actions(.ruby, .init(hasRakeTestTask: true))["test"]?.isCheckedByDefault == true)
     }
 
     @Test func djangoRunsManageThroughTheProjectRunner() {
