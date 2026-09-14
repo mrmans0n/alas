@@ -97,10 +97,17 @@ enum RunScriptStackDetector {
                 add(stack)
             case .go:
                 guard has("go.mod") else { continue }
-                add(stack)
+                // `cmd/` is the standard convention for a runnable command in
+                // an otherwise-library module; failing that, look for a
+                // `package main` declaration in a root-level source file.
+                let hasMain = isDirectory("cmd")
+                    || names.contains { $0.hasSuffix(".go") && goFileDeclaresPackageMain(contents($0)) }
+                add(stack, .init(hasRunnableTarget: hasMain))
             case .cargo:
                 guard has("Cargo.toml") else { continue }
-                add(stack)
+                let hasBinary = isRegularFile("src/main.rs") || isDirectory("src/bin")
+                    || (contents("Cargo.toml")?.contains("[[bin]]") ?? false)
+                add(stack, .init(hasRunnableTarget: hasBinary))
             case .rails:
                 guard hasRails else { continue }
                 add(stack, .init(hasSpecDirectory: hasSpec, hasRubocopConfig: hasRubocop))
@@ -116,7 +123,10 @@ enum RunScriptStackDetector {
                 add(stack)
             case .swiftPackage:
                 guard has("Package.swift") else { continue }
-                add(stack)
+                let manifest = contents("Package.swift") ?? ""
+                let hasExecutable = manifest.contains(".executableTarget")
+                    || manifest.range(of: #"type:\s*\.executable"#, options: .regularExpression) != nil
+                add(stack, .init(hasRunnableTarget: hasExecutable))
             case .xcode:
                 let workspaces = names.filter { $0.hasSuffix(".xcworkspace") }.sorted()
                 let projects = names.filter { $0.hasSuffix(".xcodeproj") }.sorted()
@@ -139,9 +149,7 @@ enum RunScriptStackDetector {
             case .deno:
                 guard has("deno.json", "deno.jsonc") else { continue }
                 let denoTasks = (contents("deno.json") ?? contents("deno.jsonc")).flatMap { text -> Set<String>? in
-                    guard let data = text.data(using: .utf8),
-                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    else { return nil }
+                    guard let object = parseJSONC(text) else { return nil }
                     return Set((object["tasks"] as? [String: Any])?.keys.map { $0 } ?? [])
                 }
                 add(stack, .init(denoTasks: denoTasks))
@@ -214,6 +222,69 @@ enum RunScriptStackDetector {
         // than any occurrence of the atom: a bare ":phoenix" also matches
         // inside an unrelated string literal, e.g. a package description.
         return stripped.range(of: #"\{\s*:phoenix\s*,"#, options: .regularExpression) != nil
+    }
+
+    /// Whether a Go source file declares `package main`, the marker that
+    /// distinguishes a runnable command from a library package.
+    private static func goFileDeclaresPackageMain(_ contents: String?) -> Bool {
+        guard let contents else { return false }
+        return contents.range(of: #"(?m)^\s*package\s+main\s*$"#, options: .regularExpression) != nil
+    }
+
+    /// Strips `//` and `/* */` comments from JSONC, respecting string
+    /// literals so a URL like `"http://example.com"` isn't mistaken for one,
+    /// then drops trailing commas so `JSONSerialization` accepts the result.
+    private static func parseJSONC(_ text: String) -> [String: Any]? {
+        var stripped = ""
+        stripped.reserveCapacity(text.count)
+        var inString = false
+        var isEscaped = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let char = text[index]
+            if inString {
+                stripped.append(char)
+                if isEscaped {
+                    isEscaped = false
+                } else if char == "\\" {
+                    isEscaped = true
+                } else if char == "\"" {
+                    inString = false
+                }
+                index = text.index(after: index)
+                continue
+            }
+            if char == "\"" {
+                inString = true
+                stripped.append(char)
+                index = text.index(after: index)
+                continue
+            }
+            if char == "/", text.index(after: index) < text.endIndex {
+                let next = text.index(after: index)
+                if text[next] == "/" {
+                    while index < text.endIndex, text[index] != "\n" { index = text.index(after: index) }
+                    continue
+                }
+                if text[next] == "*" {
+                    index = text.index(after: next)
+                    while index < text.endIndex {
+                        let isCloseStar = text[index] == "*" && text.index(after: index) < text.endIndex
+                            && text[text.index(after: index)] == "/"
+                        index = text.index(after: index)
+                        if isCloseStar { index = text.index(after: index); break }
+                    }
+                    continue
+                }
+            }
+            stripped.append(char)
+            index = text.index(after: index)
+        }
+        let withoutTrailingCommas = stripped.replacingOccurrences(
+            of: #",(\s*[}\]])"#, with: "$1", options: .regularExpression
+        )
+        guard let data = withoutTrailingCommas.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     /// Everything before an unquoted `#`. Shared by pubspec.yaml (YAML) and

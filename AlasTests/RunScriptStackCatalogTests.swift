@@ -132,6 +132,17 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.make)["build"]?.body == "make")
     }
 
+    /// "Run" fails outright against a library-only manifest, so it only
+    /// defaults to checked once a runnable target is actually confirmed.
+    @Test func runIsUncheckedWithoutAConfirmedRunnableTarget() {
+        #expect(actions(.go)["run"]?.isCheckedByDefault == false)
+        #expect(actions(.go, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
+        #expect(actions(.cargo)["run"]?.isCheckedByDefault == false)
+        #expect(actions(.cargo, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
+        #expect(actions(.swiftPackage)["run"]?.isCheckedByDefault == false)
+        #expect(actions(.swiftPackage, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
+    }
+
     @Test func oneShotCommandsCloseAndServersKeepThePane() {
         #expect(actions(.cargo)["build"]?.onExit == .close)
         #expect(actions(.cargo)["run"]?.onExit == .keep)

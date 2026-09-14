@@ -92,7 +92,26 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("Cargo.toml", in: root)
-        #expect(detect(root)[.cargo] != nil)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
+    @Test func cargoDetectsARunnableBinaryThreeWays() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Cargo.toml", "[package]\nname = \"lib\"\n", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("src/main.rs"))
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin"), withIntermediateDirectories: true)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("src/bin"))
+        try write("Cargo.toml", "[package]\nname = \"lib\"\n\n[[bin]]\nname = \"tool\"\n", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
@@ -153,8 +172,15 @@ struct RunScriptStackDetectorTests {
     @Test func swiftPackageDetectsManifest() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try touch("Package.swift", in: root)
-        #expect(detect(root)[.swiftPackage] != nil)
+        try write("Package.swift", "let package = Package(name: \"Lib\", targets: [.target(name: \"Lib\")])", in: root)
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+
+        try write(
+            "Package.swift",
+            "let package = Package(name: \"Tool\", targets: [.executableTarget(name: \"Tool\")])",
+            in: root
+        )
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
     }
 
     @Test func xcodePrefersWorkspaceOverProject() throws {
@@ -171,7 +197,24 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        #expect(detect(root)[.go] != nil)
+        #expect(detect(root)[.go]?.hasRunnableTarget == false)
+    }
+
+    @Test func goDetectsARunnableMainTwoWays() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("cmd"), withIntermediateDirectories: true)
+        #expect(detect(root)[.go]?.hasRunnableTarget == true)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("cmd"))
+        #expect(detect(root)[.go]?.hasRunnableTarget == false)
+
+        try write("lib.go", "package mylib\n\nfunc DoThing() {}\n", in: root)
+        #expect(detect(root)[.go]?.hasRunnableTarget == false)
+
+        try write("main.go", "package main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.hasRunnableTarget == true)
     }
 
     @Test func pythonPicksRunnerFromLockfile() throws {
@@ -380,10 +423,28 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.deno]?.denoTasks == ["build"])
     }
 
-    @Test func denoWithUnreadableConfigLeavesTasksUnknown() throws {
+    @Test func denoParsesJSONCCommentsAndTrailingCommas() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try write("deno.jsonc", "// a comment deno.json can't have\n{\"tasks\": {}}", in: root)
+        try write(
+            "deno.jsonc",
+            """
+            // project config
+            {
+              "tasks": {
+                "dev": "deno run --watch main.ts", // dev server
+              },
+            }
+            """,
+            in: root
+        )
+        #expect(detect(root)[.deno]?.denoTasks == ["dev"])
+    }
+
+    @Test func denoWithGenuinelyMalformedConfigLeavesTasksUnknown() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("deno.jsonc", "{ this is not json at all", in: root)
         #expect(detect(root)[.deno]?.denoTasks == nil)
     }
 }

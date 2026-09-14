@@ -33,9 +33,11 @@ struct NewRunScriptDialogTests {
         #expect(NewRunScriptDialog.defaultCheckedActionIDs(start: .blank, detections: [js]).isEmpty)
     }
 
-    @Test func undetectedStackChecksEverything() {
+    @Test func undetectedStackChecksEverythingItCanConfirmWillWork() {
+        // Cargo's "run" opts in only with detected evidence of a runnable
+        // binary, so an undetected pick checks everything else.
         let checked = NewRunScriptDialog.defaultCheckedActionIDs(start: .stack(.cargo), detections: [])
-        #expect(checked == Set(RunScriptStackCatalog.actions(for: .cargo).map(\.id)))
+        #expect(checked == Set(RunScriptStackCatalog.actions(for: .cargo).map(\.id)).subtracting(["run"]))
     }
 
     @Test func confirmTitleReflectsMode() {

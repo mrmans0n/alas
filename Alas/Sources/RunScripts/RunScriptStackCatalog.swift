@@ -95,6 +95,11 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// unchecked rather than assuming a task exists: `deno task dev` has no
     /// generic fallback the way `npm test` does.
     var denoTasks: Set<String>?
+    /// Shared by Go, Cargo, and Swift Package: whether the repository has an
+    /// actual runnable target (a `main` package, a `[[bin]]`/`src/bin`, an
+    /// executable product). Defaults to false — "Run" fails outright against
+    /// a library-only manifest, so it's opt-in rather than assumed.
+    var hasRunnableTarget = false
 
     init(
         hasWrapper: Bool = false,
@@ -108,7 +113,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasRequirementsFile: Bool = false,
         usesFlutter: Bool = true,
         usesPhoenix: Bool = true,
-        denoTasks: Set<String>? = nil
+        denoTasks: Set<String>? = nil,
+        hasRunnableTarget: Bool = false
     ) {
         self.hasWrapper = hasWrapper
         self.kotlinWrapper = kotlinWrapper
@@ -122,6 +128,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
+        self.hasRunnableTarget = hasRunnableTarget
     }
 }
 
@@ -235,7 +242,7 @@ enum RunScriptStackCatalog {
                 .init("build", "Build", "go build ./..."),
                 .init("test", "Test", "go test ./..."),
                 .init("vet", "Vet", "go vet ./..."),
-                .init("run", "Run", "go run .", onExit: .keep),
+                .init("run", "Run", "go run .", checked: context.hasRunnableTarget, onExit: .keep),
             ]
         case .cargo:
             return [
@@ -243,7 +250,7 @@ enum RunScriptStackCatalog {
                 .init("test", "Test", "cargo test"),
                 .init("clippy", "Clippy", "cargo clippy --all-targets -- -D warnings"),
                 .init("format-check", "Format check", "cargo fmt --all --check"),
-                .init("run", "Run", "cargo run", onExit: .keep),
+                .init("run", "Run", "cargo run", checked: context.hasRunnableTarget, onExit: .keep),
                 .init("clean", "Clean", "cargo clean"),
             ]
         case .rails:
@@ -278,7 +285,7 @@ enum RunScriptStackCatalog {
             return [
                 .init("build", "Build", "swift build"),
                 .init("test", "Test", "swift test"),
-                .init("run", "Run", "swift run", onExit: .keep),
+                .init("run", "Run", "swift run", checked: context.hasRunnableTarget, onExit: .keep),
             ]
         case .xcode:
             let container = context.xcodeContainer ?? "App.xcodeproj"
