@@ -110,7 +110,7 @@ import Testing
 
         let model = WorkspaceCheckoutDetailModel(checkout: checkout)
 
-        #expect(model.diagnostics == ["Setup script failed"])
+        #expect(model.diagnostics.map(\.message) == ["Setup script failed"])
         #expect(model.status == .needsAttention("Needs Attention"))
     }
 
@@ -121,6 +121,42 @@ import Testing
         #expect(WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: deleted, orderedCheckoutIDs: [first, deleted, third]) == third)
         #expect(WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: third, orderedCheckoutIDs: [first, deleted, third]) == deleted)
         #expect(WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: first, orderedCheckoutIDs: [first]) == nil)
+    }
+
+    @Test func unavailableMembersNeverClaimToBeReady() {
+        let checkout = checkout(members: [
+            member(name: "Missing", availability: .missing, checkpoint: .setupComplete),
+            member(name: "Remote", availability: .unavailable, checkpoint: .setupComplete),
+            member(name: "Replaced", availability: .identityConflict, checkpoint: .setupComplete),
+            member(name: "Deleted", availability: .explicitlyDeleted, checkpoint: .setupComplete),
+        ])
+        let rows = WorkspaceCheckoutDetailModel(checkout: checkout).memberRows
+        #expect(rows.map(\.status) == [.missing, .unavailable, .identityConflict, .explicitlyDeleted])
+        #expect(rows.allSatisfy { !$0.detail.contains("Ready") })
+        #expect(rows[0].detail.contains("not found"))
+        #expect(rows[1].detail.contains("Could not access"))
+    }
+
+    @Test func preservesDiagnosticIdentitySeverityAndErrorDetails() {
+        var checkout = checkout(members: [])
+        checkout.diagnostics = [
+            .init(severity: .warning, message: "Using cached main"),
+            .init(severity: .error, message: "Setup failed", detail: "tool: command not found"),
+            .init(severity: .error, message: "Setup failed", detail: "Permission denied"),
+        ]
+        let diagnostics = WorkspaceCheckoutDetailModel(checkout: checkout).diagnostics
+        #expect(diagnostics == checkout.diagnostics)
+        #expect(Set(diagnostics.map(\.id)).count == 3)
+    }
+
+    @Test func hidesMemberMutationActionsWhileCheckoutIsBusy() {
+        for operation in [WorkspaceCheckoutOperation.creating, .repairing, .deleting, .archiving, .cleaning] {
+            let checkout = checkout(operation: operation, members: [
+                member(name: "Failed", availability: .available, checkpoint: .failed),
+                member(name: "Ready", availability: .available, checkpoint: .setupComplete),
+            ])
+            #expect(WorkspaceCheckoutDetailModel(checkout: checkout).memberRows.allSatisfy { $0.actions.isEmpty })
+        }
     }
 
     private func checkout(

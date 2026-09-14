@@ -50,6 +50,7 @@ enum WorkspaceCheckoutMemberPresentationStatus: Equatable, Sendable {
     case ready
     case creating
     case missing
+    case unavailable
     case identityConflict
     case needsAttention
     case explicitlyDeleted
@@ -123,8 +124,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             : nil
     }
 
-    var diagnostics: [String] {
-        checkout.diagnostics.map(\.message)
+    var diagnostics: [WorkspaceDiagnostic] {
+        checkout.diagnostics
     }
 
     var primaryActions: [WorkspaceCheckoutAction] {
@@ -167,7 +168,7 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 title: member.fallbackProjectName,
                 detail: detail(for: member),
                 status: status(for: member),
-                actions: checkout.archivedAt == nil ? actions(for: member) : []
+                actions: checkout.archivedAt == nil && checkout.operation == .idle ? actions(for: member) : []
             )
         }
     }
@@ -214,8 +215,10 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return .creating
         case .pending:
             return .pending
-        case .missing, .unavailable:
+        case .missing:
             return .missing
+        case .unavailable:
+            return .unavailable
         case .identityConflict:
             return .identityConflict
         case .explicitlyDeleted:
@@ -224,6 +227,13 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
     }
 
     private func detail(for member: WorkspaceCheckoutMember) -> String {
+        switch member.availability {
+        case .missing: return "Worktree not found at \(member.worktreePath)"
+        case .unavailable: return "Could not access \(member.worktreePath)"
+        case .identityConflict: return "The worktree at \(member.worktreePath) does not match this checkout."
+        case .explicitlyDeleted: return "Worktree removed from \(member.worktreePath)"
+        case .available, .pending: break
+        }
         switch member.checkpoint {
         case .notStarted:
             return "Waiting to start"

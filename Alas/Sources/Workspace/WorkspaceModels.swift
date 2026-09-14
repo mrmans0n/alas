@@ -366,12 +366,22 @@ struct WorkspaceDiagnostic: Codable, Equatable, Identifiable, Sendable {
     var severity: WorkspaceDiagnosticSeverity
     var message: String
     var createdAt: Date
+    var memberID: UUID?
+    var detail: String?
 
-    init(id: UUID = UUID(), severity: WorkspaceDiagnosticSeverity, message: String, createdAt: Date = .now) {
+    init(id: UUID = UUID(), severity: WorkspaceDiagnosticSeverity, message: String, createdAt: Date = .now, memberID: UUID? = nil, detail: String? = nil) {
         self.id = id
         self.severity = severity
         self.message = message
         self.createdAt = createdAt
+        self.memberID = memberID
+        self.detail = detail
+    }
+
+    func isCreationFailure(for member: WorkspaceCheckoutMember) -> Bool {
+        severity == .error && (memberID == nil || memberID == member.id)
+            && (message == "Workspace creation failed for \(member.fallbackProjectName)."
+                || message == "Workspace setup failed for \(member.fallbackProjectName).")
     }
 }
 

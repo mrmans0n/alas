@@ -58,6 +58,8 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await git.createdProjectIDs.count == 4)
         let completed = await store.checkout(id: checkout.id)
         #expect(completed?.members.first?.checkpoint == .failed)
+        #expect(completed?.diagnostics.last?.memberID == completed?.members.first?.id)
+        #expect(completed?.diagnostics.last?.detail?.isEmpty == false)
         #expect(completed?.members.dropFirst().allSatisfy { $0.checkpoint == .setupComplete } == true)
         #expect(completed?.members.dropFirst().allSatisfy { $0.gitLineageID == "lineage-\($0.projectID)" } == true)
     }
@@ -676,6 +678,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
 
         let repaired = try #require(await store.checkout(id: checkout.id))
         #expect(repaired.members[0].checkpoint == .setupComplete)
+        #expect(repaired.diagnostics.isEmpty)
         #expect(repaired.members[0].gitLineageID == expectedLineage)
         #expect(await git.createCount == 1)
         #expect(await git.existingLineageAllowedRecording == false)

@@ -2299,10 +2299,10 @@ final class AppState {
                 configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
             )
         } catch {
-            await workspacesManager.refreshCheckoutSnapshots()
+            await workspacesManager.refreshCheckoutSnapshots(reconciling: plan.checkoutID)
             throw error
         }
-        await workspacesManager.refreshCheckoutSnapshots()
+        await workspacesManager.refreshCheckoutSnapshots(reconciling: plan.checkoutID)
         guard workspaceMutationAvailable else {
             return try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
         }
@@ -2317,7 +2317,7 @@ final class AppState {
     }
 
     private func applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: UUID) async {
-        await workspacesManager.refreshCheckoutSnapshots()
+        await workspacesManager.refreshCheckoutSnapshots(reconciling: checkoutID)
         guard let checkout = workspacesManager.checkout(id: checkoutID),
               checkout.archivedAt == nil,
               checkout.operation == .idle,
@@ -2327,7 +2327,7 @@ final class AppState {
         else { return }
 
         await refreshWorkspaceCheckoutMemberProjects(checkout)
-        await workspacesManager.refreshCheckoutSnapshots()
+        await workspacesManager.refreshCheckoutSnapshots(reconciling: checkoutID)
         selectWorkspaceCheckout(id: checkout.id)
         switch preference.launcherMode ?? .terminal {
         case .terminal:

@@ -243,6 +243,43 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id)?.members[0].checkpoint == .setupComplete)
     }
 
+    @Test(arguments: [false, true])
+    func retryPreservesFailureDetailsAndClearsOnlyResolvedMemberErrors(hasDuplicateName: Bool) async throws {
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
+        let member = fixture.checkout.members[0]
+        let warning = WorkspaceDiagnostic(severity: .warning, message: "Using a cached reference", createdAt: .distantPast)
+        let unrelated = WorkspaceDiagnostic(severity: .error, message: "Workspace setup failed for A.", createdAt: .distantPast, memberID: UUID())
+        let legacy = WorkspaceDiagnostic(severity: .error, message: "Workspace creation failed for A.", createdAt: .distantPast)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].diagnostics = [warning, unrelated, legacy]
+            if hasDuplicateName {
+                var sibling = member
+                sibling.id = UUID()
+                sibling.plan?.checkoutMemberID = sibling.id
+                state.checkouts[0].members.append(sibling)
+            }
+        }
+        let failedCoordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store, git: RepairGit(), scripts: FailingRepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(), lifecycle: RepairLifecycle(result: .exactLineage("lineage-a"))
+        )
+        let failed = try await failedCoordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: member.id)
+        let diagnostic = try #require(failed.diagnostics.last)
+        #expect(diagnostic.memberID == member.id)
+        #expect(diagnostic.message == "Workspace setup failed for A.")
+        #expect(diagnostic.detail?.contains("tool: command not found") == true)
+
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store, git: RepairGit(), scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(), lifecycle: RepairLifecycle(result: .exactLineage("lineage-a"))
+        )
+        let recovered = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: member.id)
+        #expect(recovered.members[0].checkpoint == .setupComplete)
+        let retained = hasDuplicateName ? [warning, unrelated, legacy] : [warning, unrelated]
+        #expect(recovered.diagnostics == retained)
+        #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id)?.diagnostics == retained)
+    }
+
     @Test func retrySetupDoesNotRunInheritedGlobalSetupTwice() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
         let member = fixture.checkout.members[0]
@@ -990,6 +1027,12 @@ private actor RepairScriptRunner: WorkspaceScriptRunning {
     func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {
         paths.append(operation.worktreePath)
         scripts.append(operation.script)
+    }
+}
+
+private struct FailingRepairScriptRunner: WorkspaceScriptRunning {
+    func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {
+        throw WorktreeService.WorktreeError.gitFailed("tool: command not found")
     }
 }
 

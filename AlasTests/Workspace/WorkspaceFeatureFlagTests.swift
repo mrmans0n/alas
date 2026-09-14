@@ -2,6 +2,15 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor RecordingWorkspaceProgressObserver: WorkspaceCheckoutObserving {
+    private(set) var checkoutIDs: [UUID] = []
+
+    func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+        checkoutIDs.append(checkout.id)
+        return .missing
+    }
+}
+
 @Suite("Workspace feature flag")
 @MainActor
 struct WorkspaceFeatureFlagTests {
@@ -48,6 +57,43 @@ struct WorkspaceFeatureFlagTests {
             return
         }
         #expect(persistedState.spaceLayouts == [])
+    }
+
+    @Test func progressRefreshOnlyInspectsTheRequestedCheckout() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let store = WorkspaceStore(url: url)
+        let member = WorkspaceCheckoutMember(
+            workspaceMemberID: UUID(), projectID: "project", fallbackProjectName: "Project",
+            fallbackRepositoryRoot: "/repo", worktreePath: "/checkout/project",
+            availability: .pending, checkpoint: .planPersisted
+        )
+        let local = WorkspaceCheckout(
+            workspaceID: UUID(), fallbackWorkspaceName: "Local", executionLocation: .local,
+            branch: "feature", rootPath: "/checkout", members: [member]
+        )
+        let remote = WorkspaceCheckout(
+            workspaceID: UUID(), fallbackWorkspaceName: "Remote", executionLocation: .ssh("offline"),
+            branch: "other", rootPath: "/other", members: [member]
+        )
+        try await store.checkpoint(.init(checkouts: [local, remote]))
+        let observer = RecordingWorkspaceProgressObserver()
+        let manager = WorkspacesManager(bridge: .init(workspaceStore: store), observer: observer)
+        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        let remoteReport = manager.checkoutReconciliations[remote.id]
+        try await store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .setupComplete
+        }
+
+        await manager.refreshCheckoutSnapshots(reconciling: local.id)
+
+        #expect(await observer.checkoutIDs == [local.id, remote.id, local.id])
+        #expect(manager.checkout(id: local.id)?.members[0].checkpoint == .setupComplete)
+        #expect(manager.checkoutReconciliations[remote.id] == remoteReport)
+        await manager.setEnabled(false, spacesFile: emptySpacesFile())
+        await manager.refreshCheckoutSnapshots(reconciling: local.id)
+        #expect(await observer.checkoutIDs.count == 3)
+        #expect(manager.loadState == .notLoaded)
     }
 
     @Test func appStateDefaultBridgeUsesTheInjectedWorkspaceStore() async throws {

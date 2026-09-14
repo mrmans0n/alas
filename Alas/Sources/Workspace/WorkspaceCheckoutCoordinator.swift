@@ -852,7 +852,7 @@ actor WorkspaceCheckoutCoordinator {
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
-                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
+                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName).", memberID: member.id, detail: error.localizedDescription))
             }
         }
         await finishScopedRepair(checkoutID: checkoutID, memberIDs: [memberID])
@@ -1109,7 +1109,7 @@ actor WorkspaceCheckoutCoordinator {
                         else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                         state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
                         state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
-                        state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
+                        state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName).", memberID: plan.checkoutMemberID, detail: error.localizedDescription))
                     }
                     await refreshManifestIfPresent(checkoutID: checkout.id)
                 }
@@ -1494,7 +1494,7 @@ actor WorkspaceCheckoutCoordinator {
                 }
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
-                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
+                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName).", memberID: plan.checkoutMemberID, detail: error.localizedDescription))
             }
             await refreshManifestIfPresent(checkoutID: checkout.id)
         }
@@ -1510,7 +1510,7 @@ actor WorkspaceCheckoutCoordinator {
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
-                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
+                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName).", memberID: plan.checkoutMemberID, detail: error.localizedDescription))
             }
             await refreshManifestIfPresent(checkoutID: checkout.id)
         }
@@ -1593,6 +1593,15 @@ actor WorkspaceCheckoutCoordinator {
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 update(&state.checkouts[checkoutIndex].members[memberIndex])
+                let member = state.checkouts[checkoutIndex].members[memberIndex]
+                if member.checkpoint == .setupComplete && member.availability == .available {
+                    let hasUniqueName = !state.checkouts[checkoutIndex].members.contains {
+                        $0.id != member.id && $0.fallbackProjectName == member.fallbackProjectName
+                    }
+                    state.checkouts[checkoutIndex].diagnostics.removeAll {
+                        ($0.memberID != nil || hasUniqueName) && $0.isCreationFailure(for: member)
+                    }
+                }
             }
             await refreshManifestIfPresent(checkoutID: checkoutID)
         } catch WorkspaceStoreError.recoveryRequired {

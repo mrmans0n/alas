@@ -11,14 +11,11 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var editingWorkspace: Workspace?
     @State private var creatingCheckout: Workspace?
     @State private var inspectedCheckout: WorkspaceCheckout?
-    @State private var inspectorGeneration = UUID()
     @State private var collapsedWorkspaces: Set<UUID> = []
     @State private var expandedCheckouts: Set<UUID> = []
     @Environment(\.theme) private var theme
     @State private var lifecycleError: String?
-    @State private var deletionConfirmation: PendingDeletionConfirmation?
     @State private var workspaceDeletionConfirmation: PendingWorkspaceDefinitionDeletion?
-    @State private var repairPlan: PendingRepairPlan?
     @State private var hoveringWorkspaceID: UUID?
     @State private var plusHoveringWorkspaceID: UUID?
 
@@ -67,39 +64,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         }
         .sheet(item: $editingWorkspace) { workspace in EditWorkspaceDialog(state: state, workspace: workspace, presented: Binding(get: { editingWorkspace != nil }, set: { if !$0 { editingWorkspace = nil } })) }
         .sheet(item: $creatingCheckout) { workspace in CreateWorkspaceCheckoutDialog(state: state, workspace: workspace, presented: Binding(get: { creatingCheckout != nil }, set: { if !$0 { creatingCheckout = nil } })) }
-        .sheet(item: $inspectedCheckout) { snapshot in
-            let checkout = state.workspacesManager.checkout(id: snapshot.id) ?? snapshot
-            WorkspaceCheckoutDetailView(
-                model: Self.detailModel(for: checkout, rollupBuilder: state.workspaceMemberReviewRollupBuilder(for: checkout)),
-                perform: { action, memberID in perform(action, checkoutID: checkout.id, memberID: memberID) },
-                openReview: { action in
-                    inspectedCheckout = nil
-                    state.openWorkspaceReview(action)
-                }
-            )
-            .sheet(item: $deletionConfirmation) { pending in
-                WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
-                    confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
-                }
-                .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
-            }
-            .sheet(item: $repairPlan) { pending in
-                WorkspaceRepairPlanSheet(model: pending.model) { candidate in
-                    useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
-                }
-                .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
-            }
-            .modifier(WorkspaceLifecycleErrorAlert(
-                error: $lifecycleError, enabled: deletionConfirmation == nil && repairPlan == nil
-            ))
+        .sheet(item: $inspectedCheckout) { checkout in
+            WorkspaceCheckoutInspector(state: state, checkout: checkout)
         }
-        .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError, enabled: inspectedCheckout == nil))
-        .onChange(of: inspectedCheckout?.id) { _, _ in
-            inspectorGeneration = UUID()
-            deletionConfirmation = nil
-            repairPlan = nil
-            lifecycleError = nil
-        }
+        .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
         .confirmationDialog(
             "Delete Workspace?",
             isPresented: Binding(
@@ -298,6 +266,55 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         .padding(.horizontal, 6)
     }
 
+    private func deleteWorkspace(id: UUID) {
+        Task { @MainActor in
+            do {
+                try await state.deleteWorkspaceDefinition(id: id)
+                workspaceDeletionConfirmation = nil
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct WorkspaceCheckoutInspector: View {
+    @Bindable var state: AppState
+    let checkout: WorkspaceCheckout
+    @State private var inspectorGeneration = UUID()
+    @State private var lifecycleError: String?
+    @State private var deletionConfirmation: PendingDeletionConfirmation?
+    @State private var repairPlan: PendingRepairPlan?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let current = state.workspacesManager.checkout(id: checkout.id) ?? checkout
+        WorkspaceCheckoutDetailView(
+            model: Self.detailModel(for: current, rollupBuilder: state.workspaceMemberReviewRollupBuilder(for: current)),
+            perform: { action, memberID in perform(action, checkoutID: checkout.id, memberID: memberID) },
+            openReview: { action in
+                dismiss()
+                state.openWorkspaceReview(action)
+            }
+        )
+        .sheet(item: $deletionConfirmation) { pending in
+            WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
+                confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
+            }
+            .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
+        }
+        .sheet(item: $repairPlan) { pending in
+            WorkspaceRepairPlanSheet(model: pending.model) { candidate in
+                useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
+            }
+            .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
+        }
+        .modifier(WorkspaceLifecycleErrorAlert(
+            error: $lifecycleError, enabled: deletionConfirmation == nil && repairPlan == nil
+        ))
+        .onDisappear { inspectorGeneration = UUID() }
+    }
+
     private func perform(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID, memberID: UUID?) {
         let generation = inspectorGeneration
         Task { @MainActor in
@@ -322,12 +339,16 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
                     } else {
                         try await state.forgetWorkspaceCheckout(id: checkoutID)
-                        if isCurrentInspector(checkoutID, generation: generation) { inspectedCheckout = nil }
+                        if isCurrentInspector(checkoutID, generation: generation) { dismiss() }
                     }
                 case .stopAfterCurrentOperations:
                     try await state.stopWorkspaceCheckoutAfterCurrentOperations(id: checkoutID)
                 case .resumeCreation:
-                    _ = try await state.resumeWorkspaceCheckoutCreation(id: checkoutID)
+                    if let memberID {
+                        _ = try await state.resumeWorkspaceCheckoutMemberCreation(checkoutID: checkoutID, memberID: memberID)
+                    } else {
+                        _ = try await state.resumeWorkspaceCheckoutCreation(id: checkoutID)
+                    }
                 case .recreateMember:
                     if let memberID {
                         _ = try await state.resumeWorkspaceCheckoutMemberCreation(checkoutID: checkoutID, memberID: memberID)
@@ -363,7 +384,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     }
 
     private func isCurrentInspector(_ checkoutID: UUID, generation: UUID) -> Bool {
-        inspectedCheckout?.id == checkoutID && inspectorGeneration == generation
+        checkout.id == checkoutID && inspectorGeneration == generation
     }
 
     static func detailModel(for checkout: WorkspaceCheckout, rollupBuilder: MemberReviewRollupBuilder = .init()) -> WorkspaceCheckoutDetailModel {
@@ -388,7 +409,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     }
                 case .forgetCheckout(let confirmedPreserveArtifacts):
                     try await state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
-                    if isCurrentInspector(checkoutID, generation: generation) { inspectedCheckout = nil }
+                    if isCurrentInspector(checkoutID, generation: generation) { dismiss() }
                 }
                 if deletionConfirmation?.id == confirmationID { deletionConfirmation = nil }
             } catch {
@@ -407,17 +428,6 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 if repairPlan?.id == repairID { repairPlan = nil }
             } catch {
                 if isCurrentInspector(checkoutID, generation: generation) { lifecycleError = error.localizedDescription }
-            }
-        }
-    }
-
-    private func deleteWorkspace(id: UUID) {
-        Task { @MainActor in
-            do {
-                try await state.deleteWorkspaceDefinition(id: id)
-                workspaceDeletionConfirmation = nil
-            } catch {
-                lifecycleError = error.localizedDescription
             }
         }
     }

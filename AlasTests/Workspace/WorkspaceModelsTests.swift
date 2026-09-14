@@ -4,6 +4,19 @@ import Testing
 
 @Suite("Workspace models")
 struct WorkspaceModelsTests {
+    @Test func diagnosticsDecodeOlderRecordsAndRoundTripFailureDetails() throws {
+        let legacy = Data("""
+            {"id":"11111111-1111-1111-1111-111111111111","severity":"warning","message":"Cached ref","createdAt":0}
+            """.utf8)
+        var diagnostic = try JSONDecoder().decode(WorkspaceDiagnostic.self, from: legacy)
+        #expect(diagnostic.memberID == nil)
+        #expect(diagnostic.detail == nil)
+        diagnostic.memberID = UUID()
+        diagnostic.detail = "Permission denied"
+        let data = try JSONEncoder().encode(diagnostic)
+        #expect(try JSONDecoder().decode(WorkspaceDiagnostic.self, from: data) == diagnostic)
+    }
+
     @Test func stateRoundTripsStableWorkspaceAndCheckoutIDs() throws {
         let workspaceID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let memberID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!

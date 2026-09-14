@@ -98,6 +98,24 @@ struct WorkspacePresentationTests {
         #expect(size.height < 160)
     }
 
+    @Test func checkoutRecoveryFitsTheInspectorWithWarningsAndErrorDetails() throws {
+        var checkout = checkout(memberCount: 3)
+        checkout.members[0].checkpoint = .failed
+        checkout.members[1].availability = .missing
+        checkout.members[2].availability = .unavailable
+        checkout.diagnostics = [
+            .init(severity: .warning, message: "Using cached reference main."),
+            .init(severity: .error, message: "Workspace setup failed for Repository 0.",
+                  memberID: checkout.members[0].id, detail: "zsh: command not found: project-setup\nInstall project-setup and retry."),
+        ]
+        let size = try render(
+            WorkspaceCheckoutDetailView(model: .init(checkout: checkout)),
+            named: "workspace-checkout-recovery"
+        )
+        #expect(size.width == 560)
+        #expect(size.height < 640)
+    }
+
     private func render<V: View>(_ view: V, named name: String) throws -> CGSize {
         let theme = try ThemeStore().current
         let controller = NSHostingController(rootView: view.environment(\.theme, theme).background(theme.color("bg-1")))

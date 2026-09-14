@@ -14,6 +14,7 @@ enum WorkspaceLoadState: Equatable {
 @MainActor
 final class WorkspacesManager {
     private let bridge: WorkspaceSpacePersistenceBridge
+    private let observer: any WorkspaceCheckoutObserving
     private(set) var loadState: WorkspaceLoadState = .notLoaded
     private(set) var checkoutReconciliations: [UUID: WorkspaceCheckoutReconciliation] = [:]
 
@@ -47,8 +48,9 @@ final class WorkspacesManager {
             .map(presentedCheckout)
     }
 
-    init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()) {
+    init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge(), observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()) {
         self.bridge = bridge
+        self.observer = observer
     }
 
     /// Enables or disables the preview. Disabling is intentionally a pure
@@ -86,15 +88,26 @@ final class WorkspacesManager {
         }
     }
 
-    /// Lifecycle operations mutate through the coordinator's store. Refresh
-    /// the read-only navigation snapshot afterwards so archived checkouts
-    /// disappear immediately instead of remaining selectable from stale data.
-    func refreshCheckoutSnapshots() async {
-        guard case .loaded = loadState else { return }
+    /// Creation progress only needs to inspect the checkout being created.
+    /// Keep observations for unrelated, unchanged snapshots without contacting their hosts.
+    func refreshCheckoutSnapshots(reconciling checkoutID: UUID? = nil) async {
+        guard case .loaded(let previous) = loadState else { return }
         switch await bridge.load() {
         case .loaded(let state):
+            guard canMutate else { return }
             loadState = .loaded(state)
-            checkoutReconciliations = await reconcileCheckouts(in: state)
+            if let checkoutID {
+                let previousByID = Dictionary(uniqueKeysWithValues: previous.checkouts.map { ($0.id, $0) })
+                let unchangedIDs = Set(state.checkouts.filter { previousByID[$0.id] == $0 }.map(\.id))
+                checkoutReconciliations = checkoutReconciliations.filter { unchangedIDs.contains($0.key) }
+                let report = try? await bridge.reconcileCheckout(id: checkoutID, observer: observer)
+                guard canMutate else { return }
+                checkoutReconciliations[checkoutID] = report
+            } else {
+                let reports = await reconcileCheckouts(in: state)
+                guard canMutate else { return }
+                checkoutReconciliations = reports
+            }
         case .unreadable(let recovery):
             loadState = .unreadable(recovery)
             checkoutReconciliations = [:]
@@ -107,7 +120,7 @@ final class WorkspacesManager {
     private func reconcileCheckouts(in state: WorkspaceStateFile) async -> [UUID: WorkspaceCheckoutReconciliation] {
         var reports: [UUID: WorkspaceCheckoutReconciliation] = [:]
         for checkout in state.checkouts {
-            if let report = try? await bridge.reconcileCheckout(id: checkout.id) {
+            if let report = try? await bridge.reconcileCheckout(id: checkout.id, observer: observer) {
                 reports[checkout.id] = report
             }
         }
