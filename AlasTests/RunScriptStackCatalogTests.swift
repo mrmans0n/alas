@@ -1,0 +1,194 @@
+import Foundation
+import Testing
+@testable import Alas
+
+struct RunScriptStackCatalogTests {
+    private func actions(_ stack: RunScriptStack, _ context: RunScriptStackContext = .init()) -> [String: RunScriptStackAction] {
+        Dictionary(uniqueKeysWithValues: RunScriptStackCatalog.actions(for: stack, context: context).map { ($0.id, $0) })
+    }
+
+    @Test(arguments: RunScriptStack.allCases)
+    func everyStackOffersDistinctRunnableActions(stack: RunScriptStack) throws {
+        let actions = RunScriptStackCatalog.actions(for: stack)
+        #expect(!actions.isEmpty)
+        #expect(Set(actions.map(\.id)).count == actions.count)
+        #expect(Set(actions.map(\.displayName)).count == actions.count)
+        #expect(actions.contains { $0.isCheckedByDefault })
+        for action in actions {
+            #expect(!action.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            let contents = RunScriptTemplate.contents(
+                name: action.displayName, onExit: action.onExit, body: action.body, endpoint: action.endpoint
+            )
+            let meta = RunScriptMetadata.parse(fileName: RunScriptTemplate.fileName(for: action.displayName), contents: contents)
+            #expect(meta.displayName == action.displayName)
+            #expect(meta.onExit == action.onExit)
+            #expect(meta.cwd == nil)
+            if let endpoint = action.endpoint {
+                #expect(meta.endpoint?.absoluteString == endpoint)
+                #expect(action.onExit == .keep, "\(stack) \(action.id) serves an endpoint but closes its pane")
+            } else {
+                #expect(meta.endpoint == nil, "\(stack) \(action.id) must not declare an endpoint by accident")
+            }
+            #expect(contents.contains("set -euo pipefail\n"))
+            let syntaxOK = try zshSyntaxIsValid(contents)
+            #expect(syntaxOK, "\(stack) \(action.id) failed zsh -n")
+        }
+    }
+
+    @Test func gradlePrefersWrapper() {
+        #expect(actions(.gradle, .init(hasWrapper: true))["build"]?.body == "./gradlew assemble")
+        #expect(actions(.gradle)["build"]?.body == "gradle assemble")
+        #expect(actions(.gradle)["test"]?.body == "gradle test")
+    }
+
+    @Test func mavenPrefersWrapperAndRunsBatchMode() {
+        #expect(actions(.maven, .init(hasWrapper: true))["test"]?.body == "./mvnw -B test")
+        #expect(actions(.maven)["build"]?.body == "mvn -B -DskipTests package")
+    }
+
+    @Test func kotlinToolchainPrefersWrapper() {
+        #expect(actions(.kotlin, .init(hasWrapper: true))["build"]?.body == "./kotlin build")
+        #expect(actions(.kotlin)["run"]?.body == "kotlin run")
+    }
+
+    @Test func cargoClippyDeniesWarnings() {
+        #expect(actions(.cargo)["clippy"]?.body == "cargo clippy --all-targets -- -D warnings")
+        #expect(actions(.cargo)["format-check"]?.body == "cargo fmt --all --check")
+    }
+
+    @Test func javascriptUsesDetectedPackageManager() {
+        #expect(actions(.javascript, .init(packageManager: .pnpm))["build"]?.body == "pnpm run build")
+        #expect(actions(.javascript, .init(packageManager: .bun))["test"]?.body == "bun run test")
+        #expect(actions(.javascript)["install"]?.body == "npm install")
+        #expect(actions(.javascript, .init(packageManager: .yarn))["install"]?.body == "yarn install")
+    }
+
+    @Test func javascriptDevHintsAtEndpointWithoutDeclaringOne() {
+        let dev = actions(.javascript, .init(packageManager: .pnpm))["dev"]
+        #expect(dev?.body.hasSuffix("pnpm run dev") == true)
+        #expect(dev?.body.contains("alas-url") == true)
+    }
+
+    @Test func javascriptChecksOnlyScriptsThePackageDeclares() {
+        let known = actions(.javascript, .init(packageScripts: ["build", "lint"]))
+        #expect(known["install"]?.isCheckedByDefault == true)
+        #expect(known["build"]?.isCheckedByDefault == true)
+        #expect(known["lint"]?.isCheckedByDefault == true)
+        #expect(known["test"]?.isCheckedByDefault == false)
+        #expect(known["dev"]?.isCheckedByDefault == false)
+
+        let unchecked = actions(.javascript).values.filter { !$0.isCheckedByDefault }
+        #expect(unchecked.isEmpty)
+    }
+
+    @Test func cmakeConfiguresBuildsAndTestsInBuildDirectory() {
+        let cmake = actions(.cmake)
+        #expect(cmake["configure"]?.body == "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug")
+        #expect(cmake["build"]?.body == "cmake --build build")
+        #expect(cmake["test"]?.body == "ctest --test-dir build --output-on-failure")
+    }
+
+    @Test func xcodeUsesDetectedContainerAndScheme() {
+        let workspace = actions(.xcode, .init(xcodeContainer: "Alas.xcworkspace"))["build"]?.body ?? ""
+        #expect(workspace.contains("-workspace Alas.xcworkspace -scheme Alas"))
+        let project = actions(.xcode, .init(xcodeContainer: "Alas.xcodeproj"))["test"]?.body ?? ""
+        #expect(project.contains("-project Alas.xcodeproj -scheme Alas"))
+        #expect(project.contains("-destination 'platform=macOS'"))
+        let fallback = actions(.xcode)["build"]?.body ?? ""
+        #expect(fallback.contains("-project App.xcodeproj -scheme App"))
+    }
+
+    @Test func pythonUsesDetectedRunner() {
+        #expect(actions(.python, .init(pythonRunner: .uv))["test"]?.body == "uv run pytest")
+        #expect(actions(.python, .init(pythonRunner: .uv))["install"]?.body == "uv sync")
+        #expect(actions(.python, .init(pythonRunner: .poetry))["lint"]?.body == "poetry run ruff check .")
+        #expect(actions(.python, .init(pythonRunner: .poetry))["install"]?.body == "poetry install")
+        #expect(actions(.python)["test"]?.body == "pytest")
+    }
+
+    @Test func goAndSwiftPackageCoverWholeModule() {
+        #expect(actions(.go)["test"]?.body == "go test ./...")
+        #expect(actions(.swiftPackage)["test"]?.body == "swift test")
+        #expect(actions(.make)["build"]?.body == "make")
+    }
+
+    @Test func oneShotCommandsCloseAndServersKeepThePane() {
+        #expect(actions(.cargo)["build"]?.onExit == .close)
+        #expect(actions(.cargo)["run"]?.onExit == .keep)
+        #expect(actions(.javascript)["dev"]?.onExit == .keep)
+        #expect(actions(.javascript)["install"]?.onExit == .close)
+        #expect(actions(.compose)["up"]?.onExit == .keep)
+        #expect(actions(.compose)["down"]?.onExit == .close)
+    }
+
+    @Test func railsDeclaresItsPortAndPicksTheTestRunner() {
+        let rails = actions(.rails)
+        #expect(rails["dev"]?.body == "bin/rails server")
+        #expect(rails["dev"]?.endpoint == "http://localhost:3000")
+        #expect(rails["test"]?.body == "bin/rails test")
+        #expect(rails["lint"]?.isCheckedByDefault == false)
+        let rspec = actions(.rails, .init(hasSpecDirectory: true, hasRubocopConfig: true))
+        #expect(rspec["test"]?.body == "bundle exec rspec")
+        #expect(rspec["lint"]?.isCheckedByDefault == true)
+    }
+
+    @Test func plainRubyFallsBackToRake() {
+        #expect(actions(.ruby)["test"]?.body == "bundle exec rake test")
+        #expect(actions(.ruby, .init(hasSpecDirectory: true))["test"]?.body == "bundle exec rspec")
+    }
+
+    @Test func djangoRunsManageThroughTheProjectRunner() {
+        let bare = actions(.django)
+        #expect(bare["dev"]?.body == "python3 manage.py runserver")
+        #expect(bare["dev"]?.endpoint == "http://localhost:8000")
+        #expect(bare["install"]?.body == "python3 -m pip install -e .")
+        #expect(bare["install"]?.isCheckedByDefault == false)
+        let requirements = actions(.django, .init(hasRequirementsFile: true))
+        #expect(requirements["install"]?.body == "python3 -m pip install -r requirements.txt")
+        #expect(requirements["install"]?.isCheckedByDefault == true)
+        let uv = actions(.django, .init(pythonRunner: .uv))
+        #expect(uv["migrate"]?.body == "uv run python manage.py migrate")
+        #expect(uv["install"]?.isCheckedByDefault == true)
+    }
+
+    @Test func laravelAndPhpUseComposer() {
+        #expect(actions(.laravel)["dev"]?.body == "php artisan serve")
+        #expect(actions(.laravel)["dev"]?.endpoint == "http://localhost:8000")
+        #expect(actions(.php)["test"]?.body == "vendor/bin/phpunit")
+    }
+
+    @Test func flutterFallsBackToDartAndDropsRun() {
+        #expect(actions(.flutter)["run"]?.body == "flutter run")
+        let dart = actions(.flutter, .init(usesFlutter: false))
+        #expect(dart["test"]?.body == "dart test")
+        #expect(dart["run"] == nil)
+    }
+
+    @Test func elixirOffersPhoenixServerOnlyWhenPresent() {
+        #expect(actions(.elixir)["dev"]?.body == "mix phx.server")
+        #expect(actions(.elixir)["dev"]?.endpoint == "http://localhost:4000")
+        #expect(actions(.elixir, .init(usesPhoenix: false))["dev"] == nil)
+    }
+
+    @Test func remainingStacksUseTheirCanonicalCommands() {
+        #expect(actions(.dotnet)["test"]?.body == "dotnet test")
+        #expect(actions(.deno)["lint"]?.body == "deno lint")
+        #expect(actions(.zig)["test"]?.body == "zig build test")
+        #expect(actions(.bazel)["build"]?.body == "bazel build //...")
+        #expect(actions(.compose)["up"]?.body == "docker compose up")
+    }
+
+    private func zshSyntaxIsValid(_ contents: String) throws -> Bool {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sh")
+        try Data(contents.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-n", url.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+}

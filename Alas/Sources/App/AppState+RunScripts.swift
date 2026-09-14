@@ -845,8 +845,53 @@ extension AppState {
             scope: scope,
             projectId: project.id,
             worktreeId: worktree.id,
-            repositoryName: project.name
+            repositoryName: project.name,
+            detectedStacks: scope == .repo ? RunScriptStackDetector.detect(worktreeRoot: worktree.path) : []
         )
+    }
+
+    /// Writes every selected template script and opens the first one written.
+    /// Existing files are skipped, so this is safe to re-run on a repo that
+    /// already has some of the scripts.
+    func createPendingRunScripts(
+        actions: [RunScriptStackAction],
+        globalDir: URL = Paths.runScriptsGlobalDir
+    ) throws {
+        guard let presentation = pendingRunScriptCreation,
+              let worktree = worktree(withId: presentation.worktreeId),
+              worktree.projectId == presentation.projectId
+        else {
+            throw RunScriptCreationError.worktreeUnavailable
+        }
+        let result = try RunScriptCreator.createBundle(
+            scope: presentation.scope,
+            actions: actions,
+            worktreeRoot: worktree.path,
+            globalDir: globalDir
+        )
+        if let first = result.created.first {
+            openCreatedRunScript(at: first, scope: presentation.scope, in: worktree)
+        }
+        pendingRunScriptCreation = nil
+        runScriptCatalogGeneration += 1
+    }
+
+    private func openCreatedRunScript(at url: URL, scope: RunScriptScope, in worktree: Worktree) {
+        switch scope {
+        case .repo:
+            openFile(
+                relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(url.lastPathComponent)",
+                worktreeId: worktree.id
+            )
+        case .global:
+            _ = tabs.openExternalEditor(
+                worktreeId: worktree.id,
+                absoluteURL: url,
+                revealLine: nil,
+                revealCharacter: nil,
+                editable: true
+            )
+        }
     }
 
     func createPendingRunScript(
@@ -877,21 +922,7 @@ extension AppState {
             globalDir: globalDir
         )
 
-        switch presentation.scope {
-        case .repo:
-            openFile(
-                relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(url.lastPathComponent)",
-                worktreeId: worktree.id
-            )
-        case .global:
-            _ = tabs.openExternalEditor(
-                worktreeId: worktree.id,
-                absoluteURL: url,
-                revealLine: nil,
-                revealCharacter: nil,
-                editable: true
-            )
-        }
+        openCreatedRunScript(at: url, scope: presentation.scope, in: worktree)
         pendingRunScriptCreation = nil
         runScriptCatalogGeneration += 1
         if let writingHelpRequest {
