@@ -220,6 +220,8 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.laravel)["dev"]?.body == "php artisan serve")
         #expect(actions(.laravel)["dev"]?.endpoint == "http://localhost:8000")
         #expect(actions(.php)["test"]?.body == "vendor/bin/phpunit")
+        #expect(actions(.php)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.php, .init(hasPHPUnit: true))["test"]?.isCheckedByDefault == true)
     }
 
     @Test func flutterFallsBackToDartAndDropsRun() {

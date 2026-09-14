@@ -92,6 +92,8 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// tool most likely doesn't have it installed.
     var hasPytest = false
     var hasRuff = false
+    /// composer.json declares PHPUnit or a local vendor/bin/phpunit exists.
+    var hasPHPUnit = false
     /// pubspec.yaml depends on the Flutter SDK rather than plain Dart.
     var usesFlutter = true
     /// mix.exs depends on Phoenix, so there is a dev server to run.
@@ -135,6 +137,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasRequirementsFile: Bool = false,
         hasPytest: Bool = false,
         hasRuff: Bool = false,
+        hasPHPUnit: Bool = false,
         usesFlutter: Bool = true,
         usesPhoenix: Bool = true,
         denoTasks: Set<String>? = nil,
@@ -155,6 +158,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.hasRequirementsFile = hasRequirementsFile
         self.hasPytest = hasPytest
         self.hasRuff = hasRuff
+        self.hasPHPUnit = hasPHPUnit
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
@@ -318,7 +322,7 @@ enum RunScriptStackCatalog {
         case .php:
             return [
                 .init("install", "Install", "composer install"),
-                .init("test", "Test", "vendor/bin/phpunit"),
+                .init("test", "Test", "vendor/bin/phpunit", checked: context.hasPHPUnit),
             ]
         case .swiftPackage:
             return [

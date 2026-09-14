@@ -158,6 +158,21 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
+    @Test func cargoHonorsDisabledAutomaticBinaryTargets() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Cargo.toml", "[package]\nname = \"tool\"\nautobins = false\n", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src/bin/helper"), withIntermediateDirectories: true)
+        try touch("src/bin/helper/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+
+        try write("Cargo.toml", "[package]\nname = \"tool\"\nautobins = false\n\n[[bin]]\nname = \"tool\"\npath = \"src/main.rs\"\n", in: root)
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
+    }
+
     @Test func javascriptPicksPackageManagerFromLockfile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -361,6 +376,9 @@ struct RunScriptStackDetectorTests {
 
         try write("main.go", "//go:build linux\n\npackage main\n\nfunc main() {}\n", in: root)
         #expect(detect(root)[.go]?.goRunTarget == nil)
+
+        try write("main.go", "// +build linux\n\npackage main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
     @Test func goUsesTheCurrentArchitectureForBuildTags() throws {
@@ -495,6 +513,19 @@ struct RunScriptStackDetectorTests {
         try touch("artisan", in: root)
         #expect(detect(root)[.php] == nil)
         #expect(detect(root)[.laravel] != nil)
+    }
+
+    @Test func phpRecordsWhetherPHPUnitIsAvailable() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("composer.json", #"{"require":{"monolog/monolog":"^3"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == false)
+
+        try write("composer.json", #"{"require-dev":{"phpunit/phpunit":"^11"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == true)
+
+        try write("composer.json", #"{"scripts":{"test":"vendor/bin/phpunit"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == true)
     }
 
     @Test func dotnetDetectsSolutionOrProjectFiles() throws {
@@ -644,6 +675,17 @@ struct RunScriptStackDetectorTests {
         try write(
             "pubspec.yaml",
             "name: tool\n# flutter: { sdk: flutter }\ndependencies:\n  args: ^2.0.0\n",
+            in: root
+        )
+        #expect(detect(root)[.flutter]?.usesFlutter == false)
+    }
+
+    @Test func flutterInlineFallbackIsLimitedToDependencies() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pubspec.yaml",
+            "name: tool\ndescription: \"flutter: { sdk: flutter }\"\ndependencies:\n  args: ^2.0.0\n",
             in: root
         )
         #expect(detect(root)[.flutter]?.usesFlutter == false)

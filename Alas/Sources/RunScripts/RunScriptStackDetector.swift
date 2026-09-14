@@ -123,7 +123,7 @@ enum RunScriptStackDetector {
                 add(stack)
             case .php:
                 guard has("composer.json"), !hasArtisan else { continue }
-                add(stack)
+                add(stack, .init(hasPHPUnit: composerDeclaresPHPUnit(contents("composer.json") ?? "") || isRegularFile("vendor/bin/phpunit")))
             case .swiftPackage:
                 guard has("Package.swift") else { continue }
                 add(stack, .init(hasRunnableTarget: swiftPackageHasUnambiguousExecutable(contents("Package.swift") ?? "")))
@@ -187,35 +187,39 @@ enum RunScriptStackDetector {
     private static func pubspecDeclaresFlutterSDK(_ pubspec: String) -> Bool {
         let lines = pubspec.components(separatedBy: .newlines)
         for (index, rawLine) in lines.enumerated() {
-            guard let mapping = yamlMappingLine(stripLineComment(rawLine)), mapping.key == "flutter" else { continue }
-            if let value = mapping.value {
-                // Flow form: the "sdk: flutter" pair lives on the same line.
-                // The scalar may be quoted ("flutter" or 'flutter').
-                if value.range(of: #"sdk:\s*['"]?flutter['"]?\b"#, options: .regularExpression) != nil { return true }
-                continue // A non-flow, non-empty value can't be the SDK form.
+            guard let dependencies = yamlMappingLine(stripLineComment(rawLine)), dependencies.key == "dependencies" else { continue }
+            if let value = dependencies.value {
+                // Fully flow-style dependencies map:
+                // `dependencies: { flutter: { sdk: flutter } }`.
+                return value.range(
+                    of: #"flutter\s*:\s*\{\s*sdk\s*:\s*['"]?flutter['"]?\s*\}"#,
+                    options: .regularExpression
+                ) != nil
             }
-            // Block form: scan the nested lines for "sdk: flutter", skipping
-            // blank lines and comments, stopping once indentation returns to
-            // this level or shallower.
-            for candidate in lines[(index + 1)...] {
+            // Block form: find a nested `flutter:` dependency, then scan its
+            // nested lines for `sdk: flutter`, skipping blank lines and
+            // comments.
+            for candidateIndex in lines.indices.dropFirst(index + 1) {
+                let candidate = lines[candidateIndex]
                 let stripped = stripLineComment(candidate)
                 if stripped.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-                guard let child = yamlMappingLine(stripped), child.indent > mapping.indent else { break }
-                if child.key == "sdk", let value = child.value, unquoteYAMLScalar(value.trimmingCharacters(in: .whitespaces)) == "flutter" {
-                    return true
+                guard let dependency = yamlMappingLine(stripped), dependency.indent > dependencies.indent else { break }
+                guard dependency.key == "flutter" else { continue }
+                if let value = dependency.value {
+                    return value.range(of: #"sdk:\s*['"]?flutter['"]?\b"#, options: .regularExpression) != nil
+                }
+                for nested in lines.indices.dropFirst(candidateIndex + 1).map({ lines[$0] }) {
+                    let nestedStripped = stripLineComment(nested)
+                    if nestedStripped.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                    guard let child = yamlMappingLine(nestedStripped), child.indent > dependency.indent else { break }
+                    if child.key == "sdk", let value = child.value, unquoteYAMLScalar(value.trimmingCharacters(in: .whitespaces)) == "flutter" {
+                        return true
+                    }
                 }
             }
+            return false
         }
-        // Fallback for a fully flow-style dependencies block, e.g.
-        // `dependencies: { flutter: { sdk: flutter } }`, where "flutter" is
-        // never a line's own key because the whole map is inline. Comments
-        // are stripped first so a mention inside one, e.g.
-        // `# flutter: { sdk: flutter }`, doesn't count.
-        let commentsStripped = lines.map(stripLineComment).joined(separator: "\n")
-        return commentsStripped.range(
-            of: #"flutter\s*:\s*\{\s*sdk\s*:\s*['"]?flutter['"]?\s*\}"#,
-            options: .regularExpression
-        ) != nil
+        return false
     }
 
     /// A `{:phoenix, ...}` dependency atom in mix.exs's deps list. A bare
@@ -276,8 +280,11 @@ enum RunScriptStackDetector {
     /// package declares more than one bin target and none is designated.
     private static func cargoHasUnambiguousBinary(cargoToml: String, hasRootMain: Bool, binTargetPaths: Set<String>) -> Bool {
         var binaryPaths = Set<String>()
-        if hasRootMain { binaryPaths.insert("src/main.rs") }
-        binaryPaths.formUnion(binTargetPaths)
+        let automaticBinariesEnabled = cargoPackageBool(cargoToml, key: "autobins") ?? true
+        if automaticBinariesEnabled {
+            if hasRootMain { binaryPaths.insert("src/main.rs") }
+            binaryPaths.formUnion(binTargetPaths)
+        }
 
         for declaredBin in cargoDeclaredBins(cargoToml) {
             if let path = declaredBin.path {
@@ -345,9 +352,14 @@ enum RunScriptStackDetector {
     }
 
     private static func cargoPackageName(_ cargoToml: String) -> String? {
+        cargoPackageString(cargoToml, key: "name")
+    }
+
+    private static func cargoPackageString(_ cargoToml: String, key: String) -> String? {
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
         guard let regex = try? NSRegularExpression(
             pattern: #"(?ms)^\s*\[package\]\s*(.*?)(?=^\s*\[|\z)"#
-        ), let nameRegex = try? NSRegularExpression(pattern: #"(?m)^\s*name\s*=\s*\"([^\"]+)\""#)
+        ), let valueRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"# + escapedKey + #"\s*=\s*\"([^\"]+)\""#)
         else { return nil }
         let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
         guard let packageMatch = regex.firstMatch(in: cargoToml, range: fullRange),
@@ -355,10 +367,28 @@ enum RunScriptStackDetector {
         else { return nil }
         let package = String(cargoToml[packageRange])
         let packageNSRange = NSRange(package.startIndex..., in: package)
-        guard let nameMatch = nameRegex.firstMatch(in: package, range: packageNSRange),
-              let nameRange = Range(nameMatch.range(at: 1), in: package)
+        guard let valueMatch = valueRegex.firstMatch(in: package, range: packageNSRange),
+              let valueRange = Range(valueMatch.range(at: 1), in: package)
         else { return nil }
-        return String(package[nameRange])
+        return String(package[valueRange])
+    }
+
+    private static func cargoPackageBool(_ cargoToml: String, key: String) -> Bool? {
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?ms)^\s*\[package\]\s*(.*?)(?=^\s*\[|\z)"#
+        ), let valueRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"# + escapedKey + #"\s*=\s*(true|false)\b"#)
+        else { return nil }
+        let fullRange = NSRange(cargoToml.startIndex..., in: cargoToml)
+        guard let packageMatch = regex.firstMatch(in: cargoToml, range: fullRange),
+              let packageRange = Range(packageMatch.range(at: 1), in: cargoToml)
+        else { return nil }
+        let package = String(cargoToml[packageRange])
+        let packageNSRange = NSRange(package.startIndex..., in: package)
+        guard let valueMatch = valueRegex.firstMatch(in: package, range: packageNSRange),
+              let valueRange = Range(valueMatch.range(at: 1), in: package)
+        else { return nil }
+        return package[valueRange] == "true"
     }
 
     /// The path (relative to the worktree root) of a project file declaring
@@ -503,14 +533,31 @@ enum RunScriptStackDetector {
     }
 
     private static func goBuildConstraintAllowsCurrentHost(_ contents: String) -> Bool {
-        guard let directive = contents.components(separatedBy: .newlines).first(where: { $0.hasPrefix("//go:build ") }) else {
-            return true
+        let lines = contents.components(separatedBy: .newlines)
+        if let directive = lines.first(where: { $0.hasPrefix("//go:build ") }) {
+            let expression = String(directive.dropFirst("//go:build ".count))
+            return goBuildExpressionAllowsCurrentHost(expression)
         }
-        let expression = String(directive.dropFirst("//go:build ".count))
+        let legacyDirectives = lines.prefix { line in
+            line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("//")
+        }.filter { $0.hasPrefix("// +build ") }
+        guard !legacyDirectives.isEmpty else { return true }
+        return legacyDirectives.allSatisfy { directive in
+            directive.dropFirst("// +build ".count).split { $0 == " " || $0 == "\t" }.contains { option in
+                option.split(separator: ",").allSatisfy { term in
+                    if term.hasPrefix("!") {
+                        return !goBuildTagIsEnabled(term.dropFirst())
+                    }
+                    return goBuildTagIsEnabled(term)
+                }
+            }
+        }
+    }
+
+    private static func goBuildExpressionAllowsCurrentHost(_ expression: String) -> Bool {
         let tokens = expression.matches(of: /&&|\|\||!|\(|\)|[A-Za-z0-9_.]+/).map(\.output)
         guard tokens.joined() == expression.filter({ !$0.isWhitespace }) else { return false }
         var index = 0
-        let enabledTags: Set<Substring> = ["darwin", "unix", currentGoArchitecture, "cgo"]
         func parsePrimary() -> Bool? {
             guard index < tokens.count else { return nil }
             if tokens[index] == "!" {
@@ -525,7 +572,7 @@ enum RunScriptStackDetector {
             }
             let tag = tokens[index]
             index += 1
-            return enabledTags.contains(tag)
+            return goBuildTagIsEnabled(tag)
         }
         func parseAnd() -> Bool? {
             guard var value = parsePrimary() else { return nil }
@@ -547,6 +594,31 @@ enum RunScriptStackDetector {
         }
         guard let result = parseOr(), index == tokens.count else { return false }
         return result
+    }
+
+    private static func goBuildTagIsEnabled(_ tag: Substring) -> Bool {
+        ["darwin", "unix", currentGoArchitecture, "cgo"].contains(tag)
+    }
+
+    private static func composerDeclaresPHPUnit(_ composerJSON: String) -> Bool {
+        guard let data = composerJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        let dependencyKeys = ["require", "require-dev"].flatMap { key -> [String] in
+            guard let dependencies = object[key] as? [String: Any] else { return [] }
+            return Array(dependencies.keys)
+        }
+        if dependencyKeys.contains("phpunit/phpunit") { return true }
+        guard let scripts = object["scripts"] as? [String: Any] else { return false }
+        return scripts.values.contains { value in
+            if let command = value as? String {
+                return command.contains("phpunit")
+            }
+            if let commands = value as? [String] {
+                return commands.contains { $0.contains("phpunit") }
+            }
+            return false
+        }
     }
 
     private static func countOccurrences(of pattern: String, in text: String) -> Int {
