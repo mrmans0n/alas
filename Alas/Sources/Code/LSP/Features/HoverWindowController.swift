@@ -104,6 +104,7 @@ private struct HoverPopupContent: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
+        context.coordinator.update(onOpenLink: onOpenLink)
         context.coordinator.apply(result: result, theme: theme, to: textView)
         nsView.backgroundColor = NSColor(theme.color("bg-1"))
     }
@@ -126,7 +127,7 @@ private struct HoverPopupContent: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let mermaidCoordinator: MermaidAttachmentCoordinator
-        let onOpenLink: (URL) -> Bool
+        private var onOpenLink: (URL) -> Bool
         var appliedRevision: UUID?
 
         weak var textView: NSTextView? {
@@ -166,6 +167,10 @@ private struct HoverPopupContent: NSViewRepresentable {
                 onTextStorageDelta: nil
             )
             appliedRevision = result.revision
+        }
+
+        func update(onOpenLink: @escaping (URL) -> Bool) {
+            self.onOpenLink = onOpenLink
         }
 
         func cancel() {

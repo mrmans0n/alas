@@ -67,7 +67,7 @@ final class DiagnosticsFeature {
         let ranges = current.map(\.range).sorted(by: Self.rangePrecedes)
         guard !ranges.isEmpty else { return nil }
         if backwards {
-            return ranges.last(where: { Self.positionPrecedes($0.end, position) }) ?? ranges.last
+            return ranges.last(where: { Self.positionPrecedes($0.start, position) }) ?? ranges.last
         }
         return ranges.first(where: { Self.positionPrecedes(position, $0.start) }) ?? ranges.first
     }
@@ -86,11 +86,11 @@ final class DiagnosticsFeature {
         } else if let code = diagnostic.code {
             lines.append("`\(code.displayValue)`")
         }
-        lines.append(diagnostic.message)
+        lines.append(markdownLiteral(diagnostic.message))
         if let related = diagnostic.relatedInformation, !related.isEmpty {
             lines.append("**Related information**")
             for (index, item) in related.enumerated() {
-                lines.append("[\(item.message)](alas-diagnostic://related/\(index))")
+                lines.append("[\(markdownLiteral(item.message))](alas-diagnostic://related/\(index))")
             }
         }
         lines.append("[Quick Fixes…](alas-diagnostic://actions)")
@@ -137,6 +137,17 @@ final class DiagnosticsFeature {
 
     nonisolated private static func positionPrecedes(_ lhs: LSPPosition, _ rhs: LSPPosition) -> Bool {
         lhs.line < rhs.line || lhs.line == rhs.line && lhs.character < rhs.character
+    }
+
+    /// Diagnostic prose is server data, not Markdown authored by the user.
+    /// Escape it before combining it with the small Markdown shell that owns
+    /// our metadata and navigation links.
+    nonisolated private static func markdownLiteral(_ value: String) -> String {
+        let syntax = CharacterSet(charactersIn: "\\`*_{}[]<>()#+-.!|")
+        return String(value.unicodeScalars.reduce(into: "") { result, scalar in
+            if syntax.contains(scalar) { result.append("\\") }
+            result.unicodeScalars.append(scalar)
+        })
     }
 
     nonisolated private static func utf16Index(line: Int, character: Int, in source: String) -> Int? {

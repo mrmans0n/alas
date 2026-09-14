@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Markdown
 import Testing
 @testable import Alas
 
@@ -26,6 +27,19 @@ struct DiagnosticDetailsTests {
         let diagnostic = try JSONDecoder().decode(LSPDiagnostic.self, from: Data(#"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"message":"m","code":"unused"}"#.utf8))
 
         #expect(diagnostic.code == .string("unused"))
+    }
+
+    @Test("keeps extreme numeric codes and data from the diagnostic wire value")
+    func keepsExtremeNumericMetadata() throws {
+        let raw = Data(#"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"m","code":1e1000,"data":{"exponent":1e1000,"integer":123456789012345678901234567890123456789012345678901234567890}}"#.utf8)
+
+        let diagnostic = try #require(LSPDiagnostic.decodeWire([LSPJSONValue.decode(from: raw)]).first)
+
+        #expect(diagnostic.code == .number("1e1000"))
+        #expect(diagnostic.data == .object([
+            "exponent": .number("1e1000"),
+            "integer": .number("123456789012345678901234567890123456789012345678901234567890")
+        ]))
     }
 
     @Test @MainActor func replacesPushAndPullBatchesWhileRetainingZeroWidthDiagnostics() {
@@ -79,6 +93,22 @@ struct DiagnosticDetailsTests {
         #expect(feature.nextRange(after: LSPPosition(line: 0, character: 0), backwards: true) == last.range)
     }
 
+    @Test @MainActor func previousProblemUsesStartsForAdjacentAndOverlappingRanges() {
+        let feature = DiagnosticsFeature()
+        let storage = NSTextStorage(string: "abcdef")
+        let left = diagnostic(message: "left", severity: 1, start: 1, end: 2)
+        let right = diagnostic(message: "right", severity: 1, start: 2, end: 3)
+        let overlapping = diagnostic(message: "overlap", severity: 1, start: 1, end: 4)
+        let nested = diagnostic(message: "nested", severity: 1, start: 2, end: 5)
+
+        feature.apply([right, left], to: storage, theme: .fallback)
+        #expect(feature.nextRange(after: LSPPosition(line: 0, character: 2), backwards: true) == left.range)
+
+        feature.apply([nested, overlapping], to: storage, theme: .fallback)
+        #expect(feature.nextRange(after: LSPPosition(line: 0, character: 2), backwards: true) == overlapping.range)
+        #expect(feature.nextRange(after: LSPPosition(line: 0, character: 4), backwards: true) == nested.range)
+    }
+
     @Test func detailMarkdownIncludesMetadataAndRelatedLinks() throws {
         let diagnostic = try #require(LSPDiagnostic.decodeWire([LSPJSONValue.decode(from: Data(#"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"Unknown name","severity":1,"source":"ts","code":2304,"codeDescription":{"href":"https://example.test/2304"},"relatedInformation":[{"location":{"uri":"file:///tmp/related.ts","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}},"message":"Declared here"}]}"#.utf8))]).first)
 
@@ -90,6 +120,27 @@ struct DiagnosticDetailsTests {
         #expect(markdown.contains("Unknown name"))
         #expect(markdown.contains("alas-diagnostic://related/0"))
         #expect(markdown.contains("alas-diagnostic://actions"))
+    }
+
+    @Test @MainActor func detailRenderingPreservesLiteralDiagnosticAndRelatedMessages() throws {
+        let message = "Generic <T> [not a link](nope) *literal*"
+        let related = "Related [label] <U>"
+        let diagnostic = try #require(LSPDiagnostic.decodeWire([LSPJSONValue.decode(from: Data("""
+        {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"\(message)","relatedInformation":[{"location":{"uri":"file:///tmp/related.ts","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}}},"message":"\(related)"}]}
+        """.utf8))]).first)
+
+        let result = MarkdownRenderer().render(
+            document: Document(parsing: DiagnosticsFeature.detailMarkdown(for: diagnostic)),
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: URL(fileURLWithPath: "/")
+        )
+
+        #expect(result.attributedString.string.contains(message))
+        #expect(result.attributedString.string.contains(related))
+        let relatedRange = (result.attributedString.string as NSString).range(of: related)
+        #expect(result.attributedString.attribute(.link, at: relatedRange.location, effectiveRange: nil) != nil)
     }
 
     private func diagnostic(message: String, severity: Int, start: Int, end: Int) -> LSPDiagnostic {

@@ -307,6 +307,22 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case range, severity, code, codeDescription, source, tags, relatedInformation, data, message
     }
+
+    init(wireValue: LSPJSONValue) throws {
+        let raw = try wireValue.encodedData()
+        let c = try JSONDecoder().decode(DecodedFields.self, from: raw)
+        self.wireValue = wireValue
+        range = c.range
+        severity = c.severity
+        code = LSPDiagnosticCode(wireValue: wireValue["code"])
+        codeDescription = c.codeDescription
+        source = c.source
+        tags = c.tags
+        relatedInformation = c.relatedInformation
+        data = wireValue["data"]
+        message = c.message
+    }
+
     init(from decoder: Decoder) throws {
         wireValue = try? LSPJSONValue(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -342,6 +358,16 @@ struct LSPDiagnostic: Codable, Hashable, Sendable {
         try c.encodeIfPresent(relatedInformation, forKey: .relatedInformation)
         if let data { try data.encode(to: c.superEncoder(forKey: .data)) }
         try c.encode(message, forKey: .message)
+    }
+
+    private struct DecodedFields: Decodable {
+        let range: LSPRange
+        let severity: Int?
+        let codeDescription: LSPDiagnosticCodeDescription?
+        let source: String?
+        let tags: [Int]?
+        let relatedInformation: [LSPDiagnosticRelatedInformation]?
+        let message: String
     }
 }
 
@@ -423,11 +449,7 @@ struct LSPPublishDiagnosticsParams: Decodable, Sendable {
 
 extension LSPDiagnostic {
     static func decodeWire(_ values: [LSPJSONValue]) throws -> [LSPDiagnostic] {
-        try values.map { value in
-            var diagnostic = try JSONDecoder().decode(LSPDiagnostic.self, from: value.encodedData())
-            diagnostic.wireValue = value
-            return diagnostic
-        }
+        try values.map(LSPDiagnostic.init(wireValue:))
     }
 }
 
