@@ -750,7 +750,7 @@ final class CodeEditorCoordinator {
             let token = nc.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: clipView
-            ) { [weak self] _ in
+            ) { [weak self] in
                 guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
@@ -763,7 +763,7 @@ final class CodeEditorCoordinator {
         let selectionToken = nc.addMainActorObserver(
             forName: NSTextView.didChangeSelectionNotification,
             object: textView
-        ) { [weak self] _ in
+        ) { [weak self] in
             guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
             self?.hover?.notifyCaretChanged()
             self?.definition?.notifyCaretChanged()
@@ -774,14 +774,15 @@ final class CodeEditorCoordinator {
         // Subscribe with object: nil because attach(...) runs from
         // makeNSView before the text view is inserted into a window, so
         // textView.window is often nil here and never gets retried. The
-        // handler filters to the text view's current window at fire time.
-        let resizeToken = nc.addMainActorObserver(
+        // handler filters to the text view's current window at fire time by
+        // comparing the posting object's identity.
+        let resizeToken = nc.addMainActorObjectObserver(
             forName: NSWindow.didResizeNotification,
             object: nil
-        ) { [weak self] note in
+        ) { [weak self] postingWindow in
             guard let self,
-                  let window = note.object as? NSWindow,
-                  window === self.textView?.window else { return }
+                  let window = self.textView?.window,
+                  postingWindow == ObjectIdentifier(window) else { return }
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
             self.signatureHelp?.notifyWindowResized()

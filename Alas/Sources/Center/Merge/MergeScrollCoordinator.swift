@@ -118,7 +118,7 @@ final class MergePaneScrollBridge {
         token = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scroll.contentView
-        ) { _ in
+        ) {
             coordinator.applyPaneY(scroll.contentView.bounds.origin.y, source: source)
         }
         // Weak scroll: onSync* handlers live on `coordinator`, which

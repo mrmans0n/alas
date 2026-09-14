@@ -525,7 +525,7 @@ private final class MermaidDiagramViewerBackingScaleView: NSView {
         backingPropertiesObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSWindow.didChangeBackingPropertiesNotification,
             object: window
-        ) { [weak self] _ in
+        ) { [weak self] in
             self?.publishScale()
         }
     }

@@ -228,7 +228,7 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
         boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
-        ) { [weak self] _ in
+        ) { [weak self] in
             self?.needsDisplay = true
         }
     }

@@ -1127,7 +1127,14 @@ actor WorkspaceCheckoutCoordinator {
         return try await self.checkout(id: checkoutID)
     }
 
-    private func failedDuringSetup(checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember) -> Bool {
+    /// `nonisolated` because it is a pure function of its two `Sendable`
+    /// parameters — it reads no actor state — and it has to be callable from
+    /// inside the `@Sendable` closures passed to `store.mutate`, which do not
+    /// inherit this actor's isolation.
+    private nonisolated func failedDuringSetup(
+        checkout: WorkspaceCheckout,
+        member: WorkspaceCheckoutMember
+    ) -> Bool {
         guard member.checkpoint == .failed,
               member.cleanupOwnership.worktreeCreated,
               member.gitLineageID != nil

@@ -2,6 +2,8 @@ import Testing
 import Foundation
 @testable import Alas
 
+// `MergeOperationState` is main-actor isolated, so the whole suite runs there.
+@MainActor
 @Suite(.serialized)
 struct MergeOperationStateTests {
     fileprivate static func makeRepo() async throws -> URL {

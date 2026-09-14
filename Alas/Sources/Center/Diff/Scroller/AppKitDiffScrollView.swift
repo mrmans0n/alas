@@ -46,7 +46,7 @@ final class AppKitDiffScrollView: NSScrollView {
         boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
             object: contentView
-        ) { [weak self] _ in
+        ) { [weak self] in
             guard let self, self.programmaticAdjustmentDepth == 0 else { return }
             if self.programmaticAnimationDepth > 0 {
                 self.onProgrammaticViewportChange?()

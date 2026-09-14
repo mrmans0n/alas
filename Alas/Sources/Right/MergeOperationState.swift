@@ -4,6 +4,9 @@ import Observation
 /// Per-worktree, observable holder for the current in-progress
 /// merge/rebase/cherry-pick (or nil when the worktree is idle).
 /// Refreshed by `RightPaneState` whenever it refreshes `changes`.
+/// Main-actor isolated: `current` is read directly by SwiftUI views and
+/// mutated from `RightPaneState`, which is itself `@MainActor`.
+@MainActor
 @Observable
 final class MergeOperationState {
     private(set) var current: MergeOperation? = nil
