@@ -66,7 +66,14 @@ enum ReviewSessionLauncher {
     }
 }
 
-struct ReviewSessionLoader {
+/// `@unchecked Sendable` is sound because these closures are nonisolated by
+/// type but built (in `.production`) from a `@MainActor` context; any
+/// actor-isolated state they capture (e.g. `AppState`) is only ever touched
+/// by hopping back to that actor (`Task { @MainActor in ... }` or an
+/// explicitly `@MainActor`-typed callback), so no capture is mutated
+/// concurrently. This lets `load(target:)` stay nonisolated (callable from
+/// anywhere) while still being safe to hold on a `@MainActor` view.
+struct ReviewSessionLoader: @unchecked Sendable {
     var localChanges: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var draftCommit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var commit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession

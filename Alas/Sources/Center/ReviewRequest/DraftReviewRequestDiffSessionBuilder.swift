@@ -3,10 +3,11 @@ import Foundation
 enum DraftReviewRequestDiffSessionBuilder {
     static let namespace = "draft-review-request"
 
+    @MainActor
     static func build(
         context: ReviewRequestDraftContext,
         worktreePath: URL,
-        openFileForPath: @escaping (String) -> (() -> Void)?,
+        openFileForPath: @escaping @MainActor (String) -> (() -> Void)?,
         contextProviderForPath: @escaping @MainActor (String, String?) -> DiffReviewContextProvider? = { _, _ in nil },
         imageProviderForFile: @escaping @MainActor (CommitChangedFile) -> DiffReviewImageProvider? = { _ in nil }
     ) async throws -> DiffReviewLoadedSession {
@@ -23,10 +24,10 @@ enum DraftReviewRequestDiffSessionBuilder {
                 for: file,
                 diff: parsed,
                 openFile: openFileForPath(file.path),
-                contextProvider: await contextProviderForPath(file.path, file.originalPath),
+                contextProvider: contextProviderForPath(file.path, file.originalPath),
                 imageProvider: ImageFileType.isSupported(relativePath: file.path)
                     || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
-                    ? await imageProviderForFile(file)
+                    ? imageProviderForFile(file)
                     : nil
             ))
         }
