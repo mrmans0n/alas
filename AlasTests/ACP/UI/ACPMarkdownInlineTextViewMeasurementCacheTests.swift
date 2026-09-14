@@ -2,6 +2,15 @@ import AppKit
 import Testing
 @testable import Alas
 
+@MainActor
+private final class ACPMarkdownScrollRecordingResponder: NSResponder {
+    private(set) var receivedEvents: [NSEvent] = []
+
+    override func scrollWheel(with event: NSEvent) {
+        receivedEvents.append(event)
+    }
+}
+
 /// The transcript scroll beachball came from `ACPMarkdownInlineNSTextView`
 /// re-running full TextKit layout on every `sizeThatFits` probe (SwiftUI's
 /// StackLayout probes each row at several widths per placement pass and
@@ -22,6 +31,47 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
             NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13)])
         )
         return textView
+    }
+
+    private func makeScrollEvent(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        phase: NSEvent.Phase = [],
+        momentumPhase: NSEvent.Phase = []
+    ) throws -> NSEvent {
+        let cgEvent = try #require(
+            CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: Int32(deltaY),
+                wheel2: Int32(deltaX),
+                wheel3: 0
+            )
+        )
+        if !phase.isEmpty {
+            cgEvent.setIntegerValueField(
+                CGEventField.scrollWheelEventScrollPhase,
+                value: cgScrollPhaseRawValue(for: phase)
+            )
+        }
+        if !momentumPhase.isEmpty {
+            cgEvent.setIntegerValueField(
+                CGEventField.scrollWheelEventMomentumPhase,
+                value: cgScrollPhaseRawValue(for: momentumPhase)
+            )
+        }
+        return try #require(NSEvent(cgEvent: cgEvent))
+    }
+
+    private func cgScrollPhaseRawValue(for phase: NSEvent.Phase) -> Int64 {
+        var rawValue: UInt32 = 0
+        if phase.contains(.began) { rawValue |= CGScrollPhase.began.rawValue }
+        if phase.contains(.changed) { rawValue |= CGScrollPhase.changed.rawValue }
+        if phase.contains(.ended) { rawValue |= CGScrollPhase.ended.rawValue }
+        if phase.contains(.cancelled) { rawValue |= CGScrollPhase.cancelled.rawValue }
+        if phase.contains(.mayBegin) { rawValue |= CGScrollPhase.mayBegin.rawValue }
+        return Int64(rawValue)
     }
 
     @Test func repeatedSameWidthProbesHitTheCache() {
@@ -92,5 +142,298 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         // The earlier width was evicted, so it now recomputes.
         _ = textView.fittingSize(for: 100)
         #expect(textView.fittingComputationCountForTests == 18)
+    }
+
+    @Test("only vertical-dominant wheel events are forwarded")
+    func onlyVerticalDominantWheelEventsAreForwarded() {
+        #expect(ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 0, deltaY: 20))
+        #expect(!ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 20, deltaY: 0))
+        #expect(!ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 20, deltaY: 20))
+    }
+
+    @Test("scroll routing keeps the selected responder through phase-only endings")
+    func scrollRoutingKeepsGestureResponderThroughPhaseOnlyEndings() {
+        var vertical = ACPMarkdownScrollRoutingState()
+        let verticalStart = vertical.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let verticalEnd = vertical.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        #expect(verticalStart)
+        #expect(verticalEnd)
+        #expect(vertical.forwarding == true)
+
+        var horizontal = ACPMarkdownScrollRoutingState()
+        let horizontalStart = horizontal.shouldForward(
+            deltaX: 20, deltaY: 0, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let horizontalEnd = horizontal.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        #expect(!horizontalStart)
+        #expect(!horizontalEnd)
+        #expect(horizontal.forwarding == false)
+    }
+
+    @Test("scroll routing keeps forwarding through trackpad momentum")
+    func scrollRoutingKeepsForwardingThroughMomentum() {
+        var routing = ACPMarkdownScrollRoutingState()
+        _ = routing.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let momentumStart = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: .began
+        )
+        let momentumEnd = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: NSEvent.Phase(), momentumPhase: .ended
+        )
+        routing.completeCurrentEventRouting()
+        #expect(momentumStart)
+        #expect(momentumEnd)
+        #expect(routing.forwarding == nil)
+    }
+
+    @Test("scroll routing preserves the responder until momentum finishes")
+    func scrollRoutingPreservesResponderUntilMomentumFinishes() {
+        var routing = ACPMarkdownScrollRoutingState()
+        _ = routing.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let gestureEnd = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        let momentumStart = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: NSEvent.Phase(), momentumPhase: .began
+        )
+
+        #expect(gestureEnd)
+        #expect(momentumStart)
+    }
+
+    @Test("scroll routing is shared across Markdown rows")
+    func scrollRoutingIsSharedAcrossMarkdownRows() throws {
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        let firstRow = makeTextView("First row")
+        let secondRow = makeTextView("Second row")
+        firstRow.nextResponder = scroller
+        secondRow.nextResponder = scroller
+
+        let start = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .began)
+        firstRow.scrollWheel(with: start)
+
+        let end = try makeScrollEvent(deltaX: 0, deltaY: 0, phase: .ended)
+        secondRow.scrollWheel(with: end)
+
+        #expect(firstRow.superScrollEventsForTests.isEmpty)
+        #expect(secondRow.superScrollEventsForTests.isEmpty)
+        #expect(scroller.markdownScrollEventsForTests.count == 2)
+        #expect(scroller.markdownScrollEventsForTests[0] === start)
+        #expect(scroller.markdownScrollEventsForTests[1] === end)
+    }
+
+    @Test("scroll routing waits for dominant axis before latching")
+    func scrollRoutingWaitsForAxisBeforeLatching() {
+        var routing = ACPMarkdownScrollRoutingState()
+
+        let waitsForDominantAxis = !routing.shouldForward(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(waitsForDominantAxis)
+
+        let followsDominantAxis = routing.shouldForward(
+            deltaX: 0,
+            deltaY: 20,
+            phase: .changed,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(followsDominantAxis)
+
+        let endsAfterDominantAxis = routing.shouldForward(
+            deltaX: 0,
+            deltaY: 0,
+            phase: .ended,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(endsAfterDominantAxis)
+
+        #expect(routing.forwarding == true)
+    }
+
+    @Test("vertical wheel events over Markdown text reach the transcript")
+    func verticalWheelEventsReachTranscript() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+        let cgEvent = try #require(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 20,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        let event = try #require(NSEvent(cgEvent: cgEvent))
+
+        textView.scrollWheel(with: event)
+        #expect(transcriptResponder.receivedEvents == [event])
+    }
+
+    @Test("ambiguous gesture starts are replayed once axis becomes vertical")
+    func ambiguousGestureStartIsReplayedOnceAxisBecomesVertical() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+
+        let ambiguousStart = try makeScrollEvent(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began
+        )
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(
+            deltaX: 5,
+            deltaY: 5,
+            phase: .changed
+        )
+        textView.scrollWheel(with: ambiguousChange)
+
+        let vertical = try makeScrollEvent(
+            deltaX: 0,
+            deltaY: 20,
+            phase: .changed
+        )
+        textView.scrollWheel(with: vertical)
+
+        #expect(textView.superScrollEventsForTests.isEmpty)
+        #expect(transcriptResponder.receivedEvents.count == 3)
+        #expect(transcriptResponder.receivedEvents[0] === ambiguousStart)
+        #expect(transcriptResponder.receivedEvents[1] === ambiguousChange)
+        #expect(transcriptResponder.receivedEvents[2] === vertical)
+    }
+
+    @Test("ambiguous queued events survive momentum start")
+    func ambiguousQueuedEventsSurviveMomentumStart() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+
+        let ambiguousStart = try makeScrollEvent(deltaX: 10, deltaY: 10, phase: .began)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(deltaX: 5, deltaY: 5, phase: .changed)
+        textView.scrollWheel(with: ambiguousChange)
+
+        let momentumStart = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .ended, momentumPhase: .began)
+        textView.scrollWheel(with: momentumStart)
+
+        #expect(textView.superScrollEventsForTests.isEmpty)
+        #expect(transcriptResponder.receivedEvents.count == 3)
+        if transcriptResponder.receivedEvents.count == 3 {
+            #expect(transcriptResponder.receivedEvents[0] === ambiguousStart)
+            #expect(transcriptResponder.receivedEvents[1] === ambiguousChange)
+            #expect(transcriptResponder.receivedEvents[2] === momentumStart)
+        }
+    }
+
+    @Test("ambiguous gesture starts are replayed once axis becomes horizontal")
+    func ambiguousGestureStartIsReplayedOnceAxisBecomesHorizontal() throws {
+        let textView = makeTextView("Table cell")
+
+        let ambiguousStart = try makeScrollEvent(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began
+        )
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(
+            deltaX: 5,
+            deltaY: 5,
+            phase: .changed
+        )
+        textView.scrollWheel(with: ambiguousChange)
+
+        let horizontal = try makeScrollEvent(
+            deltaX: 20,
+            deltaY: 0,
+            phase: .changed
+        )
+        textView.scrollWheel(with: horizontal)
+
+        #expect(textView.superScrollEventsForTests.count == 3)
+        #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
+        #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
+        #expect(textView.superScrollEventsForTests[2] === horizontal)
+    }
+
+    @Test("unresolved ambiguous gestures are flushed at gesture end")
+    func unresolvedAmbiguousGesturesAreFlushedAtGestureEnd() throws {
+        let textView = makeTextView("Table cell")
+
+        let ambiguousStart = try makeScrollEvent(deltaX: 10, deltaY: 10, phase: .began)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(deltaX: 5, deltaY: 5, phase: .changed)
+        textView.scrollWheel(with: ambiguousChange)
+
+        let end = try makeScrollEvent(deltaX: 0, deltaY: 0, phase: .ended)
+        textView.scrollWheel(with: end)
+
+        #expect(textView.superScrollEventsForTests.count == 3)
+        if textView.superScrollEventsForTests.count == 3 {
+            #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
+            #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
+            #expect(textView.superScrollEventsForTests[2] === end)
+        }
+    }
+
+    @Test("unresolved ambiguous gestures are flushed at momentum end")
+    func unresolvedAmbiguousGesturesAreFlushedAtMomentumEnd() throws {
+        let textView = makeTextView("Table cell")
+
+        let ambiguousStart = try makeScrollEvent(deltaX: 10, deltaY: 10, phase: .began)
+        textView.scrollWheel(with: ambiguousStart)
+
+        let ambiguousChange = try makeScrollEvent(deltaX: 5, deltaY: 5, phase: .changed)
+        textView.scrollWheel(with: ambiguousChange)
+
+        let momentumEnd = try makeScrollEvent(deltaX: 0, deltaY: 0, momentumPhase: .ended)
+        textView.scrollWheel(with: momentumEnd)
+
+        #expect(textView.superScrollEventsForTests.count == 3)
+        if textView.superScrollEventsForTests.count == 3 {
+            #expect(textView.superScrollEventsForTests[0] === ambiguousStart)
+            #expect(textView.superScrollEventsForTests[1] === ambiguousChange)
+            #expect(textView.superScrollEventsForTests[2] === momentumEnd)
+        }
+    }
+
+    @Test("direct transcript gestures reset shared Markdown routing")
+    func directTranscriptGesturesResetSharedMarkdownRouting() throws {
+        let scroller = ACPTranscriptScrollerView(frame: .zero)
+        var staleRouting = ACPMarkdownScrollRoutingState()
+        _ = staleRouting.shouldForward(
+            deltaX: 20,
+            deltaY: 0,
+            phase: .began,
+            momentumPhase: NSEvent.Phase()
+        )
+        scroller.markdownScrollRoutingState = staleRouting
+
+        let directStart = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .began)
+        scroller.scrollWheel(with: directStart)
+
+        let textView = makeTextView("Table cell")
+        textView.nextResponder = scroller
+        let verticalChange = try makeScrollEvent(deltaX: 0, deltaY: 20, phase: .changed)
+        textView.scrollWheel(with: verticalChange)
+
+        #expect(textView.superScrollEventsForTests.isEmpty)
+        #expect(scroller.markdownScrollEventsForTests == [verticalChange])
     }
 }
