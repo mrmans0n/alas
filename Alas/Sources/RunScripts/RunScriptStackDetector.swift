@@ -12,7 +12,11 @@ struct RunScriptStackDetection: Identifiable, Equatable, Sendable {
 /// Results follow `RunScriptStack.allCases` order so the picker is stable.
 enum RunScriptStackDetector {
     // swiftlint:disable:next function_body_length cyclomatic_complexity
-    static func detect(worktreeRoot: URL, fileManager: FileManager = .default) -> [RunScriptStackDetection] {
+    static func detect(
+        worktreeRoot: URL,
+        fileManager: FileManager = .default,
+        goToolchainMinorVersion: (URL) -> Int? = currentGoToolchainMinorVersion
+    ) -> [RunScriptStackDetection] {
         guard let names = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.path) else { return [] }
         let entries = Set(names)
         func path(_ name: String) -> String { worktreeRoot.appendingPathComponent(name).path }
@@ -125,7 +129,12 @@ enum RunScriptStackDetector {
                 ))
             case .go:
                 guard has("go.mod") else { continue }
-                add(stack, .init(goRunTarget: goRunnableTarget(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
+                add(stack, .init(goRunTarget: goRunnableTarget(
+                    rootEntries: names,
+                    worktreeRoot: worktreeRoot,
+                    fileManager: fileManager,
+                    releaseTags: goReleaseTags(worktreeRoot: worktreeRoot, minorVersion: goToolchainMinorVersion)
+                )))
             case .cargo:
                 guard has("Cargo.toml") else { continue }
                 add(stack, .init(hasRunnableTarget: cargoHasUnambiguousBinary(
@@ -384,13 +393,18 @@ enum RunScriptStackDetector {
     /// command found under the cmd/ convention (Go's `run` compiles and runs
     /// exactly the named main package — a `cmd/` subpackage does not make
     /// the module root itself runnable). Nil when neither is confirmed.
-    private static func goRunnableTarget(rootEntries: [String], worktreeRoot: URL, fileManager: FileManager) -> String? {
+    private static func goRunnableTarget(
+        rootEntries: [String],
+        worktreeRoot: URL,
+        fileManager: FileManager,
+        releaseTags: Set<String>
+    ) -> String? {
         func fileText(_ relativePath: String) -> String? {
             guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
             return String(decoding: data, as: UTF8.self)
         }
         if rootEntries.contains(where: {
-            $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0))
+            $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText($0), releaseTags: releaseTags)
         }) {
             return "."
         }
@@ -406,7 +420,11 @@ enum RunScriptStackDetector {
                   let files = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent(subdir).path)
             else { continue }
             if files.contains(where: {
-                $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(named: $0, contents: fileText("\(subdir)/\($0)"))
+                $0.hasSuffix(".go") && goSourceIsRunnableOnCurrentHost(
+                    named: $0,
+                    contents: fileText("\(subdir)/\($0)"),
+                    releaseTags: releaseTags
+                )
             }) {
                 commandTargets.append("./\(subdir)")
             }
@@ -968,9 +986,10 @@ enum RunScriptStackDetector {
         if swiftImportConditionName(trimmed) != nil {
             return false
         }
-        // Unknown manifest conditions may depend on SwiftPM settings. Keep
-        // them rather than hiding real executable declarations.
-        return true
+        // Unknown manifest conditions may depend on SwiftPM settings. Leave
+        // generated `swift run` unchecked unless we can prove the branch is
+        // active the same way SwiftPM would.
+        return false
     }
 
     private static func swiftConditionalDirectiveArgument(_ line: String, keyword: String) -> String? {
@@ -1129,11 +1148,11 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?) -> Bool {
+    private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?, releaseTags: Set<String>) -> Bool {
         guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
               let firstCharacter = name.first, firstCharacter != ".", firstCharacter != "_",
               let contents, goFileDeclaresPackageMain(contents),
-              goFilenameSupportsCurrentHost(name), goBuildConstraintAllowsCurrentHost(contents)
+              goFilenameSupportsCurrentHost(name), goBuildConstraintAllowsCurrentHost(contents, releaseTags: releaseTags)
         else { return false }
         return true
     }
@@ -1177,11 +1196,11 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static func goBuildConstraintAllowsCurrentHost(_ contents: String) -> Bool {
+    private static func goBuildConstraintAllowsCurrentHost(_ contents: String, releaseTags: Set<String>) -> Bool {
         let lines = contents.components(separatedBy: .newlines)
         if let directive = lines.first(where: { $0.hasPrefix("//go:build ") }) {
             let expression = String(directive.dropFirst("//go:build ".count))
-            return goBuildExpressionAllowsCurrentHost(expression)
+            return goBuildExpressionAllowsCurrentHost(expression, releaseTags: releaseTags)
         }
         let legacyDirectives = lines.prefix { line in
             line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("//")
@@ -1191,15 +1210,15 @@ enum RunScriptStackDetector {
             directive.dropFirst("// +build ".count).split { $0 == " " || $0 == "\t" }.contains { option in
                 option.split(separator: ",").allSatisfy { term in
                     if term.hasPrefix("!") {
-                        return !goBuildTagIsEnabled(term.dropFirst())
+                        return !goBuildTagIsEnabled(term.dropFirst(), releaseTags: releaseTags)
                     }
-                    return goBuildTagIsEnabled(term)
+                    return goBuildTagIsEnabled(term, releaseTags: releaseTags)
                 }
             }
         }
     }
 
-    private static func goBuildExpressionAllowsCurrentHost(_ expression: String) -> Bool {
+    private static func goBuildExpressionAllowsCurrentHost(_ expression: String, releaseTags: Set<String>) -> Bool {
         let tokens = expression.matches(of: /&&|\|\||!|\(|\)|[A-Za-z0-9_.]+/).map(\.output)
         guard tokens.joined() == expression.filter({ !$0.isWhitespace }) else { return false }
         var index = 0
@@ -1217,7 +1236,7 @@ enum RunScriptStackDetector {
             }
             let tag = tokens[index]
             index += 1
-            return goBuildTagIsEnabled(tag)
+            return goBuildTagIsEnabled(tag, releaseTags: releaseTags)
         }
         func parseAnd() -> Bool? {
             guard var value = parsePrimary() else { return nil }
@@ -1241,9 +1260,9 @@ enum RunScriptStackDetector {
         return result
     }
 
-    private static func goBuildTagIsEnabled(_ tag: Substring) -> Bool {
+    private static func goBuildTagIsEnabled(_ tag: Substring, releaseTags: Set<String>) -> Bool {
         let tag = String(tag)
-        return goCoreBuildTags.contains(tag) || currentGoArchitectureFeatureTags.contains(tag) || goReleaseTags.contains(tag)
+        return goCoreBuildTags.contains(tag) || currentGoArchitectureFeatureTags.contains(tag) || releaseTags.contains(tag)
     }
 
     private static var goCoreBuildTags: Set<String> {
@@ -1260,16 +1279,17 @@ enum RunScriptStackDetector {
 #endif
     }
 
-    private static let goReleaseTags: Set<String> = {
-        let minor = currentGoToolchainMinorVersion() ?? 25
+    private static func goReleaseTags(worktreeRoot: URL, minorVersion: (URL) -> Int?) -> Set<String> {
+        let minor = minorVersion(worktreeRoot) ?? 25
         guard minor >= 1 else { return [] }
         return Set((1...minor).map { "go1.\($0)" })
-    }()
+    }
 
-    private static func currentGoToolchainMinorVersion() -> Int? {
+    private static func currentGoToolchainMinorVersion(worktreeRoot: URL) -> Int? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["go", "env", "GOVERSION"]
+        process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
@@ -1653,7 +1673,7 @@ enum RunScriptStackDetector {
             case "project":
                 if tomlKeyedDependencyText(section.body, declares: tool, keys: ["dependencies"]) { return true }
             case "build-system":
-                if tomlKeyedDependencyText(section.body, declares: tool, keys: ["requires"]) { return true }
+                continue
             case "dependency-groups":
                 guard includeDependencyGroups else { continue }
                 if tomlDependencyText(section.body, declares: tool) { return true }

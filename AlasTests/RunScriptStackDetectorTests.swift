@@ -772,6 +772,26 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageLeavesRunUncheckedForUnknownConditions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            #if DEBUG
+            let targets: [Target] = [.executableTarget(name: "Tool")]
+            #else
+            let targets: [Target] = [.target(name: "Lib")]
+            #endif
+            let package = Package(name: "Lib", targets: targets)
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageIgnoresExecutableTargetsInsideStringLiterals() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -955,6 +975,25 @@ struct RunScriptStackDetectorTests {
         try write("main.go", "//go:build !go1.25\n\npackage main\n\nfunc main() {}\n", in: root)
 
         #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
+    @Test func goResolvesReleaseTagsForTheDetectedWorktree() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build go1.26\n\npackage main\n\nfunc main() {}\n", in: root)
+        var resolvedRoots: [URL] = []
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainMinorVersion: { resolvedRoot in
+                resolvedRoots.append(resolvedRoot)
+                return resolvedRoot == root ? 26 : 1
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(resolvedRoots == [root])
+        #expect(stacks[.go]?.goRunTarget == ".")
     }
 
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
@@ -1194,6 +1233,27 @@ struct RunScriptStackDetectorTests {
 
             [project.optional-dependencies]
             dev = ["pytest", "ruff"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonIgnoresBuildSystemRequirementsForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [build-system]
+            requires = ["setuptools", "pytest", "ruff"]
+            build-backend = "setuptools.build_meta"
             """,
             in: root
         )
