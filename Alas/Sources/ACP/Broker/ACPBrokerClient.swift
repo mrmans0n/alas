@@ -838,9 +838,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             result: result,
             error: error
         ))
-        stateLock.lock()
-        let cursor = pendingInboundCursors.removeValue(forKey: id)
-        stateLock.unlock()
+        let cursor = stateLock.withLock { pendingInboundCursors.removeValue(forKey: id) }
         if let cursor {
             ackAfterEarlierDurableEvents(cursor: cursor)
         }
@@ -858,10 +856,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             } catch {
                 return
             }
-            self.stateLock.lock()
-            self.acknowledgedCursor = max(self.acknowledgedCursor, cursor)
-            let shouldDrainDurableStates = self.enqueueDurableStateLocked()
-            self.stateLock.unlock()
+            let shouldDrainDurableStates = self.stateLock.withLock {
+                self.acknowledgedCursor = max(self.acknowledgedCursor, cursor)
+                return self.enqueueDurableStateLocked()
+            }
             if shouldDrainDurableStates {
                 self.drainDurableStateCallbacks()
             }

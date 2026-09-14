@@ -1,6 +1,8 @@
 import Foundation
 
-final class ShellEnvResolver {
+/// All mutable state (`_resolvedPath`, `resolveTask`) is guarded by `lock` on
+/// every access path, so concurrent use is safe.
+final class ShellEnvResolver: @unchecked Sendable {
     static let shared = ShellEnvResolver()
 
     private let lock = NSLock()
@@ -23,9 +25,7 @@ final class ShellEnvResolver {
     func resolve() {
         let task = Task {
             let path = await Self.discoverShellPath()
-            lock.lock()
-            _resolvedPath = path
-            lock.unlock()
+            lock.withLock { _resolvedPath = path }
         }
         lock.lock()
         resolveTask = task
@@ -38,9 +38,7 @@ final class ShellEnvResolver {
     /// (e.g. `gg`) should await this instead of racing `resolve()`'s
     /// fire-and-forget Task.
     func waitUntilResolved() async {
-        lock.lock()
-        let task = resolveTask
-        lock.unlock()
+        let task = lock.withLock { resolveTask }
         await task?.value
     }
 

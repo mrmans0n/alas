@@ -195,9 +195,7 @@ final class LSPTransport: @unchecked Sendable {
             // the kernel reparents children to init.
             while !Task.isCancelled {
                 guard let self else { return }
-                self.lock.lock()
-                let shouldStop = self.rootHasExited
-                self.lock.unlock()
+                let shouldStop = self.lock.withLock { self.rootHasExited }
                 if shouldStop { return }
                 self.refreshOrphanSet()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
