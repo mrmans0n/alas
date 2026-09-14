@@ -56,7 +56,7 @@ struct MergeResultPane: NSViewRepresentable {
         textView.delegate = context.coordinator
         scroll.documentView = textView
         context.coordinator.textView = textView
-        context.coordinator.observeScroll(scroll, into: coordinator)
+        context.coordinator.scrollBridge = MergePaneScrollBridge(scroll: scroll, source: .result, coordinator: coordinator)
         context.coordinator.onEditFullText = onEditFullText
         context.coordinator.rows = rows
         return scroll
@@ -144,6 +144,7 @@ struct MergeResultPane: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let editorUndoManager = UndoManager()
 
@@ -166,34 +167,13 @@ struct MergeResultPane: NSViewRepresentable {
         var rows: [MergeRegionVisualLayout.VisualRow] = []
         var onEditFullText: ((String) -> Void)?
         var lastKey: CacheKey?
-        private var coordinator: MergeScrollCoordinator?
-        private var token: NSObjectProtocol?
+        fileprivate var scrollBridge: MergePaneScrollBridge?
         private var pendingTextEdits: [EditorTextEdit] = []
         private var highlightTask: Task<Void, Never>?
         private var highlightGeneration = 0
         private let highlightSession = TreeSitterHighlighter.Session()
         private var isReplacingTextStorage = false
         private var needsHighlightSessionReset = false
-
-        func observeScroll(_ scroll: NSScrollView, into coord: MergeScrollCoordinator) {
-            self.coordinator = coord
-            scroll.contentView.postsBoundsChangedNotifications = true
-            token = NotificationCenter.default.addMainActorObserver(
-                forName: NSView.boundsDidChangeNotification,
-                object: scroll.contentView
-            ) { [weak self, weak scroll, weak coord] _ in
-                guard let scroll, let coord, self != nil else { return }
-                let y = scroll.contentView.bounds.origin.y
-                coord.applyPaneY(y, source: .result)
-            }
-            MainActor.assumeIsolated {
-                coord.onSyncResult = { @MainActor [weak scroll] y in
-                    guard let scroll else { return }
-                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
-                    scroll.reflectScrolledClipView(scroll.contentView)
-                }
-            }
-        }
 
         /// Called by AppKit when the user types. Emits the full new
         /// buffer text — the model is responsible for diffing back to
@@ -298,8 +278,7 @@ struct MergeResultPane: NSViewRepresentable {
             }
         }
 
-        deinit {
-            if let token { NotificationCenter.default.removeObserver(token) }
+        isolated deinit {
             highlightTask?.cancel()
         }
     }
