@@ -94,7 +94,7 @@ enum RunScriptStackDetector {
                 add(stack, .init(kotlinWrapper: wrapper))
             case .dotnet:
                 guard names.contains(where: { $0.hasSuffix(".sln") || $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }) else { continue }
-                add(stack, .init(dotnetRunProject: dotnetExecutableProjectPath(worktreeRoot: worktreeRoot, fileManager: fileManager)))
+                add(stack, .init(dotnetRunProject: dotnetExecutableProjectPath(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
             case .go:
                 guard has("go.mod") else { continue }
                 add(stack, .init(goRunTarget: goRunnableTarget(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
@@ -120,10 +120,7 @@ enum RunScriptStackDetector {
                 add(stack)
             case .swiftPackage:
                 guard has("Package.swift") else { continue }
-                let manifest = contents("Package.swift") ?? ""
-                let hasExecutable = manifest.contains(".executableTarget")
-                    || manifest.range(of: #"type:\s*\.executable"#, options: .regularExpression) != nil
-                add(stack, .init(hasRunnableTarget: hasExecutable))
+                add(stack, .init(hasRunnableTarget: swiftPackageHasUnambiguousExecutable(contents("Package.swift") ?? "")))
             case .xcode:
                 let workspaces = names.filter { $0.hasSuffix(".xcworkspace") }.sorted()
                 let projects = names.filter { $0.hasSuffix(".xcodeproj") }.sorted()
@@ -283,37 +280,63 @@ enum RunScriptStackDetector {
     /// <path>` has something to run. Bare `dotnet run` only resolves a
     /// project from the current directory, so a root `.sln` whose actual
     /// projects live in subdirectories needs this to find one at all.
-    private static func dotnetExecutableProjectPath(worktreeRoot: URL, fileManager: FileManager) -> String? {
-        // `enumerator(atPath:)` yields relative path strings built by plain
-        // concatenation, so — unlike the URL-based enumerator — it isn't
-        // affected by macOS resolving /var to /private/var mid-walk.
-        guard let enumerator = fileManager.enumerator(atPath: worktreeRoot.path) else { return nil }
-        let skippedDirectories: Set<String> = ["bin", "obj", "node_modules"]
-        var candidates: [String] = []
-        while let relativePath = enumerator.nextObject() as? String {
-            let name = (relativePath as NSString).lastPathComponent
-            if name.hasPrefix(".") {
-                enumerator.skipDescendants()
-                continue
-            }
-            var isDirectory: ObjCBool = false
-            let fullPath = worktreeRoot.appendingPathComponent(relativePath).path
-            guard fileManager.fileExists(atPath: fullPath, isDirectory: &isDirectory) else { continue }
-            if isDirectory.boolValue {
-                if skippedDirectories.contains(name) { enumerator.skipDescendants() }
-                continue
-            }
-            guard relativePath.hasSuffix(".csproj") || relativePath.hasSuffix(".fsproj") else { continue }
-            candidates.append(relativePath)
+    private static func dotnetExecutableProjectPath(
+        rootEntries: [String], worktreeRoot: URL, fileManager: FileManager
+    ) -> String? {
+        // Unlike the shared `contents(_:)` closure, project paths here can be
+        // nested (a solution's projects usually live in subdirectories), so
+        // read directly rather than gating on the root-level entries set.
+        func fileText(_ relativePath: String) -> String? {
+            guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        }
+        // Read candidate project paths from solution metadata rather than
+        // walking the whole worktree — on a large monorepo a recursive scan
+        // runs synchronously on the main actor and would be visibly slow.
+        let candidates: [String]
+        if let solutionName = rootEntries.first(where: { $0.hasSuffix(".sln") }) {
+            candidates = dotnetProjectPaths(fromSolution: fileText(solutionName) ?? "")
+        } else {
+            candidates = rootEntries.filter { $0.hasSuffix(".csproj") || $0.hasSuffix(".fsproj") }
         }
         for path in candidates.sorted() {
-            guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(path).path),
-                  let text = String(data: data, encoding: .utf8),
+            guard let text = fileText(path),
                   text.range(of: #"<OutputType>\s*(Exe|WinExe)\s*</OutputType>"#, options: [.regularExpression, .caseInsensitive]) != nil
             else { continue }
             return path
         }
         return nil
+    }
+
+    /// Extracts each referenced project's relative path from a .sln file's
+    /// `Project("{type}") = "Name", "path\to\Project.csproj", "{guid}"`
+    /// lines, normalizing the Windows-style backslashes .sln files use.
+    private static func dotnetProjectPaths(fromSolution solutionText: String) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^Project\("[^"]*"\)\s*=\s*"[^"]*",\s*"([^"]+)""#, options: [.anchorsMatchLines]
+        ) else { return [] }
+        let range = NSRange(solutionText.startIndex..., in: solutionText)
+        return regex.matches(in: solutionText, range: range).compactMap { match in
+            guard let pathRange = Range(match.range(at: 1), in: solutionText) else { return nil }
+            let path = solutionText[pathRange].replacingOccurrences(of: "\\", with: "/")
+            return (path.hasSuffix(".csproj") || path.hasSuffix(".fsproj")) ? path : nil
+        }
+    }
+
+    /// Whether Package.swift declares exactly one executable, the only case
+    /// bare `swift run` (no product name) can resolve on its own.
+    private static func swiftPackageHasUnambiguousExecutable(_ manifest: String) -> Bool {
+        let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: manifest)
+        if executableTargets > 0 { return executableTargets == 1 }
+        // Older manifests declare an executable product via `type:
+        // .executable` on a plain `.target` without a dedicated
+        // .executableTarget entry; a single one is unambiguous the same way.
+        return countOccurrences(of: #"type:\s*\.executable\b"#, in: manifest) == 1
+    }
+
+    private static func countOccurrences(of pattern: String, in text: String) -> Int {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        return regex.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text))
     }
 
     /// Whether a Makefile declares a rule for `target` — a target line looks

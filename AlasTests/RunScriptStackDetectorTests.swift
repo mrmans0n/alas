@@ -215,6 +215,30 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
     }
 
+    /// `swift run` with no argument only resolves when there's exactly one
+    /// executable to pick; with two, it exits requiring a name.
+    @Test func swiftPackageLeavesMultipleExecutablesUnchecked() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "let package = Package(targets: [.executableTarget(name: \"A\"), .executableTarget(name: \"B\")])",
+            in: root
+        )
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "products: [.executable(name: \"Tool\", targets: [\"Tool\"])], targets: [.target(name: \"Tool\", type: .executable)]",
+            in: root
+        )
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
+    }
+
     @Test func xcodePrefersWorkspaceOverProject() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -344,16 +368,27 @@ struct RunScriptStackDetectorTests {
     /// A root .sln with no runnable project at the worktree root: only a
     /// project under a subdirectory whose OutputType is actually executable
     /// counts, not a library alongside it.
+    /// Detection reads the solution's own project references rather than
+    /// walking the worktree, so an unreferenced project on disk doesn't
+    /// count and a large monorepo isn't scanned end to end.
     @Test func dotnetFindsAnExecutableProjectUnderTheSolutionLayout() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try touch("App.sln", in: root)
         try FileManager.default.createDirectory(
             at: root.appendingPathComponent("src/App.Lib"), withIntermediateDirectories: true
         )
         try write(
             "src/App.Lib/App.Lib.csproj",
             "<Project><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>",
+            in: root
+        )
+        try write(
+            "App.sln",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.Lib", "src\\App.Lib\\App.Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """,
             in: root
         )
         #expect(detect(root)[.dotnet]?.dotnetRunProject == nil)
@@ -363,6 +398,29 @@ struct RunScriptStackDetectorTests {
         )
         try write(
             "src/App.Cli/App.Cli.csproj",
+            "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>",
+            in: root
+        )
+        try write(
+            "App.sln",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.Lib", "src\\App.Lib\\App.Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.Cli", "src\\App.Cli\\App.Cli.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """,
+            in: root
+        )
+        #expect(detect(root)[.dotnet]?.dotnetRunProject == "src/App.Cli/App.Cli.csproj")
+
+        // A project that exists on disk but isn't referenced by the
+        // solution must not be discovered by scanning the tree for it.
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("unreferenced"), withIntermediateDirectories: true
+        )
+        try write(
+            "unreferenced/Stray.csproj",
             "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>",
             in: root
         )
