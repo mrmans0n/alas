@@ -112,7 +112,11 @@ struct EditorNavigationHistoryTests {
         ("root", "rootish/sibling.swift", "rootish/sibling.swift", nil),
         ("root", "root/sub/../inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift"),
         ("root/sub/..", "root/inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift"),
-        ("root", "root/inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift")
+        ("root", "root/inside%20%25%20file.swift", "root/inside % file.swift", "inside % file.swift"),
+        ("root", "root/link/file.swift", "outside/file.swift", nil),
+        ("root", "root/internal/file.swift", "root/sub/file.swift", "internal/file.swift"),
+        ("root-alias", "root-alias/link/file.swift", "outside/file.swift", nil),
+        ("root-alias", "root-alias/internal/file.swift", "root/sub/file.swift", "internal/file.swift")
     ])
     @MainActor func navigationContainmentControlsBufferAndSaveRoute(
         rootPath: String,
@@ -120,13 +124,46 @@ struct EditorNavigationHistoryTests {
         diskPath: String,
         expectedRelativePath: String?
     ) async throws {
+        try await checkNavigationContainment(
+            rootPath: rootPath, targetPath: targetPath, diskPath: diskPath,
+            expectedRelativePath: expectedRelativePath
+        )
+    }
+
+    @Test(arguments: [
+        ("root/link/missing.swift", "outside/missing.swift"),
+        ("root/dangling/file.swift", "absent/file.swift")
+    ])
+    @MainActor func missingSymlinkNavigationStaysExternalAndCannotSave(targetPath: String, diskPath: String) async throws {
+        try await checkNavigationContainment(
+            rootPath: "root", targetPath: targetPath, diskPath: diskPath,
+            expectedRelativePath: nil, missing: true
+        )
+    }
+
+    @MainActor private func checkNavigationContainment(
+        rootPath: String,
+        targetPath: String,
+        diskPath: String,
+        expectedRelativePath: String?,
+        missing: Bool = false
+    ) async throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("navigation-containment-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: fixture.appendingPathComponent("root/sub"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: fixture.appendingPathComponent("rootish"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixture) }
+        try FileManager.default.createDirectory(at: fixture.appendingPathComponent("outside"), withIntermediateDirectories: true)
+        for (link, destination) in [
+            ("root/link", "outside"), ("root/internal", "root/sub"),
+            ("root-alias", "root"), ("root/dangling", "absent")
+        ] {
+            try FileManager.default.createSymbolicLink(
+                at: fixture.appendingPathComponent(link), withDestinationURL: fixture.appendingPathComponent(destination)
+            )
+        }
         let file = fixture.appendingPathComponent(diskPath)
-        try Data("original".utf8).write(to: file)
+        if !missing { try Data("original".utf8).write(to: file) }
         let root = try #require(URL(string: fixture.absoluteString + rootPath))
         let target = EditorNavigationTarget(
             document: EditorDocumentID(host: nil, worktreeID: "w", uri: fixture.absoluteString + targetPath),
@@ -145,7 +182,8 @@ struct EditorNavigationHistoryTests {
         }
         defer { manager.discardBuffer(worktreeId: "w", tabId: state.id) }
         #expect(state.relativePath == (expectedRelativePath ?? ""))
-        #expect(state.externalAbsolutePath == (expectedRelativePath == nil ? file.path : nil))
+        let logicalTarget = try #require(URL(string: target.document.uri)).standardizedFileURL
+        #expect(state.externalAbsolutePath == (expectedRelativePath == nil ? logicalTarget.path : nil))
         #expect(!state.isExternalEditable)
         #expect(state.revealLine == 3)
         #expect(state.revealCharacter == 7)
@@ -159,14 +197,18 @@ struct EditorNavigationHistoryTests {
         }
         await buffer.awaitLoadForTesting()
         buffer.stopWatching()
-        #expect(buffer.storage.string == "original")
+        #expect(buffer.storage.string == (missing ? "(unable to read file)" : "original"))
         #expect(buffer.isExternal == (expectedRelativePath == nil))
         #expect(buffer.readOnly == (expectedRelativePath == nil))
         #expect((manager.activeEditorContext(worktreeId: "w") == nil) == (expectedRelativePath == nil))
         #expect((manager.peekExternalBuffer(tabId: state.id) != nil) == (expectedRelativePath == nil))
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "changed")
         try buffer.save()
-        #expect(try String(contentsOf: file, encoding: .utf8) == (expectedRelativePath == nil ? "original" : "changed"))
+        if missing {
+            #expect(!FileManager.default.fileExists(atPath: file.path))
+        } else {
+            #expect(try String(contentsOf: file, encoding: .utf8) == (expectedRelativePath == nil ? "original" : "changed"))
+        }
     }
 
     @Test @MainActor func historyKeepsOnlyTheMostRecentTwoHundredLocations() {

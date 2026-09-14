@@ -143,10 +143,21 @@ final class TabsManager {
               let url = URL(string: target.document.uri)
         else { return false }
         let normalizedURL = url.standardizedFileURL
-        let rootComponents = worktreeRoot.standardizedFileURL.pathComponents
+        let normalizedRoot = worktreeRoot.standardizedFileURL
+        let rootComponents = normalizedRoot.pathComponents
         let targetComponents = normalizedURL.pathComponents
-        if targetComponents.count > rootComponents.count,
-           targetComponents.starts(with: rootComponents) {
+        var isContained = targetComponents.count > rootComponents.count
+            && targetComponents.starts(with: rootComponents)
+        if isContained, target.document.host == nil {
+            let resolvedRootComponents = normalizedRoot.resolvingSymlinksInPath().pathComponents
+            let resolvedTargetComponents = normalizedURL.resolvingSymlinksInPath().pathComponents
+            // A directory symlink can escape the worktree despite a contained
+            // logical path. Missing targets cannot establish resolved identity.
+            isContained = FileManager.default.fileExists(atPath: normalizedURL.path)
+                && resolvedTargetComponents.count > resolvedRootComponents.count
+                && resolvedTargetComponents.starts(with: resolvedRootComponents)
+        }
+        if isContained {
             _ = openEditor(
                 worktreeId: target.document.worktreeID,
                 relativePath: targetComponents.dropFirst(rootComponents.count).joined(separator: "/"),
