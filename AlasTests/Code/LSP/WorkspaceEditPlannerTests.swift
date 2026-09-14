@@ -285,6 +285,56 @@ struct WorkspaceEditPlannerTests {
         #expect(try value.encodedData() == Data(token.utf8))
     }
 
+    @Test func rejectsDuplicateJSONKeys() {
+        #expect(jsonParsingFails(#"{"value":1,"value":2}"#))
+    }
+
+    @Test func acceptsJSONWith128NestedArrays() throws {
+        let source = nestedArrayJSON(containers: 128)
+
+        #expect(try LSPJSONValue.decode(from: Data(source.utf8)).encodedData() == Data(source.utf8))
+    }
+
+    @Test func rejectsJSONWith129NestedArrays() {
+        let source = nestedArrayJSON(containers: 129)
+
+        #expect(jsonParsingFails(source))
+    }
+
+    @Test func acceptsJSONWith128NestedObjects() throws {
+        let source = nestedObjectJSON(containers: 128)
+
+        #expect(try LSPJSONValue.decode(from: Data(source.utf8)).encodedData() == Data(source.utf8))
+    }
+
+    @Test func rejectsJSONWith129NestedObjects() {
+        let source = nestedObjectJSON(containers: 129)
+
+        #expect(jsonParsingFails(source))
+    }
+
+    @Test func acceptsJSONWith128MixedContainers() throws {
+        let source = nestedMixedJSON(containers: 128)
+
+        #expect(try LSPJSONValue.decode(from: Data(source.utf8)).encodedData() == Data(source.utf8))
+    }
+
+    @Test func rejectsJSONWith129MixedContainers() {
+        let source = nestedMixedJSON(containers: 129)
+
+        #expect(jsonParsingFails(source))
+    }
+
+    @Test func rejectsJSONWith10000MixedContainers() {
+        #expect(jsonParsingFails(nestedMixedJSON(containers: 10_000)))
+    }
+
+    @Test func resetsJSONNestingDepthBetweenSiblings() throws {
+        let source = "[\(nestedArrayJSON(containers: 127)),\(nestedObjectJSON(containers: 127)),\(nestedMixedJSON(containers: 127))]"
+
+        #expect(try LSPJSONValue.decode(from: Data(source.utf8)).encodedData() == Data(source.utf8))
+    }
+
     @Test func genericCodableSupportsNumbersInsideNestedValues() throws {
         let source = Data(#"[42,{"fraction":12.5,"negative":-7}]"#.utf8)
         let value = try JSONDecoder().decode(LSPJSONValue.self, from: source)
@@ -395,5 +445,37 @@ struct WorkspaceEditPlannerTests {
             start: .init(line: startLine, character: startCharacter),
             end: .init(line: endLine, character: endCharacter)
         )
+    }
+
+    private func nestedArrayJSON(containers: Int) -> String {
+        String(repeating: "[", count: containers) + "null" + String(repeating: "]", count: containers)
+    }
+
+    private func nestedObjectJSON(containers: Int) -> String {
+        String(repeating: #"{"value":"#, count: containers) + "null" + String(repeating: "}", count: containers)
+    }
+
+    private func nestedMixedJSON(containers: Int) -> String {
+        var source = ""
+        var closings = ""
+        for depth in 0..<containers {
+            if depth.isMultiple(of: 2) {
+                source += "["
+                closings += "]"
+            } else {
+                source += #"{"value":"#
+                closings += "}"
+            }
+        }
+        return source + "null" + String(closings.reversed())
+    }
+
+    private func jsonParsingFails(_ source: String) -> Bool {
+        do {
+            _ = try LSPJSONValue.decode(from: Data(source.utf8))
+            return false
+        } catch {
+            return true
+        }
     }
 }

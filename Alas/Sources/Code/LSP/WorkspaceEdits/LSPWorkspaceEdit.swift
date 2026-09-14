@@ -69,9 +69,12 @@ indirect enum LSPJSONValue: Codable, Hashable, Sendable {
 private enum LSPJSONValueError: Swift.Error {
     case malformedJSON
     case duplicateObjectKey
+    case containerNestingLimitExceeded
 }
 
 private struct LSPJSONValueParser {
+    private static let maximumContainerDepth = 128
+
     private let bytes: [UInt8]
     private var index = 0
 
@@ -81,13 +84,13 @@ private struct LSPJSONValueParser {
 
     mutating func parseDocument() throws -> LSPJSONValue {
         skipWhitespace()
-        let value = try parseValue()
+        let value = try parseValue(containerDepth: 0)
         skipWhitespace()
         guard index == bytes.count else { throw LSPJSONValueError.malformedJSON }
         return value
     }
 
-    private mutating func parseValue() throws -> LSPJSONValue {
+    private mutating func parseValue(containerDepth: Int) throws -> LSPJSONValue {
         guard index < bytes.count else { throw LSPJSONValueError.malformedJSON }
         switch bytes[index] {
         case 110:
@@ -102,9 +105,15 @@ private struct LSPJSONValueParser {
         case 34:
             return .string(try parseString())
         case 91:
-            return .array(try parseArray())
+            guard containerDepth < Self.maximumContainerDepth else {
+                throw LSPJSONValueError.containerNestingLimitExceeded
+            }
+            return .array(try parseArray(containerDepth: containerDepth + 1))
         case 123:
-            return .object(try parseObject())
+            guard containerDepth < Self.maximumContainerDepth else {
+                throw LSPJSONValueError.containerNestingLimitExceeded
+            }
+            return .object(try parseObject(containerDepth: containerDepth + 1))
         case 45, 48...57:
             return .number(try parseNumber())
         default:
@@ -112,21 +121,21 @@ private struct LSPJSONValueParser {
         }
     }
 
-    private mutating func parseArray() throws -> [LSPJSONValue] {
+    private mutating func parseArray(containerDepth: Int) throws -> [LSPJSONValue] {
         index += 1 // [
         skipWhitespace()
         if consume(93) { return [] }
         var values: [LSPJSONValue] = []
         while true {
             skipWhitespace()
-            values.append(try parseValue())
+            values.append(try parseValue(containerDepth: containerDepth))
             skipWhitespace()
             if consume(93) { return values }
             guard consume(44) else { throw LSPJSONValueError.malformedJSON }
         }
     }
 
-    private mutating func parseObject() throws -> [String: LSPJSONValue] {
+    private mutating func parseObject(containerDepth: Int) throws -> [String: LSPJSONValue] {
         index += 1 // {
         skipWhitespace()
         if consume(125) { return [:] }
@@ -138,7 +147,7 @@ private struct LSPJSONValueParser {
             skipWhitespace()
             guard consume(58) else { throw LSPJSONValueError.malformedJSON }
             skipWhitespace()
-            values[key] = try parseValue()
+            values[key] = try parseValue(containerDepth: containerDepth)
             skipWhitespace()
             if consume(125) { return values }
             guard consume(44) else { throw LSPJSONValueError.malformedJSON }
