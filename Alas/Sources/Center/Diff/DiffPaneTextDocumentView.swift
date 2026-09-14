@@ -1629,14 +1629,11 @@ final class DiffPaneCodeTextView: NSTextView {
         for scrollView in scrollViews {
             let clipView = scrollView.contentView
             clipView.postsBoundsChangedNotifications = true
-            let token = NotificationCenter.default.addObserver(
+            let token = NotificationCenter.default.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
+                object: clipView
             ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.lspController?.notifyScrolled()
-                }
+                self?.lspController?.notifyScrolled()
             }
             scrollBoundsObservers.append(token)
         }
@@ -2521,10 +2518,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
+        boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
+            object: scrollView.contentView
         ) { [weak self] _ in
             self?.needsDisplay = true
         }

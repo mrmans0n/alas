@@ -115,10 +115,9 @@ struct MergeSidePane: NSViewRepresentable {
             self.side = side
             self.coordinator = coord
             scroll.contentView.postsBoundsChangedNotifications = true
-            token = NotificationCenter.default.addObserver(
+            token = NotificationCenter.default.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: scroll.contentView,
-                queue: .main
+                object: scroll.contentView
             ) { [weak self] _ in
                 guard let self else { return }
                 let y = scroll.contentView.bounds.origin.y
@@ -255,10 +254,9 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
 
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
+        boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
+            object: scrollView.contentView
         ) { [weak self] _ in
             self?.needsDisplay = true
         }

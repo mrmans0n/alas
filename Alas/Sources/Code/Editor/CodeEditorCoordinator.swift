@@ -747,10 +747,9 @@ final class CodeEditorCoordinator {
 
         if let clipView = textView.enclosingScrollView?.contentView {
             clipView.postsBoundsChangedNotifications = true
-            let token = nc.addObserver(
+            let token = nc.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
+                object: clipView
             ) { [weak self] _ in
                 guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
                 self?.hover?.notifyScrolled()
@@ -761,10 +760,9 @@ final class CodeEditorCoordinator {
             hoverObservers.append(token)
         }
 
-        let selectionToken = nc.addObserver(
+        let selectionToken = nc.addMainActorObserver(
             forName: NSTextView.didChangeSelectionNotification,
-            object: textView,
-            queue: .main
+            object: textView
         ) { [weak self] _ in
             guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
             self?.hover?.notifyCaretChanged()
@@ -777,10 +775,9 @@ final class CodeEditorCoordinator {
         // makeNSView before the text view is inserted into a window, so
         // textView.window is often nil here and never gets retried. The
         // handler filters to the text view's current window at fire time.
-        let resizeToken = nc.addObserver(
+        let resizeToken = nc.addMainActorObserver(
             forName: NSWindow.didResizeNotification,
-            object: nil,
-            queue: .main
+            object: nil
         ) { [weak self] note in
             guard let self,
                   let window = note.object as? NSWindow,

@@ -178,10 +178,9 @@ struct MergeResultPane: NSViewRepresentable {
         func observeScroll(_ scroll: NSScrollView, into coord: MergeScrollCoordinator) {
             self.coordinator = coord
             scroll.contentView.postsBoundsChangedNotifications = true
-            token = NotificationCenter.default.addObserver(
+            token = NotificationCenter.default.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: scroll.contentView,
-                queue: .main
+                object: scroll.contentView
             ) { [weak self, weak scroll, weak coord] _ in
                 guard let scroll, let coord, self != nil else { return }
                 let y = scroll.contentView.bounds.origin.y
