@@ -70,7 +70,7 @@ struct RightPaneTabBar: View {
                 }
             segment(
                 .agent,
-                icon: "person.crop.circle",
+                icon: "cpu",
                 label: "Agent",
                 count: activeAgentCount > 0 ? activeAgentCount : nil,
                 layout: layout
