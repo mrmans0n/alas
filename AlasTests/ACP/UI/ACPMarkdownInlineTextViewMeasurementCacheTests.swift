@@ -4,10 +4,10 @@ import Testing
 
 @MainActor
 private final class ACPMarkdownScrollRecordingResponder: NSResponder {
-    var receivedEvent: NSEvent?
+    private(set) var receivedEvents: [NSEvent] = []
 
     override func scrollWheel(with event: NSEvent) {
-        receivedEvent = event
+        receivedEvents.append(event)
     }
 }
 
@@ -32,6 +32,32 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         return textView
     }
+
+    private func makeScrollEvent(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        phase: NSEvent.Phase = [],
+        momentumPhase: NSEvent.Phase = []
+    ) throws -> NSEvent {
+        let cgEvent = try #require(
+            CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: Int32(deltaX),
+                wheel2: Int32(deltaY),
+                wheel3: 0
+            )
+        )
+        if !phase.isEmpty {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        }
+        if !momentumPhase.isEmpty {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventMomentumPhase, value: Int64(momentumPhase.rawValue))
+        }
+        return try #require(NSEvent(cgEvent: cgEvent))
+    }
+
 
     @Test func repeatedSameWidthProbesHitTheCache() {
         let textView = makeTextView("The quick brown fox jumps over the lazy dog, several times, wrapping.")
@@ -199,6 +225,31 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         let event = try #require(NSEvent(cgEvent: cgEvent))
 
         textView.scrollWheel(with: event)
-        #expect(transcriptResponder.receivedEvent === event)
+        #expect(transcriptResponder.receivedEvents == [event])
+    }
+
+    @Test("ambiguous gesture starts are replayed once axis becomes vertical")
+    func ambiguousGestureStartIsReplayedOnceAxisBecomesVertical() throws {
+        let textView = makeTextView("Table cell")
+        let transcriptResponder = ACPMarkdownScrollRecordingResponder()
+        textView.nextResponder = transcriptResponder
+
+        let ambiguous = try makeScrollEvent(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began
+        )
+        textView.scrollWheel(with: ambiguous)
+
+        let vertical = try makeScrollEvent(
+            deltaX: 0,
+            deltaY: 20,
+            phase: .changed
+        )
+        textView.scrollWheel(with: vertical)
+
+        #expect(transcriptResponder.receivedEvents.count == 2)
+        #expect(transcriptResponder.receivedEvents[0] === ambiguous)
+        #expect(transcriptResponder.receivedEvents[1] === vertical)
     }
 }

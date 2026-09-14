@@ -221,13 +221,15 @@ extension NSAttributedString.Key {
 
 struct ACPMarkdownScrollRoutingState {
     private(set) var forwarding: Bool?
+    private(set) var pendingStartEvent: NSEvent?
     private var hasMomentumPhase = false
 
     mutating func shouldForward(
         deltaX: CGFloat,
         deltaY: CGFloat,
         phase: NSEvent.Phase,
-        momentumPhase: NSEvent.Phase
+        momentumPhase: NSEvent.Phase,
+        pendingEvent: NSEvent? = nil
     ) -> Bool {
         let isVertical = Self.isVerticalDominant(deltaX: deltaX, deltaY: deltaY)
         let hasDominantAxis = abs(deltaY) != abs(deltaX)
@@ -235,12 +237,17 @@ struct ACPMarkdownScrollRoutingState {
 
         if phase.contains(.began) {
             forwarding = nil
+            pendingStartEvent = hasDominantAxis ? nil : pendingEvent
             hasMomentumPhase = false
         }
         if momentumPhase.contains(.began) {
             hasMomentumPhase = true
+            pendingStartEvent = nil
         }
         if forwarding == nil && hasGesturePhase && hasDominantAxis {
+            forwarding = isVertical
+        }
+        if forwarding == nil && !hasGesturePhase && pendingStartEvent != nil {
             forwarding = isVertical
         }
 
@@ -254,10 +261,17 @@ struct ACPMarkdownScrollRoutingState {
             || (phase.contains(.ended) && !hasMomentumPhase)
         {
             forwarding = nil
+            pendingStartEvent = nil
             hasMomentumPhase = false
         }
 
         return shouldForward
+    }
+
+    mutating func consumePendingStartEvent() -> NSEvent? {
+        guard let pendingStartEvent else { return nil }
+        self.pendingStartEvent = nil
+        return pendingStartEvent
     }
 
     static func isVerticalDominant(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
@@ -341,8 +355,12 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             deltaX: event.scrollingDeltaX,
             deltaY: event.scrollingDeltaY,
             phase: event.phase,
-            momentumPhase: event.momentumPhase
+            momentumPhase: event.momentumPhase,
+            pendingEvent: event
         ) {
+            if let pendingStartEvent = scrollRoutingState.consumePendingStartEvent() {
+                nextResponder?.scrollWheel(with: pendingStartEvent)
+            }
             nextResponder?.scrollWheel(with: event)
             return
         }
