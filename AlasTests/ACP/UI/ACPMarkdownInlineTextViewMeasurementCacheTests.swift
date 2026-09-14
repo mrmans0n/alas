@@ -105,9 +105,82 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
 
     @Test("only vertical-dominant wheel events are forwarded")
     func onlyVerticalDominantWheelEventsAreForwarded() {
-        #expect(ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 0, deltaY: 20))
-        #expect(!ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 20, deltaY: 0))
-        #expect(!ACPMarkdownInlineNSTextView.shouldForwardVerticalScroll(deltaX: 20, deltaY: 20))
+        #expect(ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 0, deltaY: 20))
+        #expect(!ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 20, deltaY: 0))
+        #expect(!ACPMarkdownScrollRoutingState.isVerticalDominant(deltaX: 20, deltaY: 20))
+    }
+
+    @Test("scroll routing keeps the selected responder through phase-only endings")
+    func scrollRoutingKeepsGestureResponderThroughPhaseOnlyEndings() {
+        var vertical = ACPMarkdownScrollRoutingState()
+        let verticalStart = vertical.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let verticalEnd = vertical.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        #expect(verticalStart)
+        #expect(verticalEnd)
+        #expect(vertical.forwarding == nil)
+
+        var horizontal = ACPMarkdownScrollRoutingState()
+        let horizontalStart = horizontal.shouldForward(
+            deltaX: 20, deltaY: 0, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let horizontalEnd = horizontal.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: NSEvent.Phase()
+        )
+        #expect(!horizontalStart)
+        #expect(!horizontalEnd)
+        #expect(horizontal.forwarding == nil)
+    }
+
+    @Test("scroll routing keeps forwarding through trackpad momentum")
+    func scrollRoutingKeepsForwardingThroughMomentum() {
+        var routing = ACPMarkdownScrollRoutingState()
+        _ = routing.shouldForward(
+            deltaX: 0, deltaY: 20, phase: .began, momentumPhase: NSEvent.Phase()
+        )
+        let momentumStart = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: .ended, momentumPhase: .began
+        )
+        let momentumEnd = routing.shouldForward(
+            deltaX: 0, deltaY: 0, phase: NSEvent.Phase(), momentumPhase: .ended
+        )
+        #expect(momentumStart)
+        #expect(momentumEnd)
+        #expect(routing.forwarding == nil)
+    }
+
+    @Test("scroll routing waits for dominant axis before latching")
+    func scrollRoutingWaitsForAxisBeforeLatching() {
+        var routing = ACPMarkdownScrollRoutingState()
+
+        let waitsForDominantAxis = !routing.shouldForward(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(waitsForDominantAxis)
+
+        let followsDominantAxis = routing.shouldForward(
+            deltaX: 0,
+            deltaY: 20,
+            phase: .changed,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(followsDominantAxis)
+
+        let endsAfterDominantAxis = routing.shouldForward(
+            deltaX: 0,
+            deltaY: 0,
+            phase: .ended,
+            momentumPhase: NSEvent.Phase()
+        )
+        #expect(endsAfterDominantAxis)
+
+        #expect(routing.forwarding == nil)
     }
 
     @Test("vertical wheel events over Markdown text reach the transcript")

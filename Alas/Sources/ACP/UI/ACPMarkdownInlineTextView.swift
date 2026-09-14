@@ -219,7 +219,55 @@ extension NSAttributedString.Key {
     static let acpMarkdownInlineRemoteImage = NSAttributedString.Key("ACPMarkdownInlineRemoteImage")
 }
 
+struct ACPMarkdownScrollRoutingState {
+    private(set) var forwarding: Bool?
+    private var hasMomentumPhase = false
+
+    mutating func shouldForward(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        phase: NSEvent.Phase,
+        momentumPhase: NSEvent.Phase
+    ) -> Bool {
+        let isVertical = Self.isVerticalDominant(deltaX: deltaX, deltaY: deltaY)
+        let hasDominantAxis = abs(deltaY) != abs(deltaX)
+        let hasGesturePhase = !phase.isEmpty || !momentumPhase.isEmpty
+
+        if phase.contains(.began) {
+            forwarding = nil
+            hasMomentumPhase = false
+        }
+        if momentumPhase.contains(.began) {
+            hasMomentumPhase = true
+        }
+        if forwarding == nil && hasGesturePhase && hasDominantAxis {
+            forwarding = isVertical
+        }
+
+        let shouldForward = hasGesturePhase
+            ? forwarding ?? false
+            : isVertical
+
+        if phase.contains(.cancelled)
+            || momentumPhase.contains(.cancelled)
+            || momentumPhase.contains(.ended)
+            || (phase.contains(.ended) && !hasMomentumPhase)
+        {
+            forwarding = nil
+            hasMomentumPhase = false
+        }
+
+        return shouldForward
+    }
+
+    static func isVerticalDominant(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
+        abs(deltaY) > abs(deltaX)
+    }
+}
+
 final class ACPMarkdownInlineNSTextView: NSTextView {
+    private var scrollRoutingState = ACPMarkdownScrollRoutingState()
+
     private let minimumFittingWidth: CGFloat = 80
     private let maximumNaturalFittingWidth: CGFloat = 10_000
 
@@ -289,18 +337,16 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// Markdown cells are NSTextViews, so without this override they consume
     /// wheel events even though they cannot scroll vertically themselves.
     override func scrollWheel(with event: NSEvent) {
-        if Self.shouldForwardVerticalScroll(
+        if scrollRoutingState.shouldForward(
             deltaX: event.scrollingDeltaX,
-            deltaY: event.scrollingDeltaY
+            deltaY: event.scrollingDeltaY,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase
         ) {
             nextResponder?.scrollWheel(with: event)
             return
         }
         super.scrollWheel(with: event)
-    }
-
-    static func shouldForwardVerticalScroll(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
-        abs(deltaY) > abs(deltaX)
     }
 
     /// Measure the current text wrapped at `width`, as a pure function of the
