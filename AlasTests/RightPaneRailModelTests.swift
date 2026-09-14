@@ -2,6 +2,10 @@ import Testing
 @testable import Alas
 
 struct RightPaneRailModelTests {
+    @Test func agentTabUsesTheWorkerGlyph() {
+        #expect(RightPaneRail.icon(for: .agent) == "cpu")
+    }
+
     @Test func tappingTheActiveTabWhileExpandedCollapsesThePane() {
         #expect(RightPaneRailAction.resolve(tapped: .changes, active: .changes, collapsed: false) == .collapse)
         #expect(RightPaneRailAction.resolve(tapped: .run, active: .run, collapsed: false) == .collapse)

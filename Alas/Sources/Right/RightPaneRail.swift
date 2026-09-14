@@ -65,7 +65,7 @@ struct RightPaneRail: View {
         switch tab {
         case .changes: return "diff"
         case .files:   return "folder"
-        case .agent:   return "person.crop.circle"
+        case .agent:   return "cpu"
         case .run:     return "play"
         }
     }
