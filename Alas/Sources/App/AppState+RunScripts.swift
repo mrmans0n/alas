@@ -525,9 +525,43 @@ extension AppState {
     }
 
     func dismissRunScriptFailure(id: String, worktreeID: String) {
+        if let failure = runScriptFailureQueue.failures(for: worktreeID).first(where: { $0.id == id }),
+           let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
+           let context = attentionContext(for: worktree) {
+            let keys = [
+                AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: context.owner),
+                AttentionSourceKey(rawValue: "script:\(failure.runID):failure")
+            ]
+            for key in keys where attentionStore.document.observations[key]?.fingerprint == id {
+                observeAttention(.inactive(sourceKey: key))
+            }
+        }
+        for event in attentionStore.events where event.kind == .runScriptFailure
+            && event.jumpTarget == .runScriptFailure(failureID: id)
+            && attentionWorktree(for: event.owner)?.id == worktreeID {
+            guard let current = attentionStore.document.observations[event.sourceKey],
+                  current.isActive, current.eventID == event.id else { continue }
+            observeAttention(.inactive(sourceKey: event.sourceKey))
+        }
         runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
         if selectedRunScriptFailure?.id == id, selectedRunScriptFailure?.worktreeID == worktreeID {
             selectedRunScriptFailure = nil
+        }
+    }
+
+    private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {
+        if let context = attentionContext(for: worktree) {
+            observeAttention(.inactive(sourceKey: AttentionProducer.scriptSourceKey(
+                scriptKey: scriptKey, owner: context.owner
+            )), at: date)
+        }
+        // Legacy run-keyed occurrences can only be matched while their script metadata survives.
+        for failure in runScriptFailureQueue.failures(for: worktree.id) where failure.scriptKey == scriptKey {
+            observeAttention(.inactive(sourceKey: .init(rawValue: "script:\(failure.runID):failure")), at: date)
+            runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id)
+            if selectedRunScriptFailure?.id == failure.id {
+                selectedRunScriptFailure = nil
+            }
         }
     }
 
@@ -579,6 +613,7 @@ extension AppState {
                     )
                     guard completion.exitCode != 0 else {
                         runRecords.finish(runID: runID, outcome: .succeeded, at: observedAt)
+                        retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                         return
                     }
                     let capturedOutput: RunScriptCapturedOutput
@@ -613,6 +648,7 @@ extension AppState {
                         completedAt: observedAt,
                         capturedOutput: capturedOutput
                     )
+                    retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                     runScriptFailureQueue.append(failure)
                     if let context = attentionContext(for: worktree) {
                         for observation in AttentionProducer.script(
@@ -713,6 +749,17 @@ extension AppState {
         if purgeFailures {
             // The worktree itself is going away, so its run history goes with
             // it rather than leaking into a future worktree that reuses the id.
+            for event in attentionStore.events where event.kind == .runScriptFailure
+                && attentionWorktree(for: event.owner)?.id == worktreeID {
+                observeAttention(.inactive(sourceKey: event.sourceKey))
+            }
+            if let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
+               let context = attentionContext(for: worktree) {
+                let prefix = "script:\(context.owner.storageKey):"
+                for key in attentionStore.document.observations.keys where key.rawValue.hasPrefix(prefix) {
+                    observeAttention(.inactive(sourceKey: key))
+                }
+            }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
         } else {

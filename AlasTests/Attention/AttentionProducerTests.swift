@@ -5,25 +5,24 @@ import Testing
 @Suite("Attention producer")
 struct AttentionProducerTests {
     @Test(arguments: [
-        (ActivityState.awaitingInput, AttentionKind.agentAwaiting, "session:s1:awaiting", "Codex is waiting for input"),
-        (ActivityState.permissionRequest, AttentionKind.agentPermission, "session:s1:permission", "Codex needs permission")
+        (ActivityState.awaitingInput, true, AttentionKind.agentAwaiting, "session:s1:awaiting"),
+        (ActivityState.awaitingInput, false, AttentionKind.agentReady, "session:s1:awaiting"),
+        (ActivityState.permissionRequest, false, AttentionKind.agentPermission, "session:s1:permission")
     ])
     func harnessWaitingStatesMapToAttention(
-        state: ActivityState, kind: AttentionKind, sourceKey: String, title: String
+        state: ActivityState, requiresUserInput: Bool, kind: AttentionKind, sourceKey: String
     ) throws {
         let observations = AttentionProducer.harness(
             sessionID: "s1", agent: .codex, state: state, body: "Need a choice",
-            owner: Fixtures.owner, display: Fixtures.display
+            owner: Fixtures.owner, display: Fixtures.display, requiresUserInput: requiresUserInput
         )
 
         let signal = try #require(observations.compactMap(\.activeSignal).first { $0.kind == kind })
-        #expect(signal.title == title)
         #expect(signal.sourceKey == AttentionSourceKey(rawValue: sourceKey))
         #expect(signal.fingerprint.hasPrefix("body-sha256:"))
-        #expect(signal.fingerprint.count == "body-sha256:".count + 64)
         #expect(!signal.fingerprint.contains("Need a choice"))
         #expect(signal.jumpTarget == .session(sessionID: "s1"))
-        let inactiveKey = kind == .agentAwaiting
+        let inactiveKey = state == .awaitingInput
             ? AttentionSourceKey(rawValue: "session:s1:permission")
             : AttentionSourceKey(rawValue: "session:s1:awaiting")
         #expect(observations.contains { observation in
@@ -52,9 +51,22 @@ struct AttentionProducerTests {
 
         #expect(signal.kind == .runScriptFailure)
         #expect(signal.title == "Build failed with exit code 23")
-        #expect(signal.sourceKey == AttentionSourceKey(rawValue: "script:run-1:failure"))
+        #expect(signal.sourceKey == AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: Fixtures.owner))
         #expect(signal.fingerprint == "failure-1")
         #expect(signal.jumpTarget == .runScriptFailure(failureID: "failure-1"))
+    }
+
+    @Test func laterFailureOfSameScriptSupersedesPriorRun() throws {
+        let first = try #require(AttentionProducer.script(
+            failure: Fixtures.failure(runID: "one", id: "first", exitCode: 1),
+            owner: Fixtures.owner, display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        let second = try #require(AttentionProducer.script(
+            failure: Fixtures.failure(runID: "two", id: "second", exitCode: 1),
+            owner: Fixtures.owner, display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        #expect(first.sourceKey == second.sourceKey)
+        #expect(first.fingerprint != second.fingerprint)
     }
 
     @Test func scriptFailureOutputMarksTruncationBeforeUtf8Repair() throws {
@@ -68,15 +80,14 @@ struct AttentionProducerTests {
     }
 
     @Test(arguments: [
-        (MergeOperation.merge(sourceBranch: "main"), "Merge is in progress"),
-        (MergeOperation.rebase(plan: RebasePlan(ontoBranch: "main", sourceBranch: "feature", commits: [])), "Rebase is in progress"),
-        (MergeOperation.cherryPick(sha: "abc123", summary: "Pick"), "Cherry-pick is in progress")
+        MergeOperation.merge(sourceBranch: "main"),
+        MergeOperation.rebase(plan: RebasePlan(ontoBranch: "main", sourceBranch: "feature", commits: [])),
+        MergeOperation.cherryPick(sha: "abc123", summary: "Pick")
     ])
-    func gitOperationsMapToTheOperationDestination(operation: MergeOperation, title: String) throws {
+    func gitOperationsMapToTheOperationDestination(operation: MergeOperation) throws {
         let signal = try #require(AttentionProducer.git(operation: operation, changes: [], owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
 
         #expect(signal.kind == .gitOperation)
-        #expect(signal.title == title)
         #expect(signal.sourceKey == AttentionSourceKey(rawValue: "git:\(Fixtures.owner.storageKey):operation"))
         #expect(signal.jumpTarget == .gitOperation)
     }
@@ -167,14 +178,13 @@ struct AttentionProducerTests {
     }
 
     @Test(arguments: [
-        (Fixtures.review(check: .fail), AttentionKind.failedChecks, "CI failed"),
-        (Fixtures.review(decision: .changesRequested), AttentionKind.actionableFeedback, "Review feedback needs action"),
-        (Fixtures.review(needsPush: true, upstreamAhead: 1), AttentionKind.reviewSyncBlocked, "Remote branch diverged"),
-        (Fixtures.review(needsPush: false, upstreamAhead: 1), AttentionKind.reviewSyncBlocked, "Remote branch is ahead")
+        (Fixtures.review(check: .fail), AttentionKind.failedChecks),
+        (Fixtures.review(decision: .changesRequested), AttentionKind.actionableFeedback),
+        (Fixtures.review(needsPush: true, upstreamAhead: 1), AttentionKind.reviewSyncBlocked)
     ])
-    func reviewMappingsIncludeOnlyActionableStates(snapshot: ReviewLoopSnapshot, kind: AttentionKind, title: String) throws {
+    func reviewMappingsRecordQuietHistory(snapshot: ReviewLoopSnapshot, kind: AttentionKind) throws {
         let signal = try #require(AttentionProducer.review(snapshot: snapshot, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first { $0.kind == kind })
-        #expect(signal.title == title)
+        #expect(!signal.kind.requiresAction)
         #expect(signal.jumpTarget == .reviewRequest(number: 42))
         if kind != .reviewSyncBlocked {
             #expect(signal.fingerprint.contains("head-1"))

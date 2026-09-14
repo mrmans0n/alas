@@ -106,16 +106,30 @@ struct AttentionIntegrationTests {
         #expect(fixture.state.attentionAggregation.unresolvedCountByProject == ["other": 1])
     }
 
-    @Test func unavailableProviderDoesNotResurrectAcknowledgedReviewFailure() throws {
+    @Test(arguments: ["missing", "unavailable", "unauthenticated", "failed"])
+    func unknownProviderRetainsAcknowledgedReviewOccurrence(status: String) throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let failed = review()
         fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
         let event = try #require(fixture.state.attentionStore.events.first)
         fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
-        let unavailable = ReviewLoopSnapshot(local: failed.local, remote: failed.remote, reviewRequest: nil, providerAvailable: false, providerAuthenticated: false, providerCapabilities: .githubCLI, errorMessage: "Provider unavailable")
-        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: unavailable))
-        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: nil))
+        let unknown = status == "missing" ? nil : ReviewLoopSnapshot(
+            local: failed.local,
+            remote: failed.remote,
+            reviewRequest: nil,
+            providerAvailable: status != "unavailable",
+            providerAuthenticated: status != "unauthenticated",
+            providerCapabilities: .githubCLI,
+            errorMessage: status == "failed" ? "Provider request failed" : nil
+        )
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: unknown))
+        #expect(fixture.state.attentionStore.document.observations[event.sourceKey]?.isActive == true)
+        #expect(fixture.state.attentionStore.document.observations[event.sourceKey]?.eventID == event.id)
+        let retained = try #require(fixture.state.attentionAggregation.history.first { $0.eventID == event.id })
+        #expect(retained.presentation == .unverified)
+        #expect(retained.acknowledgedAt != nil)
+        #expect(fixture.state.attentionAggregation.items.isEmpty)
         fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
         #expect(fixture.state.attentionStore.events.count == 1)
         #expect(fixture.state.attentionAggregation.unresolvedCount == 0)
@@ -149,11 +163,12 @@ struct AttentionIntegrationTests {
         let snapshot = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: review(decision: .changesRequested, upstreamAhead: 2, needsPush: true))
         fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: snapshot)
         #expect(Set(fixture.state.attentionStore.events.map(\.kind)) == [.failedChecks, .actionableFeedback, .reviewSyncBlocked])
+        #expect(fixture.state.attentionAggregation.items.isEmpty)
         let prior = try #require(snapshot.review)
         let removed = ReviewLoopSnapshot(local: prior.local, remote: prior.remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
         fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: removed))
         #expect(fixture.state.attentionStore.document.observations.values.allSatisfy { !$0.isActive })
-        #expect(fixture.state.attentionAggregation.unresolvedCount == 3)
+        #expect(fixture.state.attentionAggregation.items.isEmpty)
     }
 
     @Test func persistedAgentReplyUsesCommentOwnerAndAcknowledgmentSurvivesRepeat() throws {
@@ -176,6 +191,9 @@ struct AttentionIntegrationTests {
         #expect(callbacks == 1)
         let event = try #require(fixture.state.attentionStore.events.first)
         #expect(event.owner.legacyPath == "/repo/two")
+        #expect(event.kind == .reviewReply)
+        #expect(fixture.state.attentionAggregation.items.isEmpty)
+        #expect(fixture.state.attentionAggregation.history.map(\.eventID) == [event.id])
         fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
         let persistedComment = try store.find(commentID: comment.id)
         let updated = try #require(persistedComment)

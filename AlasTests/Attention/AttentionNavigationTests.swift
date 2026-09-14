@@ -55,10 +55,6 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
     }
 
-    @Test func staleSyncBlockageDoesNotClaimTheRemoteIsStillAhead() {
-        #expect(AttentionKind.reviewSyncBlocked.historicalTitle(from: "Remote branch is ahead") == "Remote branch was ahead")
-    }
-
     @Test func refreshingLoadedReviewDoesNotReplayConsumedCommentJump() {
         var consumer = ReviewSessionCommentJumpConsumer()
         let file = DiffReviewFileID(namespace: "unstaged", path: "file.swift")
@@ -313,6 +309,9 @@ struct AttentionNavigationTests {
         try comments.save(comment)
         fixture.state.attentionNavigationEnvironment = .live(appState: fixture.state, reviewSessionStore: sessions, reviewCommentStore: comments)
         let item = try fixture.record(.reviewComment(sessionID: target.draftSessionID.rawValue, commentID: "comment2"))
+        #expect(item.kind == .reviewReply)
+        #expect(fixture.state.attentionAggregation.items.isEmpty)
+        #expect(fixture.state.attentionAggregation.history.map(\.eventID) == [item.eventID])
         #expect(await fixture.state.openAttentionItem(item) != .opened)
         #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: "worktree").first)
@@ -465,9 +464,17 @@ struct AttentionNavigationTests {
         }
         func record(_ target: AttentionJumpTarget) throws -> AttentionItem {
             let context = try #require(state.attentionContext(for: worktree))
-            state.observeAttention(.active(.init(sourceKey: .init(rawValue: UUID().uuidString), fingerprint: "active", owner: context.owner, kind: .agentAwaiting, title: "Needs attention", body: nil, jumpTarget: target, display: context.display)))
+            let kind: AttentionKind = switch target {
+            case .reviewComment: .reviewReply
+            case .reviewRequest: .failedChecks
+            case .gitOperation: .gitOperation
+            default: .agentAwaiting
+            }
+            state.observeAttention(.active(.init(sourceKey: .init(rawValue: UUID().uuidString), fingerprint: "active", owner: context.owner, kind: kind, title: "Needs attention", body: nil, jumpTarget: target, display: context.display)))
             let id = try #require(state.attentionStore.events.last?.id)
-            return try #require(state.attentionAggregation.items.first { $0.eventID == id })
+            let aggregation = state.attentionAggregation
+            let source = kind.requiresAction ? aggregation.items : aggregation.history
+            return try #require(source.first { $0.eventID == id })
         }
         func cleanup() { try? FileManager.default.removeItem(at: directory) }
     }

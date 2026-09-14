@@ -19,6 +19,7 @@ struct HarnessServiceTests {
         #expect(transitions.map(\.state) == [.awaitingInput, .idle, nil])
         #expect(transitions.first?.body == "Need input")
         #expect(transitions.allSatisfy { $0.sessionID == "session-1" && $0.agent == .claude })
+        #expect(transitions.allSatisfy { !$0.requiresUserInput })
     }
 
     @Test func externalActivityReportsPermissionAndDeduplicatesRepeatedState() {
@@ -30,6 +31,30 @@ struct HarnessServiceTests {
         service.setExternalActivity(sessionId: "acp", agent: .codex, state: .busy)
 
         #expect(transitions.map(\.state) == [.permissionRequest, .busy])
+        #expect(transitions.map(\.requiresUserInput) == [true, false])
+        #expect(collector.requests.isEmpty)
+    }
+
+    @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {
+        let (service, collector) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        service.setExternalActivity(sessionId: "session-1", agent: .claude, state: .awaitingInput, body: "Continue?")
+        #expect(service.activityBySession["session-1"]?.requiresUserInput == false)
+
+        service.setExternalActivity(sessionId: "session-1", agent: .claude, state: .awaitingInput, body: "Continue?", requiresUserInput: true)
+        #expect(service.activityBySession["session-1"]?.requiresUserInput == true)
+        service.setExternalActivity(sessionId: "session-1", agent: .claude, state: .awaitingInput, body: "Continue?", requiresUserInput: true)
+
+        service.handleSocketEvent(
+            makeEvent(event: .awaitingInput, body: "Continue?"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(transitions.map(\.requiresUserInput) == [false, true, false])
+        #expect(transitions.map(\.state) == [.awaitingInput, .awaitingInput, .awaitingInput])
+        #expect(service.activityBySession["session-1"]?.requiresUserInput == false)
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .awaiting)
         #expect(collector.requests.isEmpty)
     }
 
@@ -96,6 +121,7 @@ struct HarnessServiceTests {
         )
 
         #expect(service.activityBySession["session-1"]?.state == .awaitingInput)
+        #expect(service.activityBySession["session-1"]?.requiresUserInput == false)
         #expect(collector.requests.count == 1)
         #expect(collector.requests[0].content.title == "Claude Code needs input")
         #expect(collector.requests[0].content.body == "Need help")
@@ -246,6 +272,7 @@ struct HarnessServiceTests {
 
         #expect(service.activityBySession["s2"]?.state == .permissionRequest)
         #expect(service.activityBySession["s2"]?.lastBody == "Allow command?")
+        #expect(service.activityBySession["s2"]?.requiresUserInput == true)
 
         let summary = service.summary(forSessionIds: ["s1", "s2"])
         #expect(summary?.state == .awaiting)
@@ -269,6 +296,7 @@ struct HarnessServiceTests {
         )
 
         #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(service.activityBySession["session-1"]?.requiresUserInput == false)
         #expect(collector.requests.isEmpty)
     }
 

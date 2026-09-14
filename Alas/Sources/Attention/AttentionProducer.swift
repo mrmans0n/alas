@@ -2,8 +2,9 @@ import Foundation
 import CryptoKit
 
 enum AttentionProducer {
-    static func harnessFingerprint(state: ActivityState, body: String?) -> String {
-        body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
+    static func harnessFingerprint(state: ActivityState, body: String?, requiresUserInput: Bool = false) -> String {
+        let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
+        return state == .awaitingInput && requiresUserInput ? "\(fingerprint):input" : fingerprint
     }
 
     static func harness(
@@ -12,18 +13,21 @@ enum AttentionProducer {
         state: ActivityState,
         body: String?,
         owner: AttentionWorktreeIdentity,
-        display: AttentionWorktreeDisplaySnapshot
+        display: AttentionWorktreeDisplaySnapshot,
+        requiresUserInput: Bool = false
     ) -> [AttentionObservation] {
         let awaitingKey = AttentionSourceKey(rawValue: "session:\(sessionID):awaiting")
         let permissionKey = AttentionSourceKey(rawValue: "session:\(sessionID):permission")
-        let fingerprint = harnessFingerprint(state: state, body: body)
+        let fingerprint = harnessFingerprint(state: state, body: body, requiresUserInput: requiresUserInput)
 
         switch state {
         case .awaitingInput:
             return [
                 .active(signal(
                     sourceKey: awaitingKey, fingerprint: fingerprint, owner: owner,
-                    kind: .agentAwaiting, title: "\(agent.displayName) is waiting for input", body: body,
+                    kind: requiresUserInput ? .agentAwaiting : .agentReady,
+                    title: requiresUserInput ? "\(agent.displayName) is waiting for input" : "\(agent.displayName) is ready for another prompt",
+                    body: body,
                     jumpTarget: .session(sessionID: sessionID), display: display
                 )),
                 .inactive(sourceKey: permissionKey)
@@ -42,13 +46,17 @@ enum AttentionProducer {
         }
     }
 
+    static func scriptSourceKey(scriptKey: String, owner: AttentionWorktreeIdentity) -> AttentionSourceKey {
+        .init(rawValue: "script:\(owner.storageKey):\(scriptKey.count):\(scriptKey):failure")
+    }
+
     static func script(
         failure: RunScriptFailure?,
         owner: AttentionWorktreeIdentity,
         display: AttentionWorktreeDisplaySnapshot
     ) -> [AttentionObservation] {
         guard let failure else { return [] }
-        let sourceKey = AttentionSourceKey(rawValue: "script:\(failure.runID):failure")
+        let sourceKey = scriptSourceKey(scriptKey: failure.scriptKey, owner: owner)
         return [.active(signal(
             sourceKey: sourceKey, fingerprint: failure.id, owner: owner,
             kind: .runScriptFailure,

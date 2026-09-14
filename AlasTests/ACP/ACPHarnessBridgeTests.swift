@@ -41,6 +41,7 @@ struct ACPHarnessBridgeTests {
         #expect(acknowledged.count == 1)
         #expect(acknowledged.first?.0 == session.owner)
         #expect(acknowledged.first?.1 == "s1")
+        #expect(harness.activityBySession["s1"]?.requiresUserInput == false)
     }
 
     @Test("transitioning from awaiting permission to streaming acknowledges the session interaction")
@@ -78,23 +79,51 @@ struct ACPHarnessBridgeTests {
     func awaitingPermissionMapsToPermissionRequest() async {
         let harness = makeHarness()
         let bridge = ACPHarnessBridge(harness: harness)
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
         let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
         session.transcript.streamingState = .awaitingPermission
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.state == .permissionRequest)
+        #expect(harness.activityBySession["s1"]?.requiresUserInput == true)
+        #expect(transitions.last?.requiresUserInput == true)
     }
 
     @Test("streamingState .awaitingInput writes .awaitingInput")
     func awaitingInputMapsToAwaitingInput() async {
         let harness = makeHarness()
         let bridge = ACPHarnessBridge(harness: harness)
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
         let session = ACPSession(id: "s1", agentId: "cursor-agent", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
         session.transcript.streamingState = .awaitingInput
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.state == .awaitingInput)
         #expect(harness.activityBySession["s1"]?.agent == .cursor)
+        #expect(harness.activityBySession["s1"]?.requiresUserInput == true)
+        #expect(transitions.last?.requiresUserInput == true)
+        #expect(transitions.last?.isSnapshot == false)
+    }
+
+    @Test("observing a pending question upgrades quiet readiness without changing activity state")
+    func observingPendingQuestionPreservesInputIntent() {
+        let harness = makeHarness()
+        harness.setExternalActivity(sessionId: "s1", agent: .claude, state: .awaitingInput)
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.transcript.streamingState = .awaitingInput
+
+        bridge.observe(session: session)
+
+        #expect(harness.activityBySession["s1"]?.requiresUserInput == true)
+        #expect(transitions.map(\.requiresUserInput) == [true])
+        #expect(transitions.first?.isSnapshot == true)
+        #expect(transitions.first?.previousState == .awaitingInput)
+        #expect(transitions.first?.state == .awaitingInput)
     }
 
     @Test("streamingState .idle removes the entry")
