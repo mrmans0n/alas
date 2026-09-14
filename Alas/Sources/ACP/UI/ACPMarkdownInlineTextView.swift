@@ -287,6 +287,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// (i.e. a cache miss). Lets tests assert that repeated `sizeThatFits`
     /// probes at a known width hit the memo instead of re-laying out.
     private(set) var fittingComputationCountForTests = 0
+    private(set) var superScrollEventsForTests: [NSEvent] = []
     #endif
     /// Cap on distinct cached widths. SwiftUI's `StackLayout` probes a small,
     /// bounded set of widths per placement pass (min / ideal / actual), so a
@@ -366,6 +367,16 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             return
         }
 
+        if let pendingStartEvent = scrollRoutingState.consumePendingStartEvent() {
+            scrollTextView(with: pendingStartEvent)
+        }
+        scrollTextView(with: event)
+    }
+
+    private func scrollTextView(with event: NSEvent) {
+        #if DEBUG
+        superScrollEventsForTests.append(event)
+        #endif
         super.scrollWheel(with: event)
     }
 

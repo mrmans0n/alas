@@ -50,12 +50,28 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
             )
         )
         if !phase.isEmpty {
-            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            cgEvent.setIntegerValueField(
+                CGEventField.scrollWheelEventScrollPhase,
+                value: cgScrollPhaseRawValue(for: phase)
+            )
         }
         if !momentumPhase.isEmpty {
-            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventMomentumPhase, value: Int64(momentumPhase.rawValue))
+            cgEvent.setIntegerValueField(
+                CGEventField.scrollWheelEventMomentumPhase,
+                value: cgScrollPhaseRawValue(for: momentumPhase)
+            )
         }
         return try #require(NSEvent(cgEvent: cgEvent))
+    }
+
+    private func cgScrollPhaseRawValue(for phase: NSEvent.Phase) -> Int64 {
+        var rawValue: UInt32 = 0
+        if phase.contains(.began) { rawValue |= CGScrollPhase.began.rawValue }
+        if phase.contains(.changed) { rawValue |= CGScrollPhase.changed.rawValue }
+        if phase.contains(.ended) { rawValue |= CGScrollPhase.ended.rawValue }
+        if phase.contains(.cancelled) { rawValue |= CGScrollPhase.cancelled.rawValue }
+        if phase.contains(.mayBegin) { rawValue |= CGScrollPhase.mayBegin.rawValue }
+        return Int64(rawValue)
     }
 
     @Test func repeatedSameWidthProbesHitTheCache() {
@@ -146,7 +162,7 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         #expect(verticalStart)
         #expect(verticalEnd)
-        #expect(vertical.forwarding == nil)
+        #expect(vertical.forwarding == true)
 
         var horizontal = ACPMarkdownScrollRoutingState()
         let horizontalStart = horizontal.shouldForward(
@@ -157,7 +173,7 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         #expect(!horizontalStart)
         #expect(!horizontalEnd)
-        #expect(horizontal.forwarding == nil)
+        #expect(horizontal.forwarding == false)
     }
 
     @Test("scroll routing keeps forwarding through trackpad momentum")
@@ -222,7 +238,7 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         )
         #expect(endsAfterDominantAxis)
 
-        #expect(routing.forwarding == nil)
+        #expect(routing.forwarding == true)
     }
 
     @Test("vertical wheel events over Markdown text reach the transcript")
@@ -267,5 +283,28 @@ struct ACPMarkdownInlineTextViewMeasurementCacheTests {
         #expect(transcriptResponder.receivedEvents.count == 2)
         #expect(transcriptResponder.receivedEvents[0] === ambiguous)
         #expect(transcriptResponder.receivedEvents[1] === vertical)
+    }
+
+    @Test("ambiguous gesture starts are replayed once axis becomes horizontal")
+    func ambiguousGestureStartIsReplayedOnceAxisBecomesHorizontal() throws {
+        let textView = makeTextView("Table cell")
+
+        let ambiguous = try makeScrollEvent(
+            deltaX: 10,
+            deltaY: 10,
+            phase: .began
+        )
+        textView.scrollWheel(with: ambiguous)
+
+        let horizontal = try makeScrollEvent(
+            deltaX: 20,
+            deltaY: 0,
+            phase: .changed
+        )
+        textView.scrollWheel(with: horizontal)
+
+        #expect(textView.superScrollEventsForTests.count == 2)
+        #expect(textView.superScrollEventsForTests[0] === ambiguous)
+        #expect(textView.superScrollEventsForTests[1] === horizontal)
     }
 }
