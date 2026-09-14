@@ -1477,11 +1477,23 @@ enum RunScriptStackDetector {
     }
 
     private static func goToolModeBuildTag(fromGOFLAGSFlag flag: String) -> String? {
-        switch flag {
-        case "-race": "race"
-        case "-msan": "msan"
-        case "-asan": "asan"
-        default: nil
+        for mode in ["race", "msan", "asan"] {
+            if flag == "-\(mode)" {
+                return mode
+            }
+            let assignmentPrefix = "-\(mode)="
+            if flag.hasPrefix(assignmentPrefix) {
+                let value = String(flag.dropFirst(assignmentPrefix.count))
+                return goBooleanFlagValueIsEnabled(value) ? mode : nil
+            }
+        }
+        return nil
+    }
+
+    private static func goBooleanFlagValueIsEnabled(_ value: String) -> Bool {
+        switch value.lowercased() {
+        case "1", "t", "true": true
+        default: false
         }
     }
 
@@ -1575,25 +1587,39 @@ enum RunScriptStackDetector {
     }
 
     private static func rakefileDeclaresTask(_ rakefile: String, task: String) -> Bool {
-        let stripped = stripRubyStringLiterals(stripRubyHeredocs(stripHashComments(rakefile)))
+        let commentless = stripRubyHeredocs(stripHashComments(rakefile))
+        let stripped = stripRubyStringLiterals(commentless)
         let escapedTask = NSRegularExpression.escapedPattern(for: task)
         guard let taskRegex = try? NSRegularExpression(
-            pattern: #"^\s*task\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)"#
+            pattern: #"^\s*task(?:\s+(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']|"# + escapedTask + #"\s*:)|\s*\(\s*(?::"# + escapedTask + #"\b|["']"# + escapedTask + #"["']))"#
+        ), let stringTaskRegex = try? NSRegularExpression(
+            pattern: #"^\s*task\s*\(\s*["']"# + escapedTask + #"["']"#
+        ), let parenthesizedTaskSkeletonRegex = try? NSRegularExpression(
+            pattern: #"^\s*task\s*\("#
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#)
         else { return false }
         var blockStack: [Bool] = []
-        for segment in stripped.components(separatedBy: .newlines).flatMap({ $0.components(separatedBy: ";") }) {
+        let originalSegments = commentless.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
+        let strippedSegments = stripped.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
+        for (originalSegment, segment) in zip(originalSegments, strippedSegments) {
             let trimmed = segment.trimmingCharacters(in: .whitespaces)
             if trimmed == "end" || trimmed == "}" {
                 _ = blockStack.popLast()
                 continue
             }
             let range = NSRange(segment.startIndex..., in: segment)
+            let originalRange = NSRange(originalSegment.startIndex..., in: originalSegment)
             if namespaceRegex.firstMatch(in: segment, range: range) != nil {
                 blockStack.append(true)
                 continue
             }
             if !blockStack.contains(true), taskRegex.firstMatch(in: segment, range: range) != nil {
+                return true
+            }
+            if !blockStack.contains(true),
+               parenthesizedTaskSkeletonRegex.firstMatch(in: segment, range: range) != nil,
+               stringTaskRegex.firstMatch(in: originalSegment, range: originalRange) != nil
+            {
                 return true
             }
             if rubyBlockOpens(trimmed) {

@@ -274,6 +274,7 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.php)["test"]?.isCheckedByDefault == false)
         #expect(actions(.php, .init(hasPHPUnit: true))["test"]?.isCheckedByDefault == true)
         #expect(actions(.php, .init(hasPHPUnit: true, phpUnitBinaryPath: "bin/phpunit"))["test"]?.body == "bin/phpunit")
+        #expect(actions(.php, .init(hasPHPUnit: true, phpUnitBinaryPath: "custom bin/phpunit"))["test"]?.body == "'custom bin/phpunit'")
     }
 
     @Test func flutterFallsBackToDartAndDropsRun() {

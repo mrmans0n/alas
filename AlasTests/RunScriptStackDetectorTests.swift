@@ -1206,6 +1206,15 @@ struct RunScriptStackDetectorTests {
         ).map { ($0.stack, $0.context) })
 
         #expect(stacks[.go]?.goRunTarget == nil)
+
+        let booleanAssignmentStacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [], buildTags: RunScriptStackDetector.goBuildTags(fromGOFLAGS: "-race=true"))
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(booleanAssignmentStacks[.go]?.goRunTarget == nil)
     }
 
     @Test func goResolvesCGOTagFromTheDetectedToolchain() throws {
@@ -1401,6 +1410,12 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
+
+        try write("Rakefile", "task(:test) do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
+
+        try write("Rakefile", "task(\"test\") do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
 
         try write("Rakefile", "task test: :prepare do\n  ruby \"test/all_test.rb\"\nend\n", in: root)

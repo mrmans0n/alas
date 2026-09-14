@@ -362,7 +362,7 @@ enum RunScriptStackCatalog {
         case .php:
             return [
                 .init("install", "Install", "composer install"),
-                .init("test", "Test", context.phpUnitBinaryPath, checked: context.hasPHPUnit),
+                .init("test", "Test", AppState.shellQuote(context.phpUnitBinaryPath), checked: context.hasPHPUnit),
             ]
         case .swiftPackage:
             return [
