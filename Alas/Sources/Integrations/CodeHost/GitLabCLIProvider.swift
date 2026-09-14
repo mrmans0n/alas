@@ -1870,7 +1870,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                   !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab issue output is missing a valid URL."),
                   let createdAt = try parseOptionalGitLabDate(response.createdAt),
-                  case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
+                  case .url(let kind, let host, _, let number) = try CodeHostIssueInput.parse(url.absoluteString),
                   kind == .gitlab,
                   host.caseInsensitiveCompare(remote.host) == .orderedSame,
                   number == response.iid

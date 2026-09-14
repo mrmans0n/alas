@@ -518,7 +518,7 @@ final class TerminalService {
     /// Checkout cleanup has no Project/worktree fallback: its typed owner is
     /// sufficient to derive the exact scoped zmx name and SSH destination.
     func closeSession(id: String, owner: SessionOwnerID) {
-        if let existing = registry.session(for: id) {
+        if registry.session(for: id) != nil {
             closeSession(id: id)
             return
         }

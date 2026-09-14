@@ -373,7 +373,7 @@ struct MermaidDiagramViewerView: View {
                                 fitted: fittedSize
                             )
                         }
-                        .onChange(of: proxy.size) { _ in
+                        .onChange(of: proxy.size) { _, _ in
                             updateActualSizeScale(
                                 intrinsic: diagram.image.size,
                                 fitted: fittedSize

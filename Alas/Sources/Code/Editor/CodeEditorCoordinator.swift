@@ -494,7 +494,7 @@ final class CodeEditorCoordinator {
         // Keeping `currentLanguage` accurate is critical because hover,
         // definition, completion, diagnostics, didChange, and indentation
         // all route through it.
-        _ = withObservationTracking {
+        withObservationTracking {
             _ = buffer.effectiveLanguage
         } onChange: { [weak self, weak buffer] in
             Task { @MainActor [weak self, weak buffer] in

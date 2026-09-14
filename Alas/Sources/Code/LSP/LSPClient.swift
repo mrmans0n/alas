@@ -528,7 +528,7 @@ actor LSPClient {
             Task {
                 do {
                     try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                    await self.failPendingRequest(id: id, error: LSPError.requestTimedOut)
+                    self.failPendingRequest(id: id, error: LSPError.requestTimedOut)
                 } catch {}
             }
         }

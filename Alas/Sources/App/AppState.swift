@@ -917,7 +917,7 @@ final class AppState {
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
-            await self?.cancelAllRunScriptCompletionTasks()
+            self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
         }
         Task.detached {
@@ -2800,7 +2800,7 @@ final class AppState {
         else { return false }
         let next = (current + offset + spaces.count) % spaces.count
         guard next != current else { return false }
-        switchToSpace(id: spaces[next].id)
+        _ = switchToSpace(id: spaces[next].id)
         return true
     }
 
@@ -5083,7 +5083,7 @@ final class AppState {
             },
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
-                      let (owner, manager) = self.acpManagers.first(where: { _, manager in
+                      let (owner, _) = self.acpManagers.first(where: { _, manager in
                           manager.liveSession(for: sessionId) != nil
                       }),
                       let worktreeId = owner.worktreeID,

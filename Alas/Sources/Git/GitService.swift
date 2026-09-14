@@ -1119,7 +1119,6 @@ extension GitService {
         case 1: return false
         default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
-        guard ignoredByPattern else { return false }
         if let comparisonRef, !comparisonRef.isEmpty {
             let existedAtRef = try await Process.git(
                 ["cat-file", "-e", "\(comparisonRef):\(path)"], cwd: worktreePath)

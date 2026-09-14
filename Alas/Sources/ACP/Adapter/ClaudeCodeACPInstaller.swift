@@ -22,7 +22,7 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
     }
 
     static let defaultRunner: (String, [String]) async throws -> (status: Int32, stderr: String) = { cmd, args in
-        nonisolated(unsafe) let proc = Process()
+        let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
         proc.environment = ACPProcessEnvironment.augmented()
