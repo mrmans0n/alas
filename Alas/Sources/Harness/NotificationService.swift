@@ -27,12 +27,17 @@ final class NotificationService {
         }
     }
 
+    // Both overloads write `NotificationDelegate`'s main-actor handlers, so
+    // they are main-actor isolated too. The only caller is
+    // `HarnessService.start`, which runs during `AppState.startHarness()`.
+    @MainActor
     func setup(onClick: @escaping (String, String, String) -> Void) {
         center.delegate = delegate
         delegate.onClick = onClick
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    @MainActor
     func setup(onContextClick: @escaping (NotificationClickContext) -> Void) {
         center.delegate = delegate
         delegate.onContextClick = onContextClick

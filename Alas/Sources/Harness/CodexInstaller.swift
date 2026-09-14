@@ -23,7 +23,12 @@ struct CodexInstaller: AgentInstaller, Sendable {
         self.configURL = configURL ?? homeDirectoryURL
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("config.toml", isDirectory: false)
-        self.runEnableHooks = runEnableHooks ?? Self.defaultEnableHooks
+        // Wrapped in a closure literal rather than passed as an unapplied
+        // method reference: the metatype-bound reference is a plain function
+        // value and converting it to the `@Sendable` stored type is a data-race
+        // warning. `defaultEnableHooks` captures nothing, so the literal is
+        // trivially `@Sendable`.
+        self.runEnableHooks = runEnableHooks ?? { try await CodexInstaller.defaultEnableHooks() }
     }
 
     func installState() -> InstallState {
