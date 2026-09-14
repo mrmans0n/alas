@@ -84,6 +84,10 @@ enum RunScriptCreator {
         onExit: RunScriptOnExit,
         body: String? = nil,
         endpoint: String? = nil,
+        /// Overrides the slugified-name filename. Stack bundles use this to
+        /// namespace by stack, so two stacks whose actions share a display
+        /// name (e.g. "Build") never collide on disk.
+        fileName fileNameOverride: String? = nil,
         worktreeRoot: URL,
         globalDir: URL = Paths.runScriptsGlobalDir,
         fileManager: FileManager = .default
@@ -92,7 +96,8 @@ enum RunScriptCreator {
             throw RunScriptCreationError.emptyName
         }
         let directory = directory(scope: scope, worktreeRoot: worktreeRoot, globalDir: globalDir)
-        let url = directory.appendingPathComponent(RunScriptTemplate.fileName(for: name))
+        let fileName = fileNameOverride ?? RunScriptTemplate.fileName(for: name)
+        let url = directory.appendingPathComponent(fileName)
 
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         guard !fileManager.fileExists(atPath: url.path) else {
@@ -108,8 +113,13 @@ enum RunScriptCreator {
     /// its template declares. A file that already exists is left untouched
     /// and reported as skipped rather than aborting the bundle — re-running a
     /// template must never clobber a script the user edited.
+    ///
+    /// Filenames are namespaced by stack (`cargo-build.sh`, not `build.sh`) so
+    /// bootstrapping two stacks in the same repository — a Cargo/JS hybrid,
+    /// say — never has one stack's "Build" silently skip another's.
     static func createBundle(
         scope: RunScriptScope,
+        stack: RunScriptStack,
         actions: [RunScriptStackAction],
         worktreeRoot: URL,
         globalDir: URL = Paths.runScriptsGlobalDir,
@@ -125,6 +135,7 @@ enum RunScriptCreator {
                     onExit: action.onExit,
                     body: action.body,
                     endpoint: action.endpoint,
+                    fileName: "\(stack.fileSlug)-\(action.id).sh",
                     worktreeRoot: worktreeRoot,
                     globalDir: globalDir,
                     fileManager: fileManager

@@ -98,6 +98,19 @@ struct RunScriptStackCatalogTests {
         #expect(fallback.contains("-project App.xcodeproj -scheme App"))
     }
 
+    @Test func xcodeQuotesAContainerNameWithSpaces() {
+        let build = actions(.xcode, .init(xcodeContainer: "My App.xcodeproj"))["build"]?.body ?? ""
+        #expect(build.contains("-project 'My App.xcodeproj' -scheme 'My App'"))
+    }
+
+    @Test func stackFileSlugsAreFilenameSafe() {
+        #expect(RunScriptStack.swiftPackage.fileSlug == "swift-package")
+        #expect(RunScriptStack.cargo.fileSlug == "cargo")
+        for stack in RunScriptStack.allCases {
+            #expect(!stack.fileSlug.contains(" "))
+        }
+    }
+
     @Test func pythonUsesDetectedRunner() {
         #expect(actions(.python, .init(pythonRunner: .uv))["test"]?.body == "uv run pytest")
         #expect(actions(.python, .init(pythonRunner: .uv))["install"]?.body == "uv sync")

@@ -37,6 +37,15 @@ enum RunScriptStack: String, CaseIterable, Identifiable, Sendable, Hashable {
         case .compose:      "Docker Compose"
         }
     }
+
+    /// Kebab-case identifier used to namespace bundle filenames per stack
+    /// (`cargo-build.sh`), so two stacks never collide on a shared action id.
+    var fileSlug: String {
+        switch self {
+        case .swiftPackage: "swift-package"
+        default:            rawValue
+        }
+    }
 }
 
 enum JavaScriptPackageManager: String, Sendable, Hashable, CaseIterable {
@@ -250,7 +259,7 @@ enum RunScriptStackCatalog {
             let note = context.xcodeContainer == nil
                 ? "# Set the project (or workspace) and scheme for this repository."
                 : "# Adjust the scheme if it differs from the project name."
-            let target = "\(flag) \(container) -scheme \(AppState.shellQuote(scheme)) -destination 'platform=macOS'"
+            let target = "\(flag) \(AppState.shellQuote(container)) -scheme \(AppState.shellQuote(scheme)) -destination 'platform=macOS'"
             return [
                 .init("build", "Build", "\(note)\nxcodebuild \(target) build"),
                 .init("test", "Test", "\(note)\nxcodebuild \(target) test"),

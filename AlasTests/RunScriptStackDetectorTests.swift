@@ -208,6 +208,17 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.python] == nil)
     }
 
+    /// A typical Django repo also has a pyproject.toml; generic Python must
+    /// defer to Django the same way Ruby defers to Rails.
+    @Test func djangoHidesGenericPythonEvenWithPyprojectPresent() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("manage.py", "pyproject.toml", in: root)
+        let stacks = detect(root)
+        #expect(stacks[.django] != nil)
+        #expect(stacks[.python] == nil)
+    }
+
     @Test func laravelHidesPlainComposer() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

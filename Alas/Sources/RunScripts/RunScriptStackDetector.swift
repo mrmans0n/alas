@@ -38,6 +38,7 @@ enum RunScriptStackDetector {
         let hasRequirements = entries.contains("requirements.txt")
         let hasRails = isRegularFile("bin/rails")
         let hasArtisan = entries.contains("artisan")
+        let hasDjangoManage = entries.contains("manage.py")
         let hasSpec = isDirectory("spec")
         let hasRubocop = has(".rubocop.yml")
 
@@ -63,10 +64,13 @@ enum RunScriptStackDetector {
                 }
                 add(stack, .init(packageManager: packageManager, packageScripts: manifest?.scripts))
             case .python:
-                guard has("pyproject.toml") else { continue }
+                // Django owns the Python build; only offer generic Python
+                // when there is no manage.py, the same way Rails/Ruby and
+                // Laravel/PHP defer to their framework-specific stack.
+                guard has("pyproject.toml"), !hasDjangoManage else { continue }
                 add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
             case .django:
-                guard has("manage.py") else { continue }
+                guard hasDjangoManage else { continue }
                 add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
             case .gradle:
                 guard has("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts") else { continue }

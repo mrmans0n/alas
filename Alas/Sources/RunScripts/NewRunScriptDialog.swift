@@ -241,7 +241,7 @@ struct NewRunScriptDialog: View {
         do {
             if let stack = selectedStack {
                 let actions = stackActions(for: stack).filter { checkedActionIDs.contains($0.id) }
-                try state.createPendingRunScripts(actions: actions)
+                try state.createPendingRunScripts(stack: stack, actions: actions)
             } else {
                 try state.createPendingRunScript(
                     name: name, onExit: onExit,

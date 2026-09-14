@@ -854,6 +854,7 @@ extension AppState {
     /// Existing files are skipped, so this is safe to re-run on a repo that
     /// already has some of the scripts.
     func createPendingRunScripts(
+        stack: RunScriptStack,
         actions: [RunScriptStackAction],
         globalDir: URL = Paths.runScriptsGlobalDir
     ) throws {
@@ -865,6 +866,7 @@ extension AppState {
         }
         let result = try RunScriptCreator.createBundle(
             scope: presentation.scope,
+            stack: stack,
             actions: actions,
             worktreeRoot: worktree.path,
             globalDir: globalDir
