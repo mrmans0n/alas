@@ -181,7 +181,11 @@ enum RunScriptStackDetector {
                 add(stack, .init(hasPHPUnit: composerDeclaresPHPUnit(contents("composer.json") ?? "") || isRegularFile("vendor/bin/phpunit")))
             case .swiftPackage:
                 guard has("Package.swift") else { continue }
-                add(stack, .init(hasRunnableTarget: swiftPackageHasUnambiguousExecutable(contents("Package.swift") ?? "")))
+                let manifest = contents("Package.swift") ?? ""
+                add(stack, .init(
+                    hasRunnableTarget: swiftPackageHasUnambiguousExecutable(manifest),
+                    hasSwiftTestTarget: swiftPackageHasTestTarget(manifest)
+                ))
             case .xcode:
                 let workspaces = names.filter { $0.hasSuffix(".xcworkspace") }.sorted()
                 let projects = names.filter { $0.hasSuffix(".xcodeproj") }.sorted()
@@ -806,14 +810,7 @@ enum RunScriptStackDetector {
     /// Whether Package.swift declares exactly one executable, the only case
     /// bare `swift run` (no product name) can resolve on its own.
     private static func swiftPackageHasUnambiguousExecutable(_ manifest: String) -> Bool {
-        // A commented-out `.executableTarget` must not count — Package.swift
-        // is Swift source, so `//`/`/* */` comments are as valid here as
-        // anywhere else.
-        let languageVersion = swiftToolsVersion(in: manifest) ?? currentSwiftLanguageVersion
-        let uncommented = stripInactiveSwiftConditionalBranches(
-            stripCStyleComments(manifest),
-            swiftLanguageVersion: languageVersion
-        )
+        let uncommented = swiftPackageActiveManifest(manifest)
         let executableProducts = swiftExecutableProducts(in: uncommented)
         let executableTargetNames = swiftExecutableTargetNames(in: uncommented)
         let legacyTargetNames = swiftLegacyExecutableTargetNames(in: uncommented)
@@ -828,6 +825,22 @@ enum RunScriptStackDetector {
         // .executable` on a plain `.target` without a dedicated
         // .executableTarget entry; a single one is unambiguous the same way.
         return legacyTargetNames.count == 1
+    }
+
+    private static func swiftPackageHasTestTarget(_ manifest: String) -> Bool {
+        let uncommented = swiftPackageActiveManifest(manifest)
+        return !swiftTestTargetNames(in: uncommented).isEmpty
+    }
+
+    private static func swiftPackageActiveManifest(_ manifest: String) -> String {
+        // A commented-out declaration must not count — Package.swift is Swift
+        // source, so comments and conditional compilation apply the same as
+        // anywhere else.
+        let languageVersion = swiftToolsVersion(in: manifest) ?? currentSwiftLanguageVersion
+        return stripInactiveSwiftConditionalBranches(
+            stripCStyleComments(manifest),
+            swiftLanguageVersion: languageVersion
+        )
     }
 
     private static func swiftExecutableProducts(in manifest: String) -> [(name: String, targets: Set<String>)] {
@@ -859,6 +872,10 @@ enum RunScriptStackDetector {
 
     private static func swiftExecutableTargetNames(in manifest: String) -> Set<String> {
         swiftDeclarationNames(matching: #"\.executableTarget\s*\(\s*name:\s*"([^"]+)""#, in: manifest)
+    }
+
+    private static func swiftTestTargetNames(in manifest: String) -> Set<String> {
+        swiftDeclarationNames(matching: #"\.testTarget\s*\(\s*name:\s*"([^"]+)""#, in: manifest)
     }
 
     private static func swiftLegacyExecutableTargetNames(in manifest: String) -> Set<String> {
@@ -1013,9 +1030,7 @@ enum RunScriptStackDetector {
         if let condition = swiftVersionCondition(trimmed, function: "swift") {
             return swiftVersion(swiftLanguageVersion, satisfies: condition)
         }
-        if let condition = swiftVersionCondition(trimmed, function: "compiler") {
-            return swiftVersion(currentSwiftCompilerVersion, satisfies: condition)
-        }
+        if swiftVersionCondition(trimmed, function: "compiler") != nil { return nil }
         if swiftImportConditionName(trimmed) != nil { return nil }
         // Unknown manifest conditions may depend on SwiftPM settings. Leave
         // generated `swift run` unchecked unless we can prove the branch is
@@ -1148,22 +1163,6 @@ enum RunScriptStackDetector {
         "x86_64"
 #else
         ""
-#endif
-    }
-
-    private static var currentSwiftCompilerVersion: (major: Int, minor: Int) {
-#if compiler(>=6.2)
-        (6, 2)
-#elseif compiler(>=6.1)
-        (6, 1)
-#elseif compiler(>=6.0)
-        (6, 0)
-#elseif compiler(>=5.10)
-        (5, 10)
-#elseif compiler(>=5.9)
-        (5, 9)
-#else
-        (5, 0)
 #endif
     }
 

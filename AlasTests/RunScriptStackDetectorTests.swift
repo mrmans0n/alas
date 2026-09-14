@@ -539,13 +539,27 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try write("Package.swift", "let package = Package(name: \"Lib\", targets: [.target(name: \"Lib\")])", in: root)
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+        #expect(detect(root)[.swiftPackage]?.hasSwiftTestTarget == false)
 
         try write(
             "Package.swift",
-            "let package = Package(name: \"Tool\", targets: [.executableTarget(name: \"Tool\")])",
+            "let package = Package(name: \"Tool\", targets: [.executableTarget(name: \"Tool\"), .testTarget(name: \"ToolTests\", dependencies: [\"Tool\"])])",
             in: root
         )
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == true)
+        #expect(detect(root)[.swiftPackage]?.hasSwiftTestTarget == true)
+    }
+
+    @Test func swiftPackageLeavesTestUncheckedWithoutATestTarget() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "let package = Package(name: \"Lib\", targets: [.target(name: \"Lib\")])",
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasSwiftTestTarget == false)
     }
 
     /// `swift run` with no argument only resolves when there's exactly one
@@ -810,6 +824,26 @@ struct RunScriptStackDetectorTests {
             // swift-tools-version: 6.0
             import PackageDescription
             #if swift(<6.0)
+            let targets: [Target] = [.executableTarget(name: "Tool")]
+            #else
+            let targets: [Target] = [.target(name: "Lib")]
+            #endif
+            let package = Package(name: "Lib", targets: targets)
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    @Test func swiftPackageLeavesCompilerConditionsUnchecked() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            """
+            import PackageDescription
+            #if compiler(>=5.0)
             let targets: [Target] = [.executableTarget(name: "Tool")]
             #else
             let targets: [Target] = [.target(name: "Lib")]

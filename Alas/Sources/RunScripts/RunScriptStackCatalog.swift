@@ -119,6 +119,10 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// product). Defaults to false — "Run" fails outright against a
     /// library-only manifest, so it's opt-in rather than assumed.
     var hasRunnableTarget = false
+    /// Swift Package manifests need at least one `.testTarget` before
+    /// `swift test` can succeed; library-only packages exit with
+    /// "no tests found".
+    var hasSwiftTestTarget = false
     /// The path argument for `go run` that actually contains `package main`
     /// — "." for a root-level main package, "./cmd/<name>" for the first
     /// command found under the cmd/ convention. Nil when neither is
@@ -163,6 +167,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         denoTasks: Set<String>? = nil,
         zigBuildSteps: Set<String>? = nil,
         hasRunnableTarget: Bool = false,
+        hasSwiftTestTarget: Bool = false,
         goRunTarget: String? = nil,
         dotnetRunProject: String? = nil,
         dotnetBuildTarget: String? = nil,
@@ -195,6 +200,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.hasMakeTestTarget = hasMakeTestTarget
         self.hasMakeCleanTarget = hasMakeCleanTarget
         self.hasRunnableTarget = hasRunnableTarget
+        self.hasSwiftTestTarget = hasSwiftTestTarget
         self.goRunTarget = goRunTarget
     }
 }
@@ -357,7 +363,7 @@ enum RunScriptStackCatalog {
         case .swiftPackage:
             return [
                 .init("build", "Build", "swift build"),
-                .init("test", "Test", "swift test"),
+                .init("test", "Test", "swift test", checked: context.hasSwiftTestTarget),
                 .init("run", "Run", "swift run", checked: context.hasRunnableTarget, onExit: .keep),
             ]
         case .xcode:

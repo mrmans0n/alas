@@ -143,6 +143,14 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.make)["build"]?.body == "make")
     }
 
+    /// `swift test` exits with "no tests found" for packages with only
+    /// library/executable targets, so Test should only be preselected once the
+    /// detector confirms a test target exists.
+    @Test func swiftPackageTestIsUncheckedWithoutAConfirmedTestTarget() {
+        #expect(actions(.swiftPackage)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.swiftPackage, .init(hasSwiftTestTarget: true))["test"]?.isCheckedByDefault == true)
+    }
+
     /// "Run" fails outright against a library-only manifest, so it only
     /// defaults to checked once a runnable target is actually confirmed.
     @Test func runIsUncheckedWithoutAConfirmedRunnableTarget() {
