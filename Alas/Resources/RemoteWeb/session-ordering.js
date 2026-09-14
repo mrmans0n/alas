@@ -8,9 +8,6 @@ function sessionRecency(session) {
 }
 
 function compareSessions(a, b) {
-  const active = Number(sessionIsActive(b)) - Number(sessionIsActive(a));
-  if (active) return active;
-
   const recency = sessionRecency(b) - sessionRecency(a);
   if (recency) return recency;
 
@@ -22,34 +19,79 @@ function compareSessions(a, b) {
   return aID === bID ? 0 : aID < bID ? -1 : 1;
 }
 
+function worktreeIdentity(session) {
+  const worktreeID = String(session.worktreeId || "").trim();
+  if (worktreeID) return worktreeID;
+
+  const path = String(session.worktree?.path || "").trim();
+  return path || null;
+}
+
+function worktreeRecency(worktree) {
+  return Math.max(
+    ...worktree.activeSessions.map(sessionRecency),
+    ...worktree.closedSessions.map(sessionRecency)
+  );
+}
+
+function compareWorktrees(a, b) {
+  const recency = worktreeRecency(b) - worktreeRecency(a);
+  if (recency) return recency;
+
+  const title = a.title.localeCompare(b.title, undefined, { sensitivity: "accent" });
+  if (title) return title;
+  return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
+}
+
 function groupSessions(sessions) {
   const groups = new Map();
-  const other = [];
+  const other = { id: "other", title: "Other", activeSessions: [], closedSessions: [] };
 
   sessions.forEach((session) => {
-    if (!session.projectId || !session.worktree) {
-      other.push(session);
+    const worktreeID = worktreeIdentity(session);
+    if (!session.projectId || !session.worktree || !worktreeID) {
+      (sessionIsActive(session) ? other.activeSessions : other.closedSessions).push(session);
       return;
     }
 
     const group = groups.get(session.projectId) || {
       id: session.projectId,
       title: session.worktree.projectName,
-      sessions: [],
+      worktrees: new Map(),
       isOther: false,
     };
-    group.sessions.push(session);
+    const worktree = group.worktrees.get(worktreeID) || {
+      id: worktreeID,
+      title: session.worktree.worktreeName,
+      summary: session.worktree,
+      activeSessions: [],
+      closedSessions: [],
+    };
+    (sessionIsActive(session) ? worktree.activeSessions : worktree.closedSessions).push(session);
+    group.worktrees.set(worktreeID, worktree);
     groups.set(session.projectId, group);
   });
 
-  const sections = [...groups.values()];
-  if (other.length) sections.push({ id: "other", title: "Other", sessions: other, isOther: true });
+  const sections = [...groups.values()].map((group) => ({
+    id: group.id,
+    title: group.title,
+    isOther: false,
+    worktrees: [...group.worktrees.values()].map((worktree) => {
+      worktree.activeSessions.sort(compareSessions);
+      worktree.closedSessions.sort(compareSessions);
+      return worktree;
+    }).sort(compareWorktrees),
+  }));
+  if (other.activeSessions.length || other.closedSessions.length) {
+    other.activeSessions.sort(compareSessions);
+    other.closedSessions.sort(compareSessions);
+    sections.push({ id: "other", title: "Other", isOther: true, worktrees: [other] });
+  }
 
-  sections.forEach((section) => section.sessions.sort(compareSessions));
   return sections.sort((a, b) => {
     if (a.isOther) return 1;
     if (b.isOther) return -1;
-    const recency = Math.max(...b.sessions.map(sessionRecency)) - Math.max(...a.sessions.map(sessionRecency));
+    const recency = Math.max(...b.worktrees.map(worktreeRecency)) - Math.max(...a.worktrees.map(worktreeRecency));
     if (recency) return recency;
 
     const title = a.title.localeCompare(b.title, undefined, { sensitivity: "accent" });

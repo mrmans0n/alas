@@ -168,9 +168,9 @@ struct RemoteAppStateAccessTests {
 
         let summaries = await state.sessionSummaries()
         let historical = try #require(summaries.first { $0.title == "Historical" })
-
         #expect(!historical.isActive)
         #expect(historical.projectId == state.projects.first?.id)
+        #expect(historical.worktreeId == worktreeId)
         #expect(historical.updatedAt == 42)
     }
 
@@ -570,6 +570,7 @@ struct RemoteAppStateAccessTests {
         #expect(manager.liveSession(for: summary.id) != nil)
         let row = try #require(manager.sessionRows.first { $0.id == summary.id })
         #expect(summary.projectId == state.projects.first?.id)
+        #expect(summary.worktreeId == worktreeId)
         #expect(summary.updatedAt == row.updatedAt)
         #expect(scheduledAttach?.managerWorktreeId == worktreeId)
         #expect(scheduledAttach?.sessionId == summary.id)

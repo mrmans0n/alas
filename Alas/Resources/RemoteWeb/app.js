@@ -13,6 +13,7 @@ let queueItems = [];             // [{id, text, imageCount, resourceCount, statu
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let listedSessions = new Map();
+let expandedClosedWorktrees = new Set();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
 let reconnectTimer = null;
@@ -426,12 +427,47 @@ function renderSessions(sessions) {
   RemoteSessionOrdering.groupSessions(sessions).forEach(section => {
     const element = el("section", "session-section");
     element.append(el("h2", "session-section-title", section.title));
-    const rows = el("div", "session-section-list");
-    section.sessions.forEach(s => rows.appendChild(renderSessionRow(s)));
-    element.append(rows);
+    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
     list.appendChild(element);
   });
   if (currentSession) setDetailTitle(currentSession);
+}
+
+function renderWorktreeGroup(section, worktree) {
+  const group = el("div", "session-worktree-group");
+  if (!section.isOther) {
+    const header = el("div", "session-worktree-header");
+    header.append(el("span", "session-worktree-name", worktree.summary.worktreeName));
+    const meta = el("div", "session-worktree-meta");
+    sessionMetaParts(worktree.summary).forEach(part => meta.append(part));
+    header.append(meta);
+    group.append(header);
+  }
+
+  if (worktree.activeSessions.length) {
+    const rows = el("div", "session-section-list");
+    worktree.activeSessions.forEach(session => rows.append(renderSessionRow(session)));
+    group.append(rows);
+  }
+
+  if (worktree.closedSessions.length) {
+    const closed = document.createElement("details");
+    closed.className = "session-closed";
+    closed.open = expandedClosedWorktrees.has(worktree.id);
+    closed.addEventListener("toggle", () => {
+      if (closed.open) {
+        expandedClosedWorktrees.add(worktree.id);
+      } else {
+        expandedClosedWorktrees.delete(worktree.id);
+      }
+    });
+    closed.append(el("summary", "session-closed-summary", `Closed (${worktree.closedSessions.length})`));
+    const rows = el("div", "session-section-list");
+    worktree.closedSessions.forEach(session => rows.append(renderSessionRow(session)));
+    closed.append(rows);
+    group.append(closed);
+  }
+  return group;
 }
 
 function renderSessionRow(s) {
@@ -460,11 +496,6 @@ function renderSessionRow(s) {
 
   if (s.worktree) {
     row.classList.add("session-row-card");
-    open.append(el("div", "session-worktree", s.worktree.worktreeName));
-    const meta = el("div", "session-meta");
-    const parts = sessionMetaParts(s.worktree);
-    parts.forEach(part => meta.append(part));
-    open.append(meta);
     row.title = s.worktree.path || "";
   } else {
     row.classList.add("session-row-minimal");

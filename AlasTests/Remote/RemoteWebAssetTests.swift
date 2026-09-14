@@ -171,11 +171,14 @@ struct RemoteWebAssetTests {
 
         #expect(app.contains("function sessionMetaParts"))
         #expect(app.contains("function renderSessionRow"))
+        #expect(app.contains("function renderWorktreeGroup"))
         #expect(app.contains("RemoteSessionOrdering.groupSessions(sessions)"))
         #expect(app.contains("listedSessions.set(session.id, session);"))
         #expect(app.contains("renderSessions([...listedSessions.values()]);"))
-        #expect(app.contains("session-section-title"))
-        #expect(app.contains("s.worktree.worktreeName"))
+        #expect(app.contains("worktree.activeSessions"))
+        #expect(app.contains("worktree.closedSessions"))
+        #expect(app.contains("expandedClosedWorktrees"))
+        #expect(app.contains("worktree.summary.worktreeName"))
         #expect(app.contains(#""session-row-active""#))
         #expect(app.contains(#""session-row-inactive""#))
         #expect(app.contains(#""Active""#))
@@ -187,10 +190,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-row-inactive"))
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
-        #expect(css.contains(".session-meta"))
-        #expect(css.contains(".session-section"))
-        #expect(css.contains(".session-section-title"))
-        #expect(css.contains(".session-section-list"))
+        #expect(css.contains(".session-worktree-group"))
+        #expect(css.contains(".session-closed"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
