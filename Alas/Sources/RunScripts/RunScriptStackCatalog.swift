@@ -86,6 +86,12 @@ struct RunScriptStackContext: Equatable, Sendable {
     var hasSpecDirectory = false
     var hasRubocopConfig = false
     var hasRequirementsFile = false
+    /// Whether pyproject.toml mentions pytest/ruff anywhere — a dependency
+    /// line, an optional-dependency group, or a `[tool.pytest]`/`[tool.ruff]`
+    /// config section. A runtime-only library that never mentions either
+    /// tool most likely doesn't have it installed.
+    var hasPytest = false
+    var hasRuff = false
     /// pubspec.yaml depends on the Flutter SDK rather than plain Dart.
     var usesFlutter = true
     /// mix.exs depends on Phoenix, so there is a dev server to run.
@@ -127,6 +133,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         hasSpecDirectory: Bool = false,
         hasRubocopConfig: Bool = false,
         hasRequirementsFile: Bool = false,
+        hasPytest: Bool = false,
+        hasRuff: Bool = false,
         usesFlutter: Bool = true,
         usesPhoenix: Bool = true,
         denoTasks: Set<String>? = nil,
@@ -145,6 +153,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.hasSpecDirectory = hasSpecDirectory
         self.hasRubocopConfig = hasRubocopConfig
         self.hasRequirementsFile = hasRequirementsFile
+        self.hasPytest = hasPytest
+        self.hasRuff = hasRuff
         self.usesFlutter = usesFlutter
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
@@ -211,8 +221,8 @@ enum RunScriptStackCatalog {
             let (install, run) = pythonCommands(context)
             return [
                 .init("install", "Install", install),
-                .init("test", "Test", "\(run)pytest"),
-                .init("lint", "Lint", "\(run)ruff check ."),
+                .init("test", "Test", "\(run)pytest", checked: context.hasPytest),
+                .init("lint", "Lint", "\(run)ruff check .", checked: context.hasRuff),
             ]
         case .django:
             let (install, run) = pythonCommands(context)

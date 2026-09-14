@@ -169,6 +169,14 @@ struct RunScriptStackCatalogTests {
         #expect(actions(.make, .init(hasMakeCleanTarget: true))["clean"]?.isCheckedByDefault == true)
     }
 
+    @Test func pythonTestAndLintAreOnlyCheckedWhenPyprojectMentionsThem() {
+        #expect(actions(.python)["install"]?.isCheckedByDefault == true)
+        #expect(actions(.python)["test"]?.isCheckedByDefault == false)
+        #expect(actions(.python)["lint"]?.isCheckedByDefault == false)
+        #expect(actions(.python, .init(hasPytest: true))["test"]?.isCheckedByDefault == true)
+        #expect(actions(.python, .init(hasRuff: true))["lint"]?.isCheckedByDefault == true)
+    }
+
     @Test func oneShotCommandsCloseAndServersKeepThePane() {
         #expect(actions(.cargo)["build"]?.onExit == .close)
         #expect(actions(.cargo)["run"]?.onExit == .keep)

@@ -68,7 +68,13 @@ enum RunScriptStackDetector {
                 // when there is no manage.py, the same way Rails/Ruby and
                 // Laravel/PHP defer to their framework-specific stack.
                 guard has("pyproject.toml"), !hasDjangoManage else { continue }
-                add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
+                let pyproject = contents("pyproject.toml") ?? ""
+                add(stack, .init(
+                    pythonRunner: pythonRunner,
+                    hasRequirementsFile: hasRequirements,
+                    hasPytest: pyproject.contains("pytest"),
+                    hasRuff: pyproject.contains("ruff")
+                ))
             case .django:
                 guard hasDjangoManage else { continue }
                 add(stack, .init(pythonRunner: pythonRunner, hasRequirementsFile: hasRequirements))
@@ -326,12 +332,16 @@ enum RunScriptStackDetector {
     /// Whether Package.swift declares exactly one executable, the only case
     /// bare `swift run` (no product name) can resolve on its own.
     private static func swiftPackageHasUnambiguousExecutable(_ manifest: String) -> Bool {
-        let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: manifest)
+        // A commented-out `.executableTarget` must not count — Package.swift
+        // is Swift source, so `//`/`/* */` comments are as valid here as
+        // anywhere else.
+        let uncommented = stripCStyleComments(manifest)
+        let executableTargets = countOccurrences(of: #"\.executableTarget\s*\("#, in: uncommented)
         if executableTargets > 0 { return executableTargets == 1 }
         // Older manifests declare an executable product via `type:
         // .executable` on a plain `.target` without a dedicated
         // .executableTarget entry; a single one is unambiguous the same way.
-        return countOccurrences(of: #"type:\s*\.executable\b"#, in: manifest) == 1
+        return countOccurrences(of: #"type:\s*\.executable\b"#, in: uncommented) == 1
     }
 
     private static func countOccurrences(of pattern: String, in text: String) -> Int {
@@ -343,8 +353,11 @@ enum RunScriptStackDetector {
     /// like `name:` or `name: deps`, unindented (an indented line is a
     /// recipe, not a rule) and not a variable assignment.
     private static func makefileDeclaresTarget(_ makefile: String, target: String) -> Bool {
-        for line in makefile.components(separatedBy: .newlines) {
-            guard !line.hasPrefix("\t"), !line.hasPrefix(" ") else { continue }
+        for rawLine in makefile.components(separatedBy: .newlines) {
+            guard !rawLine.hasPrefix("\t"), !rawLine.hasPrefix(" ") else { continue }
+            // Drop a "#" comment before parsing, so "# test: disabled" isn't
+            // read as a rule for "test".
+            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
             let beforeColon = line[line.startIndex..<colonIndex]
             guard !beforeColon.contains("=") else { continue }
@@ -354,10 +367,11 @@ enum RunScriptStackDetector {
         return false
     }
 
-    /// Strips `//` and `/* */` comments from JSONC, respecting string
-    /// literals so a URL like `"http://example.com"` isn't mistaken for one,
-    /// then drops trailing commas so `JSONSerialization` accepts the result.
-    private static func parseJSONC(_ text: String) -> [String: Any]? {
+    /// Strips `//` and `/* */` comments, respecting string literals so a URL
+    /// like `"http://example.com"` isn't mistaken for one. Shared by JSONC
+    /// (deno.jsonc) and Swift source (Package.swift), whose comment syntax
+    /// happens to match.
+    private static func stripCStyleComments(_ text: String) -> String {
         var stripped = ""
         stripped.reserveCapacity(text.count)
         var inString = false
@@ -406,7 +420,13 @@ enum RunScriptStackDetector {
             stripped.append(char)
             index = text.index(after: index)
         }
-        let withoutTrailingCommas = stripped.replacingOccurrences(
+        return stripped
+    }
+
+    /// Strips comments and drops trailing commas so `JSONSerialization`
+    /// accepts a JSONC document like deno.jsonc.
+    private static func parseJSONC(_ text: String) -> [String: Any]? {
+        let withoutTrailingCommas = stripCStyleComments(text).replacingOccurrences(
             of: #",(\s*[}\]])"#, with: "$1", options: .regularExpression
         )
         guard let data = withoutTrailingCommas.data(using: .utf8) else { return nil }

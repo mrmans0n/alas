@@ -201,6 +201,18 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.make]?.hasMakeCleanTarget == true)
     }
 
+    /// A column-zero comment like "# test: disabled" must not read as a
+    /// rule for "test" just because it splits into that token before a colon.
+    @Test func makefileIgnoresCommentLines() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Makefile", "# test: disabled\n\nall:\n\techo build\n", in: root)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+
+        try write("Makefile", "test: build ## runs the test suite\n\techo test\n", in: root)
+        #expect(detect(root)[.make]?.hasMakeTestTarget == true)
+    }
+
     @Test func swiftPackageDetectsManifest() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -223,6 +235,20 @@ struct RunScriptStackDetectorTests {
         try write(
             "Package.swift",
             "let package = Package(targets: [.executableTarget(name: \"A\"), .executableTarget(name: \"B\")])",
+            in: root
+        )
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
+    /// A commented-out `.executableTarget` is Swift source, not a real
+    /// target — Package.swift's `//` comments apply the same as anywhere
+    /// else.
+    @Test func swiftPackageIgnoresACommentedOutExecutableTarget() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Package.swift",
+            "let package = Package(targets: [\n  .target(name: \"Lib\"),\n  // .executableTarget(name: \"Removed\"),\n])",
             in: root
         )
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
@@ -339,6 +365,25 @@ struct RunScriptStackDetectorTests {
         let stacks = detect(root)
         #expect(stacks[.django] != nil)
         #expect(stacks[.python] == nil)
+    }
+
+    /// A runtime-only library that never mentions pytest or ruff most likely
+    /// doesn't have either installed; confirming pytest/ruff use requires
+    /// finding a real mention in pyproject.toml.
+    @Test func pythonOnlyChecksToolsPyprojectActuallyMentions() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("pyproject.toml", "[project]\nname = \"lib\"\ndependencies = []\n", in: root)
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+
+        try write(
+            "pyproject.toml",
+            "[project]\nname = \"lib\"\n[project.optional-dependencies]\ndev = [\"pytest\", \"ruff\"]\n",
+            in: root
+        )
+        #expect(detect(root)[.python]?.hasPytest == true)
+        #expect(detect(root)[.python]?.hasRuff == true)
     }
 
     @Test func laravelHidesPlainComposer() throws {
