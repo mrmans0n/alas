@@ -242,11 +242,14 @@ struct ACPMarkdownScrollRoutingState {
         if momentumPhase.contains(.began) {
             pendingEvents.removeAll(keepingCapacity: true)
         }
-        if forwarding == nil && hasGesturePhase && !hasDominantAxis, let pendingEvent {
+        if forwarding == nil && hasGesturePhase && !hasDominantAxis && !phase.contains(.ended), let pendingEvent {
             pendingEvents.append(pendingEvent)
         }
         if forwarding == nil && hasGesturePhase && hasDominantAxis {
             forwarding = isVertical
+        }
+        if forwarding == nil && phase.contains(.ended) && hasPendingEvents {
+            forwarding = false
         }
         if forwarding == nil && !hasGesturePhase && hasPendingEvents {
             forwarding = isVertical
@@ -261,8 +264,6 @@ struct ACPMarkdownScrollRoutingState {
             || momentumPhase.contains(.ended)
         {
             forwarding = nil
-            pendingEvents.removeAll(keepingCapacity: true)
-        } else if phase.contains(.ended) {
             pendingEvents.removeAll(keepingCapacity: true)
         }
 

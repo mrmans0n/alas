@@ -209,6 +209,13 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
+    override func scrollWheel(with event: NSEvent) {
+        if event.phase.contains(.began) {
+            markdownScrollRoutingState = ACPMarkdownScrollRoutingState()
+        }
+        super.scrollWheel(with: event)
+    }
+
     deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
