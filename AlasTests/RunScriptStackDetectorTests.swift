@@ -398,6 +398,33 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
     }
 
+    @Test func swiftPackageIgnoresExecutableTargetsInInactiveArchitectureBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+#if arch(arm64)
+        let inactiveArchitecture = "x86_64"
+#else
+        let inactiveArchitecture = "arm64"
+#endif
+        try write(
+            "Package.swift",
+            """
+            #if arch(\(inactiveArchitecture))
+            let package = Package(targets: [
+                .executableTarget(name: "InactiveTool"),
+            ])
+            #else
+            let package = Package(targets: [
+                .target(name: "Lib"),
+            ])
+            #endif
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.swiftPackage]?.hasRunnableTarget == false)
+    }
+
     @Test func swiftPackageRecognizesTheOlderExecutableProductForm() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -512,6 +539,18 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
+    @Test func goIgnoresToolchainIgnoredSourceFilenames() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("_main.go", "package main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("_main.go"))
+        try write(".main.go", "package main\n\nfunc main() {}\n", in: root)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
     @Test func goUsesTheCurrentArchitectureForBuildTags() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -603,6 +642,9 @@ struct RunScriptStackDetectorTests {
         try write("Rakefile", "namespace :foo do\n  task :test\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
 
+        try write("Rakefile", "namespace :foo do\n  if true\n  end\n  task :test\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
         try write("Rakefile", "task :test do\n  ruby \"test/all_test.rb\"\nend\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == true)
     }
@@ -668,6 +710,24 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonIgnoresUnrelatedProjectArraysWhenDetectingTools() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+            keywords = ["pytest", "ruff"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
     }
 
     @Test func pythonIgnoresCommentedOutToolMentions() throws {

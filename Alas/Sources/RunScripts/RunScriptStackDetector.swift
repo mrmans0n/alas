@@ -715,6 +715,9 @@ enum RunScriptStackDetector {
         if let osName = swiftOSConditionName(trimmed) {
             return osName == "macOS" || osName == "Darwin"
         }
+        if let architecture = swiftArchitectureConditionName(trimmed) {
+            return architecture == currentSwiftArchitecture
+        }
         // Unknown manifest conditions may depend on SwiftPM settings. Keep
         // them rather than hiding real executable declarations.
         return true
@@ -776,8 +779,28 @@ enum RunScriptStackDetector {
         return String(condition[nameRange])
     }
 
+    private static func swiftArchitectureConditionName(_ condition: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"^arch\(\s*([A-Za-z0-9_]+)\s*\)$"#) else { return nil }
+        let range = NSRange(condition.startIndex..., in: condition)
+        guard let match = regex.firstMatch(in: condition, range: range),
+              let nameRange = Range(match.range(at: 1), in: condition)
+        else { return nil }
+        return String(condition[nameRange])
+    }
+
+    private static var currentSwiftArchitecture: String {
+#if arch(arm64)
+        "arm64"
+#elseif arch(x86_64)
+        "x86_64"
+#else
+        ""
+#endif
+    }
+
     private static func goSourceIsRunnableOnCurrentHost(named name: String, contents: String?) -> Bool {
         guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
+              let firstCharacter = name.first, firstCharacter != ".", firstCharacter != "_",
               let contents, goFileDeclaresPackageMain(contents),
               goFilenameSupportsCurrentHost(name), goBuildConstraintAllowsCurrentHost(contents)
         else { return false }
@@ -965,11 +988,19 @@ enum RunScriptStackDetector {
             if !blockStack.contains(true), taskRegex.firstMatch(in: segment, range: range) != nil {
                 return true
             }
-            if trimmed.hasSuffix(" do") || trimmed.contains(" do |") {
+            if rubyBlockOpens(trimmed) {
                 blockStack.append(false)
             }
         }
         return false
+    }
+
+    private static func rubyBlockOpens(_ trimmedLine: String) -> Bool {
+        let blockStarters = ["if", "unless", "case", "begin", "for", "while", "until", "def", "class", "module"]
+        if blockStarters.contains(where: { trimmedLine == $0 || trimmedLine.hasPrefix("\($0) ") }) {
+            return true
+        }
+        return trimmedLine.hasSuffix(" do") || trimmedLine.contains(" do |")
     }
 
     /// Strips `//` and `/* */` comments, respecting string literals so a URL
@@ -1055,11 +1086,18 @@ enum RunScriptStackDetector {
         }
         for section in tomlSections(stripped) {
             let table = section.name
-            guard table == "project" || table == "build-system" || table.hasPrefix("project.optional-dependencies")
-                || table == "dependency-groups" || table == "tool.poetry.dev-dependencies"
-                || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
-            else { continue }
-            if tomlDependencyText(section.body, declares: tool) { return true }
+            switch table {
+            case "project":
+                if tomlKeyedDependencyText(section.body, declares: tool, keys: ["dependencies"]) { return true }
+            case "build-system":
+                if tomlKeyedDependencyText(section.body, declares: tool, keys: ["requires"]) { return true }
+            default:
+                guard table.hasPrefix("project.optional-dependencies") || table == "dependency-groups"
+                    || table == "tool.poetry.dev-dependencies"
+                    || (table.hasPrefix("tool.poetry.group.") && table.hasSuffix(".dependencies"))
+                else { continue }
+                if tomlDependencyText(section.body, declares: tool) { return true }
+            }
         }
         return false
     }
@@ -1108,6 +1146,24 @@ enum RunScriptStackDetector {
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
             let body = String(text[bodyRange])
             return tableDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+        }
+    }
+
+    private static func tomlKeyedDependencyText(_ text: String, declares tool: String, keys: [String]) -> Bool {
+        let escapedTool = NSRegularExpression.escapedPattern(for: tool)
+        guard let quotedDependencyRegex = try? NSRegularExpression(
+            pattern: #"["']"# + escapedTool + #"([<>=~! ;,\[][^"']*)?["']"#
+        ) else { return false }
+        return keys.contains { key in
+            let escapedKey = NSRegularExpression.escapedPattern(for: key)
+            guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#)
+            else { return false }
+            let range = NSRange(text.startIndex..., in: text)
+            return arrayRegex.matches(in: text, range: range).contains { match in
+                guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
+                let body = String(text[bodyRange])
+                return quotedDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+            }
         }
     }
 
