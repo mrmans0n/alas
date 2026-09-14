@@ -135,12 +135,22 @@ struct RunScriptStackCatalogTests {
     /// "Run" fails outright against a library-only manifest, so it only
     /// defaults to checked once a runnable target is actually confirmed.
     @Test func runIsUncheckedWithoutAConfirmedRunnableTarget() {
-        #expect(actions(.go)["run"]?.isCheckedByDefault == false)
-        #expect(actions(.go, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
         #expect(actions(.cargo)["run"]?.isCheckedByDefault == false)
         #expect(actions(.cargo, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
         #expect(actions(.swiftPackage)["run"]?.isCheckedByDefault == false)
         #expect(actions(.swiftPackage, .init(hasRunnableTarget: true))["run"]?.isCheckedByDefault == true)
+    }
+
+    /// Go's Run points at whatever command was actually confirmed, not
+    /// blindly at the module root — "go run ." fails for a root library
+    /// whose only command lives under cmd/.
+    @Test func goRunPointsAtTheConfirmedCommandPath() {
+        #expect(actions(.go)["run"]?.body == "go run .")
+        #expect(actions(.go)["run"]?.isCheckedByDefault == false)
+        #expect(actions(.go, .init(goRunTarget: "."))["run"]?.body == "go run .")
+        #expect(actions(.go, .init(goRunTarget: "."))["run"]?.isCheckedByDefault == true)
+        #expect(actions(.go, .init(goRunTarget: "./cmd/tool"))["run"]?.body == "go run ./cmd/tool")
+        #expect(actions(.go, .init(goRunTarget: "./cmd/tool"))["run"]?.isCheckedByDefault == true)
     }
 
     @Test func oneShotCommandsCloseAndServersKeepThePane() {

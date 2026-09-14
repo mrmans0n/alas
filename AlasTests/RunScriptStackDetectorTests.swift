@@ -197,24 +197,34 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        #expect(detect(root)[.go]?.hasRunnableTarget == false)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
-    @Test func goDetectsARunnableMainTwoWays() throws {
+    @Test func goPrefersARootMainPackage() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try touch("go.mod", in: root)
-        try FileManager.default.createDirectory(at: root.appendingPathComponent("cmd"), withIntermediateDirectories: true)
-        #expect(detect(root)[.go]?.hasRunnableTarget == true)
-
-        try FileManager.default.removeItem(at: root.appendingPathComponent("cmd"))
-        #expect(detect(root)[.go]?.hasRunnableTarget == false)
-
         try write("lib.go", "package mylib\n\nfunc DoThing() {}\n", in: root)
-        #expect(detect(root)[.go]?.hasRunnableTarget == false)
+        #expect(detect(root)[.go]?.goRunTarget == nil)
 
         try write("main.go", "package main\n\nfunc main() {}\n", in: root)
-        #expect(detect(root)[.go]?.hasRunnableTarget == true)
+        #expect(detect(root)[.go]?.goRunTarget == ".")
+    }
+
+    /// A root library with the command living under cmd/ is not itself
+    /// runnable — `go run .` fails there even though `go run ./cmd/tool`
+    /// would succeed.
+    @Test func goPointsAtTheActualCommandUnderCmd() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("go.mod", "module example.com/tool\n", in: root)
+        try write("lib.go", "package tool\n\nfunc DoThing() {}\n", in: root)
+        let cmdToolDir = root.appendingPathComponent("cmd/tool", isDirectory: true)
+        try FileManager.default.createDirectory(at: cmdToolDir, withIntermediateDirectories: true)
+        #expect(detect(root)[.go]?.goRunTarget == nil, "an empty cmd/ directory confirms nothing")
+
+        try Data("package main\n\nfunc main() {}\n".utf8).write(to: cmdToolDir.appendingPathComponent("main.go"))
+        #expect(detect(root)[.go]?.goRunTarget == "./cmd/tool")
     }
 
     @Test func pythonPicksRunnerFromLockfile() throws {

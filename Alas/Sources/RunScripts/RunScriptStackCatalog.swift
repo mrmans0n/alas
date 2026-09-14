@@ -95,11 +95,17 @@ struct RunScriptStackContext: Equatable, Sendable {
     /// unchecked rather than assuming a task exists: `deno task dev` has no
     /// generic fallback the way `npm test` does.
     var denoTasks: Set<String>?
-    /// Shared by Go, Cargo, and Swift Package: whether the repository has an
-    /// actual runnable target (a `main` package, a `[[bin]]`/`src/bin`, an
-    /// executable product). Defaults to false — "Run" fails outright against
-    /// a library-only manifest, so it's opt-in rather than assumed.
+    /// Shared by Cargo and Swift Package: whether the repository has an
+    /// actual runnable target (a `[[bin]]`/`src/bin`, an executable
+    /// product). Defaults to false — "Run" fails outright against a
+    /// library-only manifest, so it's opt-in rather than assumed.
     var hasRunnableTarget = false
+    /// The path argument for `go run` that actually contains `package main`
+    /// — "." for a root-level main package, "./cmd/<name>" for the first
+    /// command found under the cmd/ convention. Nil when neither is
+    /// confirmed: a root library with a `cmd/` subpackage is not itself
+    /// runnable, so `go run .` would fail even though a command exists.
+    var goRunTarget: String?
 
     init(
         hasWrapper: Bool = false,
@@ -114,7 +120,8 @@ struct RunScriptStackContext: Equatable, Sendable {
         usesFlutter: Bool = true,
         usesPhoenix: Bool = true,
         denoTasks: Set<String>? = nil,
-        hasRunnableTarget: Bool = false
+        hasRunnableTarget: Bool = false,
+        goRunTarget: String? = nil
     ) {
         self.hasWrapper = hasWrapper
         self.kotlinWrapper = kotlinWrapper
@@ -129,6 +136,7 @@ struct RunScriptStackContext: Equatable, Sendable {
         self.usesPhoenix = usesPhoenix
         self.denoTasks = denoTasks
         self.hasRunnableTarget = hasRunnableTarget
+        self.goRunTarget = goRunTarget
     }
 }
 
@@ -242,7 +250,10 @@ enum RunScriptStackCatalog {
                 .init("build", "Build", "go build ./..."),
                 .init("test", "Test", "go test ./..."),
                 .init("vet", "Vet", "go vet ./..."),
-                .init("run", "Run", "go run .", checked: context.hasRunnableTarget, onExit: .keep),
+                .init(
+                    "run", "Run", "go run \(context.goRunTarget ?? ".")",
+                    checked: context.goRunTarget != nil, onExit: .keep
+                ),
             ]
         case .cargo:
             return [

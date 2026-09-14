@@ -97,12 +97,7 @@ enum RunScriptStackDetector {
                 add(stack)
             case .go:
                 guard has("go.mod") else { continue }
-                // `cmd/` is the standard convention for a runnable command in
-                // an otherwise-library module; failing that, look for a
-                // `package main` declaration in a root-level source file.
-                let hasMain = isDirectory("cmd")
-                    || names.contains { $0.hasSuffix(".go") && goFileDeclaresPackageMain(contents($0)) }
-                add(stack, .init(hasRunnableTarget: hasMain))
+                add(stack, .init(goRunTarget: goRunnableTarget(rootEntries: names, worktreeRoot: worktreeRoot, fileManager: fileManager)))
             case .cargo:
                 guard has("Cargo.toml") else { continue }
                 let hasBinary = isRegularFile("src/main.rs") || isDirectory("src/bin")
@@ -229,6 +224,36 @@ enum RunScriptStackDetector {
     private static func goFileDeclaresPackageMain(_ contents: String?) -> Bool {
         guard let contents else { return false }
         return contents.range(of: #"(?m)^\s*package\s+main\s*$"#, options: .regularExpression) != nil
+    }
+
+    /// The path argument for `go run` that actually contains `package main`:
+    /// "." for a root-level main package, or "./cmd/<name>" for the first
+    /// command found under the cmd/ convention (Go's `run` compiles and runs
+    /// exactly the named main package — a `cmd/` subpackage does not make
+    /// the module root itself runnable). Nil when neither is confirmed.
+    private static func goRunnableTarget(rootEntries: [String], worktreeRoot: URL, fileManager: FileManager) -> String? {
+        func fileText(_ relativePath: String) -> String? {
+            guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        }
+        if rootEntries.contains(where: { $0.hasSuffix(".go") && goFileDeclaresPackageMain(fileText($0)) }) {
+            return "."
+        }
+        guard let cmdEntries = try? fileManager.contentsOfDirectory(
+            atPath: worktreeRoot.appendingPathComponent("cmd").path
+        ) else { return nil }
+        for name in cmdEntries.sorted() {
+            let subdir = "cmd/\(name)"
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: worktreeRoot.appendingPathComponent(subdir).path, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  let files = try? fileManager.contentsOfDirectory(atPath: worktreeRoot.appendingPathComponent(subdir).path)
+            else { continue }
+            if files.contains(where: { $0.hasSuffix(".go") && goFileDeclaresPackageMain(fileText("\(subdir)/\($0)")) }) {
+                return "./\(subdir)"
+            }
+        }
+        return nil
     }
 
     /// Strips `//` and `/* */` comments from JSONC, respecting string
