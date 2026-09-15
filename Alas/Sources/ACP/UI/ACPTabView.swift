@@ -580,7 +580,7 @@ private struct ACPSessionView: View {
             // clear state - if the user has typed a new draft by the
             // time the completion fires, the conditional checks in
             // purge/reinstate skip and the new draft survives.
-            var suspendedRevision: Int = -1
+            let suspendedRevision = ACPSuspendedRevisionBox()
             let accepted = manager.submit(
                 sessionId: sessionId,
                 text: text,
@@ -588,24 +588,24 @@ private struct ACPSessionView: View {
                 intent: intent,
                 draft: draft
             ) { succeeded in
-                if suspendedRevision >= 0 {
+                if suspendedRevision.value >= 0 {
                     if succeeded {
                         manager.purgeSuspendedComposerDraft(
                             for: session,
-                            suspendedRevision: suspendedRevision
+                            suspendedRevision: suspendedRevision.value
                         )
                     } else {
                         manager.reinstateSuspendedComposerDraft(
                             draft,
                             for: session,
-                            suspendedRevision: suspendedRevision
+                            suspendedRevision: suspendedRevision.value
                         )
                     }
                 }
                 onPromptFinished(succeeded)
             }
             if accepted {
-                suspendedRevision = manager.suspendComposerDraftForSubmission(
+                suspendedRevision.value = manager.suspendComposerDraftForSubmission(
                     draft, for: session
                 )
             }
@@ -982,4 +982,13 @@ enum ACPSetupNudgeDismissal {
         // retain their old behavior only for local ACP sessions.
         return key.target == .local && values.contains(key.agentID)
     }
+}
+
+/// `submit`'s completion deliberately observes a revision assigned *after*
+/// `submit` returns, so the value cannot be a captured `let`. The completion is
+/// `@MainActor` and so is the assignment, so main-actor isolation is enough to
+/// make the box safe to capture — no lock required.
+@MainActor
+private final class ACPSuspendedRevisionBox {
+    var value: Int = -1
 }
