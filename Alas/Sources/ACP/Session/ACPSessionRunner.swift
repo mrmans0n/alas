@@ -72,6 +72,9 @@ final class ACPSessionRunner {
     private var nextPromptID = 0
     private var activePromptID: Int?
     private var cancelledPromptIDs: Set<Int> = []
+    /// Retains the most recently dispatched prompt RPC so steering can wait
+    /// for its response after sending the cancellation notification.
+    private var latestPromptTask: Task<Void, Never>?
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
     private var persistenceTail: Task<Void, Never>?
@@ -1706,6 +1709,7 @@ extension ACPSessionRunner {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.queue.removeAll { $0.status == .sending }
         persistQueue()
+        let interruptedPromptTask = activePromptID == nil ? nil : latestPromptTask
         // Invalidate the in-flight prompt NOW (before awaiting userCancel)
         // so its completion can't race the redirect during the cancel
         // round-trip. Without this, a slow `session/cancel` leaves the
@@ -1726,6 +1730,7 @@ extension ACPSessionRunner {
         Task { [weak self] in
             guard let self else { return }
             await self.userCancel()
+            await interruptedPromptTask?.value
             await MainActor.run {
                 // If the session was detached while we were awaiting
                 // `userCancel` (tab closed, worktree torn down), the
@@ -1801,7 +1806,7 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
-        Task { [weak self, onPromptFinished] in
+        latestPromptTask = Task { [weak self, onPromptFinished] in
             guard let self else {
                 await MainActor.run { onPromptFinished?(false) }
                 return
@@ -1904,6 +1909,12 @@ extension ACPSessionRunner {
                 if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
+                    throw CancellationError()
+                }
+                // Hydration suspends for file I/O. A steer can invalidate this
+                // prompt while that work is in progress, so verify ownership
+                // again before sending a stale RPC.
+                guard await MainActor.run(body: { self.activePromptID == promptID }) else {
                     throw CancellationError()
                 }
                 let promptAcknowledgement = try await self.connection.prompt(
@@ -2030,7 +2041,7 @@ extension ACPSessionRunner {
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
-        Task { [weak self, onCompleted] in
+        latestPromptTask = Task { [weak self, onCompleted] in
             guard let self else {
                 await MainActor.run { onCompleted?(false) }
                 return

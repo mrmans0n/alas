@@ -431,6 +431,76 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
+    @Test("steer waits for the cancelled prompt RPC before sending its replacement")
+    func steerWaitsForCancelledPromptToSettle() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let probe = StrictSingleFlightPromptProbe()
+        let cancelSent = QueueTestGate()
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelSent.open()
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            try await probe.send()
+        }
+
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await probe.waitUntilFirstStarted()
+
+        runner.send(blocks: [.text("redirect")], intent: .steer)
+        await cancelSent.wait()
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        let callsBeforeFirstSettles = await probe.callCount
+        #expect(callsBeforeFirstSettles == 1)
+
+        await probe.releaseFirst()
+        for _ in 0 ..< 20 {
+            if await probe.callCount >= 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let totalCalls = await probe.callCount
+        #expect(totalCalls == 2)
+        #expect(session.lastError == nil)
+    }
+
+    @Test("steer waits for a cancelled recovery prompt before sending its replacement")
+    func steerWaitsForCancelledRecoveryPromptToSettle() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let probe = StrictSingleFlightPromptProbe()
+        let cancelSent = QueueTestGate()
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelSent.open()
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            try await probe.send()
+        }
+
+        #expect(runner.sendRecoveryContext("restore"))
+        await probe.waitUntilFirstStarted()
+
+        runner.send(blocks: [.text("redirect")], intent: .steer)
+        await cancelSent.wait()
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        let callsBeforeRecoverySettles = await probe.callCount
+        #expect(callsBeforeRecoverySettles == 1)
+
+        await probe.releaseFirst()
+        for _ in 0 ..< 20 {
+            if await probe.callCount >= 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let totalCalls = await probe.callCount
+        #expect(totalCalls == 2)
+        #expect(session.lastError == nil)
+    }
+
     @Test("steer that races a detach skips the redirect on a torn-down session")
     func steerSkipsRedirectAfterDetach() async throws {
         // Regression: the unstructured steer Task survives the runner +
@@ -879,6 +949,38 @@ private actor QueueTestGate {
         isOpen = true
         waiters.forEach { $0.resume() }
         waiters.removeAll()
+    }
+}
+
+private actor StrictSingleFlightPromptProbe {
+    private let firstStarted = QueueTestGate()
+    private let firstRelease = QueueTestGate()
+    private var firstRunning = false
+    private(set) var callCount = 0
+
+    func send() async throws -> Data {
+        callCount += 1
+        if callCount == 1 {
+            firstRunning = true
+            await firstStarted.open()
+            await firstRelease.wait()
+            firstRunning = false
+        } else if firstRunning {
+            throw ACPClientError.jsonrpc(.init(
+                code: -32003,
+                message: "Agent is already processing. Use steer() or followUp() to queue messages, or wait for completion.",
+                data: nil
+            ))
+        }
+        return Data("null".utf8)
+    }
+
+    func waitUntilFirstStarted() async {
+        await firstStarted.wait()
+    }
+
+    func releaseFirst() async {
+        await firstRelease.open()
     }
 }
 
