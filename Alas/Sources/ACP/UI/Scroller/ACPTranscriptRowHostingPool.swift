@@ -45,7 +45,11 @@ final class ACPTranscriptRowHostingPool {
     }
 
     func release(id: String) {
-        entries.removeValue(forKey: id)?.view.removeFromSuperview()
+        guard let entry = entries.removeValue(forKey: id) else { return }
+        // AppKit can retain the detached graph and invalidate it during teardown.
+        // Retiring a row must end its ability to change transcript geometry.
+        entry.view.onIntrinsicSizeInvalidated = nil
+        entry.view.removeFromSuperview()
     }
 
     func releaseAll(except keep: Set<String> = []) {
