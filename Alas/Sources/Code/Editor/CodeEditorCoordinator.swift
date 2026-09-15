@@ -35,6 +35,7 @@ final class CodeEditorCoordinator {
     private var revealHighlightTask: Task<Void, Never>?
     private var revealHighlightRange: NSRange?
     private var revealHighlightRevision: Int?
+    private var revealHighlightDisplayRanges: [NSRange] = []
     private var currentExternalAbsolutePath: String?
     private var currentExternalEditable: Bool = false
     private var currentOriginatingWorktreeRoot: URL?
@@ -730,6 +731,10 @@ final class CodeEditorCoordinator {
     private func installHoverObservers(textView: CodeTextView) {
         clearHoverObservers()
         let nc = NotificationCenter.default
+        let willChangeToken = nc.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearRevealPaint() }
+        }
+        hoverObservers.append(willChangeToken)
         let projectionToken = nc.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let view = self.textView else { return }
@@ -738,7 +743,7 @@ final class CodeEditorCoordinator {
                 self.completion?.notifyProjectionChanged()
                 self.signatureHelp?.notifyScrolled()
                 if let range = self.revealHighlightRange, self.revealHighlightRevision == self.buffer?.editGeneration {
-                    view.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: NSColor.systemYellow.withAlphaComponent(0.9)], range: range)
+                    self.paintRevealHighlight(range, in: view)
                 }
                 self.scheduleSemanticRefresh(visibleRangeChanged: true)
             }
@@ -1759,8 +1764,7 @@ final class CodeEditorCoordinator {
         ))
         guard lineRange.location != NSNotFound, lineRange.length > 0 else { return }
 
-        let color = NSColor.systemYellow.withAlphaComponent(0.9)
-        textView.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: color], range: lineRange)
+        paintRevealHighlight(lineRange, in: textView)
         revealHighlightRange = lineRange
         revealHighlightRevision = buffer?.editGeneration
         revealHighlightTask = Task { [weak self, weak textView] in
@@ -1776,23 +1780,25 @@ final class CodeEditorCoordinator {
     private func clearRevealHighlight() {
         revealHighlightTask?.cancel()
         revealHighlightTask = nil
-        guard let range = revealHighlightRange,
-              let textView,
-              textView.layoutManager != nil else {
-            revealHighlightRange = nil
-            return
-        }
-        let textLength = (textView.sourceString as NSString).length
-        if range.location < textLength {
-            let clampedRange = NSRange(
-                location: range.location,
-                length: min(range.length, textLength - range.location)
-            )
-            if clampedRange.length > 0 {
-                textView.removeSourceTemporaryAttribute(.underlineStyle, range: clampedRange)
-                textView.removeSourceTemporaryAttribute(.underlineColor, range: clampedRange)
-            }
-        }
+        clearRevealPaint()
         revealHighlightRange = nil
+    }
+
+    private func paintRevealHighlight(_ range: NSRange, in view: CodeTextView) {
+        clearRevealPaint()
+        revealHighlightDisplayRanges = view.displaySegments(forSource: range)
+        for segment in revealHighlightDisplayRanges {
+            view.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: NSColor.systemYellow.withAlphaComponent(0.9)], forCharacterRange: segment)
+        }
+    }
+
+    private func clearRevealPaint() {
+        defer { revealHighlightDisplayRanges = [] }
+        guard let layout = textView?.layoutManager, let storage = layout.textStorage else { return }
+        for range in revealHighlightDisplayRanges {
+            guard let clipped = range.intersection(NSRange(location: 0, length: storage.length)), clipped.length > 0 else { continue }
+            layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: clipped)
+            layout.removeTemporaryAttribute(.underlineColor, forCharacterRange: clipped)
+        }
     }
 }

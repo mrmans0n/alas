@@ -33,6 +33,65 @@ struct EditorDisplayInputTests {
         #expect(f.document.map.hintRuns.isEmpty) // Unowned/undo edits remain conservative.
     }
 
+    @Test func sourceEditRemovesShiftedCommandHoverUnderline() async throws {
+        let f = try await Fixture("alpha beta")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        try adapter.updateHints([], revision: f.buffer.editGeneration)
+        let transport = FakeTransport()
+        defer { transport.finish() }
+        transport.onSend = { @Sendable sent in
+            guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = frame["id"] else { return }
+            let result: LSPJSONValue = frame["method"] == .string("initialize")
+                ? .object(["capabilities": .object(["definitionProvider": .bool(true)])])
+                : .array([.object(["uri": .string("file:///target.swift"), "range": .object(["start": .object(["line": .number("0"), "character": .number("0")]), "end": .object(["line": .number("0"), "character": .number("1")])])])])
+            transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["id": id, "result": result]).encodedData(), as: UTF8.self))
+        }
+        let client = LSPClient(transport: transport, language: "swift", rootURI: f.root.lspURI)
+        try await client.initialize()
+        let feature = HoverHighlightFeature(textView: f.view, getClient: { client }, getURI: { "file:///test.txt" })
+        defer { feature.cancelAndClear() }
+        let rect = try #require(f.view.sourceRects(inViewFor: NSRange(location: 7, length: 1)).first)
+        feature.simulateCommandPressed()
+        feature.simulateMouseMoved(at: NSPoint(x: rect.midX, y: rect.midY))
+        for _ in 0..<100 where feature.lastUnderlinedRange == nil { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(feature.lastUnderlinedRange == NSRange(location: 6, length: 4))
+        #expect(adapter.replaceSource(NSRange(location: 0, length: 0), with: "x"))
+        #expect(feature.lastUnderlinedRange == nil)
+        #expect(f.view.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: 10, effectiveRange: nil) == nil)
+    }
+
+    @Test func sourceEditsClearOwnedHighlightsWithoutErasingOtherBackgrounds() async throws {
+        let layout = TemporaryClearRecorder()
+        let f = try await Fixture("alpha\nbeta\nomega\n", layout: layout)
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        try adapter.updateHints([], revision: f.buffer.editGeneration)
+        let semantic = EditorSemanticLayer(layoutManager: layout, theme: EditorTheme(theme: try ThemeStore().current), textView: f.view, isCurrent: { _ in true })
+        let context = EditorRequestContext(document: .init(host: nil, worktreeID: "test", uri: "file:///test.txt"), version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 3, character: 0)))
+        semantic.replace([HighlightSpan(range: NSRange(location: 6, length: 4), capture: .function)], context: context)
+        layout.addTemporaryAttribute(.backgroundColor, value: NSColor.blue, forCharacterRange: NSRange(location: 6, length: 4))
+        layout.addTemporaryAttribute(.backgroundColor, value: NSColor.purple, forCharacterRange: NSRange(location: 11, length: 5))
+        let find = EditorFindHighlightRenderer()
+        find.attach(textView: f.view)
+        find.render(matches: [NSRange(location: 6, length: 4)], activeIndex: 0, inactiveColor: .yellow, activeColor: .orange)
+        layout.clearedRanges = []
+        #expect(adapter.replaceSource(NSRange(location: 0, length: 0), with: "x"))
+        #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: 7, effectiveRange: nil) == nil)
+        #expect(layout.temporaryAttribute(.backgroundColor, atCharacterIndex: 7, effectiveRange: nil) as? NSColor == .blue)
+        #expect(layout.temporaryAttribute(.backgroundColor, atCharacterIndex: 12, effectiveRange: nil) as? NSColor == .purple)
+        #expect(!layout.clearedRanges.isEmpty)
+        #expect(layout.clearedRanges.allSatisfy { $0 == NSRange(location: 6, length: 4) })
+    }
+
+    private final class TemporaryClearRecorder: NSLayoutManager {
+        var clearedRanges: [NSRange] = []
+        override func removeTemporaryAttribute(_ attrName: NSAttributedString.Key, forCharacterRange charRange: NSRange) {
+            clearedRanges.append(charRange)
+            super.removeTemporaryAttribute(attrName, forCharacterRange: charRange)
+        }
+    }
+
     @Test func lineOffsetsStayCurrentThroughTypingHintFallbackAndUndo() async throws {
         let f = try await Fixture("ab\ncd\n")
         defer { f.remove() }

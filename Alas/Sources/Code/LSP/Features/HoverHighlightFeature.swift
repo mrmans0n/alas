@@ -20,9 +20,14 @@ final class HoverHighlightFeature {
     private(set) var lastUnderlinedRange: NSRange?
     private var inFlight: Task<Void, Never>?
     private var projectionObserver: NSObjectProtocol?
+    private var projectionWillChangeObserver: NSObjectProtocol?
+    private var paintedRanges: [NSRange] = []
     private var underlineRevision: Int?
 
-    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit {
+        if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
+        if let projectionWillChangeObserver { NotificationCenter.default.removeObserver(projectionWillChangeObserver) }
+    }
 
     private let debounceNanos: UInt64 = 80_000_000 // 80 ms
 
@@ -38,12 +43,15 @@ final class HoverHighlightFeature {
         self.getURI = getURI
         self.synchronizeRequest = synchronizeRequest
         self.isContextCurrent = isContextCurrent
+        projectionWillChangeObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearPaint() }
+        }
         projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let view = self.textView, let range = self.lastUnderlinedRange else { return }
                 guard self.underlineRevision == view.displayAdapter?.buffer.editGeneration else { self.clearUnderline()
                 return }
-                view.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
+                self.paintUnderline(range)
             }
         }
         // Chain all three handlers so coexisting features (HoverFeature's
@@ -159,24 +167,34 @@ final class HoverHighlightFeature {
         let wordRange = nsString.rangeOfWord(at: offset)
         clearUnderline()
         if wordRange.length == 0 { return }
-        textView.addSourceTemporaryAttributes(
-            [.underlineStyle: NSUnderlineStyle.single.rawValue],
-            range: wordRange
-        )
+        paintUnderline(wordRange)
         lastUnderlinedRange = wordRange
         underlineRevision = textView.displayAdapter?.buffer.editGeneration
         NSCursor.pointingHand.set()
     }
 
     private func clearUnderline() {
-        defer { restoreCursor() }
-        guard let textView,
-              let range = lastUnderlinedRange else {
-            lastUnderlinedRange = nil
-            return
-        }
-        textView.removeSourceTemporaryAttribute(.underlineStyle, range: range)
+        clearPaint()
         lastUnderlinedRange = nil
+        restoreCursor()
+    }
+
+    private func paintUnderline(_ range: NSRange) {
+        clearPaint()
+        guard let textView else { return }
+        paintedRanges = textView.displaySegments(forSource: range)
+        for segment in paintedRanges {
+            textView.layoutManager?.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, forCharacterRange: segment)
+        }
+    }
+
+    private func clearPaint() {
+        defer { paintedRanges = [] }
+        guard let layout = textView?.layoutManager, let storage = layout.textStorage else { return }
+        for range in paintedRanges {
+            guard let clipped = range.intersection(NSRange(location: 0, length: storage.length)), clipped.length > 0 else { continue }
+            layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: clipped)
+        }
     }
 
     private func restoreCursor() {
