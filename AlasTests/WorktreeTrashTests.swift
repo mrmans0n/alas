@@ -559,6 +559,81 @@ struct WorktreeTrashTests {
         #expect(recovered == [ticket])
     }
 
+    @Test func staleScanLeavesFreshPendingDeletionAlone() throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pending-fresh-\(UUID().uuidString)")
+        let original = common.appendingPathComponent("linked")
+        defer { try? FileManager.default.removeItem(at: common) }
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: original,
+            now: Date(timeIntervalSince1970: 200)
+        )
+        try FileManager.default.createDirectory(at: ticket.trashRoot, withIntermediateDirectories: true)
+        let registration = common.appendingPathComponent("worktrees/linked")
+        try FileManager.default.createDirectory(at: registration, withIntermediateDirectories: true)
+        try "\(original.path)/.git\n".write(
+            to: registration.appendingPathComponent("gitdir"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try WorktreeTrash.markPendingForActiveRemoval(
+            ticket,
+            originalPath: original,
+            linkedGitDirectory: registration,
+            at: Date(timeIntervalSince1970: 200)
+        )
+        defer { WorktreeTrash.finishActivePendingRemoval(ticket) }
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+
+        _ = WorktreeTrash.staleTickets(
+            commonGitDirectories: [common],
+            olderThan: Date(timeIntervalSince1970: 100)
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: original.path))
+        #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(FileManager.default.fileExists(atPath: WorktreeTrash.pendingMarkerURL(for: ticket).path))
+    }
+
+    @Test func staleScanRecoversFreshPendingDeletionAfterRestart() throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pending-restart-\(UUID().uuidString)")
+        let original = common.appendingPathComponent("linked")
+        defer { try? FileManager.default.removeItem(at: common) }
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: original,
+            now: Date(timeIntervalSince1970: 200)
+        )
+        try FileManager.default.createDirectory(at: ticket.trashRoot, withIntermediateDirectories: true)
+        let registration = common.appendingPathComponent("worktrees/linked")
+        try FileManager.default.createDirectory(at: registration, withIntermediateDirectories: true)
+        try "\(original.path)/.git\n".write(
+            to: registration.appendingPathComponent("gitdir"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try WorktreeTrash.markPending(
+            ticket,
+            originalPath: original,
+            linkedGitDirectory: registration,
+            at: Date(timeIntervalSince1970: 200)
+        )
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+
+        _ = WorktreeTrash.staleTickets(
+            commonGitDirectories: [common],
+            olderThan: Date(timeIntervalSince1970: 100)
+        )
+
+        #expect(FileManager.default.fileExists(atPath: original.path))
+        #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!FileManager.default.fileExists(atPath: WorktreeTrash.pendingMarkerURL(for: ticket).path))
+    }
+
     @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct WorktreeTrashDirectoryIdentity: Equatable, Sendable {
@@ -23,7 +24,10 @@ enum WorktreeTrash {
     private static let committedMarkerVersion = "1"
     private static let pendingMarkerName = ".alas-worktree-deletion-pending"
     private static let pendingMarkerVersion = "1"
+    private static let activeMarkerName = ".alas-worktree-deletion-active"
     private static let maximumPendingMarkerBytes: UInt64 = 4_096
+    private static let activePendingRemovalLock = NSLock()
+    nonisolated(unsafe) private static var activePendingRemovalHandles: [String: FileHandle] = [:]
 
     private struct CommittedMetadata {
         let date: Date
@@ -123,6 +127,50 @@ enum WorktreeTrash {
         )
     }
 
+    static func markPendingForActiveRemoval(
+        _ ticket: WorktreeTrashCleanupTicket,
+        originalPath: URL,
+        linkedGitDirectory: URL,
+        at date: Date = Date()
+    ) throws {
+        let path = ticket.stagedPath.standardizedFileURL.path
+        let lockURL = activeMarkerURL(for: ticket)
+        if !FileManager.default.fileExists(atPath: lockURL.path) {
+            _ = FileManager.default.createFile(atPath: lockURL.path, contents: nil)
+        }
+        let handle = try FileHandle(forUpdating: lockURL)
+        guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let error = errno
+            try? handle.close()
+            throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
+        }
+        activePendingRemovalLock.lock()
+        activePendingRemovalHandles[path] = handle
+        activePendingRemovalLock.unlock()
+        do {
+            try markPending(
+                ticket,
+                originalPath: originalPath,
+                linkedGitDirectory: linkedGitDirectory,
+                at: date
+            )
+        } catch {
+            finishActivePendingRemoval(ticket)
+            throw error
+        }
+    }
+
+    static func finishActivePendingRemoval(_ ticket: WorktreeTrashCleanupTicket) {
+        let path = ticket.stagedPath.standardizedFileURL.path
+        activePendingRemovalLock.lock()
+        let handle = activePendingRemovalHandles.removeValue(forKey: path)
+        activePendingRemovalLock.unlock()
+        guard let handle else { return }
+        _ = flock(handle.fileDescriptor, LOCK_UN)
+        try? handle.close()
+        try? FileManager.default.removeItem(at: activeMarkerURL(for: ticket))
+    }
+
     static func staleTickets(
         commonGitDirectories: [URL],
         olderThan cutoff: Date,
@@ -155,6 +203,7 @@ enum WorktreeTrash {
                     ),
                     directoryIdentity: directoryIdentity
                 )
+                guard !isActivePendingRemoval(ticket) else { continue }
                 reconcilePendingTicket(
                     ticket,
                     commonGitDirectory: commonGitDirectory,
@@ -242,6 +291,17 @@ enum WorktreeTrash {
         )
     }
 
+    private static func activeMarkerURL(for ticket: WorktreeTrashCleanupTicket) -> URL {
+        let identifier = ticket.stagedPath.lastPathComponent
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .last
+            .map(String.init) ?? "invalid"
+        return ticket.trashRoot.appendingPathComponent(
+            "\(activeMarkerName).\(identifier)",
+            isDirectory: false
+        )
+    }
+
     private static func reconcilePendingTicket(
         _ ticket: WorktreeTrashCleanupTicket,
         commonGitDirectory: URL,
@@ -272,6 +332,27 @@ enum WorktreeTrash {
         } catch {
             return
         }
+    }
+
+    private static func isActivePendingRemoval(_ ticket: WorktreeTrashCleanupTicket) -> Bool {
+        let path = ticket.stagedPath.standardizedFileURL.path
+        activePendingRemovalLock.lock()
+        let isActiveInThisProcess = activePendingRemovalHandles[path] != nil
+        activePendingRemovalLock.unlock()
+        if isActiveInThisProcess { return true }
+
+        guard let handle = try? FileHandle(forUpdating: activeMarkerURL(for: ticket)) else {
+            return false
+        }
+        let isActiveInAnotherProcess = flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) != 0
+        if !isActiveInAnotherProcess {
+            _ = flock(handle.fileDescriptor, LOCK_UN)
+        }
+        try? handle.close()
+        if !isActiveInAnotherProcess {
+            try? FileManager.default.removeItem(at: activeMarkerURL(for: ticket))
+        }
+        return isActiveInAnotherProcess
     }
 
     private static func restorePendingTicket(
