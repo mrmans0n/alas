@@ -119,7 +119,6 @@ struct WorkspaceNavigationStateTests {
         )
     }
 
-
     private func fixtureCheckout(members: [WorkspaceCheckoutMember]) -> WorkspaceCheckout {
         WorkspaceCheckout(
             id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!, workspaceID: nil,
