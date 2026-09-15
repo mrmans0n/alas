@@ -17,7 +17,7 @@ struct InlineErrorStripTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 420, height: 80)
         controller.view.layoutSubtreeIfNeeded()
 
-        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedErrorStripAllowsMoreVerticalSpaceForLongMessage() {

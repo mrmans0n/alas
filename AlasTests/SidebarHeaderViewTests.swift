@@ -29,7 +29,7 @@ struct SidebarHeaderViewTests {
 
     @Test func headerRendersWithoutCrashing() {
         _ = hostHeader()
-        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func sortMenuKeepsHeaderHeightAndAccessibilityLabel() throws {
