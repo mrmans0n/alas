@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixes
 
 - Prevent retired transcript rows from remounting during delayed layout invalidation, and avoid redundant same-width row-root updates.
+- Wait for cancelled ACP prompt requests to settle before sending steering replacements.
 
 ## [0.17.6] - 2026-09-15
 
@@ -42,10 +43,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Expand editor LSP support with code actions, rename, signature help, semantic tokens, snippets, navigation, and source-preserving inlay hints (#1232).
 - Add detected stack templates to the New Run Script dialog (#1221).
-
-### 🐛 Fixes
-
-- Wait for cancelled ACP prompt requests to settle before sending steering replacements.
 
 ## [0.17.4] - 2026-09-14
 
