@@ -152,7 +152,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
             .frame(width: 18, height: 18)
         }
-        .padding(.leading, 6)
+        // Own leading inset matches RepoGroupView's header `.padding(5)`, so
+        // both header kinds land at the same 13pt from the sidebar edge once
+        // the outer scroll-content padding (SidebarView.swift) is added.
+        .padding(.leading, 5)
         .padding(.trailing, 8)
         .padding(.vertical, 3)
         .background(selected ? theme.color("bg-4") : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -164,7 +167,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     .padding(.leading, 2)
             }
         }
-        .padding(.horizontal, 6)
+        // Outer margin: trailing only. The leading side is already accounted
+        // for by the outer scroll-content padding, so adding it here would
+        // double-count it against the header's own leading inset above.
+        .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
@@ -263,7 +269,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 }
             }
         }
-        .padding(.horizontal, 6)
+        // Outer margin: trailing only, mirroring the workspace header above —
+        // the leading side is already covered by the outer scroll-content
+        // padding.
+        .padding(.trailing, 6)
     }
 
     private func deleteWorkspace(id: UUID) {

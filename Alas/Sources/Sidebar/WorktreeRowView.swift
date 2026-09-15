@@ -264,7 +264,7 @@ struct WorktreeRowView: View {
             Icon(
                 name: isMain ? "home" : "branch",
                 size: 12,
-                color: theme.color(iconColorToken(status: status))
+                color: theme.color(iconColorToken(harnessState: harnessSummary?.state))
             )
             Text(worktree.branch)
                 .font(.system(size: 11.5, weight: .medium, design: .monospaced))
@@ -282,8 +282,13 @@ struct WorktreeRowView: View {
 
     /// E1 tints the branch glyph green while a session runs, so activity
     /// reads from line 1 without the row having to be scanned twice.
-    private func iconColorToken(status: StatusPresentation) -> String {
-        if status.pulses { return "add" }
+    ///
+    /// Keyed off the harness state directly rather than `StatusPresentation.pulses`:
+    /// `pulses` is a presentation detail (whether the dot animates), not the
+    /// state itself, so a future state that also pulses should not turn the
+    /// icon green by accident.
+    private func iconColorToken(harnessState: HarnessService.AggregatedState?) -> String {
+        if harnessState == .running { return "add" }
         return isMain ? "fg-muted" : "fg-faint"
     }
 
@@ -320,7 +325,6 @@ struct WorktreeRowView: View {
         .foregroundColor(theme.color("fg-dim"))
         // Aligns line 2 under the branch text, not under the row's icon.
         .padding(.leading, 19)
-        .frame(minHeight: 21)
     }
 
     private var operationLine: some View {

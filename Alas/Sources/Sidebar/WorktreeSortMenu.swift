@@ -65,10 +65,7 @@ struct WorktreeSortMenu: View {
                 size: 13,
                 color: hovering ? theme.color("fg") : theme.color("fg-muted")
             )
-            .frame(width: 26, height: 22)
-            .contentShape(Rectangle())
-            .background(hovering ? theme.color("bg-3") : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .toolbarControlSurface(isLit: hovering, metrics: .sidebarHeader)
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
