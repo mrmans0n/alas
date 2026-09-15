@@ -80,7 +80,7 @@ struct ImageDiffDecodedCacheTests {
 
         let side = await cache.side(
             for: key,
-            cost: ImageDiffDecodedCache.decodedImageCost,
+            cost: { ImageDiffDecodedCache.decodedImageCost(for: $0) },
             makeImageSide: { .image($0, frameCount: 1) }
         ) {
             calls.increment()

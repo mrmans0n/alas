@@ -852,7 +852,7 @@ struct AppKitDiffReviewRowPlanTests {
         )
     }
 
-    private func imageProvider(load: @escaping @MainActor () async -> ImageDiffPair) -> DiffReviewImageProvider {
+    private func imageProvider(load: @escaping @MainActor @Sendable () async -> ImageDiffPair) -> DiffReviewImageProvider {
         DiffReviewImageProvider(
             id: .init(
                 source: .commit, repository: "/repo", beforeRevision: "old", afterRevision: "new",
