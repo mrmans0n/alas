@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 struct ThemeStoreTests {
     @Test func defaultIsCoolSlate() throws {
         let store = try ThemeStore()
