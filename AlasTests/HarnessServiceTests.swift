@@ -172,6 +172,7 @@ struct HarnessServiceTests {
         #expect(context?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
     }
 
+    @MainActor
     @Test func checkoutNotificationClickDoesNotAlsoInvokeLegacyWorktreeRouting() {
         let (service, _) = makeService()
         let checkoutID = UUID()
@@ -424,32 +425,32 @@ struct HarnessServiceTests {
         let (service, _) = makeService()
         service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
 
-        var invalidations = 0
-        _ = withObservationTracking {
+        let invalidations = InvalidationCounter()
+        withObservationTracking {
             _ = service.activeHarnessBySession
         } onChange: {
-            invalidations += 1
+            invalidations.increment()
         }
 
         service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
-        #expect(invalidations == 0)
+        #expect(invalidations.count == 0)
 
         service.recordHarnessDetection(sessionId: "s1", kind: nil)
-        #expect(invalidations == 1)
+        #expect(invalidations.count == 1)
     }
 
     @Test func recordHarnessDetection_nilSkipsAbsentActiveHarnessMutation() {
         let (service, _) = makeService()
 
-        var invalidations = 0
-        _ = withObservationTracking {
+        let invalidations = InvalidationCounter()
+        withObservationTracking {
             _ = service.activeHarnessBySession
         } onChange: {
-            invalidations += 1
+            invalidations.increment()
         }
 
         service.recordHarnessDetection(sessionId: "missing", kind: nil)
-        #expect(invalidations == 0)
+        #expect(invalidations.count == 0)
     }
 
     // MARK: - Cursor idle debounce
@@ -617,5 +618,22 @@ struct HarnessServiceTests {
         try await Task.sleep(nanoseconds: 150_000_000)
         await waitForMainQueue()
         #expect(service.activityBySession["session-1"] == nil)
+    }
+}
+
+private final class InvalidationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

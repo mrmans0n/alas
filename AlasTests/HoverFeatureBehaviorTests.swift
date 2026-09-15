@@ -53,7 +53,7 @@ struct HoverFeatureBehaviorTests {
             getMonoFontFamily: { "SF Mono" },
             getMonoFontSize: { 13 },
             requestHover: { uri, position in
-                await recorder.record(uri: uri, position: position)
+                recorder.record(uri: uri, position: position)
                 return recorder.nextResponse()
             }
         )
@@ -113,7 +113,7 @@ struct HoverFeatureBehaviorTests {
         feature.simulateMouseMoved(at: point(forCharacterAt: 18, in: textView))
         try? await Task.sleep(nanoseconds: 900_000_000)
 
-        let calls = await recorder.calls
+        let calls = recorder.calls
         #expect(calls.count == 1)
         #expect(feature.isShowingPopover == true)
     }
