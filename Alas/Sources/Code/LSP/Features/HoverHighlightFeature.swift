@@ -22,7 +22,7 @@ final class HoverHighlightFeature {
     private var projectionObserver: NSObjectProtocol?
     private var underlineRevision: Int?
 
-    deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
 
     private let debounceNanos: UInt64 = 80_000_000 // 80 ms
 

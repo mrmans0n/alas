@@ -11,7 +11,7 @@ final class EditorSemanticLayer {
     private weak var textView: CodeTextView?
     private var projectionObserver: NSObjectProtocol?
 
-    deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
 
     init(layoutManager: NSLayoutManager, theme: EditorTheme, textView: CodeTextView? = nil, isCurrent: @escaping (EditorRequestContext) -> Bool) {
         self.layoutManager = layoutManager
