@@ -66,8 +66,8 @@ struct SidebarHeaderView: View {
             expandedHeader
             compactHeader
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 11)
+        .frame(height: 38)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .windowDragHandle()
@@ -90,13 +90,14 @@ struct SidebarHeaderView: View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
             Spacer()
-            HStack(alignment: .center, spacing: 2) {
+            HStack(alignment: .center, spacing: 1) {
                 WorktreeSortMenu(
                     selection: worktreeSortMode,
                     onSelect: onSetWorktreeSortMode,
                     headerHovered: hovering
                 )
-                ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
+                ToolbarBtn(icon: "search", tooltip: "Search",
+                           metrics: .sidebarHeader, action: onSearch)
                 if showsAttentionInbox {
                     attentionToolbarButton
                 }
@@ -106,10 +107,10 @@ struct SidebarHeaderView: View {
                         Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
                     } label: {
                         Icon(name: "folder-plus", size: 13, color: theme.color(addMenuHovered ? "fg" : "fg-muted"))
-                            .frame(width: 26, height: 22)
+                            .frame(width: 23, height: 23)
                             .contentShape(Rectangle())
                             .background(addMenuHovered ? theme.color("bg-3") : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -118,10 +119,13 @@ struct SidebarHeaderView: View {
                     .help("Add repository or workspace")
                     .accessibilityLabel("Add repository or workspace")
                 } else {
-                    ToolbarBtn(icon: "folder-plus", tooltip: "Add repository", action: onAddProject)
+                    ToolbarBtn(icon: "folder-plus", tooltip: "Add repository",
+                               metrics: .sidebarHeader, action: onAddProject)
                 }
-                ToolbarBtn(icon: "gear", tooltip: "Settings", action: onSettings)
-                ToolbarBtn(icon: "sidebar.left", tooltip: "Hide sidebar", action: onHideSidebar)
+                ToolbarBtn(icon: "gear", tooltip: "Settings",
+                           metrics: .sidebarHeader, action: onSettings)
+                ToolbarBtn(icon: "sidebar.left", tooltip: "Hide sidebar",
+                           metrics: .sidebarHeader, action: onHideSidebar)
             }
         }
     }
@@ -185,10 +189,10 @@ private struct AttentionToolbarButton<Content: View>: View {
             Image(systemName: "tray")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.color(hovering || isOpen ? "fg" : "fg-muted"))
-                .frame(width: 26, height: 22)
+                .frame(width: 23, height: 23)
                 .contentShape(Rectangle())
                 .background(theme.color("bg-3").opacity(hovering || isOpen ? 1 : 0))
-                .clipShape(.rect(cornerRadius: 5))
+                .clipShape(.rect(cornerRadius: 6))
                 .overlay(alignment: .topTrailing) {
                     if SidebarHeaderView.showsAttentionBadge(count: count) {
                         Text(count > 999 ? "999+" : "\(count)")
@@ -222,13 +226,14 @@ struct ToolbarBtn: View {
     /// surface hover uses. Toolbar toggles adopt it so their state reads
     /// without needing a second control next to them.
     var isActive: Bool = false
+    var metrics: ToolbarControlMetrics = .standard
     let action: () -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     var body: some View {
         Button(action: action) {
             Icon(name: icon, size: 13, color: iconColor)
-                .toolbarControlSurface(isLit: hovering || isActive)
+                .toolbarControlSurface(isLit: hovering || isActive, metrics: metrics)
         }
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }

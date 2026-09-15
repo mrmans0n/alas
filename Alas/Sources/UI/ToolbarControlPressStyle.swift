@@ -64,8 +64,21 @@ extension View {
     }
 }
 
-/// The shared toolbar-button surface: a fixed 26x22 hit area that fills with
-/// `bg-3` once lit.
+/// Dimensions for a toolbar control's surface.
+struct ToolbarControlMetrics: Equatable {
+    let width: CGFloat
+    let height: CGFloat
+    let cornerRadius: CGFloat
+
+    /// The app-wide default: tab bar, right pane, ACP and dialog toolbars.
+    static let standard = ToolbarControlMetrics(width: 26, height: 22, cornerRadius: 5)
+
+    /// E1's sidebar header: square buttons, slightly rounder.
+    static let sidebarHeader = ToolbarControlMetrics(width: 23, height: 23, cornerRadius: 6)
+}
+
+/// The shared toolbar-button surface: a fixed hit area that fills with `bg-3`
+/// once lit.
 ///
 /// `ToolbarBtn` wraps its own icon in it, and the tab bar's menu-backed
 /// controls borrow it directly — a `Menu` cannot take a `ButtonStyle`, so
@@ -73,19 +86,23 @@ extension View {
 /// neighbours.
 private struct ToolbarControlSurface: ViewModifier {
     let isLit: Bool
+    let metrics: ToolbarControlMetrics
     @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
         content
-            .frame(width: 26, height: 22)
+            .frame(width: metrics.width, height: metrics.height)
             .contentShape(Rectangle())
             .background(isLit ? theme.color("bg-3") : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: metrics.cornerRadius))
     }
 }
 
 extension View {
-    func toolbarControlSurface(isLit: Bool) -> some View {
-        modifier(ToolbarControlSurface(isLit: isLit))
+    func toolbarControlSurface(
+        isLit: Bool,
+        metrics: ToolbarControlMetrics = .standard
+    ) -> some View {
+        modifier(ToolbarControlSurface(isLit: isLit, metrics: metrics))
     }
 }
