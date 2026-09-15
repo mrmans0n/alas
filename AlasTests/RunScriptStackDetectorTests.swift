@@ -1739,6 +1739,18 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
     }
 
+    @Test func rubyIgnoresRakeTasksInsideRuntimeConditionalBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
+        try write("Rakefile", "if ENV[\"CI\"]\n  task :test\nend\n", in: root)
+
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "unless ENV[\"SKIP_TEST\"]\n  task :test\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+    }
+
     @Test func djangoDetectsManageAndSharesPythonRunner() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1991,6 +2003,28 @@ struct RunScriptStackDetectorTests {
 
             [dependency-groups]
             dev = ["pytest; python_version >= '3.14'", "ruff; python_version == '3.12'"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonUVPartialVersionDoesNotSatisfyFullVersionMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
+        try write(".python-version", "3.12\n", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            dev = ["pytest; python_full_version < '3.12.1'", "ruff; python_version == '3.12'"]
             """,
             in: root
         )

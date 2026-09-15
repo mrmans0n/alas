@@ -1960,6 +1960,7 @@ enum RunScriptStackDetector {
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#),
            let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#),
            let falseBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if\s+false|unless\s+true)\b"#),
+           let conditionalBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if|unless)\b"#),
            let postfixFalseBranchRegex = try? NSRegularExpression(pattern: #"\b(?:if\s+false|unless\s+true)\s*$"#),
            let deferredBlockRegex = try? NSRegularExpression(pattern: #"(^|[\s=])(?:(?:proc|lambda|Proc\.new)\s*(?:do|\{)|->\s*(?:do|\{))"#)
         else { return false }
@@ -1983,6 +1984,10 @@ enum RunScriptStackDetector {
                 continue
             }
             if falseBranchRegex.firstMatch(in: segment, range: range) != nil {
+                blockStack.append(true)
+                continue
+            }
+            if conditionalBranchRegex.firstMatch(in: segment, range: range) != nil {
                 blockStack.append(true)
                 continue
             }
@@ -2410,8 +2415,15 @@ enum RunScriptStackDetector {
         else { return environment }
 
         environment.pythonVersion = pythonMajorMinorVersion(version)
-        environment.pythonFullVersion = version
+        environment.pythonFullVersion = isFullPythonVersion(version) ? version : nil
         return environment
+    }
+
+    private static func isFullPythonVersion(_ version: String) -> Bool {
+        let components = version.split(separator: ".")
+        return components.count >= 3 && components.prefix(3).allSatisfy { component in
+            !component.isEmpty && component.allSatisfy(\.isNumber)
+        }
     }
 
     private static func currentPythonMarkerEnvironment() -> PythonMarkerEnvironment {
