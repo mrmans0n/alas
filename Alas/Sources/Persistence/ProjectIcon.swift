@@ -16,9 +16,13 @@ struct ProjectIcon: Codable, Equatable {
     var symbolName: String?
     var emoji: String?
     var imagePath: String?
+    /// Drops the squircle fill and tints the glyph with `color` instead.
+    /// Ignored in `.image` mode, which never draws a background.
+    var transparentBackground: Bool
 
     enum CodingKeys: String, CodingKey {
         case mode, color, label, symbolName, emoji, imagePath, imageAssetName
+        case transparentBackground
     }
 
     init(
@@ -27,7 +31,8 @@ struct ProjectIcon: Codable, Equatable {
         label: String? = nil,
         symbolName: String? = nil,
         emoji: String? = nil,
-        imagePath: String? = nil
+        imagePath: String? = nil,
+        transparentBackground: Bool = false
     ) {
         self.init(
             mode: mode,
@@ -36,7 +41,8 @@ struct ProjectIcon: Codable, Equatable {
             label: label,
             symbolName: symbolName,
             emoji: emoji,
-            imagePath: imagePath
+            imagePath: imagePath,
+            transparentBackground: transparentBackground
         )
     }
 
@@ -47,7 +53,8 @@ struct ProjectIcon: Codable, Equatable {
         label: String?,
         symbolName: String?,
         emoji: String?,
-        imagePath: String?
+        imagePath: String?,
+        transparentBackground: Bool
     ) {
         self.mode = mode
         self.color = Self.sanitizedColor(color, fallback: fallbackColor)
@@ -55,6 +62,7 @@ struct ProjectIcon: Codable, Equatable {
         self.symbolName = Self.sanitizedNonEmpty(symbolName)
         self.emoji = Self.sanitizedEmoji(emoji)
         self.imagePath = Self.sanitizedNonEmpty(imagePath)
+        self.transparentBackground = transparentBackground
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +77,10 @@ struct ProjectIcon: Codable, Equatable {
         try c.encodeIfPresent(symbolName, forKey: .symbolName)
         try c.encodeIfPresent(emoji, forKey: .emoji)
         try c.encodeIfPresent(imagePath, forKey: .imagePath)
+        // Omitted when opaque so existing files stay byte-identical.
+        if transparentBackground {
+            try c.encode(true, forKey: .transparentBackground)
+        }
     }
 
     static func decode(from decoder: Decoder, fallbackColor: String) throws -> ProjectIcon {
@@ -81,7 +93,8 @@ struct ProjectIcon: Codable, Equatable {
             symbolName: try? c.decode(String.self, forKey: .symbolName),
             emoji: try? c.decode(String.self, forKey: .emoji),
             imagePath: (try? c.decode(String.self, forKey: .imagePath))
-                ?? (try? c.decode(String.self, forKey: .imageAssetName))
+                ?? (try? c.decode(String.self, forKey: .imageAssetName)),
+            transparentBackground: (try? c.decode(Bool.self, forKey: .transparentBackground)) ?? false
         )
     }
 
@@ -96,7 +109,8 @@ struct ProjectIcon: Codable, Equatable {
             label: label,
             symbolName: symbolName,
             emoji: emoji,
-            imagePath: imagePath
+            imagePath: imagePath,
+            transparentBackground: transparentBackground
         )
     }
 

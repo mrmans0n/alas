@@ -97,6 +97,7 @@ private struct ProjectDialog: View {
     @State private var name: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
+    @State private var iconTransparent = false
     @State private var iconLabel: String = ""
     @State private var iconSymbolName: String = "folder"
     @State private var iconEmoji: String = "🚀"
@@ -151,7 +152,8 @@ private struct ProjectDialog: View {
             label: iconMode == .letter ? iconLabel : nil,
             symbolName: iconMode == .symbol ? iconSymbolName : nil,
             emoji: iconMode == .emoji ? iconEmoji : nil,
-            imagePath: iconMode == .image ? iconImagePath : nil
+            imagePath: iconMode == .image ? iconImagePath : nil,
+            transparentBackground: iconTransparent
         )
     }
 
@@ -542,6 +544,7 @@ private struct ProjectDialog: View {
 
     private var colorControls: some View {
         HStack(spacing: 8) {
+            transparentSwatch
             ForEach(availablePalette, id: \.self) { hex in
                 Button { iconColor = hex } label: {
                     Circle()
@@ -554,6 +557,27 @@ private struct ProjectDialog: View {
             AlasField(text: $iconColor, placeholder: ProjectIcon.defaultColor, monospaced: true)
                 .frame(width: 96)
         }
+    }
+
+    /// Toggles the squircle fill off. The palette stays live because the color
+    /// becomes the glyph tint rather than the background.
+    private var transparentSwatch: some View {
+        Button { iconTransparent.toggle() } label: {
+            ImageCheckerboardBackground(tile: 5.5)
+                .background(theme.color("bg-1"))
+                .frame(width: 22, height: 22)
+                .clipShape(Circle())
+                .overlay(
+                    Circle().strokeBorder(
+                        iconTransparent ? .white : theme.color("line"),
+                        lineWidth: iconTransparent ? 2 : 0.5
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Transparent background")
+        .accessibilityLabel("Transparent icon background")
+        .accessibilityAddTraits(iconTransparent ? [.isSelected] : [])
     }
 
     private var imageControls: some View {
@@ -760,6 +784,7 @@ private struct ProjectDialog: View {
             name = project.name
             iconMode = project.icon.mode
             iconColor = project.icon.color
+            iconTransparent = project.icon.transparentBackground
             iconLabel = project.icon.label ?? ""
             iconSymbolName = project.icon.symbolName ?? "folder"
             iconEmoji = project.icon.emoji ?? "🚀"
