@@ -28,7 +28,7 @@ struct SidebarHeaderViewTests {
     }
 
     @Test func headerRendersWithoutCrashing() {
-        _ = hostHeader()
+        let controller = hostHeader()
         #expect(controller.view.fittingSize.height > 0)
     }
 
@@ -40,7 +40,11 @@ struct SidebarHeaderViewTests {
         #expect(abs(fitted.height - 42) < 0.5)
         #expect(sortControls.count == 1)
         #expect(sortControls.first?.accessibilityRole() == .button)
-        #expect(sortControls.first?.accessibilityActionNames().contains(.press) == true)
+        // `accessibilityActionNames()` is the deprecated informal-protocol query.
+        // The NSAccessibility protocols express "exposes the press action" as
+        // conformance to NSAccessibilityButton, which NSButton declares.
+        let sortControl = try #require(sortControls.first)
+        #expect(sortControl is NSAccessibilityButton)
     }
 
     @Test func sortAccessibilityButtonHasNoVisibleChromeOrFocus() {

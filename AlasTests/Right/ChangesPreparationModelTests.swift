@@ -425,6 +425,7 @@ private func changedFile(
     )
 }
 
+@MainActor
 private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
     if view.accessibilityIdentifier() == identifier {
         return view
