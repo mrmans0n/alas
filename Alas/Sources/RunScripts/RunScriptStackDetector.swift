@@ -728,6 +728,7 @@ enum RunScriptStackDetector {
     }
 
     private static func cargoDefaultFeatures(_ cargoToml: String) -> Set<String> {
+        let cargoToml = stripHashComments(cargoToml)
         guard let featuresSectionRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*\[features\]\s*(.*?)(?=^\s*\[|\z)"#),
               let featureRegex = try? NSRegularExpression(pattern: #"(?m)^\s*([A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]"#),
               let quotedValueRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
@@ -1357,11 +1358,11 @@ enum RunScriptStackDetector {
 
     private static func goSourceImportsC(_ contents: String) -> Bool {
         let stripped = stripGoCommentsPreservingStrings(contents)
-        if stripped.range(of: #"(?m)^\s*import\s+"C"\s*$"#, options: .regularExpression) != nil {
+        if stripped.range(of: #"(?m)^\s*import\s+(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"C"\s*$"#, options: .regularExpression) != nil {
             return true
         }
         guard let blockRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*import\s*\((.*?)^\s*\)"#),
-              let cImportRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"C"\s*$"#)
+              let cImportRegex = try? NSRegularExpression(pattern: #"(?m)^\s*(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"C"\s*$"#)
         else { return false }
         let range = NSRange(stripped.startIndex..., in: stripped)
         return blockRegex.matches(in: stripped, range: range).contains { match in
@@ -1748,7 +1749,8 @@ enum RunScriptStackDetector {
         ), let parenthesizedTaskSkeletonRegex = try? NSRegularExpression(
             pattern: #"^\s*task\s*\("#
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#),
-           let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#)
+           let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#),
+           let falseBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if\s+false|unless\s+true)\b"#)
         else { return false }
         var blockStack: [Bool] = []
         let originalSegments = commentless.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
@@ -1766,6 +1768,10 @@ enum RunScriptStackDetector {
                 continue
             }
             if methodRegex.firstMatch(in: segment, range: range) != nil {
+                blockStack.append(true)
+                continue
+            }
+            if falseBranchRegex.firstMatch(in: segment, range: range) != nil {
                 blockStack.append(true)
                 continue
             }

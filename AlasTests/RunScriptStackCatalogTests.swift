@@ -216,10 +216,10 @@ struct RunScriptStackCatalogTests {
         #expect(requirementsOnly["install"]?.body == "python3 -m pip install -r requirements.txt")
 
         let withPytest = actions(.python, .init(hasRequirementsFile: true, hasPyprojectFile: true, hasPytest: true))
-        #expect(withPytest["install"]?.body == "python3 -m pip install -e .")
+        #expect(withPytest["install"]?.body == "python3 -m pip install -e . -r requirements.txt")
 
         let withRuff = actions(.python, .init(hasRequirementsFile: true, hasPyprojectFile: true, hasRuff: true))
-        #expect(withRuff["install"]?.body == "python3 -m pip install -e .")
+        #expect(withRuff["install"]?.body == "python3 -m pip install -e . -r requirements.txt")
     }
 
     @Test func oneShotCommandsCloseAndServersKeepThePane() {

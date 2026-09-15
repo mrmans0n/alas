@@ -359,6 +359,33 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.cargo]?.hasRunnableTarget == true)
     }
 
+    @Test func cargoIgnoresCommentedOutDefaultFeatures() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Cargo.toml",
+            """
+            [package]
+            name = "tool"
+
+            [features]
+            default = [ # "cli"
+            ]
+            cli = []
+
+            [[bin]]
+            name = "tool"
+            path = "src/main.rs"
+            required-features = ["cli"]
+            """,
+            in: root
+        )
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try touch("src/main.rs", in: root)
+
+        #expect(detect(root)[.cargo]?.hasRunnableTarget == false)
+    }
+
     @Test func cargoDoesNotTreatDefaultOptionalDependenciesAsPackageFeatures() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1298,6 +1325,30 @@ struct RunScriptStackDetectorTests {
         #expect(cgoEnabled[.go]?.goRunTarget == ".")
     }
 
+    @Test func goTreatsAliasedCGOImportAsExcludedWhenCGOIsDisabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "package main\n\nimport c \"C\"\n\nfunc main() {}\n", in: root)
+
+        let aliased = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(aliased[.go]?.goRunTarget == nil)
+
+        try write("main.go", "package main\n\nimport (\n  _ \"C\"\n)\n\nfunc main() {}\n", in: root)
+        let blankIdentifier = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(blankIdentifier[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1485,6 +1536,15 @@ struct RunScriptStackDetectorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
         try write("Rakefile", "def register_tasks\n  task :test do\n    ruby \"test/all_test.rb\"\n  end\nend\n", in: root)
+
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+    }
+
+    @Test func rubyIgnoresRakeTasksInsideStaticallyFalseBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
+        try write("Rakefile", "if false\n  task :test do\n    ruby \"test/all_test.rb\"\n  end\nend\n", in: root)
 
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
     }
