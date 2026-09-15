@@ -107,6 +107,7 @@ enum RunScriptStackDetector {
                 // Laravel/PHP defer to their framework-specific stack.
                 guard (has("pyproject.toml") || hasRequirements), !hasDjangoManage else { continue }
                 let pyproject = contents("pyproject.toml") ?? ""
+                let requirements = contents("requirements.txt") ?? ""
                 let dependencyGroups = pythonRunner == .uv ? uvDefaultDependencyGroups(pyproject) : []
                 add(stack, .init(
                     pythonRunner: pythonRunner,
@@ -117,13 +118,13 @@ enum RunScriptStackDetector {
                         tool: "pytest",
                         includeOptionalDependencies: false,
                         dependencyGroups: dependencyGroups
-                    ),
+                    ) || requirementsDeclarePythonTool(requirements, tool: "pytest"),
                     hasRuff: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "ruff",
                         includeOptionalDependencies: false,
                         dependencyGroups: dependencyGroups
-                    )
+                    ) || requirementsDeclarePythonTool(requirements, tool: "ruff")
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
@@ -1242,6 +1243,7 @@ enum RunScriptStackDetector {
         guard name.hasSuffix(".go"), !name.hasSuffix("_test.go"),
               let firstCharacter = name.first, firstCharacter != ".", firstCharacter != "_",
               let contents, goFileDeclaresPackageMain(contents),
+              (!goSourceImportsC(contents) || toolchainEnvironment.cgoEnabled),
               goFilenameSupportsCurrentHost(name, toolchainEnvironment: toolchainEnvironment),
               goBuildConstraintAllowsCurrentHost(contents, toolchainEnvironment: toolchainEnvironment)
         else { return false }
@@ -1351,6 +1353,106 @@ enum RunScriptStackDetector {
             || toolchainEnvironment.architectureFeatures.contains(tag)
             || toolchainEnvironment.buildTags.contains(tag)
             || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
+    }
+
+    private static func goSourceImportsC(_ contents: String) -> Bool {
+        let stripped = stripGoCommentsPreservingStrings(contents)
+        if stripped.range(of: #"(?m)^\s*import\s+"C"\s*$"#, options: .regularExpression) != nil {
+            return true
+        }
+        guard let blockRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*import\s*\((.*?)^\s*\)"#),
+              let cImportRegex = try? NSRegularExpression(pattern: #"(?m)^\s*"C"\s*$"#)
+        else { return false }
+        let range = NSRange(stripped.startIndex..., in: stripped)
+        return blockRegex.matches(in: stripped, range: range).contains { match in
+            guard let bodyRange = Range(match.range(at: 1), in: stripped) else { return false }
+            let body = String(stripped[bodyRange])
+            return cImportRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+        }
+    }
+
+    private static func stripGoCommentsPreservingStrings(_ text: String) -> String {
+        var stripped = ""
+        stripped.reserveCapacity(text.count)
+        var inLineComment = false
+        var inBlockComment = false
+        var inInterpretedString = false
+        var inRawString = false
+        var isEscaped = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let char = text[index]
+            let next = text.index(after: index)
+            let nextChar = next < text.endIndex ? text[next] : nil
+
+            if inLineComment {
+                if char == "\n" {
+                    inLineComment = false
+                    stripped.append(char)
+                } else {
+                    stripped.append(" ")
+                }
+                index = next
+                continue
+            }
+            if inBlockComment {
+                if char == "\n" {
+                    stripped.append(char)
+                } else {
+                    stripped.append(" ")
+                }
+                if char == "*", nextChar == "/" {
+                    stripped.append(" ")
+                    index = text.index(after: next)
+                    inBlockComment = false
+                } else {
+                    index = next
+                }
+                continue
+            }
+            if inRawString {
+                stripped.append(char)
+                index = next
+                if char == "`" {
+                    inRawString = false
+                }
+                continue
+            }
+            if inInterpretedString {
+                stripped.append(char)
+                index = next
+                if isEscaped {
+                    isEscaped = false
+                } else if char == "\\" {
+                    isEscaped = true
+                } else if char == "\"" {
+                    inInterpretedString = false
+                }
+                continue
+            }
+            if char == "/", nextChar == "/" {
+                stripped.append(" ")
+                stripped.append(" ")
+                index = text.index(after: next)
+                inLineComment = true
+                continue
+            }
+            if char == "/", nextChar == "*" {
+                stripped.append(" ")
+                stripped.append(" ")
+                index = text.index(after: next)
+                inBlockComment = true
+                continue
+            }
+            stripped.append(char)
+            index = next
+            if char == "`" {
+                inRawString = true
+            } else if char == "\"" {
+                inInterpretedString = true
+            }
+        }
+        return stripped
     }
 
     private static func goCoreBuildTags(toolchainEnvironment: GoToolchainEnvironment) -> Set<String> {
@@ -1558,14 +1660,15 @@ enum RunScriptStackDetector {
     }
 
     /// Whether a Makefile declares a rule for `target` — a target line looks
-    /// like `name:` or `name: deps`, unindented (an indented line is a
-    /// recipe, not a rule) and not a variable assignment.
+    /// like `name:` or `name: deps`, is not a tab-prefixed recipe, and is not
+    /// a variable assignment.
     private static func makefileDeclaresTarget(_ makefile: String, target: String) -> Bool {
         for rawLine in makefile.components(separatedBy: .newlines) {
-            guard !rawLine.hasPrefix("\t"), !rawLine.hasPrefix(" ") else { continue }
+            guard !rawLine.hasPrefix("\t") else { continue }
             // Drop a "#" comment before parsing, so "# test: disabled" isn't
             // read as a rule for "test".
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+                .drop { $0 == " " }
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
             guard !makeColonStartsAssignmentOperator(in: line, at: colonIndex) else { continue }
             let beforeColon = line[line.startIndex..<colonIndex]
@@ -2027,6 +2130,23 @@ enum RunScriptStackDetector {
             }
         }
         return false
+    }
+
+    private static func requirementsDeclarePythonTool(_ requirements: String, tool: String) -> Bool {
+        let normalizedTool = normalizedPythonPackageName(tool)
+        return requirements.components(separatedBy: .newlines).contains { rawLine in
+            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+                .trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("-") else { return false }
+            let packageName = line.prefix { character in
+                character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+            }
+            return normalizedPythonPackageName(String(packageName)) == normalizedTool
+        }
+    }
+
+    private static func normalizedPythonPackageName(_ name: String) -> String {
+        name.lowercased().replacingOccurrences(of: #"[-_.]+"#, with: "-", options: .regularExpression)
     }
 
     private static func poetryOptionalGroups(in pyproject: String) -> Set<String> {

@@ -543,6 +543,15 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
     }
 
+    @Test func makefileAllowsSpaceIndentedTargets() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Makefile", "  test:\n\techo test\n\tclean:\n\techo not a clean rule\n", in: root)
+
+        #expect(detect(root)[.make]?.hasMakeTestTarget == true)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
+    }
+
     @Test func swiftPackageDetectsManifest() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1266,6 +1275,29 @@ struct RunScriptStackDetectorTests {
         #expect(cgoEnabled[.go]?.goRunTarget == ".")
     }
 
+    @Test func goTreatsImplicitCGOImportAsExcludedWhenCGOIsDisabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "package main\n\nimport \"C\"\n\nfunc main() {}\n", in: root)
+
+        let cgoDisabled = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(cgoDisabled[.go]?.goRunTarget == nil)
+
+        let cgoEnabled = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [], cgoEnabled: true)
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(cgoEnabled[.go]?.goRunTarget == ".")
+    }
+
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1501,6 +1533,15 @@ struct RunScriptStackDetectorTests {
             "[project]\nname = \"lib\"\ndependencies = [\"pytest\", \"ruff\"]\n",
             in: root
         )
+        #expect(detect(root)[.python]?.hasPytest == true)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonDetectsToolsDeclaredInRequirements() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest==8.4.0\nruff>=0.12\n", in: root)
+
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
     }
