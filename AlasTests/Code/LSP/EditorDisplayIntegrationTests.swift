@@ -240,7 +240,7 @@ struct EditorDisplayIntegrationTests {
         #expect(layout.warningToolTip(at: point, in: f.view)?.contains("Zero width") == true)
     }
 
-    @Test func diagnosticBatchRebuildsProjectionOnceAndPreservesSourceState() async throws {
+    @Test func diagnosticBatchRepaintsWithoutRebuildingProjectionAndPreservesSourceState() async throws {
         final class Counts: @unchecked Sendable {
             var sourceNotifications = 0
             var projectionRebuilds = 0
@@ -272,7 +272,7 @@ struct EditorDisplayIntegrationTests {
         DiagnosticsFeature().apply(diagnostics, to: f.buffer.storage, theme: try ThemeStore().current)
 
         #expect(counts.sourceNotifications == 1)
-        #expect(counts.projectionRebuilds == 1)
+        #expect(counts.projectionRebuilds == 0)
         #expect(f.buffer.storage.string == source)
         #expect(f.view.sourceString == source)
         #expect(f.view.sourceSelectedRange == expectedSelection)

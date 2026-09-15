@@ -5,6 +5,41 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func colorUpdatesPreserveHintAttachmentsAndOnlyEditAffectedAttributes() async throws {
+        let f = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
+        defer { f.remove() }
+        let attachment = try #require(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment)
+        let observer = DisplayEditRecorder()
+        f.document.storage.delegate = observer
+        defer { f.document.storage.delegate = nil }
+        f.view.setSourceSelectedRange(NSRange(location: 50000, length: 3))
+        f.view.layoutManager?.addTemporaryAttribute(.foregroundColor, value: NSColor.blue, forCharacterRange: NSRange(location: 50002, length: 3))
+
+        f.buffer.storage.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 50000, length: 3))
+
+        #expect(!observer.edits.isEmpty)
+        #expect(!observer.requestedEdits.isEmpty)
+        #expect(observer.requestedEdits.allSatisfy { !$0.mask.contains(.editedCharacters) && $0.range == NSRange(location: 50002, length: 3) })
+        // AppKit expands attribute fixing to the containing paragraph.
+        #expect(observer.edits.allSatisfy { !$0.mask.contains(.editedCharacters) && $0.range == NSRange(location: 49996, length: 14) })
+        #expect(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment === attachment)
+        #expect(f.document.storage.attribute(.foregroundColor, at: 50002, effectiveRange: nil) as? NSColor == .red)
+        #expect(f.view.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: 50002, effectiveRange: nil) as? NSColor == .blue)
+        #expect(f.view.sourceSelectedRange == NSRange(location: 50000, length: 3))
+        #expect(!f.buffer.dirty)
+    }
+
+    private final class DisplayEditRecorder: NSObject, NSTextStorageDelegate {
+        var edits: [(mask: NSTextStorageEditActions, range: NSRange)] = []
+        var requestedEdits: [(mask: NSTextStorageEditActions, range: NSRange)] = []
+        func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+            requestedEdits.append((editedMask, editedRange))
+        }
+        func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+            edits.append((editedMask, editedRange))
+        }
+    }
+
     @Test func formattingPublishesRevisionBeforeNextNativeInsertion() async throws {
         let f = try await Fixture("abcd")
         defer { f.remove() }
@@ -437,7 +472,8 @@ struct EditorDisplayInputTests {
     }
 
     @Test func hintRefreshPreservesOffsetWithinAWrappedSourceLine() async throws {
-        let f = try await Fixture(String(repeating: "word ", count: 2000))
+        let layout = LayoutRecorder()
+        let f = try await Fixture(String(repeating: "word ", count: 2000), layout: layout)
         defer { f.remove() }
         f.buffer.storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: NSRange(location: 0, length: f.buffer.storage.length))
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 120))
@@ -447,8 +483,18 @@ struct EditorDisplayInputTests {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 150))
         let before = scroll.contentView.bounds.origin.y
         #expect(before > 100)
+        layout.wholeContainerLayouts = 0
         try f.refreshHints()
         #expect(abs(scroll.contentView.bounds.origin.y - before) < 1)
+        #expect(layout.wholeContainerLayouts == 0)
+    }
+
+    private final class LayoutRecorder: NSLayoutManager {
+        var wholeContainerLayouts = 0
+        override func ensureLayout(for container: NSTextContainer) {
+            wholeContainerLayouts += 1
+            super.ensureLayout(for: container)
+        }
     }
 
     @MainActor
@@ -457,7 +503,7 @@ struct EditorDisplayInputTests {
         let buffer: EditorBuffer
         let view: CodeTextView
         var document: EditorDisplayDocument { view.displayAdapter!.document }
-        init(_ text: String) async throws {
+        init(_ text: String, layout: NSLayoutManager = NSLayoutManager()) async throws {
             _ = NSApplication.shared
             root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -465,7 +511,6 @@ struct EditorDisplayInputTests {
             buffer = EditorBuffer(worktreeRoot: root, relativePath: "test.txt")
             await buffer.awaitLoadForTesting()
             buffer.stopWatching()
-            let layout = NSLayoutManager()
             let container = NSTextContainer(size: CGSize(width: 800, height: 600))
             layout.addTextContainer(container)
             view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
