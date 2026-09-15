@@ -99,6 +99,23 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.gradle]?.gradleTasks == ["assemble", "check", "clean", "test"])
     }
 
+    @Test func gradleIgnoresPluginsInStaticallyInactiveBranches() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "build.gradle",
+            """
+            if (false) {
+                apply plugin: 'java'
+                tasks.register("test")
+            }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.gradle]?.gradleTasks == [])
+    }
+
     @Test func gradleRecordsTasksSuppliedByTheGroovyPlugin() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1412,6 +1429,27 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
+    @Test func goTreatsTargetDefaultRegabiArgsAsEnabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !goexperiment.regabiargs\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(
+                    minorVersion: 25,
+                    operatingSystem: "darwin",
+                    architecture: GoToolchainEnvironment.hostArchitecture,
+                    architectureFeatures: []
+                )
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsDefaultArchitectureFeatureTagsAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1685,6 +1723,24 @@ struct RunScriptStackDetectorTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("requirements.txt", "pytest; sys_platform == \"win32\"\nruff; sys_platform != \"darwin\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonIgnoresRequirementsExcludedByPythonVersionMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest; python_version < \"2\"\nruff; python_version >= \"4\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonIgnoresRequirementsWithUnsupportedMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest; extra == \"test\"\nruff; unknown_marker == \"yes\"\n", in: root)
 
         #expect(detect(root)[.python]?.hasPytest == false)
         #expect(detect(root)[.python]?.hasRuff == false)

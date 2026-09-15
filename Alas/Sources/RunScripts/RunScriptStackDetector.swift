@@ -13,10 +13,22 @@ struct GoToolchainEnvironment: Equatable, Sendable {
     var architecture = Self.hostArchitecture
     var architectureFeatures: Set<String>
     var buildTags: Set<String> = []
-    var experimentTags: Set<String> = Self.defaultExperimentTags
+    var experimentTags: Set<String> = Self.defaultExperimentTags()
     var cgoEnabled = false
 
-    static let defaultExperimentTags: Set<String> = ["goexperiment.regabiwrappers"]
+    static func defaultExperimentTags(
+        minorVersion: Int? = 25,
+        operatingSystem _: String = hostOperatingSystem,
+        architecture: String = hostArchitecture
+    ) -> Set<String> {
+        let minor = minorVersion ?? 25
+        switch architecture {
+        case "amd64" where minor >= 17, "arm64" where minor >= 17:
+            return ["goexperiment.regabiargs", "goexperiment.regabiwrappers"]
+        default:
+            return []
+        }
+    }
 
     static var hostOperatingSystem: String {
         "darwin"
@@ -583,7 +595,7 @@ enum RunScriptStackDetector {
     }
 
     private static func gradleDeclaredTasks(_ gradleBuild: String) -> Set<String> {
-        let stripped = stripCStyleComments(gradleBuild)
+        let stripped = stripGradleStaticallyInactiveBlocks(stripCStyleComments(gradleBuild))
         let stringRanges = gradleStringLiteralRanges(stripped)
         let patterns = [
             #"tasks\.(?:register|create|named)\s*\(\s*["']([^"']+)["']"#,
@@ -622,6 +634,56 @@ enum RunScriptStackDetector {
         })
         pluginIDs.formUnion(gradleKotlinDSLPluginAccessors(gradleBuild))
         return pluginIDs
+    }
+
+    private static func stripGradleStaticallyInactiveBlocks(_ gradleBuild: String) -> String {
+        guard let headerRegex = try? NSRegularExpression(pattern: #"^\s*if\s*\(\s*false\s*\)\s*\{"#) else { return gradleBuild }
+        let stringRanges = gradleStringLiteralRanges(gradleBuild)
+        var stripped = gradleBuild
+        var index = stripped.startIndex
+        while index < stripped.endIndex {
+            let location = NSRange(index..<index, in: stripped).location
+            if stringRanges.contains(where: { NSLocationInRange(location, $0) }) {
+                index = stripped.index(after: index)
+                continue
+            }
+            let remainderRange = NSRange(index..<stripped.endIndex, in: stripped)
+            if let match = headerRegex.firstMatch(in: stripped, range: remainderRange),
+               match.range.location == location,
+               let headerRange = Range(match.range, in: stripped),
+               let openingBrace = stripped[headerRange].lastIndex(of: "{"),
+               let blockEnd = balancedBraceEnd(in: stripped, openingBrace: openingBrace)
+            {
+                let replaceRange = index..<stripped.index(after: blockEnd)
+                let replacement = String(stripped[replaceRange].map { $0 == "\n" ? "\n" : " " })
+                stripped.replaceSubrange(replaceRange, with: replacement)
+                index = stripped.index(after: blockEnd)
+            } else {
+                index = stripped.index(after: index)
+            }
+        }
+        return stripped
+    }
+
+    private static func balancedBraceEnd(in text: String, openingBrace: String.Index) -> String.Index? {
+        let stringRanges = gradleStringLiteralRanges(text)
+        var depth = 0
+        var index = openingBrace
+        while index < text.endIndex {
+            let location = NSRange(index..<index, in: text).location
+            if stringRanges.contains(where: { NSLocationInRange(location, $0) }) {
+                index = text.index(after: index)
+                continue
+            }
+            if text[index] == "{" {
+                depth += 1
+            } else if text[index] == "}" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = text.index(after: index)
+        }
+        return nil
     }
 
     private static func gradleKotlinDSLPluginAccessors(_ gradleBuild: String) -> Set<String> {
@@ -1550,7 +1612,12 @@ enum RunScriptStackDetector {
             architecture: architecture,
             architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel, architecture: architecture),
             buildTags: goBuildTags(fromGOFLAGS: goflags),
-            experimentTags: goExperimentTags(fromGOEXPERIMENT: experiments),
+            experimentTags: goExperimentTags(
+                fromGOEXPERIMENT: experiments,
+                minorVersion: goToolchainMinorVersion(from: version),
+                operatingSystem: operatingSystem,
+                architecture: architecture
+            ),
             cgoEnabled: cgoValue != "0"
         )
     }
@@ -1626,8 +1693,17 @@ enum RunScriptStackDetector {
         Set(value.split { $0 == "," || $0 == " " || $0 == "\t" }.map(String.init).filter { !$0.isEmpty })
     }
 
-    private static func goExperimentTags(fromGOEXPERIMENT experiments: String) -> Set<String> {
-        var tags = GoToolchainEnvironment.defaultExperimentTags
+    private static func goExperimentTags(
+        fromGOEXPERIMENT experiments: String,
+        minorVersion: Int? = 25,
+        operatingSystem: String = GoToolchainEnvironment.hostOperatingSystem,
+        architecture: String = GoToolchainEnvironment.hostArchitecture
+    ) -> Set<String> {
+        var tags = GoToolchainEnvironment.defaultExperimentTags(
+            minorVersion: minorVersion,
+            operatingSystem: operatingSystem,
+            architecture: architecture
+        )
         for experiment in experiments.split(separator: ",").map(String.init).filter({ !$0.isEmpty }) {
             if experiment.hasPrefix("no") {
                 tags.remove("goexperiment.\(experiment.dropFirst(2))")
@@ -2196,20 +2272,175 @@ enum RunScriptStackDetector {
     }
 
     private static func pythonRequirementMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
-        let currentSysPlatform = "darwin"
-        guard let regex = try? NSRegularExpression(pattern: #"\bsys_platform\s*(==|!=)\s*['"]([^'"]+)['"]"#) else { return true }
-        let range = NSRange(marker.startIndex..., in: marker)
-        return regex.matches(in: marker, range: range).allSatisfy { match in
-            guard let operatorRange = Range(match.range(at: 1), in: marker),
-                  let valueRange = Range(match.range(at: 2), in: marker)
-            else { return true }
-            let value = String(marker[valueRange])
-            switch String(marker[operatorRange]) {
-            case "==": return currentSysPlatform == value
-            case "!=": return currentSysPlatform != value
-            default: return true
-            }
+        pythonMarkerAllowsCurrentEnvironment(marker)
+    }
+
+    private static func pythonMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
+        let orClauses = splitPythonMarker(marker, keyword: "or")
+        guard !orClauses.isEmpty else { return false }
+        return orClauses.contains { clause in
+            let andClauses = splitPythonMarker(clause, keyword: "and")
+            guard !andClauses.isEmpty else { return false }
+            return andClauses.allSatisfy { pythonMarkerAtomAllowsCurrentEnvironment($0) }
         }
+    }
+
+    private static func splitPythonMarker(_ marker: String, keyword: String) -> [String] {
+        var clauses: [String] = []
+        var start = marker.startIndex
+        var index = marker.startIndex
+        var quote: Character?
+        var depth = 0
+        while index < marker.endIndex {
+            let character = marker[index]
+            if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                }
+                index = marker.index(after: index)
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+                index = marker.index(after: index)
+                continue
+            }
+            if character == "(" {
+                depth += 1
+                index = marker.index(after: index)
+                continue
+            }
+            if character == ")" {
+                depth = max(0, depth - 1)
+                index = marker.index(after: index)
+                continue
+            }
+            if depth == 0, pythonMarkerKeywordMatches(marker, at: index, keyword: keyword) {
+                clauses.append(String(marker[start..<index]).trimmingCharacters(in: .whitespacesAndNewlines))
+                index = marker.index(index, offsetBy: keyword.count)
+                start = index
+                continue
+            }
+            index = marker.index(after: index)
+        }
+        clauses.append(String(marker[start...]).trimmingCharacters(in: .whitespacesAndNewlines))
+        return clauses.filter { !$0.isEmpty }
+    }
+
+    private static func pythonMarkerKeywordMatches(_ marker: String, at index: String.Index, keyword: String) -> Bool {
+        guard marker[index...].lowercased().hasPrefix(keyword) else { return false }
+        let end = marker.index(index, offsetBy: keyword.count)
+        let before = index == marker.startIndex ? " " : marker[marker.index(before: index)]
+        let after = end == marker.endIndex ? " " : marker[end]
+        return before.isWhitespace && after.isWhitespace
+    }
+
+    private static func pythonMarkerAtomAllowsCurrentEnvironment(_ atom: String) -> Bool {
+        let trimmed = trimmingBalancedParentheses(atom.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*['"]([^'"]+)['"]$"#
+        ) else { return false }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard let match = regex.firstMatch(in: trimmed, range: range),
+              let variableRange = Range(match.range(at: 1), in: trimmed),
+              let operatorRange = Range(match.range(at: 2), in: trimmed),
+              let valueRange = Range(match.range(at: 3), in: trimmed)
+        else { return false }
+
+        let variable = String(trimmed[variableRange])
+        let operatorText = String(trimmed[operatorRange])
+        let expected = String(trimmed[valueRange])
+        switch variable {
+        case "sys_platform":
+            return comparePythonMarkerString(actual: "darwin", operatorText: operatorText, expected: expected)
+        case "os_name":
+            return comparePythonMarkerString(actual: "posix", operatorText: operatorText, expected: expected)
+        case "platform_system":
+            return comparePythonMarkerString(actual: "Darwin", operatorText: operatorText, expected: expected)
+        case "platform_machine":
+            return comparePythonMarkerString(actual: GoToolchainEnvironment.hostArchitecture, operatorText: operatorText, expected: expected)
+        case "python_version", "python_full_version":
+            return comparePythonMarkerVersion(actual: "3.0", operatorText: operatorText, expected: expected)
+        case "implementation_name":
+            return comparePythonMarkerString(actual: "cpython", operatorText: operatorText, expected: expected)
+        case "platform_python_implementation":
+            return comparePythonMarkerString(actual: "CPython", operatorText: operatorText, expected: expected)
+        default:
+            return false
+        }
+    }
+
+    private static func trimmingBalancedParentheses(_ text: String) -> String {
+        var trimmed = text
+        while outerParenthesesWrapEntireExpression(trimmed) {
+            let innerStart = trimmed.index(after: trimmed.startIndex)
+            let innerEnd = trimmed.index(before: trimmed.endIndex)
+            trimmed = String(trimmed[innerStart..<innerEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private static func outerParenthesesWrapEntireExpression(_ text: String) -> Bool {
+        guard text.hasPrefix("("), text.hasSuffix(")") else { return false }
+        var depth = 0
+        var quote: Character?
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if let activeQuote = quote {
+                if character == activeQuote { quote = nil }
+                index = text.index(after: index)
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+            } else if character == "(" {
+                depth += 1
+            } else if character == ")" {
+                depth -= 1
+                if depth == 0, index != text.index(before: text.endIndex) {
+                    return false
+                }
+                if depth < 0 {
+                    return false
+                }
+            }
+            index = text.index(after: index)
+        }
+        return depth == 0 && quote == nil
+    }
+
+    private static func comparePythonMarkerString(actual: String, operatorText: String, expected: String) -> Bool {
+        switch operatorText {
+        case "==": return actual == expected
+        case "!=": return actual != expected
+        default: return false
+        }
+    }
+
+    private static func comparePythonMarkerVersion(actual: String, operatorText: String, expected: String) -> Bool {
+        let comparison = compareDottedVersions(actual, expected)
+        switch operatorText {
+        case "==": return comparison == .orderedSame
+        case "!=": return comparison != .orderedSame
+        case "<": return comparison == .orderedAscending
+        case "<=": return comparison != .orderedDescending
+        case ">": return comparison == .orderedDescending
+        case ">=": return comparison != .orderedAscending
+        default: return false
+        }
+    }
+
+    private static func compareDottedVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let lhsParts = lhs.split(separator: ".").map { Int($0) ?? 0 }
+        let rhsParts = rhs.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(lhsParts.count, rhsParts.count) {
+            let left = index < lhsParts.count ? lhsParts[index] : 0
+            let right = index < rhsParts.count ? rhsParts[index] : 0
+            if left < right { return .orderedAscending }
+            if left > right { return .orderedDescending }
+        }
+        return .orderedSame
     }
 
     private static func normalizedPythonPackageName(_ name: String) -> String {
