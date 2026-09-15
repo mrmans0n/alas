@@ -25,15 +25,15 @@ struct CodexInstallerTests {
         let configURL = dir.appendingPathComponent("config.toml")
         try "[features]\nhooks = true\n".write(to: configURL, atomically: true, encoding: .utf8)
 
-        var enableCalled = false
+        let enableCalled = CodexInstallerCallFlag()
         let installer = CodexInstaller(
             hooksURL: hooksURL, configURL: configURL,
-            runEnableHooks: { enableCalled = true
+            runEnableHooks: { enableCalled.mark()
             return .init(status: 0, stderr: "") }
         )
 
         try await installer.install()
-        #expect(enableCalled)
+        #expect(enableCalled.wasCalled)
         #expect(installer.installState() == .installed)
 
         let installed = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksURL)) as! [String: Any]
@@ -162,5 +162,25 @@ struct CodexInstallerTests {
         await #expect(throws: CodexInstallerError.self) {
             try await installer.install()
         }
+    }
+}
+
+/// Records whether a `@Sendable` installer callback fired. Lock-backed rather
+/// than a captured `var` because the callback may run off the test's own task.
+/// Invariant: `flag` is read and written only while `lock` is held.
+private final class CodexInstallerCallFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+
+    func mark() {
+        lock.lock()
+        flag = true
+        lock.unlock()
+    }
+
+    var wasCalled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return flag
     }
 }
