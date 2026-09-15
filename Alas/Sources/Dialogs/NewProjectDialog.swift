@@ -68,6 +68,8 @@ private struct ProjectDialog: View {
     @Environment(\.theme) var theme
 
     @State private var path: String = ""
+    @State private var selectedTab: ProjectSettingsTab = .general
+    @State private var agentSettings = ProjectStartupScripts.defaults
     private enum ProjectLocation: String, CaseIterable {
         case local = "Local"
         case github = "GitHub"
@@ -159,31 +161,30 @@ private struct ProjectDialog: View {
             subtitle: subtitle,
             width: DialogContainerLayout.projectWidth,
             content: {
-                if case .add = mode {
-                    DialogField(label: "Location") {
-                        Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
+                ProjectSettingsTabBar(selection: $selectedTab)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        switch selectedTab {
+                        case .general:
+                            generalSettings
+                        case .agents:
+                            ProjectAgentSettingsView(
+                                scripts: $agentSettings,
+                                agents: state.agentRegistry.agents,
+                                globalAgentID: state.config.agents.worktreeAutoLaunch.agentId,
+                                globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions
+                            )
+                        case .automation:
+                            startupScriptsSection
+                        case .integrations:
+                            integrationsSection
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
                 }
-                DialogField(label: locationFieldLabel) {
-                    switch mode {
-                    case .add:
-                        addLocationFields
-                    case .edit:
-                        readOnlyPath
-                    }
-                }
-                DialogField(label: "Display name") {
-                    AlasField(text: $name, placeholder: "repo-folder")
-                }
-                DialogField(label: "Icon") {
-                    projectIconSection
-                }
-                if case .edit = mode {
-                    Divider().padding(.vertical, 4)
-                    startupScriptsSection
-                    Divider().padding(.vertical, 4)
-                    integrationsSection
-                }
+                .frame(height: 330)
+                .disabled(isValidating)
                 if let sshConnectionIssue {
                     sshConnectionIssueField(sshConnectionIssue)
                 } else if let errorMessage {
@@ -248,6 +249,36 @@ private struct ProjectDialog: View {
             )
             .environment(\.theme, theme)
         }
+    }
+
+    @ViewBuilder
+    private var generalSettings: some View {
+        if case .add = mode {
+            DialogField(label: "Location") {
+                Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
+            }
+        }
+        DialogField(label: locationFieldLabel) {
+            switch mode {
+            case .add: addLocationFields
+            case .edit: readOnlyPath
+            }
+        }
+        DialogField(label: "Display name") {
+            AlasField(text: $name, placeholder: "repo-folder")
+        }
+        DialogField(label: "Icon") {
+            projectIconSection
+        }
+    }
+
+    private var draftStartupScripts: ProjectStartupScripts {
+        var scripts = agentSettings
+        scripts.sessionOpenMode = sessionOpenMode
+        scripts.sessionOpenScript = sessionOpenScript
+        scripts.worktreeCreateMode = worktreeCreateMode
+        scripts.worktreeCreateScript = worktreeCreateScript
+        return scripts
     }
 
     private var title: String {
@@ -668,7 +699,13 @@ private struct ProjectDialog: View {
                 Text("Session open script")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundColor(theme.color("fg"))
-                Seg(value: $sessionOpenMode, options: startupOptions)
+                Picker("Session open script", selection: $sessionOpenMode) {
+                    ForEach(startupOptions, id: \.0) { option in
+                        Text(option.1).tag(option.0)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
                 if sessionOpenMode == .appendToGlobal || sessionOpenMode == .overrideGlobal {
                     ProjectStartupScriptEditor(
                         text: $sessionOpenScript,
@@ -680,7 +717,13 @@ private struct ProjectDialog: View {
                 Text("Worktree create script")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundColor(theme.color("fg"))
-                Seg(value: $worktreeCreateMode, options: startupOptions)
+                Picker("Worktree create script", selection: $worktreeCreateMode) {
+                    ForEach(startupOptions, id: \.0) { option in
+                        Text(option.1).tag(option.0)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
                 if worktreeCreateMode == .appendToGlobal || worktreeCreateMode == .overrideGlobal {
                     ProjectStartupScriptEditor(
                         text: $worktreeCreateScript,
@@ -725,6 +768,7 @@ private struct ProjectDialog: View {
             sessionOpenScript = project.startupScripts.sessionOpenScript
             worktreeCreateMode = project.startupScripts.worktreeCreateMode
             worktreeCreateScript = project.startupScripts.worktreeCreateScript
+            agentSettings = project.startupScripts
             mcpServers = project.mcpServers
         }
     }
@@ -941,23 +985,11 @@ private struct ProjectDialog: View {
                 cloneTask = nil
             }
         case .edit(let project):
-            // Preserve fields the dialog doesn't yet edit (the worktree
-            // agent override — that lands with the AgentsPane UI later).
-            // Without this, hand-set JSON values would be silently wiped
-            // every time the user edits an unrelated startup-script field.
             state.updateProject(
                 id: project.id,
                 name: name,
                 icon: draftIcon,
-                startupScripts: ProjectStartupScripts(
-                    sessionOpenMode: sessionOpenMode,
-                    sessionOpenScript: sessionOpenScript,
-                    worktreeCreateMode: worktreeCreateMode,
-                    worktreeCreateScript: worktreeCreateScript,
-                    worktreeAgentMode: project.startupScripts.worktreeAgentMode,
-                    worktreeAgentId: project.startupScripts.worktreeAgentId,
-                    worktreeAgentUseBypassPermissions: project.startupScripts.worktreeAgentUseBypassPermissions
-                ),
+                startupScripts: draftStartupScripts,
                 mcpServers: mcpServers
             )
             presented = false
@@ -996,7 +1028,9 @@ private struct ProjectDialog: View {
                     path: destination,
                     displayName: name,
                     icon: draftIcon,
-                    id: pendingProjectId
+                    id: pendingProjectId,
+                    startupScripts: draftStartupScripts,
+                    mcpServers: mcpServers
                 )
                 presented = false
             } catch {
@@ -1025,7 +1059,9 @@ private struct ProjectDialog: View {
                 host: location == .remoteSSH
                     ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
                     : nil,
-                id: pendingProjectId
+                id: pendingProjectId,
+                startupScripts: draftStartupScripts,
+                mcpServers: mcpServers
             )
             sshSetupPresented = false
             presented = false

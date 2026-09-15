@@ -236,6 +236,31 @@ struct AppStateRunScriptCreationTests {
         }
     }
 
+    @Test func repositoryDefaultIsScopedAndUsedForWritingHelp() throws {
+        let (state, project, worktree, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agentID = try #require(ACPLaunchCatalog.specs.first?.agentID)
+        state.config.agents.worktreeAutoLaunch.agentId = "global-agent"
+        state.agentRegistry = AgentRegistry(
+            builtinState: [agentID: BuiltinAgentState(isEnabled: true, binaryOverride: nil)],
+            customs: [], installedIds: [agentID]
+        )
+        var scripts = ProjectStartupScripts.defaults
+        scripts.agentSelection = .agent(agentID)
+        state.updateProject(id: project.id, name: project.name, icon: project.icon, startupScripts: scripts, mcpServers: [])
+
+        #expect(state.defaultAgentID(projectID: project.id) == agentID)
+        #expect(state.defaultAgentID(projectID: "another-project") == "global-agent")
+        #expect(state.defaultAgentID(projectID: nil) == "global-agent")
+        #expect(try state.runScriptWritingHelpAgent(in: worktree) == agentID)
+
+        scripts.agentSelection = .none
+        state.updateProject(id: project.id, name: project.name, icon: project.icon, startupScripts: scripts, mcpServers: [])
+        #expect(throws: RunScriptWritingHelpError.noDefaultAgent) {
+            try state.runScriptWritingHelpAgent(in: worktree)
+        }
+    }
+
     @Test(arguments: RunScriptScope.allCases)
     func assistedCreationOpensDraftInOriginatingWorktree(scope: RunScriptScope) throws {
         let (state, _, worktree, root) = try fixture()

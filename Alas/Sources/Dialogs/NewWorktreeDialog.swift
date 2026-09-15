@@ -415,7 +415,12 @@ struct NewWorktreeDialog: View {
             globalLauncherMode: state.config.agents.defaultLauncherMode,
             acpSegmentEnabled: acpSegmentEnabled
         )
-        launchMode = defaults.launchMode
+        launchMode = Self.initialLaunchMode(
+            preferredMode: defaults.launchMode,
+            projectAgentMode: project?.startupScripts.worktreeAgentMode ?? .useGlobal,
+            resolvedAgentID: effectiveAutoLaunchAgent?.id,
+            enabledAgents: state.agentRegistry.enabled()
+        )
         persistableLaunchMode = defaults.persistableLaunchMode
         openAfterCreate = defaults.openAfterCreate
         let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
@@ -473,7 +478,10 @@ struct NewWorktreeDialog: View {
             openAfterCreate = true
             launchMode = .acp
             persistableLaunchMode = .acp
-            launchAgentId = Self.issueLaunchAgent(from: state.agentRegistry.enabled())
+            launchAgentId = Self.issueLaunchAgent(
+                from: state.agentRegistry.enabled(),
+                preferredAgentID: effectiveAutoLaunchAgent?.id
+            )
         }
         issueSheetPresentation = nil
         createErrorMessage = nil
@@ -720,8 +728,8 @@ struct NewWorktreeDialog: View {
         return (branchSeed, stackName)
     }
 
-    nonisolated static func issueLaunchAgent(from agents: [AgentDefinition]) -> String {
-        acpCapableAgents(from: agents).first?.id ?? "none"
+    nonisolated static func issueLaunchAgent(from agents: [AgentDefinition], preferredAgentID: String? = nil) -> String {
+        resolvedLaunchAgent(initialAgentId: preferredAgentID ?? "none", mode: .acp, enabledAgents: agents)
     }
 
     nonisolated static func issuePromptForLaunch(
@@ -932,6 +940,23 @@ struct NewWorktreeDialog: View {
         case .acp:
             return acpSegmentEnabled
         }
+    }
+
+    /// Repository overrides must not silently launch a different chat agent.
+    /// Explicitly choosing Chat later still uses the normal chat picker fallback.
+    nonisolated static func initialLaunchMode(
+        preferredMode: AppConfig.LauncherMode,
+        projectAgentMode: ProjectStartupScriptMode,
+        resolvedAgentID: String?,
+        enabledAgents: [AgentDefinition]
+    ) -> AppConfig.LauncherMode {
+        guard preferredMode == .acp, projectAgentMode != .useGlobal else { return preferredMode }
+        guard projectAgentMode != .disabled,
+              let resolvedAgentID,
+              acpCapableAgents(from: enabledAgents).contains(where: { $0.id == resolvedAgentID }) else {
+            return .terminal
+        }
+        return .acp
     }
 
     /// Decide which agent id the picker should hold given the desired

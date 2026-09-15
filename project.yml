@@ -45,6 +45,8 @@ targets:
         optional: true
       - path: Alas/Resources/mason-lsps.json
         buildPhase: resources
+      - path: Alas/Resources/MCPLogo-LICENSE.txt
+        buildPhase: resources
       - path: Alas/Resources/RemoteWeb
         buildPhase: resources
         type: folder

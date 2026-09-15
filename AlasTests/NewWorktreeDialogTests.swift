@@ -310,6 +310,15 @@ struct NewWorktreeDialogTests {
         ]
 
         #expect(NewWorktreeDialog.issueLaunchAgent(from: agents) == "codex")
+        #expect(NewWorktreeDialog.issueLaunchAgent(from: agents, preferredAgentID: "claude") == "claude")
+        #expect(NewWorktreeDialog.initialLaunchMode(
+            preferredMode: .acp, projectAgentMode: .overrideGlobal,
+            resolvedAgentID: "claude", enabledAgents: agents
+        ) == .acp)
+        #expect(NewWorktreeDialog.initialLaunchMode(
+            preferredMode: .acp, projectAgentMode: .overrideGlobal,
+            resolvedAgentID: "amp", enabledAgents: agents
+        ) == .terminal)
     }
 
     @Test func issuePromptIsAvailableOnlyForChatLaunchWhileAttachmentRemains() {
@@ -475,6 +484,21 @@ struct NewWorktreeDialogTests {
             enabledAgents: agents
         )
         #expect(resolved == "amp")
+    }
+
+    @Test func repositoryNoneDoesNotFallBackToAnAutomaticChatAgent() {
+        #expect(NewWorktreeDialog.initialLaunchMode(
+            preferredMode: .acp, projectAgentMode: .disabled,
+            resolvedAgentID: nil, enabledAgents: []
+        ) == .terminal)
+        #expect(NewWorktreeDialog.initialLaunchMode(
+            preferredMode: .acp, projectAgentMode: .overrideGlobal,
+            resolvedAgentID: "unavailable", enabledAgents: []
+        ) == .terminal)
+        #expect(NewWorktreeDialog.initialLaunchMode(
+            preferredMode: .acp, projectAgentMode: .useGlobal,
+            resolvedAgentID: nil, enabledAgents: []
+        ) == .acp)
     }
 
     @Test func resolvedLaunchAgentAllowsNoneInTerminalMode() {

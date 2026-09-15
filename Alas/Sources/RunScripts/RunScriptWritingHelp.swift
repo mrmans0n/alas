@@ -51,9 +51,9 @@ enum RunScriptWritingHelpError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .noDefaultAgent:
-            "Choose a default agent in Settings > Agents to use writing help."
+            "Choose a default agent in the project's Agents tab or Settings > Agents to use writing help."
         case .unsupportedAgent:
-            "The default agent must be enabled, installed, and support chat sessions. Check Settings > Agents."
+            "The default agent must be enabled, installed, and support chat sessions. Check the project's Agents tab and Settings > Agents."
         case .remoteWorktree:
             "Script writing help is available in local worktrees."
         case .emptyRequest:

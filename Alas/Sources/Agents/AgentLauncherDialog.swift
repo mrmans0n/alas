@@ -100,7 +100,10 @@ struct AgentLauncherDialog: View {
     }
 
     private var rows: [AgentDefinition] {
-        appState.agentLauncher.rows(enabledAgents: appState.agentRegistry.enabled())
+        appState.agentLauncher.rows(
+            enabledAgents: appState.agentRegistry.enabled(),
+            preferredAgentID: appState.defaultAgentID(projectID: selectedWorktree()?.projectId)
+        )
     }
 
     /// Hidden while browsing an agent's sessions, and while the launcher is

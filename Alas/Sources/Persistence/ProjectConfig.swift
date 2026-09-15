@@ -1,5 +1,11 @@
 import Foundation
 
+enum ProjectAgentSelection: Hashable {
+    case global
+    case none
+    case agent(String)
+}
+
 // MARK: - ProjectStartupScriptMode
 /// How a project's per-repository startup script combines with the global default.
 enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
@@ -21,6 +27,37 @@ struct ProjectStartupScripts: Codable, Equatable {
     var worktreeAgentMode: ProjectStartupScriptMode
     var worktreeAgentId: String?
     var worktreeAgentUseBypassPermissions: Bool
+
+    /// A picker-friendly projection of the existing persisted agent policy.
+    var agentSelection: ProjectAgentSelection {
+        get {
+            switch worktreeAgentMode {
+            case .useGlobal: .global
+            case .disabled: .none
+            case .overrideGlobal, .appendToGlobal:
+                worktreeAgentId.map(ProjectAgentSelection.agent) ?? .none
+            }
+        }
+        set {
+            switch newValue {
+            case .global:
+                worktreeAgentMode = .useGlobal
+            case .none:
+                worktreeAgentMode = .disabled
+            case .agent(let id):
+                worktreeAgentMode = .overrideGlobal
+                worktreeAgentId = id
+            }
+        }
+    }
+
+    func defaultAgentID(globalAgentID: String?) -> String? {
+        switch worktreeAgentMode {
+        case .useGlobal: globalAgentID
+        case .disabled: nil
+        case .overrideGlobal, .appendToGlobal: worktreeAgentId
+        }
+    }
 
     static let defaults = ProjectStartupScripts(
         sessionOpenMode: .useGlobal,

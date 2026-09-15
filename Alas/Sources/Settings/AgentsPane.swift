@@ -45,10 +45,10 @@ struct AgentsPane: View {
                 }
                 .padding(.bottom, 18)
 
-                SettingsGroup(title: "Worktree auto-launch") {
+                SettingsGroup(title: "Agent defaults") {
                     SettingsRow(
                         name: "Default agent",
-                        desc: "Launched in the new worktree's terminal after the create script runs."
+                        desc: "Used for new worktrees and preselected in the agent launcher. Projects can override this default."
                     ) {
                         autoLaunchPicker
                     }

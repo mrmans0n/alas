@@ -97,7 +97,9 @@ final class ProjectsManager {
         displayName: String,
         icon: ProjectIcon,
         host: String? = nil,
-        id: String = UUID().uuidString
+        id: String = UUID().uuidString,
+        startupScripts: ProjectStartupScripts = .defaults,
+        mcpServers: [ProjectMCPServer] = []
     ) async throws -> ProjectConfig {
         let worktreeRootsByProject = worktreesByProject.mapValues { $0.map(\.path.path) }
         try Self.ensureNoPathCollision(
@@ -122,6 +124,8 @@ final class ProjectsManager {
             color: icon.color,
             addedAt: Date(),
             icon: icon,
+            startupScripts: startupScripts,
+            mcpServers: mcpServers,
             host: host
         )
         if let host {

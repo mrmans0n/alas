@@ -3,6 +3,31 @@ import Foundation
 @testable import Alas
 
 struct ProjectConfigAgentOverrideTests {
+    @Test func agentSelectionResolvesInheritanceOverrideAndNone() throws {
+        var scripts = ProjectStartupScripts.defaults
+        #expect(scripts.defaultAgentID(globalAgentID: "claude") == "claude")
+        scripts.agentSelection = .agent("codex")
+        scripts.worktreeAgentUseBypassPermissions = true
+        #expect(scripts.defaultAgentID(globalAgentID: "claude") == "codex")
+        #expect(scripts.defaultAgentID(globalAgentID: nil) == "codex")
+        scripts.agentSelection = .none
+        #expect(scripts.defaultAgentID(globalAgentID: "claude") == nil)
+        scripts.agentSelection = .global
+        #expect(scripts.defaultAgentID(globalAgentID: "gemini") == "gemini")
+        #expect(scripts.worktreeAgentUseBypassPermissions)
+        let decoded = try JSONDecoder().decode(ProjectStartupScripts.self, from: JSONEncoder().encode(scripts))
+        #expect(decoded.agentSelection == .global)
+    }
+
+    @Test func editingOtherSettingsPreservesUnavailableOverride() {
+        var scripts = ProjectStartupScripts.defaults
+        scripts.worktreeAgentMode = .appendToGlobal
+        scripts.worktreeAgentId = "removed-custom-agent"
+        #expect(scripts.agentSelection == .agent("removed-custom-agent"))
+        scripts.sessionOpenScript = "echo hello"
+        #expect(scripts.defaultAgentID(globalAgentID: "claude") == "removed-custom-agent")
+    }
+
     @Test func defaultsUseGlobalAndNoAgent() {
         let s = ProjectStartupScripts.defaults
         #expect(s.worktreeAgentMode == .useGlobal)
