@@ -345,7 +345,7 @@ struct ACPTerminalTests {
             try? await Task.sleep(for: .milliseconds(500))
             return physicalFootprint()
         }
-        Thread.sleep(forTimeInterval: 0.75)
+        blockCurrentThread(seconds: 0.75)
         let highWater = await sampledFootprint.value
         let footprintGrowth = highWater >= baseline ? highWater - baseline : 0
 
@@ -445,4 +445,14 @@ private func physicalFootprint() -> UInt64 {
         }
     }
     return result == KERN_SUCCESS ? info.phys_footprint : 0
+}
+
+/// Blocks the calling thread for `seconds`.
+///
+/// The firehose test deliberately stalls the main actor so output has to back up:
+/// `Task.sleep` would instead free the main actor to drain chunks and stop exercising the
+/// backpressure path. `Thread.sleep` is `noasync`, so the block lives in a synchronous
+/// helper that preserves the original behaviour.
+private func blockCurrentThread(seconds: TimeInterval) {
+    Thread.sleep(forTimeInterval: seconds)
 }
