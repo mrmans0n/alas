@@ -45,8 +45,8 @@ struct WebPreviewAutomationRoutingTests {
         #expect(previews.count == 1)
         #expect(previews.first?["owner_key"] as? String == owner.storageKey)
         #expect(tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil).webView.url == nil)
-        tabs.closeAll(worktreeId: owner.storageKey)
-        tabs.closeAll(worktreeId: "other")
+        _ = tabs.closeAll(worktreeId: owner.storageKey)
+        _ = tabs.closeAll(worktreeId: "other")
     }
 
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {
@@ -54,9 +54,9 @@ struct WebPreviewAutomationRoutingTests {
         let owner = SessionOwnerID.worktree("owner")
         _ = tabs.openWebPreview(owner: owner)
         let old = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
-        tabs.closeAll(worktreeId: owner.storageKey)
+        _ = tabs.closeAll(worktreeId: owner.storageKey)
         _ = tabs.openWebPreview(owner: owner)
-        defer { tabs.closeAll(worktreeId: owner.storageKey) }
+        defer { _ = tabs.closeAll(worktreeId: owner.storageKey) }
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: owner, isAuthorized: { true },
             resolveOpen: { _ in throw WebPreviewAutomationError.unavailable }, focus: { _ in }
@@ -102,7 +102,7 @@ struct WebPreviewAutomationRoutingTests {
         let operation = try browser.automationState.begin()
         defer {
             browser.automationState.finish(operation)
-            tabs.closeAll(worktreeId: owner.storageKey)
+            _ = tabs.closeAll(worktreeId: owner.storageKey)
         }
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: owner, isAuthorized: { true },
@@ -123,7 +123,7 @@ struct WebPreviewAutomationRoutingTests {
         _ = tabs.openWebPreview(owner: owner)
         let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
         let other = tabs.appendTerminal(worktreeId: owner.storageKey, title: "Shell", sessionId: "shell")
-        defer { tabs.closeAll(worktreeId: owner.storageKey) }
+        defer { _ = tabs.closeAll(worktreeId: owner.storageKey) }
         let url = URL(string: "https://example.com/changed")!
         browser.onNavigate?(url)
         let preview = try #require(tabs.tabs(for: owner).compactMap { tab -> WebPreviewTabState? in
