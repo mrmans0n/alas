@@ -94,7 +94,7 @@ struct RepoGroupView: View {
             .padding(.vertical, 5)
             .contentShape(Rectangle())
             .onTapGesture { collapsed.toggle() }
-            .contextMenu {
+            .nativeContextMenu {
                 Button("Edit Project…", action: onEditProject)
                 if let onOpenGGInbox {
                     Button("gg Inbox", action: onOpenGGInbox)

@@ -292,7 +292,7 @@ struct WorktreeRowView: View {
                 onTap()
             }
         }
-        .contextMenu {
+        .nativeContextMenu {
             if case .createFailed = operationState {
                 Button("Retry Create", action: onRetryCreate)
                 Button("Remove from List", role: .destructive, action: onRemoveFailed)

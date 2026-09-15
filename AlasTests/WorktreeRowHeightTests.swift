@@ -3,6 +3,34 @@ import SwiftUI
 import Testing
 @testable import Alas
 
+@Suite
+@MainActor
+struct NativeContextMenuTests {
+    @Test func nativeContextMenuPopulatesDynamicSubmenus() throws {
+        let view = Color.clear.nativeContextMenu {
+            Menu("Parent") {
+                ForEach(["One", "Two"], id: \.self) { title in
+                    Button(title) {}
+                }
+            }
+        }
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let menuView = try #require(descendants(of: controller.view).first { $0.menu != nil })
+        #expect(menuView.frame.size == controller.view.bounds.size)
+        #expect(menuView.isAccessibilityElement())
+        let menu = try #require(menuView.menu)
+        let submenu = try #require(menu.items.first { $0.title == "Parent" }?.submenu)
+        #expect(submenu.items.map(\.title) == ["One", "Two"])
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants)
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct WorktreeRowHeightTests {
