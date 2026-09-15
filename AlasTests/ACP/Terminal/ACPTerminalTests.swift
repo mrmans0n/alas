@@ -198,6 +198,21 @@ struct ACPTerminalTests {
         #expect(status.signal != nil || (status.exitCode ?? 0) != 0)
     }
 
+    @Test("process exit state is safe when termination races with kill")
+    func processExitStateIsSynchronized() async throws {
+        let state = ACPTerminalRootExitState()
+        #expect(!state.hasExited)
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<100 {
+                group.addTask { state.markExited() }
+                group.addTask { _ = state.hasExited }
+            }
+        }
+
+        #expect(state.hasExited)
+    }
+
     @Test("snapshot honors a sub-1024 outputByteLimit")
     func smallByteLimit() async throws {
         let t = try ACPTerminal(
@@ -391,7 +406,6 @@ struct ACPTerminalTests {
         #expect(source.contains("descendantTracker = Task.detached(priority: .utility)"))
         #expect(source.contains("let cached = orphanedDescendants"))
         #expect(source.contains("let preKillDescendants = Set(Self.collectChildDescendants(of: pid))"))
-        #expect(source.contains("let rootAliveAtKill = !rootHasExited"))
         #expect(source.contains("Darwin.kill(-pid, SIGTERM)"))
         #expect(source.contains("Task.detached(priority: .utility) {\n            var initial = preKillDescendants"))
         #expect(source.contains("initial.formUnion(Self.collectDescendants(of: pid))"))
@@ -408,7 +422,6 @@ struct ACPTerminalTests {
         #expect(source.contains("let retained = Self.currentlyMatching(cached)"))
         #expect(source.contains("orphanedDescendants.subtract(cached.subtracting(retained))"))
         #expect(source.contains("let strongSelf = StrongBox(self)"))
-        #expect(source.contains("let termRootAlive = await MainActor.run"))
         #expect(source.contains("Self.signalTargets(rootPid: pid, rootAlive: termRootAlive"))
         #expect(source.contains("private final class StrongBox<T: AnyObject>: @unchecked Sendable"))
         #expect(source.contains("let startedAt: ProcessStartTime"))

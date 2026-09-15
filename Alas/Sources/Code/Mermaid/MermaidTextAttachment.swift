@@ -1,5 +1,53 @@
 import AppKit
 
+final class MermaidCellLayoutState: @unchecked Sendable {
+    enum SizingState: Equatable, Sendable {
+        case loading
+        case rendered(CGSize)
+        case failed(String)
+    }
+
+    struct Snapshot: Equatable, Sendable {
+        let showsSource: Bool
+        let measuredWidth: CGFloat
+        let sizingState: SizingState
+    }
+
+    private let lock = NSLock()
+    private var showsSource = false
+    private var measuredWidth: CGFloat = 600
+    private var sizingState: SizingState = .loading
+
+    var snapshot: Snapshot {
+        lock.withLock {
+            Snapshot(
+                showsSource: showsSource,
+                measuredWidth: measuredWidth,
+                sizingState: sizingState
+            )
+        }
+    }
+
+    func updateShowsSource(_ visible: Bool) {
+        lock.withLock { showsSource = visible }
+    }
+
+    func updateSizingState(_ state: SizingState) {
+        lock.withLock { sizingState = state }
+    }
+
+    func snapshot(updatingMeasuredWidth width: CGFloat) -> Snapshot {
+        lock.withLock {
+            measuredWidth = width
+            return Snapshot(
+                showsSource: showsSource,
+                measuredWidth: measuredWidth,
+                sizingState: sizingState
+            )
+        }
+    }
+}
+
 @MainActor
 protocol MermaidTextAttachmentCellDelegate: AnyObject {
     func mermaidTextAttachmentCellDidToggleSource(_ cell: MermaidTextAttachmentCell)
@@ -66,24 +114,15 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     weak var delegate: MermaidTextAttachmentCellDelegate?
 
     private(set) var outcome: MermaidRenderOutcome?
-    // Mirrors the deliberate nonisolated storage on `measuredWidth`/`sizingState`:
-    // TextKit sizing callbacks are not guaranteed main-thread.
-    nonisolated(unsafe) private(set) var showsSource = false
+    var showsSource: Bool { layoutState.snapshot.showsSource }
     private var theme: MermaidDiagramTheme?
     private var customAccessibilityActions: [NSAccessibilityCustomAction] = []
-    nonisolated(unsafe) private var measuredWidth: CGFloat = 600
-    nonisolated(unsafe) private var sizingState: SizingState = .loading
+    private let layoutState = MermaidCellLayoutState()
 
     nonisolated private static let horizontalPadding: CGFloat = 12
     nonisolated private static let headerHeight: CGFloat = 31
     nonisolated private static let compactSourceToggleHeight: CGFloat = 30
     nonisolated private static let fallbackWidth: CGFloat = 600
-
-    private enum SizingState: Sendable {
-        case loading
-        case rendered(CGSize)
-        case failed(String)
-    }
 
     init(id: String, source: String, profile: MermaidPresentationProfile) {
         self.id = id
@@ -108,21 +147,21 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
 
     func beginLoading() {
         outcome = nil
-        sizingState = .loading
+        layoutState.updateSizingState(.loading)
     }
 
     func apply(_ outcome: MermaidRenderOutcome) {
         self.outcome = outcome
         switch outcome {
         case .rendered(let diagram):
-            sizingState = .rendered(diagram.image.size)
+            layoutState.updateSizingState(.rendered(diagram.image.size))
         case .failed(let failure):
-            sizingState = .failed(failure.mermaidDisplayDiagnostic)
+            layoutState.updateSizingState(.failed(failure.mermaidDisplayDiagnostic))
         }
     }
 
     func setSourceVisible(_ visible: Bool) {
-        showsSource = visible
+        layoutState.updateShowsSource(visible)
         updateCompactMenu()
         updateAccessibilityActions()
     }
@@ -243,7 +282,8 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
     }
 
     override var cellSize: NSSize {
-        size(for: measuredWidth)
+        let snapshot = layoutState.snapshot
+        return size(for: snapshot.measuredWidth, snapshot: snapshot)
     }
 
     override func cellFrame(
@@ -259,8 +299,8 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         } else {
             usableWidth = Self.fallbackWidth
         }
-        measuredWidth = usableWidth
-        return NSRect(origin: .zero, size: size(for: usableWidth))
+        let snapshot = layoutState.snapshot(updatingMeasuredWidth: usableWidth)
+        return NSRect(origin: .zero, size: size(for: usableWidth, snapshot: snapshot))
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
@@ -340,13 +380,16 @@ final class MermaidTextAttachmentCell: NSTextAttachmentCell {
         return true
     }
 
-    private nonisolated func size(for width: CGFloat) -> NSSize {
-        if profile == .compact, showsSource {
+    private nonisolated func size(
+        for width: CGFloat,
+        snapshot: MermaidCellLayoutState.Snapshot
+    ) -> NSSize {
+        if profile == .compact, snapshot.showsSource {
             return NSSize(width: width, height: Self.compactSourceToggleHeight)
         }
         let bodyWidth = max(1, width - Self.horizontalPadding * 2)
         let bodyHeight: CGFloat
-        switch sizingState {
+        switch snapshot.sizingState {
         case .rendered(let imageSize):
             if profile == .compact {
                 bodyHeight = profile.maxEmbeddedHeight
