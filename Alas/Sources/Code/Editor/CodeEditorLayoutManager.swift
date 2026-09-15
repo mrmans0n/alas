@@ -61,7 +61,14 @@ final class CodeEditorLayoutManager: NSLayoutManager {
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        MainActor.assumeIsolated { drawSourceGlyphs(forGlyphRange: glyphsToShow, at: origin) }
+        // The superclass method is nonisolated, so `self` is task-isolated here
+        // and cannot be captured by a main-actor closure. TextKit only drives an
+        // on-screen layout manager from the main thread — the invariant
+        // `assumeIsolated` asserts at runtime — so the local rebind is safe.
+        nonisolated(unsafe) let mainActorSelf = self
+        MainActor.assumeIsolated {
+            mainActorSelf.drawSourceGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        }
     }
 
     @MainActor private func drawSourceGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {

@@ -146,7 +146,10 @@ final class EditorBuffer {
     @ObservationIgnored private(set) var compositionOwner: UUID?
     @ObservationIgnored private var compositionSettlement: (() -> Void)?
     @ObservationIgnored private var compositionInvalidation: (() -> Void)?
-    @ObservationIgnored private var compositionReload: (() -> Void)?
+    // Dispatched via `DispatchQueue.main.async`, whose `execute:` parameter is
+    // `@MainActor @Sendable`. Every assignment is a `[weak self]` capture of this
+    // main-actor buffer, so the stricter type costs nothing.
+    @ObservationIgnored private var compositionReload: (@MainActor @Sendable () -> Void)?
     private final class SourceEditSelection {
         var ranges: [NSValue]
         init(_ ranges: [NSValue]) { self.ranges = ranges }
@@ -2406,6 +2409,9 @@ final class EditorBuffer {
         let documentText = text ?? storage.string
         lspOpenGeneration &+= 1
         let generation = lspOpenGeneration
+        // Hoisted so the `[weak self]` below is not defeated by an implicit
+        // `self` capture when the task reads the worktree root.
+        let worktreeRoot = self.worktreeRoot
         lspOpenTask = Task { [weak self] in
             let opened = await lsp.openDocument(
                 worktreeRoot: worktreeRoot,

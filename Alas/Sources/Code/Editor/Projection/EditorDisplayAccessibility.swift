@@ -5,9 +5,16 @@ import AppKit
 extension CodeTextView {
     // NSTextView implements the legacy entry points directly. Forwarding only
     // the modern methods leaves external AX parameterized queries native.
+    // Implements deprecated AppKit AX entry points; the attribute keeps the
+    // deprecation so calls to `super` inside do not warn.
+    @available(macOS, deprecated: 10.10)
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
-        MainActor.assumeIsolated { () -> Any? in
-            switch attribute {
+        // `Any?` is not Sendable, so it cannot be returned out of the main-actor
+        // closure; assign through a local instead. The body stays in this
+        // override so it keeps the deprecation context of the entry point.
+        nonisolated(unsafe) var result: Any?
+        MainActor.assumeIsolated {
+            result = switch attribute {
             case .value: accessibilityValue()
             case .numberOfCharacters: accessibilityNumberOfCharacters()
             case .selectedText: accessibilitySelectedText()
@@ -23,9 +30,14 @@ extension CodeTextView {
             default: super.accessibilityAttributeValue(attribute)
             }
         }
+        return result
     }
 
+    // Implements deprecated AppKit AX entry points; the attribute keeps the
+    // deprecation so calls to `super` inside do not warn.
+    @available(macOS, deprecated: 10.10)
     override func accessibilitySetValue(_ value: Any?, forAttribute attribute: NSAccessibility.Attribute) {
+        nonisolated(unsafe) let value = value
         MainActor.assumeIsolated {
             switch attribute {
             case .value: setAccessibilityValue(value)
@@ -38,8 +50,14 @@ extension CodeTextView {
         }
     }
 
+    // Implements deprecated AppKit AX entry points; the attribute keeps the
+    // deprecation so calls to `super` inside do not warn.
+    @available(macOS, deprecated: 10.10)
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.ParameterizedAttribute, forParameter parameter: Any?) -> Any? {
-        MainActor.assumeIsolated { () -> Any? in
+        nonisolated(unsafe) var result: Any?
+        nonisolated(unsafe) let parameter = parameter
+        MainActor.assumeIsolated {
+            result = { () -> Any? in
             switch attribute {
             case .stringForRange, .attributedStringForRange, .rtfForRange, .boundsForRange:
                 guard let range = (parameter as? NSValue)?.rangeValue, nativeRange(forSource: range) != nil else { return nil }
@@ -66,7 +84,9 @@ extension CodeTextView {
                 return NSValue(range: accessibilityRange(for: point))
             default: return super.accessibilityAttributeValue(attribute, forParameter: parameter)
             }
+            }()
         }
+        return result
     }
 
     override func accessibilityValue() -> String? { sourceString }

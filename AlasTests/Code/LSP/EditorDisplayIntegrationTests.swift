@@ -104,7 +104,10 @@ struct EditorDisplayIntegrationTests {
         transport.onSend = { sent in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
             Task { @MainActor in
-                #expect(Thread.isMainThread)
+                // `Thread.isMainThread` is unavailable from async contexts; the
+                // enclosing `@MainActor` closure already carries the guarantee, and
+                // this asserts it at runtime the same way.
+                MainActor.assertIsolated()
                 received = true
                 delayed = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(2))
@@ -305,6 +308,8 @@ struct EditorDisplayIntegrationTests {
         #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: 3, effectiveRange: nil) == nil)
     }
 
+    // Exercises the deprecated AppKit AX entry points on purpose.
+    @available(macOS, deprecated: 10.10)
     @Test func parameterizedAccessibilityReturnsSourceRangesAndText() async throws {
         let f = try await Fixture("ab\n🙂z")
         defer { f.remove() }
@@ -592,7 +597,7 @@ struct EditorDisplayIntegrationTests {
         let f = try await Fixture("a\u{FFFC}🙂b")
         defer { f.remove() }
         f.view.setSourceSelectedRanges([NSValue(range: NSRange(location: 2, length: 2))])
-        #expect(f.view.accessibilityValue() as? String == "a\u{FFFC}🙂b")
+        #expect(f.view.accessibilityValue() == "a\u{FFFC}🙂b")
         #expect(f.view.accessibilitySelectedTextRange() == NSRange(location: 2, length: 2))
         #expect(f.view.accessibilitySelectedText() == "🙂")
         #expect(f.view.accessibilityString(for: NSRange(location: 1, length: 3)) == "\u{FFFC}🙂")
@@ -600,6 +605,8 @@ struct EditorDisplayIntegrationTests {
         #expect(f.view.sourceSelectedRange == NSRange(location: 4, length: 1))
     }
 
+    // Exercises the deprecated AppKit AX entry points on purpose.
+    @available(macOS, deprecated: 10.10)
     @Test(arguments: [
         ("e\u{301} office", NSRange(location: 0, length: 2)),
         ("👩‍👩‍👧‍👦 office", NSRange(location: 0, length: 11)),
