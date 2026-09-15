@@ -277,7 +277,7 @@ struct WorktreeRowView: View {
                             .accessibilityLabel("Active agent sessions")
                         }
                     }
-                    .frame(minHeight: 18)
+                    .frame(minHeight: 21)
                 }
             }
             .padding(.leading, 32)
