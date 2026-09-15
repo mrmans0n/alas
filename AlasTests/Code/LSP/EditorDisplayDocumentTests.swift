@@ -17,6 +17,46 @@ struct EditorDisplayDocumentTests {
         return NSAttributedString(string: text, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .paragraphStyle: paragraph])
     }
 
+    @Test(arguments: ["insert", "replace", "delete"])
+    func committedSourceEditsPreserveExactUnicodeAndStorageIdentity(operation: String) throws {
+        let document = try EditorDisplayDocument(source: source("a🙂b"), revision: 3, hints: [])
+        let storage = document.storage
+        let edit: EditorTextEdit
+        let expected: String
+        switch operation {
+        case "insert":
+            edit = .init(location: 1, oldLength: 0, replacementText: "X")
+            expected = "aX🙂b"
+        case "replace":
+            edit = .init(location: 1, oldLength: 2, replacementText: "e\u{301}")
+            expected = "ae\u{301}b"
+        default:
+            edit = .init(location: 1, oldLength: 2, replacementText: "")
+            expected = "ab"
+        }
+        #expect(document.applySourceEdit(edit, source: source(expected), revision: 4))
+        #expect(document.storage === storage)
+        #expect(Array(storage.string.utf16) == Array(expected.utf16))
+        #expect(document.map.revision == 4)
+        #expect(document.map.sourceLength == (expected as NSString).length)
+    }
+
+    @Test func invalidSourceEditsLeaveDisplayAndRevisionUnchanged() throws {
+        let original = source("a🙂b")
+        let document = try EditorDisplayDocument(source: original, revision: 3, hints: [])
+        let snapshot = NSAttributedString(attributedString: document.storage)
+        let valid = EditorTextEdit(location: 1, oldLength: 2, replacementText: "X")
+        #expect(!document.applySourceEdit(valid, source: source("aXb"), revision: 5))
+        #expect(!document.applySourceEdit(valid, source: source("aYb"), revision: 4))
+        #expect(!document.applySourceEdit(.init(location: 2, oldLength: 0, replacementText: "X"), source: source("aX🙂b"), revision: 4))
+        #expect(!document.applySourceEdit(.init(location: 1, oldLength: 20, replacementText: "X"), source: source("aXb"), revision: 4))
+        #expect(document.storage.isEqual(to: snapshot))
+        #expect(document.map.revision == 3)
+        let hinted = try EditorDisplayDocument(source: original, revision: 3, hints: pair)
+        #expect(!hinted.applySourceEdit(valid, source: source("aXb"), revision: 4))
+        #expect(hinted.storage.string == "a\u{FFFC}\u{FFFC}🙂b")
+    }
+
     @Test func copiesSourceAttributesAndBytesWithoutIntroducingSourceAttachments() throws {
         let original = NSMutableAttributedString(attributedString: source("a🙂\u{FFFC}b"))
         original.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 1, length: 2))

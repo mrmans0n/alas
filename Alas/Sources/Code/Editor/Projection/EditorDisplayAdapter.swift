@@ -14,6 +14,7 @@ final class EditorDisplayAdapter {
     private var sourceSnapshot: String
     private(set) var sourceLineStarts: [Int]
     private var deferredHints: (revision: Int, hints: [EditorDisplayHint])?
+    private var deferredSourceNotification = false
     private(set) var isApplyingSourceEdit = false
     private(set) var isRebuilding = false
 
@@ -23,7 +24,7 @@ final class EditorDisplayAdapter {
         sourceSnapshot = buffer.storage.string
         sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
         document = try EditorDisplayDocument(source: buffer.storage, revision: buffer.editGeneration, hints: [])
-        editObserver = buffer.onTextEdit { [weak self] _ in self?.sourceChanged() }
+        editObserver = buffer.onTextEdit { [weak self] edit in self?.sourceChanged(edit: edit) }
         selectionObserver = buffer.observeSourceSelection { [weak self] ranges in
             self?.view?.restoreSourceSelections(ranges)
         }
@@ -31,6 +32,12 @@ final class EditorDisplayAdapter {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.buffer.storage.editedMask.contains(.editedCharacters) {
+                    if self.isApplyingSourceEdit, !self.composition.isActive {
+                        // The buffer's delegate publishes the committed revision
+                        // after this notification. Owned typing updates there once.
+                        self.deferredSourceNotification = true
+                        return
+                    }
                     // Programmatic reloads suppress onTextEdit while installing
                     // text, but the separate display still needs the new source.
                     if self.document.map.revision != self.buffer.editGeneration || !EditorSourceText.exactlyEqual(self.sourceSnapshot, self.buffer.storage.string) { self.sourceChanged() }
@@ -97,6 +104,8 @@ final class EditorDisplayAdapter {
         isApplyingSourceEdit = true
         defer { isApplyingSourceEdit = false }
         guard buffer.replaceSource(range: range, with: text, selections: selections, finalSelections: final, composition: owner, attributes: attributes) else { return false }
+        // Loading and other suppressed edit tracking can omit the callback.
+        if deferredSourceNotification { sourceChanged() }
         view.restoreSourceSelections(final)
         return true
     }
@@ -113,11 +122,12 @@ final class EditorDisplayAdapter {
         view?.inputContext?.discardMarkedText()
     }
 
-    private func sourceChanged() {
+    private func sourceChanged(edit: EditorTextEdit? = nil) {
+        deferredSourceNotification = false
         if composition.isActive, !isApplyingSourceEdit { composition.invalidate() }
         hints = [] // Server anchors are stale after every source character edit.
         sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
-        rebuild()
+        rebuild(sourceEdit: isApplyingSourceEdit ? edit : nil)
         if let view { NotificationCenter.default.post(name: .editorSourceDidChange, object: view) }
     }
 
@@ -127,7 +137,7 @@ final class EditorDisplayAdapter {
         return result
     }
 
-    func rebuild() {
+    func rebuild(sourceEdit: EditorTextEdit? = nil) {
         guard !isRebuilding, let view else { return }
         isRebuilding = true
         defer { isRebuilding = false }
@@ -143,7 +153,12 @@ final class EditorDisplayAdapter {
             }
         }
         do {
-            try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
+            let appliedEdit = !composition.isActive && sourceEdit.map {
+                document.applySourceEdit($0, source: buffer.storage, revision: buffer.editGeneration)
+            } == true
+            if !appliedEdit {
+                try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
+            }
         } catch {
             // Reject bad presentation metadata without mutating authoritative text.
             hints = []

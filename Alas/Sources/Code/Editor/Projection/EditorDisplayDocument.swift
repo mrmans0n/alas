@@ -27,6 +27,25 @@ final class EditorDisplayDocument {
         storage.endEditing()
     }
 
+    /// Applies one committed source edit to an unhinted display. The caller
+    /// supplies the buffer's edit event, so unchanged prefix/suffix text need
+    /// not be copied or compared. Reloads and uncertain revisions rebuild.
+    func applySourceEdit(_ edit: EditorTextEdit, source: NSAttributedString, revision: Int) -> Bool {
+        guard map.hintRuns.isEmpty, revision == map.revision &+ 1,
+              (try? map.displaySegments(forSource: edit.oldRange)) != nil,
+              source.length >= map.sourceLength - edit.oldLength,
+              source.length - (map.sourceLength - edit.oldLength) == edit.newLength,
+              let replacementMap = try? EditorDisplayMap(source: source.string, revision: revision, hints: []),
+              (try? replacementMap.displaySegments(forSource: edit.newRange)) != nil else { return false }
+        let replacement = source.attributedSubstring(from: edit.newRange)
+        guard EditorSourceText.exactlyEqual(replacement.string, edit.replacementText) else { return false }
+        storage.beginEditing()
+        map = replacementMap
+        storage.replaceCharacters(in: edit.oldRange, with: replacement)
+        storage.endEditing()
+        return true
+    }
+
     /// Paint changes do not alter coordinates or hint geometry. Validate every
     /// affected run before writing, so layout-affecting changes can fall back
     /// to a complete rebuild without publishing a partial update.

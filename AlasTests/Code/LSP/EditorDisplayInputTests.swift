@@ -5,6 +5,80 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func ordinaryTypingPatchesOnlyTheEditedSourceRange() async throws {
+        let f = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
+        defer { f.remove() }
+        try f.view.displayAdapter?.updateHints([], revision: f.buffer.editGeneration)
+        let recorder = DisplayEditRecorder()
+        f.document.storage.delegate = recorder
+        defer { f.document.storage.delegate = nil }
+        f.view.setSourceSelectedRange(NSRange(location: 50000, length: 0))
+        f.view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(recorder.requestedEdits.count == 1)
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 50000, length: 1))
+        #expect(f.document.storage.string == f.buffer.storage.string)
+        #expect(f.document.map.revision == f.buffer.editGeneration)
+        #expect(f.view.sourceSelectedRange == NSRange(location: 50001, length: 0))
+    }
+
+    @Test func typingDuringInitialLoadPublishesDisplayWithoutAnEditCallback() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("abc".utf8).write(to: root.appendingPathComponent("test.txt"))
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "test.txt")
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 800, height: 600))
+        layout.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        view.bindUndo(to: buffer)
+        try view.bindDisplay(to: buffer)
+        defer {
+            try? view.bindDisplay(to: nil)
+            buffer.close(persistDirtySnapshot: false)
+            try? FileManager.default.removeItem(at: root)
+        }
+        var callbacks = 0
+        let token = buffer.onTextEdit { _ in callbacks += 1 }
+        defer { buffer.removeOnEdit(token) }
+        #expect(!buffer.initialLoadFinished)
+        view.insertText("x", replacementRange: NSRange(location: 0, length: 0))
+        #expect(callbacks == 0)
+        #expect(view.string == "x")
+        #expect(view.displayAdapter?.document.map.revision == buffer.editGeneration)
+        #expect(view.sourceSelectedRange == NSRange(location: 1, length: 0))
+        await buffer.awaitLoadForTesting()
+        #expect(buffer.storage.string == "xabc")
+        #expect(view.string == "xabc")
+        #expect(view.displayAdapter?.document.map.revision == buffer.editGeneration)
+    }
+
+    @Test func typingAfterHintRemovalAndUndoStillUsesCurrentSourceCoordinates() async throws {
+        let f = try await Fixture("abcd")
+        defer { f.remove() }
+        f.view.setSourceSelectedRange(NSRange(location: 2, length: 0))
+        f.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(f.document.map.hintRuns.isEmpty)
+        #expect(f.document.storage.string == "abXcd")
+        let recorder = DisplayEditRecorder()
+        f.document.storage.delegate = recorder
+        defer { f.document.storage.delegate = nil }
+        f.view.insertText("Y", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(recorder.requestedEdits.count == 1)
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 3, length: 1))
+        #expect(f.document.storage.string == "abXYcd")
+        f.buffer.undoManager.undo()
+        #expect(f.document.storage.string == "abcd")
+        f.buffer.undoManager.redo()
+        #expect(f.document.storage.string == "abXYcd")
+        recorder.requestedEdits.removeAll()
+        f.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(recorder.requestedEdits.count == 1)
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 4, length: 1))
+        #expect(f.document.storage.string == "abXY!cd")
+        #expect(f.document.map.revision == f.buffer.editGeneration)
+    }
+
     @Test func colorUpdatesPreserveHintAttachmentsAndOnlyEditAffectedAttributes() async throws {
         let f = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
         defer { f.remove() }
