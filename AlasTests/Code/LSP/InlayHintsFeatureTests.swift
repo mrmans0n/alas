@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 struct InlayHintsFeatureTests {
+    @Test func freshResponseCancelsRetainedPresentationExpiry() async throws {
+        var cleared = 0
+        var applied = 0
+        let feature = InlayHintsFeature(request: { _ in [] }, apply: { _ in applied += 1 }, clear: { cleared += 1 })
+        defer { feature.stop() }
+        feature.invalidate(preservingPresentation: true)
+        feature.refresh(range: NSRange(location: 0, length: 1), debounce: .zero)
+        for _ in 0..<100 where applied == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(applied == 1)
+        try await Task.sleep(for: .milliseconds(2200))
+        #expect(cleared == 0)
+    }
+
+    @Test func retainedPresentationExpiresIfNoFreshResponseArrives() async throws {
+        var cleared = 0
+        let feature = InlayHintsFeature(request: { _ in nil }, apply: { _ in }, clear: { cleared += 1 })
+        defer { feature.stop() }
+        feature.invalidate(preservingPresentation: true)
+        #expect(cleared == 0)
+        for _ in 0..<300 where cleared == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(cleared == 1)
+    }
+
     @Test func twoViewportOwnersKeepIndependentLatestRequests() async throws {
         var requestsA: [NSRange] = [], requestsB: [NSRange] = []
         var repliesA: [CheckedContinuation<[LSPInlayHint]?, Never>] = [], repliesB: [CheckedContinuation<[LSPInlayHint]?, Never>] = []

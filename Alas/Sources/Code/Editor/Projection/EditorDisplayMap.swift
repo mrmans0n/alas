@@ -142,6 +142,15 @@ struct EditorDisplayMap {
         return result
     }
 
+    /// Include the line at both endpoints: deleting a newline also changes the
+    /// line that follows it. Foundation handles CRLF and Unicode line endings.
+    func linesTouched(by range: NSRange) throws -> NSRange {
+        let end = try Self.validatedEnd(of: range, length: sourceLength)
+        let first = source.lineRange(for: NSRange(location: range.location, length: 0))
+        let last = source.lineRange(for: NSRange(location: end, length: 0))
+        return NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+    }
+
     private static func validatedEnd(of range: NSRange, length: Int) throws -> Int {
         guard range.location >= 0, range.length >= 0, range.location <= length,
               range.length <= length - range.location

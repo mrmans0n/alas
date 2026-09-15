@@ -27,21 +27,41 @@ final class EditorDisplayDocument {
         storage.endEditing()
     }
 
-    /// Applies one committed source edit to an unhinted display. The caller
+    /// Applies one committed source edit, optionally retaining hints outside
+    /// touched lines as presentation only. The caller
     /// supplies the buffer's edit event, so unchanged prefix/suffix text need
     /// not be copied or compared. Reloads and uncertain revisions rebuild.
-    func applySourceEdit(_ edit: EditorTextEdit, source: NSAttributedString, revision: Int) -> Bool {
-        guard map.hintRuns.isEmpty, revision == map.revision &+ 1,
+    func applySourceEdit(_ edit: EditorTextEdit, source: NSAttributedString, revision: Int, preservingUneditedLineHints: Bool = false) -> Bool {
+        guard (map.hintRuns.isEmpty || preservingUneditedLineHints), revision == map.revision &+ 1,
               (try? map.displaySegments(forSource: edit.oldRange)) != nil,
               source.length >= map.sourceLength - edit.oldLength,
-              source.length - (map.sourceLength - edit.oldLength) == edit.newLength,
-              let replacementMap = try? EditorDisplayMap(source: source.string, revision: revision, hints: []),
-              (try? replacementMap.displaySegments(forSource: edit.newRange)) != nil else { return false }
-        let replacement = source.attributedSubstring(from: edit.newRange)
-        guard EditorSourceText.exactlyEqual(replacement.string, edit.replacementText) else { return false }
+              source.length - (map.sourceLength - edit.oldLength) == edit.newLength else { return false }
+        var retained: [EditorDisplayHint] = []
+        var start = edit.location
+        var end = NSMaxRange(edit.oldRange)
+        if !map.hintRuns.isEmpty {
+            guard let touched = try? map.linesTouched(by: edit.oldRange) else { return false }
+            for run in map.hintRuns {
+                let hint = run.hint
+                let offset = hint.sourceOffset
+                if NSLocationInRange(offset, touched) || offset == map.sourceLength && NSMaxRange(touched) == offset {
+                    start = min(start, offset)
+                    end = max(end, offset)
+                } else {
+                    retained.append(.init(id: hint.id, sourceOffset: offset < edit.location ? offset : offset + edit.newLength - edit.oldLength,
+                                          label: hint.label, size: hint.size, parts: hint.parts, fontSize: hint.fontSize))
+                }
+            }
+        }
+        guard let replacementMap = try? EditorDisplayMap(source: source.string, revision: revision, hints: retained),
+              (try? replacementMap.displaySegments(forSource: edit.newRange)) != nil,
+              let displayStart = try? map.displayOffset(forSource: start, affinity: .beforeHints),
+              let displayEnd = try? map.displayOffset(forSource: end, affinity: .afterHints),
+              EditorSourceText.exactlyEqual(source.attributedSubstring(from: edit.newRange).string, edit.replacementText) else { return false }
+        let replacement = source.attributedSubstring(from: NSRange(location: start, length: end - start + edit.newLength - edit.oldLength))
         storage.beginEditing()
         map = replacementMap
-        storage.replaceCharacters(in: edit.oldRange, with: replacement)
+        storage.replaceCharacters(in: NSRange(location: displayStart, length: displayEnd - displayStart), with: replacement)
         storage.endEditing()
         return true
     }

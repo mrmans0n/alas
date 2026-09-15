@@ -22,7 +22,7 @@ final class EditorInlayLayout {
         textView.inlayHoverHandler = { [weak self] point in self?.hover(at: point) ?? false }
         textView.inlayClickHandler = { [weak self] point in self?.click(at: point) ?? false }
         textView.inlayAccessibilityActions = { [weak self] id in
-            guard let self, hints[id] != nil else { return [] }
+            guard let self, current, hints[id] != nil else { return [] }
             return [NSAccessibilityCustomAction(name: "Show hint actions") { [weak self] in
                 guard let self, current, hints[id] != nil else { return false }
                 showActions(id: id, part: nil)
@@ -37,6 +37,13 @@ final class EditorInlayLayout {
 
     func clear() {
         let hadHints = !hints.isEmpty
+        invalidateActions()
+        guard let adapter = textView?.displayAdapter, hadHints || !adapter.document.map.hintRuns.isEmpty else { return }
+        try? adapter.updateHints([], revision: adapter.buffer.editGeneration)
+    }
+
+    /// Retained decorations are not valid protocol anchors until refreshed.
+    func invalidateActions() {
         generation = UUID()
         resolveTask?.cancel()
         resolveTask = nil
@@ -45,8 +52,6 @@ final class EditorInlayLayout {
         hints = [:]
         menuTargets = []
         textView?.toolTip = nil
-        guard let adapter = textView?.displayAdapter, hadHints || !adapter.document.map.hintRuns.isEmpty else { return }
-        try? adapter.updateHints([], revision: adapter.buffer.editGeneration)
     }
 
     func replace(_ values: [LSPInlayHint], revision: Int, settings: InlayHintSettings) throws {

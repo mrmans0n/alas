@@ -1094,7 +1094,8 @@ final class CodeEditorCoordinator {
         hover?.notifyCaretChanged()
         definition?.notifyCaretChanged()
         codeActionsFeature?.invalidatePicker()
-        inlayFeature?.invalidate()
+        inlayLayout?.invalidateActions()
+        inlayFeature?.invalidate(preservingPresentation: edit != nil)
         semanticFeature?.invalidate()
         if let worktreeID = currentWorktreeId {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()

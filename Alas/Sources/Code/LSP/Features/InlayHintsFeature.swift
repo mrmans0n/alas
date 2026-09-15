@@ -21,7 +21,7 @@ struct InlayHintSettings: Codable, Equatable, Sendable {
 }
 
 /// One active request and one replaceable pending viewport. Source invalidation
-/// clears immediately; presentation changes never advance source freshness.
+/// rejects old replies immediately; presentation may survive until refresh.
 @MainActor
 final class InlayHintsFeature {
     private let request: (NSRange) async -> [LSPInlayHint]?
@@ -31,6 +31,7 @@ final class InlayHintsFeature {
     private var pending: (range: NSRange, deadline: ContinuousClock.Instant, generation: Int)?
     private var worker: Task<Void, Never>?
     private var workerID = UUID()
+    private var presentationExpiry: Task<Void, Never>?
 
     init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint]) -> Void, clear: @escaping () -> Void) {
         self.request = request
@@ -58,15 +59,33 @@ final class InlayHintsFeature {
                 let result = await request(next.range)
                 guard !Task.isCancelled else { return }
                 guard generation == next.generation else { continue }
+                cancelPresentationExpiry()
                 if let result { apply(result) } else { clear() }
             }
         }
     }
 
-    func invalidate() {
+    func invalidate(preservingPresentation: Bool = false) {
         generation &+= 1
         pending = nil
-        clear()
+        if !preservingPresentation {
+            cancelPresentationExpiry()
+            clear()
+        } else if presentationExpiry == nil {
+            // Repeated edits must not keep old labels alive indefinitely when
+            // synchronization or the server stalls. Fresh results cancel this.
+            presentationExpiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                presentationExpiry = nil
+                clear()
+            }
+        }
+    }
+
+    private func cancelPresentationExpiry() {
+        presentationExpiry?.cancel()
+        presentationExpiry = nil
     }
 
     func stop() {
