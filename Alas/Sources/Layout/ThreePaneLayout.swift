@@ -5,9 +5,9 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     @Binding var rightWidth: Double
     let sidebarVisible: Bool
     let rightVisible: Bool
-    /// Width of the rail strip drawn in place of a hidden right pane. `nil`
-    /// hides the right pane entirely, which is the long-standing behavior.
-    var rightCollapsedWidth: Double? = nil
+    /// Width of the permanent rail strip drawn in place of a hidden right
+    /// pane. `nil` means there is no selected right-pane host to mount it.
+    var collapsedRailWidth: Double? = nil
     let onWidthsChanged: () -> Void
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let center: (_ rightVisible: Bool) -> Center
@@ -39,7 +39,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 preferredRightWidth: transientRightWidth ?? rightWidth,
                 sidebarPreferredVisible: sidebarVisible,
                 rightPreferredVisible: rightVisible,
-                railWidth: rightCollapsedWidth,
+                collapsedRailWidth: collapsedRailWidth,
                 configuration: ThreePaneSizing.Configuration(
                     sidebarMin: sidebarMin,
                     sidebarMax: sidebarMax,
@@ -141,10 +141,10 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                             }
                         )
                     }
-                    // With the rail enabled this `if` never toggles on
+                    // With the permanent rail this `if` never toggles on
                     // collapse — only the frame width animates, and the rail
                     // host slides its own body under the rail. The transition
-                    // covers the rail-less pane, which leaves the tree.
+                    // covers the pane when no right-pane host exists.
                     right(!sizing.rightVisible)
                         .frame(width: CGFloat(sizing.rightVisible ? alignedRightWidth : railSizing.railWidth))
                         .frame(maxHeight: .infinity)

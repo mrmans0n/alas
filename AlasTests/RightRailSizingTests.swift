@@ -18,7 +18,7 @@ struct RightRailSizingTests {
     private func calculate(
         availableWidth: Double,
         rightPreferredVisible: Bool,
-        railWidth: Double?
+        collapsedRailWidth: Double?
     ) -> RightRailSizing.Result {
         RightRailSizing.calculate(
             availableWidth: availableWidth,
@@ -26,23 +26,13 @@ struct RightRailSizingTests {
             preferredRightWidth: 320,
             sidebarPreferredVisible: true,
             rightPreferredVisible: rightPreferredVisible,
-            railWidth: railWidth,
+            collapsedRailWidth: collapsedRailWidth,
             configuration: config
         )
     }
 
-    @Test func flagOffNeverReservesRailWidth() {
-        let hidden = calculate(availableWidth: 1_200, rightPreferredVisible: false, railWidth: nil)
-        #expect(hidden.railWidth == 0)
-        #expect(hidden.sizing.rightVisible == false)
-
-        let shown = calculate(availableWidth: 1_200, rightPreferredVisible: true, railWidth: nil)
-        #expect(shown.railWidth == 0)
-        #expect(shown.sizing.rightVisible == true)
-    }
-
     @Test func expandedPaneKeepsTheRailInsideItsOwnWidth() {
-        let result = calculate(availableWidth: 1_200, rightPreferredVisible: true, railWidth: 36)
+        let result = calculate(availableWidth: 1_200, rightPreferredVisible: true, collapsedRailWidth: 36)
 
         #expect(result.railWidth == 0)
         #expect(result.sizing.rightVisible == true)
@@ -51,7 +41,7 @@ struct RightRailSizingTests {
     }
 
     @Test func collapsedPaneReservesTheRailAndGivesTheRestToCenter() {
-        let result = calculate(availableWidth: 1_200, rightPreferredVisible: false, railWidth: 36)
+        let result = calculate(availableWidth: 1_200, rightPreferredVisible: false, collapsedRailWidth: 36)
 
         #expect(result.railWidth == 36)
         #expect(result.sizing.rightVisible == false)
@@ -63,7 +53,7 @@ struct RightRailSizingTests {
     @Test func narrowWindowAutoCollapseStillReservesTheRail() {
         // Too narrow for sidebar + center + right at their minimums, so
         // ThreePaneSizing drops the right pane on its own.
-        let result = calculate(availableWidth: 800, rightPreferredVisible: true, railWidth: 36)
+        let result = calculate(availableWidth: 800, rightPreferredVisible: true, collapsedRailWidth: 36)
 
         #expect(result.sizing.rightVisible == false)
         #expect(result.railWidth == 36)
@@ -71,7 +61,7 @@ struct RightRailSizingTests {
     }
 
     @Test func aZeroOrNegativeRailWidthIsTreatedAsNoRail() {
-        let result = calculate(availableWidth: 1_200, rightPreferredVisible: false, railWidth: 0)
+        let result = calculate(availableWidth: 1_200, rightPreferredVisible: false, collapsedRailWidth: 0)
         #expect(result.railWidth == 0)
         #expect(isApproximatelyEqual(result.sizing.centerWidth, 950))
     }

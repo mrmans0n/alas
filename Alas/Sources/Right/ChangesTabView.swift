@@ -104,7 +104,7 @@ struct ChangesTabView: View {
                 },
                 // The rail presentation drops the scroller: against a 36pt rail
                 // and a narrow pane, a permanent scroller reads as clutter.
-                hidesScroller: appState.config.rightPaneRailEnabled
+                hidesScroller: true
             )
             if isGGDrawerActive, rps.attentionRevealedTarget != nil {
                 Button("Back to stack") { rps.endAttentionReveal() }

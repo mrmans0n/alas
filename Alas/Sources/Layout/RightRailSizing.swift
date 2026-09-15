@@ -13,7 +13,8 @@ enum RightRailSizing {
     struct Result: Equatable {
         var sizing: ThreePaneSizing.Result
         /// Width of the standalone rail strip. Zero when no strip is drawn,
-        /// either because the flag is off or because the body is expanded.
+        /// because no selected right-pane host exists or because the body is
+        /// expanded.
         var railWidth: Double
     }
 
@@ -23,7 +24,7 @@ enum RightRailSizing {
         preferredRightWidth: Double,
         sidebarPreferredVisible: Bool,
         rightPreferredVisible: Bool,
-        railWidth: Double?,
+        collapsedRailWidth: Double?,
         configuration: ThreePaneSizing.Configuration
     ) -> Result {
         let sizing = ThreePaneSizing.calculate(
@@ -35,18 +36,18 @@ enum RightRailSizing {
             configuration: configuration
         )
 
-        guard let railWidth, railWidth > 0, !sizing.rightVisible else {
+        guard let collapsedRailWidth, collapsedRailWidth > 0, !sizing.rightVisible else {
             return Result(sizing: sizing, railWidth: 0)
         }
 
         let reduced = ThreePaneSizing.calculate(
-            availableWidth: max(0, availableWidth - railWidth),
+            availableWidth: max(0, availableWidth - collapsedRailWidth),
             preferredSidebarWidth: preferredSidebarWidth,
             preferredRightWidth: preferredRightWidth,
             sidebarPreferredVisible: sidebarPreferredVisible,
             rightPreferredVisible: false,
             configuration: configuration
         )
-        return Result(sizing: reduced, railWidth: railWidth)
+        return Result(sizing: reduced, railWidth: collapsedRailWidth)
     }
 }

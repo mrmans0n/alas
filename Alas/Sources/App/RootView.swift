@@ -169,6 +169,8 @@ struct RootView: View {
             )
         } else {
             let rightPaneSelection = rightPaneSelectionState
+            let rightPaneRailExists = rightPaneSelection.showsRightPane
+                && !state.suppressesRestoredRightPaneAfterAbandonedStartup
             ThreePaneLayout(
                 sidebarWidth: Binding(
                     get: { state.config.sidebarWidth },
@@ -182,15 +184,18 @@ struct RootView: View {
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
-                rightCollapsedWidth: state.config.rightPaneRailEnabled
-                    && rightPaneSelection.showsRightPane
+                collapsedRailWidth: rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup
                     ? Double(RightPaneRail.width)
                     : nil,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { effectiveRightPaneVisible in
-                    centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+                    centerContent(
+                        effectiveRightPaneVisible: effectiveRightPaneVisible,
+                        hasRightPaneRail: rightPaneRailExists,
+                        rightPaneStartupSuppressed: state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    )
                 },
                 right: { collapsed in rightContent(selection: rightPaneSelection, collapsed: collapsed) }
             )
@@ -283,12 +288,24 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
-        worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+    private func centerContent(
+        effectiveRightPaneVisible: Bool,
+        hasRightPaneRail: Bool,
+        rightPaneStartupSuppressed: Bool
+    ) -> some View {
+        worktreeCenterContent(
+            effectiveRightPaneVisible: effectiveRightPaneVisible,
+            hasRightPaneRail: hasRightPaneRail,
+            rightPaneStartupSuppressed: rightPaneStartupSuppressed
+        )
     }
 
     @ViewBuilder
-    private func worktreeCenterContent(effectiveRightPaneVisible: Bool) -> some View {
+    private func worktreeCenterContent(
+        effectiveRightPaneVisible: Bool,
+        hasRightPaneRail: Bool,
+        rightPaneStartupSuppressed: Bool
+    ) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,
@@ -304,7 +321,9 @@ struct RootView: View {
                 worktree: wt,
                 sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
                 allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                effectiveRightPaneVisible: effectiveRightPaneVisible
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
             )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)
@@ -343,7 +362,9 @@ struct RootView: View {
                     worktree: fallback,
                     sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
                     allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                    effectiveRightPaneVisible: effectiveRightPaneVisible
+                    effectiveRightPaneVisible: effectiveRightPaneVisible,
+                    hasRightPaneRail: hasRightPaneRail,
+                    rightPaneStartupSuppressed: rightPaneStartupSuppressed
                 )
             } else {
                 EmptyTabView(

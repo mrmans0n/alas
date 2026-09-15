@@ -184,68 +184,36 @@ struct RightPaneView: View {
 
     @ViewBuilder
     private func presentation(rps: RightPaneState) -> some View {
-        if state.config.rightPaneRailEnabled {
-            HStack(spacing: 0) {
-                if !collapsed {
-                    VStack(spacing: 0) {
-                        paneToolbar(rps: rps)
-                        // Hides the indicators of every SwiftUI ScrollView in
-                        // the tab bodies (Files, Agent, Run). The Changes tab
-                        // scrolls through AppKit, which this cannot reach — it
-                        // opts out via `AppKitDiffScroller.hidesScroller`.
-                        tabContent(rps: rps)
-                            .scrollIndicators(.hidden)
-                    }
-                    // The rail stays put at the window edge; the body keeps
-                    // its last frame on removal and slides under the rail
-                    // while the center grows over its other side.
-                    .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { railBodyWidth = $0 }
-                    .transition(PaneCollapseMotion.transition(
-                        edge: .trailing,
-                        width: railBodyWidth,
-                        reduceMotion: reduceMotion
-                    ))
-                }
-                RightPaneRail(
-                    activeTab: rps.activeTab,
-                    collapsed: collapsed,
-                    changesCount: rps.displayChanges.count,
-                    activeAgentCount: agentRollup.active.count,
-                    activeRunCount: runningScriptNames.count,
-                    showRunTab: state.config.runTabEnabled,
-                    onAction: { action in handle(action, rps: rps) }
-                )
-            }
-        } else {
-            VStack(spacing: 0) {
-                RightPaneTabBar(
-                    activeTab: Binding(
-                        get: { rps.activeTab },
-                        set: { rps.activeTab = $0 }
-                    ),
-                    changesCount: rps.displayChanges.count,
-                    totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
-                    totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
-                    onHidePane: {
-                        state.config.rightPaneVisible = false
-                        state.saveConfig()
-                    },
-                    showIgnored: state.config.files.showIgnored,
-                    onToggleShowIgnored: {
-                        state.config.files.showIgnored.toggle()
-                        state.saveConfig()
-                    },
-                    showRunTab: state.config.runTabEnabled,
-                    activeRunCount: state.runRecords
-                        .records(worktreeID: worktree.id)
-                        .count { $0.status.isActive },
-                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
-                )
-                if rps.activeTab == .run {
+        HStack(spacing: 0) {
+            if !collapsed {
+                VStack(spacing: 0) {
                     paneToolbar(rps: rps)
+                    // Hides the indicators of every SwiftUI ScrollView in
+                    // the tab bodies (Files, Agent, Run). The Changes tab
+                    // scrolls through AppKit, which this cannot reach — it
+                    // opts out via `AppKitDiffScroller.hidesScroller`.
+                    tabContent(rps: rps)
+                        .scrollIndicators(.hidden)
                 }
-                tabContent(rps: rps)
+                // The rail stays put at the window edge; the body keeps
+                // its last frame on removal and slides under the rail
+                // while the center grows over its other side.
+                .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { railBodyWidth = $0 }
+                .transition(PaneCollapseMotion.transition(
+                    edge: .trailing,
+                    width: railBodyWidth,
+                    reduceMotion: reduceMotion
+                ))
             }
+            RightPaneRail(
+                activeTab: rps.activeTab,
+                collapsed: collapsed,
+                changesCount: rps.displayChanges.count,
+                activeAgentCount: agentRollup.active.count,
+                activeRunCount: runningScriptNames.count,
+                showRunTab: state.config.runTabEnabled,
+                onAction: { action in handle(action, rps: rps) }
+            )
         }
     }
 
