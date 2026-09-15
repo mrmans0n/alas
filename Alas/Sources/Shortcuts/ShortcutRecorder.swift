@@ -33,13 +33,10 @@ final class ShortcutRecorderSession {
     typealias CancelCallback = () -> Void
     typealias FlagsCallback = ([ShortcutBinding.Modifier]) -> Void
 
-    // `keyMonitor` and `flagsMonitor` hold opaque tokens from
-    // `NSEvent.addLocalMonitorForEvents`. Marked `nonisolated(unsafe)` so the
-    // (nonisolated) `deinit` can call `NSEvent.removeMonitor` on them; all live
-    // accesses go through MainActor-isolated methods, so concurrent reads/writes
-    // are not possible in practice.
-    nonisolated(unsafe) private var keyMonitor: Any?
-    nonisolated(unsafe) private var flagsMonitor: Any?
+    // Opaque tokens from `NSEvent.addLocalMonitorForEvents`. Their full
+    // lifecycle, including teardown, stays on the main actor.
+    private var keyMonitor: Any?
+    private var flagsMonitor: Any?
     private let onCapture: Callback
     private let onCancel: CancelCallback
     private let onFlagsChanged: FlagsCallback
@@ -79,7 +76,7 @@ final class ShortcutRecorderSession {
         teardownMonitors()
     }
 
-    deinit {
+    isolated deinit {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
     }
