@@ -4,6 +4,32 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.6] - 2026-09-15
+
+### ✨ Features
+
+- Allow projects to override the default agent used for new worktrees, the agent launcher, and run-script writing help (#1243).
+
+### 🚀 Performance
+
+- Reduce editor repaint and scroll-anchor layout work (#1233).
+- Apply ordinary editor source edits incrementally (#1235).
+- Update editor line offsets incrementally for source edits (#1238).
+- Keep untouched inlay hints stable while typing (#1239).
+- Limit editor highlight invalidation to affected display ranges (#1241).
+
+### 🐛 Fixes
+
+- Prevent file-watcher crashes under Swift 6 (#1237).
+- Prevent FSEvents watcher teardown from trapping on its background queue under Swift 6 (#1244).
+- Restore nested sidebar context menus (#1240).
+- Keep worktree rows stable when agent badges appear or disappear (#1242).
+
+### 🏗️ Internal
+
+- Adopt Swift 6 language mode (#1234).
+- Update the LSP root-exit test for the scoped-lock implementation (#1236).
+
 ## [0.17.5] - 2026-09-15
 
 ### ✨ Features
