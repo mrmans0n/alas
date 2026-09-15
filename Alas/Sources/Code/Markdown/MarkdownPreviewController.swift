@@ -17,7 +17,7 @@ final class MarkdownPreviewController: NSObject {
 
     private let imageLoader = MarkdownImageLoader()
     private let mermaidCoordinator: MermaidAttachmentCoordinator
-    private nonisolated(unsafe) var anchorObserver: NSObjectProtocol?
+    private var anchorObserver: NSObjectProtocol?
     private(set) var lastAppliedRevision: UUID?
 
     init(
@@ -207,7 +207,7 @@ final class MarkdownPreviewController: NSObject {
         return found
     }
 
-    deinit {
+    isolated deinit {
         if let anchorObserver {
             NotificationCenter.default.removeObserver(anchorObserver)
         }
