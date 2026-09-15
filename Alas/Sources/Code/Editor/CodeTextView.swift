@@ -156,7 +156,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var decreaseFontSizeHandler: (() -> Void)?
     var resetFontSizeHandler: (() -> Void)?
     var editorCommandRouter: EditorCommandRouter?
-    private var commandStatusPopover: NSPopover?
+    weak var notificationStore: InAppNotificationStore?
+    var notificationWorktreeID: String?
 
     private var multiCursorSelectedRanges: [NSValue]?
     private var possibleColumnSelectionDrag: ColumnSelectionDrag?
@@ -317,19 +318,11 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         hoverHandler?(NSPoint(x: rect.midX, y: rect.midY))
     }
 
-    func showCommandStatus(_ message: String) {
-        commandStatusPopover?.close()
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = NSViewController()
-        popover.contentViewController?.view = NSTextField(labelWithString: message)
-        popover.contentViewController?.view.frame = NSRect(x: 0, y: 0, width: 220, height: 28)
-        let range = sourceSelectedRange
-        let rect = (TextEditCoordinates.lspPosition(utf16Offset: range.location, in: sourceString)).flatMap(firstRect(for:))
-            ?? NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
-        popover.show(relativeTo: rect, of: self, preferredEdge: .maxY)
-        commandStatusPopover = popover
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak popover] in popover?.close() }
+    @discardableResult
+    func showCommandStatus(_ message: String, severity: InAppNotificationSeverity = .error,
+                           cancel: (() -> Void)? = nil) -> UUID? {
+        guard let notificationWorktreeID else { return nil }
+        return notificationStore?.post(message, severity: severity, worktreeID: notificationWorktreeID, cancel: cancel)
     }
 
     private static func editorCommand(for selector: Selector?) -> EditorCommandID? {

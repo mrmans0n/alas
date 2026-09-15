@@ -67,9 +67,7 @@ final class CodeActionsFeature {
         task = Task { [weak self] in
             guard let self else { return }
             guard let (client, context) = await synchronize(range), id == generation, isCurrent(context) else {
-                if id == generation { model.isLoading = false
-                    model.message = "Language server unavailable"
-                }
+                if id == generation { finishPicker("Language server unavailable") }
                 return
             }
             let generations = tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
@@ -77,12 +75,15 @@ final class CodeActionsFeature {
             do {
                 guard await client.capabilities.supports(.codeActions) else {
                     guard id == generation, isCurrent(context) else { return }
-                    model.isLoading = false
-                    model.message = "Code actions are not supported by this server"
+                    finishPicker("Code actions are not supported by this server")
                     return
                 }
                 let actions = try await client.codeActions(uri: context.document.uri, range: context.range, diagnostics: selectedDiagnostics, only: only)
                 guard !Task.isCancelled, id == generation, isCurrent(context) else { return }
+                guard !actions.isEmpty else {
+                    finishPicker("No code actions available", severity: .information)
+                    return
+                }
                 model.rows = actions.map { .init(action: $0) }
                 model.isLoading = false
                 model.select = { [weak self] action in
@@ -93,8 +94,8 @@ final class CodeActionsFeature {
                 }
             } catch {
                 guard id == generation, isCurrent(context) else { return }
-                model.isLoading = false
-                model.message = RenameFeature.message(for: error)
+                guard !Task.isCancelled else { return }
+                finishPicker(RenameFeature.message(for: error))
             }
         }
     }
@@ -154,7 +155,12 @@ final class CodeActionsFeature {
                 })
             })
             guard id == generation else { return }
-            showStatus(result.failureReason ?? (result.applied ? "Code action completed" : "Code action cancelled"))
+            if result == .cancelled {
+                showStatus("Code action cancelled", severity: .information)
+            } else {
+                showStatus(result.failureReason ?? (result.applied ? "Code action completed" : "Code action cancelled"),
+                           severity: result.applied ? .success : result.failureReason == nil ? .information : .error)
+            }
         } catch { if id == generation { showStatus(RenameFeature.message(for: error)) } }
     }
 
@@ -183,9 +189,14 @@ final class CodeActionsFeature {
         await task?.value
     }
 
-    private func showStatus(_ message: String) {
-        guard let textView, textView.window != nil else { return }
-        textView.showCommandStatus(message)
+    private func showStatus(_ message: String, severity: InAppNotificationSeverity = .error) {
+        textView?.showCommandStatus(message, severity: severity)
+    }
+
+    private func finishPicker(_ message: String, severity: InAppNotificationSeverity = .error) {
+        popover?.close()
+        popover = nil
+        showStatus(message, severity: severity)
     }
 
     private func isCurrent(_ session: CodeActionContext, id: UUID) -> Bool {
