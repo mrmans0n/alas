@@ -60,7 +60,7 @@ struct SidebarView: View {
                     onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
-                    ScrollView(.vertical, showsIndicators: true) {
+                    ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 8) {
                             WorkspaceSidebarTree(
                                 state: state,
@@ -216,7 +216,10 @@ struct SidebarView: View {
                                     return true
                                 }
                         }
-                        .padding(.top, 8)
+                        .padding(.top, 6)
+                        .padding(.horizontal, 8)
+                        // Leaves room below the last repo for the drop target.
+                        .padding(.bottom, 20)
                     }
                 }
                 if state.spacesManager.shouldShowSpaceAffordance {
