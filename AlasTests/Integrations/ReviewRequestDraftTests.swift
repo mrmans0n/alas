@@ -4,6 +4,7 @@ import SwiftUI
 import Testing
 @testable import Alas
 
+@MainActor
 struct ReviewRequestDraftTests {
     @Test func draftReviewRequestDraftSessionIDUsesBaseAndHeadBranches() {
         let sessionID = DraftReviewRequestTabView.reviewDraftSessionID(
