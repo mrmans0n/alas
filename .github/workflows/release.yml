@@ -24,8 +24,9 @@ jobs:
     runs-on: macos-26
     # Each matrix leg has two notarytool --wait --timeout 30m calls (one .app
     # and one DMG). Worst-case notary time alone is 60 min if Apple's queue is
-    # slow on both submissions. 90 min leaves headroom for build/package/upload.
-    timeout-minutes: 90
+    # slow on both submissions. Intel release builds can also approach 90 min
+    # on cold runners, so 150 min leaves headroom for build/package/upload.
+    timeout-minutes: 150
     env:
       GIT_TERMINAL_PROMPT: "0"
       GIT_ASKPASS: "/usr/bin/true"

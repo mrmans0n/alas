@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.8] - 2026-09-16
+
+### 🐛 Fixes
+
+- Make Ghostty runtime callbacks executor-safe under Swift 6 (#1252).
+- Synchronize cross-thread ACP terminal, Mermaid layout, and pasteboard callback state (#1253).
+- Keep shortcut and Markdown preview resources confined to the main actor through teardown (#1254).
+
+### 🏗️ Internal
+
+- Increase the release workflow timeout to accommodate signed Intel builds.
+
 ## [0.17.7] - 2026-09-15
 
 ### ✨ Features
