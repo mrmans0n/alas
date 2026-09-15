@@ -26,6 +26,53 @@ struct ProjectConfigTests {
         #expect(file.projects[0].mcpServers == [])
     }
 
+    @Test func decodingOlderProjectsFileSuppliesEmptyFileBookmarks() throws {
+        // Older projects.json files predate fileBookmarks.
+        let json = """
+        {
+          "version": 1,
+          "projects": [{
+            "id": "abc",
+            "name": "alpha",
+            "path": "/tmp/alpha",
+            "color": "#5fb7c4",
+            "addedAt": 0
+          }]
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let file = try decoder.decode(ProjectsFile.self, from: json)
+        #expect(file.projects[0].fileBookmarks == [])
+    }
+
+    @Test func roundTripPreservesFileBookmarkOrder() throws {
+        let project = ProjectConfig(
+            id: "abc", name: "alpha", path: "/tmp/alpha",
+            color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0),
+            fileBookmarks: ["Sources/Center", "docs"]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(ProjectsFile(projects: [project]))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(ProjectsFile.self, from: data)
+        #expect(decoded.projects[0].fileBookmarks == ["Sources/Center", "docs"])
+    }
+
+    @Test func encodingOmitsFileBookmarksWhenEmpty() throws {
+        let project = ProjectConfig(
+            id: "abc", name: "alpha", path: "/tmp/alpha",
+            color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(ProjectsFile(projects: [project]))
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(!json.contains("fileBookmarks"))
+    }
+
     @Test func roundTripPreservesHiddenPaths() throws {
         let cachedWorktree = Worktree(
             id: "/tmp/alpha/wt-a",

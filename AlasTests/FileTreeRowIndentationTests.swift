@@ -4,9 +4,9 @@ import Testing
 
 struct FileTreeRowIndentationTests {
     @Test func filesTabRowsUseOneIndentStepPerDepth() {
-        #expect(FilesTabView.rowLeadingPadding(depth: 0) == 12)
-        #expect(FilesTabView.rowLeadingPadding(depth: 1) == 26)
-        #expect(FilesTabView.messageLeadingPadding(depth: 1) == 26)
+        #expect(FileTreeListView.rowLeadingPadding(depth: 0) == 12)
+        #expect(FileTreeListView.rowLeadingPadding(depth: 1) == 26)
+        #expect(FileTreeListView.messageLeadingPadding(depth: 1) == 26)
     }
 
     @Test func workingTreeRowsUseOneIndentStepPerDepth() {

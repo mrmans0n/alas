@@ -128,7 +128,7 @@ struct FileTreeNode: Identifiable, Equatable, Codable {
     /// `GitService.fileTree`'s `hasVisibleDescendant` check); a node whose
     /// `children` is nil (lazy, not-yet-loaded) is treated as having none.
     ///
-    /// Shared by `FilesTabView.filteredNodes` (native desktop Files tab) and
+    /// Shared by `FileTreeListView.filteredNodes` (native desktop Files tab) and
     /// `AppState.remoteFileNodes` (remote wire boundary) so both surfaces
     /// keep such a directory reachable, without the data-layer function
     /// depending on a SwiftUI view type.

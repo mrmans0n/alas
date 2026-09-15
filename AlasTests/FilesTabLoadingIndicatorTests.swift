@@ -23,22 +23,22 @@ struct FilesTabLoadingIndicatorTests {
             childrenState: .loading
         )
 
-        #expect(FilesTabView.showsInlineLoadingIndicator(
+        #expect(FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: true,
             canExpand: true
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: false,
             canExpand: true
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: true,
             canExpand: false
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingFile,
             open: true,
             canExpand: true
@@ -57,7 +57,7 @@ struct FilesTabLoadingIndicatorTests {
                 childrenState: state
             )
 
-            #expect(!FilesTabView.showsInlineLoadingIndicator(
+            #expect(!FileTreeListView.showsInlineLoadingIndicator(
                 for: node,
                 open: true,
                 canExpand: true

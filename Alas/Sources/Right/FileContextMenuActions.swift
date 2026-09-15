@@ -20,6 +20,8 @@ struct FileContextMenuTarget: Equatable {
 enum FileContextMenuAction: Hashable {
     case newFile, newFolder, openInAlas, open, openWith, viewAtHEAD, compareWithHEAD
     case fileHistory, copyRelativePath, copyFullPath, revealInFinder
+    /// Files-tab bookmarking. The payload picks the add/remove wording.
+    case toggleBookmark(isBookmarked: Bool)
 }
 
 struct FileContextMenuConfiguration: Equatable {
@@ -34,7 +36,9 @@ struct FileContextMenuConfiguration: Equatable {
         return Self(target: target, actions: actions)
     }
 
-    static func filesTab(target: FileContextMenuTarget) -> Self {
+    /// `isBookmarked` nil means the target cannot be bookmarked at all —
+    /// the worktree root, which the tab's background menu targets.
+    static func filesTab(target: FileContextMenuTarget, isBookmarked: Bool? = nil) -> Self {
         var actions: [FileContextMenuAction] = []
         if target.kind == .dir { actions += [.newFile, .newFolder] }
         if target.kind == .file { actions.append(.openInAlas) }
@@ -43,6 +47,7 @@ struct FileContextMenuConfiguration: Equatable {
             if target.kind == .file { actions.append(.openWith) }
         }
         if target.kind == .file { actions.append(.fileHistory) }
+        if let isBookmarked { actions.append(.toggleBookmark(isBookmarked: isBookmarked)) }
         actions += [.copyRelativePath, .copyFullPath]
         if target.localURL != nil { actions.append(.revealInFinder) }
         return Self(target: target, actions: actions)
@@ -61,6 +66,7 @@ struct FileContextMenuActions: View {
     var onFileHistory: (() -> Void)? = nil
     var onCopyRelativePath: (() -> Void)? = nil
     var onCopyFullPath: (() -> Void)? = nil
+    var onToggleBookmark: (() -> Void)? = nil
 
     @ViewBuilder var body: some View {
         ForEach(configuration.actions, id: \.self) { action in
@@ -95,6 +101,11 @@ struct FileContextMenuActions: View {
             case .copyFullPath:
                 Button("Copy Full Path") { onCopyFullPath?() }
                     .disabled(onCopyFullPath == nil)
+            case .toggleBookmark(let isBookmarked):
+                Button(isBookmarked ? "Remove from Bookmarks" : "Add to Bookmarks") {
+                    onToggleBookmark?()
+                }
+                .disabled(onToggleBookmark == nil)
             case .revealInFinder:
                 if let url = configuration.target.localURL {
                     Button("Reveal in Finder") { FileSystemOpen.reveal(url: url) }

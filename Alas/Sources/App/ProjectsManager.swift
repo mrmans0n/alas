@@ -194,6 +194,24 @@ final class ProjectsManager {
         }
     }
 
+    // MARK: - Files-tab bookmarks
+
+    func fileBookmarks(projectId: String) -> [String] {
+        projects.first(where: { $0.id == projectId })?.fileBookmarks ?? []
+    }
+
+    /// Adds or removes a Files-tab bookmark. Callers persist via
+    /// `AppState.saveProjects()`.
+    func toggleFileBookmark(projectId: String, path: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].fileBookmarks = FileBookmarks.toggled(path, in: projects[idx].fileBookmarks)
+    }
+
+    func removeFileBookmark(projectId: String, path: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].fileBookmarks = FileBookmarks.removing(path, from: projects[idx].fileBookmarks)
+    }
+
     func removeGGWorktreeMode(projectId: String, worktreeId: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)

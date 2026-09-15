@@ -187,6 +187,12 @@ final class RightPaneState: GGSplitCommitServicing {
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
+    /// Expanded directories inside the bookmarks drawer. Separate from
+    /// `openPaths` so expanding a bookmark leaves the tree above it alone.
+    var bookmarkOpenPaths: Set<String> = []
+    /// Bookmark roots already seeded into `bookmarkOpenPaths`, so a root the
+    /// user collapses is not re-expanded on the next render.
+    private var seededBookmarkRoots: Set<String> = []
     var revealPath: String? = nil
     private(set) var revealTick: Int = 0
     private var pendingRevealForPaneMount = false
@@ -3205,6 +3211,28 @@ final class RightPaneState: GGSplitCommitServicing {
                 self.fileTree = result.nodes
                 logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    /// Bookmark roots start expanded. Seeding once (rather than on every
+    /// render) keeps a collapsed root collapsed, and dropping removed
+    /// bookmarks means re-adding one expands it again.
+    func syncBookmarkRoots(_ paths: [String]) {
+        for path in paths where !seededBookmarkRoots.contains(path) {
+            seededBookmarkRoots.insert(path)
+            bookmarkOpenPaths.insert(path)
+        }
+        seededBookmarkRoots.formIntersection(paths)
+    }
+
+    /// Walks each bookmark toward its node and starts the next directory load
+    /// it needs. The file tree loads lazily and the drawer renders no ancestor
+    /// rows of its own, so nothing else would pull those levels in. One level
+    /// advances per call; callers re-invoke as the tree changes.
+    func ensureBookmarkPathsLoaded(_ paths: [String]) {
+        for path in paths {
+            guard let pending = FileBookmarks.pendingLoadPath(for: path, in: fileTree) else { continue }
+            loadFileTreeChildren(path: pending)
         }
     }
 
