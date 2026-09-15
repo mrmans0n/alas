@@ -117,13 +117,15 @@ enum RunScriptStackDetector {
                         pyproject,
                         tool: "pytest",
                         includeOptionalDependencies: false,
-                        dependencyGroups: dependencyGroups
+                        dependencyGroups: dependencyGroups,
+                        includePoetryDependencies: pythonRunner == .poetry
                     ) || requirementsDeclarePythonTool(requirements, tool: "pytest"),
                     hasRuff: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "ruff",
                         includeOptionalDependencies: false,
-                        dependencyGroups: dependencyGroups
+                        dependencyGroups: dependencyGroups,
+                        includePoetryDependencies: pythonRunner == .poetry
                     ) || requirementsDeclarePythonTool(requirements, tool: "ruff")
                 ))
             case .django:
@@ -445,6 +447,10 @@ enum RunScriptStackDetector {
         fileManager: FileManager,
         toolchainEnvironment: GoToolchainEnvironment
     ) -> String? {
+        guard toolchainEnvironment.operatingSystem == GoToolchainEnvironment.hostOperatingSystem,
+              toolchainEnvironment.architecture == GoToolchainEnvironment.hostArchitecture
+        else { return nil }
+
         func fileText(_ relativePath: String) -> String? {
             guard let data = fileManager.contents(atPath: worktreeRoot.appendingPathComponent(relativePath).path) else { return nil }
             return String(decoding: data, as: UTF8.self)
@@ -1752,7 +1758,8 @@ enum RunScriptStackDetector {
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#),
            let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#),
            let falseBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if\s+false|unless\s+true)\b"#),
-           let postfixFalseBranchRegex = try? NSRegularExpression(pattern: #"\b(?:if\s+false|unless\s+true)\s*$"#)
+           let postfixFalseBranchRegex = try? NSRegularExpression(pattern: #"\b(?:if\s+false|unless\s+true)\s*$"#),
+           let deferredBlockRegex = try? NSRegularExpression(pattern: #"(^|[\s=])(?:(?:proc|lambda|Proc\.new)\s*(?:do|\{)|->\s*(?:do|\{))"#)
         else { return false }
         var blockStack: [Bool] = []
         let originalSegments = commentless.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
@@ -1778,6 +1785,10 @@ enum RunScriptStackDetector {
                 continue
             }
             if postfixFalseBranchRegex.firstMatch(in: segment, range: range) != nil {
+                continue
+            }
+            if deferredBlockRegex.firstMatch(in: segment, range: range) != nil {
+                blockStack.append(true)
                 continue
             }
             if !blockStack.contains(true), taskRegex.firstMatch(in: segment, range: range) != nil {
@@ -2109,7 +2120,8 @@ enum RunScriptStackDetector {
         _ pyproject: String,
         tool: String,
         includeOptionalDependencies: Bool,
-        dependencyGroups: Set<String>
+        dependencyGroups: Set<String>,
+        includePoetryDependencies: Bool
     ) -> Bool {
         let stripped = stripHashComments(pyproject)
         let optionalPoetryGroups = poetryOptionalGroups(in: stripped)
@@ -2130,11 +2142,13 @@ enum RunScriptStackDetector {
                     continue
                 }
                 if table.hasPrefix("tool.poetry.group."), table.hasSuffix(".dependencies") {
+                    guard includePoetryDependencies else { continue }
                     let group = table
                         .dropFirst("tool.poetry.group.".count)
                         .dropLast(".dependencies".count)
                     guard !optionalPoetryGroups.contains(String(group)) else { continue }
                 } else {
+                    guard includePoetryDependencies else { continue }
                     guard table == "tool.poetry.dev-dependencies" else { continue }
                 }
                 if tomlDependencyText(section.body, declares: tool) { return true }

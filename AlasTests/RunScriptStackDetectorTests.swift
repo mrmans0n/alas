@@ -1373,6 +1373,27 @@ struct RunScriptStackDetectorTests {
         #expect(aliasedBlock[.go]?.goRunTarget == nil)
     }
 
+    @Test func goDoesNotSelectRunForForeignTargetPlatforms() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "package main\n\nfunc main() {}\n", in: root)
+
+        let foreignTarget = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(
+                    minorVersion: 25,
+                    operatingSystem: "linux",
+                    architecture: GoToolchainEnvironment.hostArchitecture,
+                    architectureFeatures: []
+                )
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(foreignTarget[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1561,6 +1582,21 @@ struct RunScriptStackDetectorTests {
         try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
         try write("Rakefile", "def register_tasks\n  task :test do\n    ruby \"test/all_test.rb\"\n  end\nend\n", in: root)
 
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+    }
+
+    @Test func rubyIgnoresRakeTasksInsideUncalledProcAndLambdaBlocks() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
+        try write("Rakefile", "register = proc do\n  task :test\nend\n", in: root)
+
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "register = -> do\n  task :test\nend\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "register = lambda { task :test }\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
     }
 
@@ -1825,6 +1861,28 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func barePythonIgnoresPoetryDependencyTables() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [tool.poetry]
+            name = "lib"
+
+            [tool.poetry.group.test.dependencies]
+            pytest = "^8"
+
+            [tool.poetry.dev-dependencies]
+            ruff = "^0.8"
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
     }
 
     @Test func pythonIgnoresOptionalPoetryGroupsForToolAvailability() throws {
