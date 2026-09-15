@@ -55,9 +55,9 @@ struct GoToolchainEnvironment: Equatable, Sendable {
 /// Results follow `RunScriptStack.allCases` order so the picker is stable.
 enum RunScriptStackDetector {
     private struct PythonMarkerEnvironment {
-        let pythonVersion: String?
-        let pythonFullVersion: String?
-        let platformMachine: String?
+        var pythonVersion: String?
+        var pythonFullVersion: String?
+        var platformMachine: String?
 
         static let current = currentPythonMarkerEnvironment()
     }
@@ -90,6 +90,11 @@ enum RunScriptStackDetector {
         let pythonRunner: PythonRunner = entries.contains("uv.lock") ? .uv
             : entries.contains("poetry.lock") ? .poetry
             : .bare
+        let pythonMarkerEnvironment = pythonMarkerEnvironment(
+            worktreeRoot: worktreeRoot,
+            runner: pythonRunner,
+            contents: contents
+        )
         let hasRequirements = entries.contains("requirements.txt")
         let hasRails = isRegularFile("bin/rails")
         let hasArtisan = entries.contains("artisan")
@@ -146,15 +151,17 @@ enum RunScriptStackDetector {
                         tool: "pytest",
                         includeOptionalDependencies: false,
                         dependencyGroups: dependencyGroups,
-                        includePoetryDependencies: pythonRunner == .poetry
-                    ) || requirementsDeclarePythonTool(requirements, tool: "pytest"),
+                        includePoetryDependencies: pythonRunner == .poetry,
+                        environment: pythonMarkerEnvironment
+                    ) || requirementsDeclarePythonTool(requirements, tool: "pytest", environment: pythonMarkerEnvironment),
                     hasRuff: pyprojectDeclaresPythonTool(
                         pyproject,
                         tool: "ruff",
                         includeOptionalDependencies: false,
                         dependencyGroups: dependencyGroups,
-                        includePoetryDependencies: pythonRunner == .poetry
-                    ) || requirementsDeclarePythonTool(requirements, tool: "ruff")
+                        includePoetryDependencies: pythonRunner == .poetry,
+                        environment: pythonMarkerEnvironment
+                    ) || requirementsDeclarePythonTool(requirements, tool: "ruff", environment: pythonMarkerEnvironment)
                 ))
             case .django:
                 guard hasDjangoManage else { continue }
@@ -2316,7 +2323,8 @@ enum RunScriptStackDetector {
         tool: String,
         includeOptionalDependencies: Bool,
         dependencyGroups: Set<String>,
-        includePoetryDependencies: Bool
+        includePoetryDependencies: Bool,
+        environment: PythonMarkerEnvironment
     ) -> Bool {
         let stripped = stripHashComments(pyproject)
         let optionalPoetryGroups = poetryOptionalGroups(in: stripped)
@@ -2324,16 +2332,16 @@ enum RunScriptStackDetector {
             let table = section.name
             switch table {
             case "project":
-                if tomlKeyedDependencyText(section.body, declares: tool, keys: ["dependencies"]) { return true }
+                if tomlKeyedDependencyText(section.body, declares: tool, keys: ["dependencies"], environment: environment) { return true }
             case "build-system":
                 continue
             case "dependency-groups":
                 guard !dependencyGroups.isEmpty else { continue }
-                if tomlKeyedDependencyText(section.body, declares: tool, keys: Array(dependencyGroups)) { return true }
+                if tomlKeyedDependencyText(section.body, declares: tool, keys: Array(dependencyGroups), environment: environment) { return true }
             default:
                 if table.hasPrefix("project.optional-dependencies") {
                     guard includeOptionalDependencies else { continue }
-                    if tomlDependencyText(section.body, declares: tool) { return true }
+                    if tomlDependencyText(section.body, declares: tool, environment: environment) { return true }
                     continue
                 }
                 if table.hasPrefix("tool.poetry.group."), table.hasSuffix(".dependencies") {
@@ -2342,30 +2350,32 @@ enum RunScriptStackDetector {
                         .dropFirst("tool.poetry.group.".count)
                         .dropLast(".dependencies".count)
                     guard !optionalPoetryGroups.contains(String(group)) else { continue }
+                } else if table == "tool.poetry.dependencies" {
+                    guard includePoetryDependencies else { continue }
                 } else {
                     guard includePoetryDependencies else { continue }
                     guard table == "tool.poetry.dev-dependencies" else { continue }
                 }
-                if tomlDependencyText(section.body, declares: tool) { return true }
+                if tomlDependencyText(section.body, declares: tool, environment: environment) { return true }
             }
         }
         return false
     }
 
-    private static func requirementsDeclarePythonTool(_ requirements: String, tool: String) -> Bool {
+    private static func requirementsDeclarePythonTool(_ requirements: String, tool: String, environment: PythonMarkerEnvironment) -> Bool {
         return requirements.components(separatedBy: .newlines).contains { rawLine in
-            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            let line = stripPythonRequirementComment(rawLine)
                 .trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("-") else { return false }
-            return pythonDependencyString(line, declares: tool)
+            return pythonDependencyString(line, declares: tool, environment: environment)
         }
     }
 
-    private static func pythonDependencyString(_ text: String, declares tool: String) -> Bool {
+    private static func pythonDependencyString(_ text: String, declares tool: String, environment: PythonMarkerEnvironment) -> Bool {
         let normalizedTool = normalizedPythonPackageName(tool)
         let parts = text.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
         let requirement = parts[0].trimmingCharacters(in: .whitespaces)
-        if parts.count == 2, !pythonRequirementMarkerAllowsCurrentEnvironment(String(parts[1])) {
+        if parts.count == 2, !pythonRequirementMarker(String(parts[1]), allows: environment) {
             return false
         }
         let packageName = requirement.prefix { character in
@@ -2374,8 +2384,34 @@ enum RunScriptStackDetector {
         return normalizedPythonPackageName(String(packageName)) == normalizedTool
     }
 
-    private static func pythonRequirementMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
-        pythonMarkerAllowsCurrentEnvironment(marker)
+    private static func stripPythonRequirementComment(_ rawLine: some StringProtocol) -> String {
+        let line = String(rawLine)
+        guard let hashIndex = line.firstIndex(of: "#") else { return line }
+        if hashIndex == line.startIndex { return "" }
+        let before = line[line.startIndex..<hashIndex]
+        guard before.last?.isWhitespace == true else { return line }
+        return String(before)
+    }
+
+    private static func pythonRequirementMarker(_ marker: String, allows environment: PythonMarkerEnvironment) -> Bool {
+        pythonMarker(marker, allows: environment)
+    }
+
+    private static func pythonMarkerEnvironment(
+        worktreeRoot _: URL,
+        runner: PythonRunner,
+        contents: (String) -> String?
+    ) -> PythonMarkerEnvironment {
+        var environment = PythonMarkerEnvironment.current
+        guard runner == .uv,
+              let version = contents(".python-version")?.components(separatedBy: .newlines).first?
+              .trimmingCharacters(in: .whitespacesAndNewlines),
+              !version.isEmpty
+        else { return environment }
+
+        environment.pythonVersion = pythonMajorMinorVersion(version)
+        environment.pythonFullVersion = version
+        return environment
     }
 
     private static func currentPythonMarkerEnvironment() -> PythonMarkerEnvironment {
@@ -2412,13 +2448,13 @@ enum RunScriptStackDetector {
         return .init(pythonVersion: pythonVersion, pythonFullVersion: pythonFullVersion, platformMachine: platformMachine)
     }
 
-    private static func pythonMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
+    private static func pythonMarker(_ marker: String, allows environment: PythonMarkerEnvironment) -> Bool {
         let orClauses = splitPythonMarker(marker, keyword: "or")
         guard !orClauses.isEmpty else { return false }
         return orClauses.contains { clause in
             let andClauses = splitPythonMarker(clause, keyword: "and")
             guard !andClauses.isEmpty else { return false }
-            return andClauses.allSatisfy { pythonMarkerAtomAllowsCurrentEnvironment($0) }
+            return andClauses.allSatisfy { pythonMarkerAtom($0, allows: environment) }
         }
     }
 
@@ -2472,7 +2508,7 @@ enum RunScriptStackDetector {
         return before.isWhitespace && after.isWhitespace
     }
 
-    private static func pythonMarkerAtomAllowsCurrentEnvironment(_ atom: String) -> Bool {
+    private static func pythonMarkerAtom(_ atom: String, allows environment: PythonMarkerEnvironment) -> Bool {
         let trimmed = trimmingBalancedParentheses(atom.trimmingCharacters(in: .whitespacesAndNewlines))
         guard let regex = try? NSRegularExpression(
             pattern: #"^([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*['"]([^'"]+)['"]$"#
@@ -2495,13 +2531,13 @@ enum RunScriptStackDetector {
         case "platform_system":
             return comparePythonMarkerString(actual: "Darwin", operatorText: operatorText, expected: expected)
         case "platform_machine":
-            guard let actual = PythonMarkerEnvironment.current.platformMachine else { return false }
+            guard let actual = environment.platformMachine else { return false }
             return comparePythonMarkerString(actual: actual, operatorText: operatorText, expected: expected)
         case "python_version":
-            guard let actual = PythonMarkerEnvironment.current.pythonVersion else { return false }
+            guard let actual = environment.pythonVersion else { return false }
             return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
         case "python_full_version":
-            guard let actual = PythonMarkerEnvironment.current.pythonFullVersion else { return false }
+            guard let actual = environment.pythonFullVersion else { return false }
             return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
         case "implementation_name":
             return comparePythonMarkerString(actual: "cpython", operatorText: operatorText, expected: expected)
@@ -2578,6 +2614,32 @@ enum RunScriptStackDetector {
         }
     }
 
+    private static func poetryPythonConstraint(_ constraint: String, allows environment: PythonMarkerEnvironment) -> Bool {
+        guard let actual = environment.pythonVersion else { return false }
+        let alternatives = constraint.components(separatedBy: "||")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let clauses = alternatives.isEmpty ? [constraint] : alternatives
+        return clauses.contains { clause in
+            let requirements = clause.split(separator: ",", omittingEmptySubsequences: true)
+            guard !requirements.isEmpty else { return false }
+            return requirements.allSatisfy { requirement in
+                poetryPythonConstraintRequirement(String(requirement), allows: actual)
+            }
+        }
+    }
+
+    private static func poetryPythonConstraintRequirement(_ requirement: String, allows actual: String) -> Bool {
+        let trimmed = requirement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        for operatorText in ["==", "!=", ">=", "<=", ">", "<"] {
+            guard trimmed.hasPrefix(operatorText) else { continue }
+            let expected = String(trimmed.dropFirst(operatorText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
+        }
+        return comparePythonMarkerVersion(actual: actual, operatorText: "==", expected: trimmed)
+    }
+
     private static func pythonVersion(_ actual: String, matchesWildcard expected: String) -> Bool {
         guard expected.hasSuffix(".*") else { return false }
         let prefix = String(expected.dropLast(2))
@@ -2599,6 +2661,16 @@ enum RunScriptStackDetector {
             if left > right { return .orderedDescending }
         }
         return .orderedSame
+    }
+
+    private static func pythonMajorMinorVersion(_ version: String) -> String? {
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        let components = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count >= 2,
+              components[0].allSatisfy(\.isNumber),
+              components[1].allSatisfy(\.isNumber)
+        else { return nil }
+        return "\(components[0]).\(components[1])"
     }
 
     private static func dottedVersionParts(_ version: String) -> [Int]? {
@@ -2652,30 +2724,30 @@ enum RunScriptStackDetector {
         return sections
     }
 
-    private static func tomlDependencyText(_ text: String, declares tool: String) -> Bool {
+    private static func tomlDependencyText(_ text: String, declares tool: String, environment: PythonMarkerEnvironment) -> Bool {
         guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\[(.*?)\]"#),
               let inlineTableRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\{(.*?)\}"#)
         else { return false }
         let range = NSRange(text.startIndex..., in: text)
-        if tomlTableDependencyText(text, declares: tool) {
+        if tomlTableDependencyText(text, declares: tool, environment: environment) {
             return true
         }
         let arrayMatches = arrayRegex.matches(in: text, range: range)
         if arrayMatches.contains(where: { match in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
             let body = String(text[bodyRange])
-            return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool) }
+            return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool, environment: environment) }
         }) {
             return true
         }
         return inlineTableRegex.matches(in: text, range: range).contains { match in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
             let body = String(text[bodyRange])
-            return tomlTableDependencyText(body, declares: tool)
+            return tomlTableDependencyText(body, declares: tool, environment: environment)
         }
     }
 
-    private static func tomlTableDependencyText(_ text: String, declares tool: String) -> Bool {
+    private static func tomlTableDependencyText(_ text: String, declares tool: String, environment: PythonMarkerEnvironment) -> Bool {
         let escapedTool = NSRegularExpression.escapedPattern(for: tool)
         guard let dependencyRegex = try? NSRegularExpression(
             pattern: #"(?m)^\s*["']?"# + escapedTool + #"["']?\s*=\s*(.*?)$"#
@@ -2684,13 +2756,19 @@ enum RunScriptStackDetector {
         return dependencyRegex.matches(in: text, range: range).contains { match in
             guard let valueRange = Range(match.range(at: 1), in: text) else { return false }
             let value = String(text[valueRange])
-            guard let marker = tomlInlineMarkerValue(value) else { return true }
-            return pythonRequirementMarkerAllowsCurrentEnvironment(marker)
+            if let pythonConstraint = tomlInlineStringValue(value, key: "python"),
+               !poetryPythonConstraint(pythonConstraint, allows: environment)
+            {
+                return false
+            }
+            guard let marker = tomlInlineStringValue(value, key: "markers") else { return true }
+            return pythonRequirementMarker(marker, allows: environment)
         }
     }
 
-    private static func tomlInlineMarkerValue(_ text: String) -> String? {
-        guard let markerRegex = try? NSRegularExpression(pattern: #"markers\s*=\s*["']([^"']+)["']"#) else { return nil }
+    private static func tomlInlineStringValue(_ text: String, key: String) -> String? {
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
+        guard let markerRegex = try? NSRegularExpression(pattern: escapedKey + #"\s*=\s*["']([^"']+)["']"#) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         guard let match = markerRegex.firstMatch(in: text, range: range),
               let markerRange = Range(match.range(at: 1), in: text)
@@ -2698,7 +2776,7 @@ enum RunScriptStackDetector {
         return String(text[markerRange])
     }
 
-    private static func tomlKeyedDependencyText(_ text: String, declares tool: String, keys: [String]) -> Bool {
+    private static func tomlKeyedDependencyText(_ text: String, declares tool: String, keys: [String], environment: PythonMarkerEnvironment) -> Bool {
         return keys.contains { key in
             let escapedKey = NSRegularExpression.escapedPattern(for: key)
             guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#)
@@ -2707,31 +2785,51 @@ enum RunScriptStackDetector {
             return arrayRegex.matches(in: text, range: range).contains { match in
                 guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
                 let body = String(text[bodyRange])
-                return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool) }
+                return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool, environment: environment) }
             }
         }
     }
 
     private static func tomlStringArrayValues(_ text: String, key: String) -> [String] {
         let escapedKey = NSRegularExpression.escapedPattern(for: key)
-        guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#),
-              let stringRegex = try? NSRegularExpression(pattern: #"["']([^"']+)["']"#)
+        guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#)
         else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return arrayRegex.matches(in: text, range: range).flatMap { match -> [String] in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return [] }
-            return tomlStringValues(String(text[bodyRange]), stringRegex: stringRegex)
+            return tomlStringValues(String(text[bodyRange]))
         }
     }
 
-    private static func tomlStringValues(_ text: String, stringRegex: NSRegularExpression? = nil) -> [String] {
-        let regex = stringRegex ?? (try? NSRegularExpression(pattern: #"["']([^"']+)["']"#))
-        guard let regex else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        return regex.matches(in: text, range: range).compactMap { match in
-            guard let valueRange = Range(match.range(at: 1), in: text) else { return nil }
-            return String(text[valueRange])
+    private static func tomlStringValues(_ text: String) -> [String] {
+        var values: [String] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            let quote = text[index]
+            guard quote == "\"" || quote == "'" else {
+                index = text.index(after: index)
+                continue
+            }
+            var value = ""
+            index = text.index(after: index)
+            var isEscaped = false
+            while index < text.endIndex {
+                let character = text[index]
+                index = text.index(after: index)
+                if quote == "\"", isEscaped {
+                    value.append(character)
+                    isEscaped = false
+                } else if quote == "\"", character == "\\" {
+                    isEscaped = true
+                } else if character == quote {
+                    values.append(value)
+                    break
+                } else {
+                    value.append(character)
+                }
+            }
         }
+        return values
     }
 
     private static func tomlHasArrayKey(_ text: String, key: String) -> Bool {

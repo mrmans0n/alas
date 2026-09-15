@@ -1805,6 +1805,22 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.hasRuff == false)
     }
 
+    @Test func pythonPreservesURLFragmentsBeforeEvaluatingRequirementMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "requirements.txt",
+            """
+            pytest @ file:///pkg.whl#sha256=deadbeef ; sys_platform == "win32"
+            ruff @ file:///ruff.whl#sha256=feedface ; sys_platform == "darwin"
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
     @Test func pythonIgnoresRequirementsExcludedByPythonVersionMarkers() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1961,6 +1977,28 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.hasRuff == true)
     }
 
+    @Test func pythonUVRunnerUsesProjectPythonVersionForMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
+        try write(".python-version", "3.12\n", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            dev = ["pytest; python_version >= '3.14'", "ruff; python_version == '3.12'"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
     @Test func pythonBareRunnerIgnoresOptionalExtrasForToolAvailability() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2087,6 +2125,27 @@ struct RunScriptStackDetectorTests {
         )
 
         #expect(detect(root)[.python]?.hasPytest == false)
+    }
+
+    @Test func pythonIgnoresPoetryDependenciesExcludedByNativePythonConstraint() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("poetry.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [tool.poetry]
+            name = "lib"
+
+            [tool.poetry.dependencies]
+            pytest = { version = "^8", python = "<3.1" }
+            ruff = { version = "^0.8", python = ">=3.1" }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
     }
 
     @Test func barePythonIgnoresPoetryDependencyTables() throws {
