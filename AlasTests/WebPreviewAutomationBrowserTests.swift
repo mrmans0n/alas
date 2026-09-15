@@ -228,7 +228,7 @@ struct WebPreviewAutomationBrowserTests {
         defer { window.orderOut(nil) }
         defer { browser.close() }
 
-        let first = Task { try await browser.automation(command: WebPreviewCommand(action: .wait, selector: "#never", condition: "visible", timeoutMS: 5_000)) }
+        let first = Task { _ = try await browser.automation(command: WebPreviewCommand(action: .wait, selector: "#never", condition: "visible", timeoutMS: 5_000)) }
         try await Task.sleep(for: .milliseconds(25))
         await expectAutomationError("busy") {
             _ = try await browser.automation(command: WebPreviewCommand(action: .inspect, selector: "button", limit: 1))
@@ -328,12 +328,13 @@ struct WebPreviewAutomationBrowserTests {
         #expect(browser.webView.url?.path == "/")
 
         let beforeReloadGeneration = browser.automationSnapshot()["document_generation"] as? Int ?? 0
-        async let reloadResult: [String: Any] = browser.automation(command: WebPreviewCommand(action: .reload, timeoutMS: 5_000))
+        async let reloadGeneration: Int? = browser.automation(
+            command: WebPreviewCommand(action: .reload, timeoutMS: 5_000)
+        )["document_generation"] as? Int
         try await waitUntil("reload did not start") {
             (browser.automationSnapshot()["document_generation"] as? Int ?? 0) > beforeReloadGeneration
         }
-        let reload = try await reloadResult
-        let afterReloadGeneration = reload["document_generation"] as? Int
+        let afterReloadGeneration = try await reloadGeneration
         #expect((afterReloadGeneration ?? 0) > beforeReloadGeneration)
         #expect(browser.webView.url?.path == "/")
     }
@@ -350,7 +351,7 @@ struct WebPreviewAutomationBrowserTests {
         let slowURL = URL(string: "http://127.0.0.1:\(port.rawValue)/slow")!
         let manualURL = URL(string: "http://127.0.0.1:\(port.rawValue)/manual")!
         let pending = Task { @MainActor in
-            try await browser.automation(command: WebPreviewCommand(action: .navigate, url: slowURL.absoluteString, timeoutMS: 5_000))
+            _ = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: slowURL.absoluteString, timeoutMS: 5_000))
         }
         try await waitUntil("slow navigation did not start") { browser.loading }
         browser.navigate(manualURL)
