@@ -328,13 +328,18 @@ struct WebPreviewAutomationBrowserTests {
         #expect(browser.webView.url?.path == "/")
 
         let beforeReloadGeneration = browser.automationSnapshot()["document_generation"] as? Int ?? 0
-        async let reloadGeneration: Int? = browser.automation(
-            command: WebPreviewCommand(action: .reload, timeoutMS: 5_000)
-        )["document_generation"] as? Int
+        // The reload payload is `[String: Any]`, which cannot be Sendable, so the
+        // child task stays on the main actor and only the generation number --
+        // an `Int?` -- crosses back out of it.
+        let reloadGeneration = Task { @MainActor in
+            try await browser.automation(
+                command: WebPreviewCommand(action: .reload, timeoutMS: 5_000)
+            )["document_generation"] as? Int
+        }
         try await waitUntil("reload did not start") {
             (browser.automationSnapshot()["document_generation"] as? Int ?? 0) > beforeReloadGeneration
         }
-        let afterReloadGeneration = try await reloadGeneration
+        let afterReloadGeneration = try await reloadGeneration.value
         #expect((afterReloadGeneration ?? 0) > beforeReloadGeneration)
         #expect(browser.webView.url?.path == "/")
     }

@@ -168,13 +168,16 @@ struct StagedDiffLoaderTests {
         let loader = StagedDiffLoader(git: git)
         let worktreePath = URL(fileURLWithPath: "/tmp/repo")
 
+        // The loaded session is deliberately discarded inside the task: its
+        // type is main-actor-only and non-Sendable, so letting it escape as
+        // the task's `Success` would push it across an isolation boundary.
         let task = Task { @MainActor in
-            try await loader.load(worktreePath: worktreePath)
+            _ = try await loader.load(worktreePath: worktreePath)
         }
         task.cancel()
 
         do {
-            _ = try await task.value
+            try await task.value
             Issue.record("Expected CancellationError but load succeeded")
         } catch is CancellationError {
             // Expected: task was cancelled

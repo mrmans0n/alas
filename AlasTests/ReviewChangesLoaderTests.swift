@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 struct ReviewChangesLoaderTests {
     @Test func buildsSectionsForStagedAndUnstagedTextDiffs() async throws {
         let unstagedDiff = ParsedDiff(hunks: [
