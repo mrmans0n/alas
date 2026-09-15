@@ -241,7 +241,10 @@ private extension String {
     func checksRootExitBeforeTrackerRefresh() -> Bool {
         guard let tracker = range(of: "private func startDescendantTracker()"),
               let refresh = range(of: "self.refreshOrphanSet()", range: tracker.upperBound..<endIndex),
-              let rootExited = range(of: "let shouldStop = self.rootHasExited", range: tracker.upperBound..<endIndex) else {
+              // Matches the binding, not the locking form, so the guarded ordering
+              // survives a rewrite of how `rootHasExited` is read.
+              let rootExited = range(of: "let shouldStop = self.lock.withLock { self.rootHasExited }",
+                                     range: tracker.upperBound..<endIndex) else {
             return false
         }
         return rootExited.lowerBound < refresh.lowerBound
