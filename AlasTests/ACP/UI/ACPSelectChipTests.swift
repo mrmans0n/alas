@@ -4,6 +4,7 @@ import Testing
 @testable import Alas
 
 @Suite("ACP select chip")
+@MainActor
 struct ACPSelectChipTests {
     @Test func labelForegroundPreservesDarkModeTreatment() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")

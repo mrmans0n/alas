@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 struct CommitReviewLoaderTests {
     @Test func loadsMultipleCommitFilesInIncomingOrderIntoUngroupedSession() async throws {
         let git = FakeCommitReviewGitClient(diffs: [

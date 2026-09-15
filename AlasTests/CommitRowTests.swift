@@ -105,6 +105,7 @@ struct CommitRowTests {
         #expect(GGCommitAction.checkout != .dropCommit)
     }
 
+    @MainActor
     @Test func commitRowCarriesOffTipCurrentPositionIndicatorCopy() {
         let indicator = GGCurrentPositionIndicator(
             text: "Current · 2 of 4",

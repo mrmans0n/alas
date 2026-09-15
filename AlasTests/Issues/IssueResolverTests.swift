@@ -443,7 +443,7 @@ struct IssueResolverTests {
         )
     }
 
-    private static let projectA = ProjectConfig(id: "project-a", name: "A", path: "/tmp/a", color: "blue", addedAt: .distantPast)
+    private nonisolated static let projectA = ProjectConfig(id: "project-a", name: "A", path: "/tmp/a", color: "blue", addedAt: .distantPast)
     private static let projectB = ProjectConfig(id: "project-b", name: "B", path: "/tmp/b", color: "green", addedAt: .distantPast)
 
     private static func expectShortReferenceManualFallback(

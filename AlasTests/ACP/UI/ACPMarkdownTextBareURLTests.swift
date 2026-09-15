@@ -4,6 +4,7 @@ import Testing
 @testable import Alas
 
 @Suite("ACPMarkdownText bare URL links")
+@MainActor
 struct ACPMarkdownTextBareURLTests {
     @Test("mermaid recognition uses the first case-insensitive fence token")
     func mermaidFenceRecognition() {

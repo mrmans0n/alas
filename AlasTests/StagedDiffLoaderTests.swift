@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 struct StagedDiffLoaderTests {
     @Test func loadsSessionWithStagedNamespace() async throws {
         let git = MockStagedDiffGitClient(
