@@ -191,3 +191,52 @@ private final class PointerTransparentMenuButton: NSButton {
         return true
     }
 }
+
+extension View {
+    func nativeContextMenu<MenuItems: View>(
+        @ViewBuilder menuItems: () -> MenuItems
+    ) -> some View {
+        overlay {
+            NativeContextMenuHost(menuItems: menuItems())
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct NativeContextMenuHost<MenuItems: View>: NSViewRepresentable {
+    let menuItems: MenuItems
+
+    func makeNSView(context: Context) -> NativeContextMenuView<MenuItems> {
+        NativeContextMenuView(menuItems: menuItems)
+    }
+
+    func updateNSView(_ nsView: NativeContextMenuView<MenuItems>, context: Context) {
+        nsView.update(menuItems: menuItems)
+    }
+}
+
+private final class NativeContextMenuView<MenuItems: View>: NSView {
+    private let hostingMenu: NSHostingMenu<Group<MenuItems>>
+
+    init(menuItems: MenuItems) {
+        hostingMenu = NSHostingMenu(rootView: Group { menuItems })
+        super.init(frame: .zero)
+        menu = hostingMenu
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func update(menuItems: MenuItems) {
+        hostingMenu.rootView = Group { menuItems }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point), let event = NSApp.currentEvent else { return nil }
+        guard event.type == .rightMouseDown
+                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+        else { return nil }
+        return self
+    }
+}
