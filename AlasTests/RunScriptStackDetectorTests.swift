@@ -625,6 +625,24 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.make]?.hasMakeTestTarget == true)
     }
 
+    @Test func makefileIgnoresTargetsInsideUnresolvedConditionals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Makefile",
+            """
+            MODE = prod
+            ifneq ($(MODE),prod)
+            test:
+            \techo inactive after expansion
+            endif
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+    }
+
     @Test func makefileAllowsSpaceIndentedTargets() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

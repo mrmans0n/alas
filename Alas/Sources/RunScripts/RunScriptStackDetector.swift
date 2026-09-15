@@ -1831,18 +1831,18 @@ enum RunScriptStackDetector {
     private static func makeConditionalState(for line: String, parentIsActive: Bool) -> MakeConditionalState? {
         if line.hasPrefix("ifeq") {
             guard let comparison = makeConditionalEqualityValue(line.dropFirst("ifeq".count)) else {
-                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: false)
             }
             return .init(parentIsActive: parentIsActive, conditionIsKnown: true, branchIsActive: parentIsActive && comparison)
         }
         if line.hasPrefix("ifneq") {
             guard let comparison = makeConditionalEqualityValue(line.dropFirst("ifneq".count)) else {
-                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: false)
             }
             return .init(parentIsActive: parentIsActive, conditionIsKnown: true, branchIsActive: parentIsActive && !comparison)
         }
         if line.hasPrefix("ifdef") || line.hasPrefix("ifndef") {
-            return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+            return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: false)
         }
         return nil
     }
@@ -1854,15 +1854,22 @@ enum RunScriptStackDetector {
             let innerEnd = trimmed.index(before: trimmed.endIndex)
             let parts = trimmed[innerStart..<innerEnd].split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { return nil }
-            return makeConditionalToken(parts[0]) == makeConditionalToken(parts[1])
+            guard let left = makeConditionalToken(parts[0]),
+                  let right = makeConditionalToken(parts[1])
+            else { return nil }
+            return left == right
         }
         let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
         guard parts.count == 2 else { return nil }
-        return makeConditionalToken(parts[0]) == makeConditionalToken(parts[1])
+        guard let left = makeConditionalToken(parts[0]),
+              let right = makeConditionalToken(parts[1])
+        else { return nil }
+        return left == right
     }
 
-    private static func makeConditionalToken(_ token: some StringProtocol) -> String {
+    private static func makeConditionalToken(_ token: some StringProtocol) -> String? {
         var value = token.trimmingCharacters(in: .whitespaces)
+        guard !value.contains("$("), !value.contains("${") else { return nil }
         if value.count >= 2,
            let first = value.first,
            let last = value.last,
