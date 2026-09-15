@@ -126,8 +126,7 @@ final class EditorDisplayAdapter {
         deferredSourceNotification = false
         if composition.isActive, !isApplyingSourceEdit { composition.invalidate() }
         hints = [] // Server anchors are stale after every source character edit.
-        sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
-        rebuild(sourceEdit: isApplyingSourceEdit ? edit : nil)
+        rebuild(sourceEdit: isApplyingSourceEdit ? edit : nil, sourceDidChange: true)
         if let view { NotificationCenter.default.post(name: .editorSourceDidChange, object: view) }
     }
 
@@ -137,7 +136,34 @@ final class EditorDisplayAdapter {
         return result
     }
 
-    func rebuild(sourceEdit: EditorTextEdit? = nil) {
+    static func applying(_ edit: EditorTextEdit, toLineStarts starts: [Int]) -> [Int] {
+        // A start at the edit's location belongs to the preceding newline and
+        // survives. A start at the old end belongs to a removed newline.
+        func firstStart(after offset: Int) -> Int {
+            var low = 0
+            var high = starts.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if starts[middle] <= offset { low = middle + 1 } else { high = middle }
+            }
+            return low
+        }
+        let first = firstStart(after: edit.location)
+        let last = firstStart(after: edit.location + edit.oldLength)
+        let inserted = edit.replacementText.utf16.enumerated().compactMap { offset, unit in
+            unit == 10 ? edit.location + offset + 1 : nil
+        }
+        let delta = edit.newLength - edit.oldLength
+        if first == last, inserted.isEmpty, delta == 0 { return starts }
+        var result = starts
+        result.replaceSubrange(first ..< last, with: inserted)
+        if delta != 0 {
+            for index in (first + inserted.count) ..< result.count { result[index] += delta }
+        }
+        return result
+    }
+
+    func rebuild(sourceEdit: EditorTextEdit? = nil, sourceDidChange: Bool = false) {
         guard !isRebuilding, let view else { return }
         isRebuilding = true
         defer { isRebuilding = false }
@@ -152,8 +178,12 @@ final class EditorDisplayAdapter {
                 layout.removeTemporaryAttribute(key, forCharacterRange: range)
             }
         }
+        // Publish matching text and line offsets before native storage observers
+        // can query geometry. Only validated incremental edits may reuse the index.
+        document.storage.beginEditing()
+        var appliedEdit = false
         do {
-            let appliedEdit = !composition.isActive && sourceEdit.map {
+            appliedEdit = !composition.isActive && sourceEdit.map {
                 document.applySourceEdit($0, source: buffer.storage, revision: buffer.editGeneration)
             } == true
             if !appliedEdit {
@@ -163,8 +193,19 @@ final class EditorDisplayAdapter {
             // Reject bad presentation metadata without mutating authoritative text.
             hints = []
             do { try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: []) }
-            catch { return }
+            catch {
+                document.storage.endEditing()
+                return
+            }
         }
+        if sourceDidChange {
+            if appliedEdit, let sourceEdit {
+                sourceLineStarts = Self.applying(sourceEdit, toLineStarts: sourceLineStarts)
+            } else {
+                sourceLineStarts = Self.lineStarts(in: buffer.storage.string)
+            }
+        }
+        document.storage.endEditing()
         sourceSnapshot = buffer.storage.string
         composition.applyOverlay()
         let clipped = selections.map { value -> NSValue in

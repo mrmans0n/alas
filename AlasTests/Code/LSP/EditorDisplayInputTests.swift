@@ -5,6 +5,32 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func lineOffsetsStayCurrentThroughTypingHintFallbackAndUndo() async throws {
+        let f = try await Fixture("ab\ncd\n")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        // The fixture starts with hints, so this edit takes the full projection path.
+        #expect(adapter.replaceSource(NSRange(location: 1, length: 0), with: "x\n"))
+        #expect(adapter.sourceLineStarts == [0, 3, 5, 8])
+        let recorder = DisplayEditRecorder()
+        recorder.onWillProcess = { #expect(adapter.sourceLineStarts == [0, 3, 7, 10]) }
+        f.document.storage.delegate = recorder
+        #expect(adapter.replaceSource(NSRange(location: 4, length: 0), with: "🙂"))
+        #expect(!recorder.requestedEdits.isEmpty)
+        f.document.storage.delegate = nil
+        #expect(adapter.sourceLineStarts == [0, 3, 7, 10])
+        f.buffer.undoManager.undo()
+        #expect(f.buffer.storage.string == "ax\nb\ncd\n")
+        #expect(adapter.sourceLineStarts == [0, 3, 5, 8])
+        f.buffer.undoManager.undo()
+        #expect(f.buffer.storage.string == "ab\ncd\n")
+        #expect(adapter.sourceLineStarts == [0, 3, 6])
+        f.buffer.undoManager.redo()
+        #expect(adapter.sourceLineStarts == [0, 3, 5, 8])
+        f.buffer.undoManager.redo()
+        #expect(adapter.sourceLineStarts == [0, 3, 7, 10])
+    }
+
     @Test func ordinaryTypingPatchesOnlyTheEditedSourceRange() async throws {
         let f = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
         defer { f.remove() }
@@ -104,9 +130,11 @@ struct EditorDisplayInputTests {
     }
 
     private final class DisplayEditRecorder: NSObject, NSTextStorageDelegate {
+        var onWillProcess: (() -> Void)?
         var edits: [(mask: NSTextStorageEditActions, range: NSRange)] = []
         var requestedEdits: [(mask: NSTextStorageEditActions, range: NSRange)] = []
         func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+            onWillProcess?()
             requestedEdits.append((editedMask, editedRange))
         }
         func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {

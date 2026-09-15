@@ -4,6 +4,26 @@ import Testing
 
 @MainActor
 struct EditorDisplayDocumentTests {
+    @Test func incrementalLineStartsHandleInsertionDeletionAndBoundaryEdits() {
+        let starts = [0, 3, 6] // "ab\ncd\n"
+        let cases: [(EditorTextEdit, [Int])] = [
+            (.init(location: 1, oldLength: 0, replacementText: "x"), [0, 4, 7]),
+            (.init(location: 1, oldLength: 3, replacementText: ""), [0, 3]),
+            (.init(location: 1, oldLength: 4, replacementText: "\nX\n"), [0, 2, 4, 5]),
+            (.init(location: 3, oldLength: 0, replacementText: "x\n"), [0, 3, 5, 8]),
+            (.init(location: 5, oldLength: 1, replacementText: ""), [0, 3]),
+            (.init(location: 0, oldLength: 6, replacementText: ""), [0]),
+            (.init(location: 1, oldLength: 0, replacementText: "🙂\n"), [0, 4, 6, 9]),
+            (.init(location: 1, oldLength: 1, replacementText: "x"), [0, 3, 6])
+        ]
+        for (edit, expected) in cases {
+            #expect(EditorDisplayAdapter.applying(edit, toLineStarts: starts) == expected)
+        }
+        #expect(EditorDisplayAdapter.applying(.init(location: 0, oldLength: 0, replacementText: "\n"), toLineStarts: [0]) == [0, 1])
+        // Removing the CR from "a\r\nb" shifts the next line without removing it.
+        #expect(EditorDisplayAdapter.applying(.init(location: 1, oldLength: 1, replacementText: ""), toLineStarts: [0, 3]) == [0, 2])
+    }
+
     private var pair: [EditorDisplayHint] {
         [EditorDisplayHint(id: "first", sourceOffset: 1, label: "x:", size: CGSize(width: 12, height: 16)),
          EditorDisplayHint(id: "second", sourceOffset: 1, label: "type:", size: CGSize(width: 40, height: 16))]
