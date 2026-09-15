@@ -6,10 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+## [0.17.7] - 2026-09-15
 
-- Prevent retired transcript rows from remounting during delayed layout invalidation, and avoid redundant same-width row-root updates.
-- Wait for cancelled ACP prompt requests to settle before sending steering replacements.
+### ✨ Features
+
+- Allow transparent backgrounds for project icons (#1245).
+- Show editor LSP results and progress as in-app notifications (#1249).
+
+### 🐛 Fixes
+
+- Prevent retired transcript rows from remounting during delayed layout invalidation, and avoid redundant same-width row-root updates (#1246).
+- Wait for cancelled ACP prompt requests to settle before sending steering replacements (#1248).
+- Prevent cleanup from restoring worktrees while another deletion is still moving them to Git trash (#1247).
+- Prevent project FSEvents watcher teardown from trapping on its background queue under Swift 6 (#1251).
+
+### 🎨 Changed
+
+- Make the right-pane icon rail the permanent navigation and reveal control (#1250).
 
 ## [0.17.6] - 2026-09-15
 
