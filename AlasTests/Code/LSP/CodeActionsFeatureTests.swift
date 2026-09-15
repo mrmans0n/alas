@@ -103,7 +103,7 @@ struct CodeActionsFeatureTests {
         let fixture = try WorkspaceEditFixture()
         defer { fixture.remove() }
         var closes: [() -> Void] = []
-        var completions: [() -> Void] = []
+        var completions: [@MainActor @Sendable () -> Void] = []
         let started = AsyncStream<Void>.makeStream()
         defer { started.continuation.finish() }
         let presentation = CodeActionEditPresentation { _, _, close, completion in
@@ -143,7 +143,7 @@ struct CodeActionsFeatureTests {
         defer { fixture.remove() }
         let started = AsyncStream<Void>.makeStream()
         defer { started.continuation.finish() }
-        var completion: (() -> Void)?
+        var completion: (@MainActor @Sendable () -> Void)?
         let presentation = CodeActionEditPresentation { _, _, _, cancelled in
             completion = cancelled
             started.continuation.yield(())
