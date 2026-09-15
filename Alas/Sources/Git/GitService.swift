@@ -1258,14 +1258,14 @@ extension GitService {
     }
 
     private func defaultGlobalExcludesPath() -> String? {
-        if let xdgConfigHome = getenv("XDG_CONFIG_HOME").flatMap({ String(validatingUTF8: $0) }),
+        if let xdgConfigHome = getenv("XDG_CONFIG_HOME").flatMap({ String(validatingCString: $0) }),
            !xdgConfigHome.isEmpty {
             return URL(fileURLWithPath: xdgConfigHome)
                 .appendingPathComponent("git")
                 .appendingPathComponent("ignore")
                 .path
         }
-        guard let home = getenv("HOME").flatMap({ String(validatingUTF8: $0) }),
+        guard let home = getenv("HOME").flatMap({ String(validatingCString: $0) }),
               !home.isEmpty else {
             return nil
         }

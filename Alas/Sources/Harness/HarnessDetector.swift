@@ -116,7 +116,9 @@ final class HarnessDetector: @unchecked Sendable {
         var pathBuf = [CChar](repeating: 0, count: maxPathSize)
         let len = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
         guard len > 0 else { return nil }
-        let path = String(cString: pathBuf)
+        // `String(cString:)` is deprecated for arrays; `proc_pidpath` NUL-terminates,
+        // so decode up to the terminator rather than the whole fixed-size buffer.
+        let path = String(decoding: pathBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         let basename = (path as NSString).lastPathComponent
         return matchKind(processName: basename)
     }
