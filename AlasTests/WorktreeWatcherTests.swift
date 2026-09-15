@@ -3,6 +3,18 @@ import Foundation
 @testable import Alas
 
 struct WorktreeWatcherTests {
+    @MainActor
+    @Test func stoppingAStartedWatcherReleasesItsStreamOffMainActor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("worktree-watcher-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let watcher = WorktreeWatcher(path: directory)
+        watcher.start()
+        watcher.stop()
+    }
+
     @Test func emptyEventListSkipsRefresh() {
         #expect(WorktreeWatcher.shouldRefresh(forEventPaths: []) == false)
     }
