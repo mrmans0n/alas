@@ -307,11 +307,7 @@ struct WorkspaceLSPManagerStatusTests {
     }
 
     @Test func openDocumentPostsBlockedNotificationWhenRemediationFails() async {
-        final class Box {
-            let path = "/usr/bin/true"
-            var notificationRealPath: String?
-        }
-        let box = Box()
+        let box = BlockedNotificationBox()
         let registry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: "swift",
@@ -351,25 +347,7 @@ struct WorkspaceLSPManagerStatusTests {
     }
 
     @Test func concurrentOpenDocumentsJoinHolderInsertedAfterRemediation() async {
-        final class Box {
-            let path = "/usr/bin/true"
-            var blocked = true
-            var continuations: [CheckedContinuation<GatekeeperRemediator.Outcome, Never>] = []
-
-            func waitForBothRemediationAttempts() async -> GatekeeperRemediator.Outcome {
-                await withCheckedContinuation { continuation in
-                    continuations.append(continuation)
-                    guard continuations.count == 2 else { return }
-                    blocked = false
-                    let parked = continuations
-                    continuations.removeAll()
-                    for continuation in parked {
-                        continuation.resume(returning: .allowed)
-                    }
-                }
-            }
-        }
-        let box = Box()
+        let box = PairedRemediationBox()
         let otherFileURL = root.appendingPathComponent("other.swift")
         let registry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
@@ -407,28 +385,7 @@ struct WorkspaceLSPManagerStatusTests {
     }
 
     @Test func closeDuringRemediationCancelsPendingOpen() async {
-        final class Box {
-            let path = "/usr/bin/true"
-            var blocked = true
-            var remediation: CheckedContinuation<GatekeeperRemediator.Outcome, Never>?
-            var parked: CheckedContinuation<Void, Never>?
-
-            func remediate() async -> GatekeeperRemediator.Outcome {
-                await withCheckedContinuation { continuation in
-                    remediation = continuation
-                    parked?.resume()
-                    parked = nil
-                }
-            }
-
-            func waitUntilRemediationIsParked() async {
-                if remediation != nil { return }
-                await withCheckedContinuation { continuation in
-                    parked = continuation
-                }
-            }
-        }
-        let box = Box()
+        let box = ParkedRemediationBox()
         let registry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: "swift",
@@ -457,36 +414,14 @@ struct WorkspaceLSPManagerStatusTests {
         await box.waitUntilRemediationIsParked()
         await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
         box.blocked = false
-        box.remediation?.resume(returning: .allowed)
-        box.remediation = nil
+        box.finishRemediation(.allowed)
         _ = await opened
 
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
     }
 
     @Test func closeDuringRemediationCancelsPendingOpenAfterRegistryChange() async {
-        final class Box {
-            let path = "/usr/bin/true"
-            var blocked = true
-            var remediation: CheckedContinuation<GatekeeperRemediator.Outcome, Never>?
-            var parked: CheckedContinuation<Void, Never>?
-
-            func remediate() async -> GatekeeperRemediator.Outcome {
-                await withCheckedContinuation { continuation in
-                    remediation = continuation
-                    parked?.resume()
-                    parked = nil
-                }
-            }
-
-            func waitUntilRemediationIsParked() async {
-                if remediation != nil { return }
-                await withCheckedContinuation { continuation in
-                    parked = continuation
-                }
-            }
-        }
-        let box = Box()
+        let box = ParkedRemediationBox()
         let initialRegistry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: "swift",
@@ -526,8 +461,7 @@ struct WorkspaceLSPManagerStatusTests {
         ]))
         await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
         box.blocked = false
-        box.remediation?.resume(returning: .allowed)
-        box.remediation = nil
+        box.finishRemediation(.allowed)
         _ = await opened
 
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
@@ -716,5 +650,122 @@ struct WorkspaceLSPManagerStatusTests {
         await mgr.closeTemporaryDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
         transport.finish()
+    }
+}
+
+/// Captures the `realPath` carried by `.lspBlockedByGatekeeper`. The
+/// notification observer block is `@Sendable` and may run off the test's own
+/// task, so the recorded value is lock-backed rather than a bare `var`.
+/// Invariant: `storedRealPath` is only ever read or written while `lock` is held.
+private final class BlockedNotificationBox: @unchecked Sendable {
+    let path = "/usr/bin/true"
+    private let lock = NSLock()
+    private var storedRealPath: String?
+
+    var notificationRealPath: String? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedRealPath
+        }
+        set {
+            lock.lock()
+            storedRealPath = newValue
+            lock.unlock()
+        }
+    }
+}
+
+/// Parks remediation attempts until two of them have arrived, then unblocks the
+/// gatekeeper and resumes both. The availability hooks that drive it run
+/// outside the test's actor, hence the lock.
+/// Invariant: `storedBlocked` and `continuations` are only touched while `lock`
+/// is held, and continuations are always resumed after the lock is released.
+private final class PairedRemediationBox: @unchecked Sendable {
+    let path = "/usr/bin/true"
+    private let lock = NSLock()
+    private var storedBlocked = true
+    private var continuations: [CheckedContinuation<GatekeeperRemediator.Outcome, Never>] = []
+
+    var blocked: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBlocked
+    }
+
+    func waitForBothRemediationAttempts() async -> GatekeeperRemediator.Outcome {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            continuations.append(continuation)
+            guard continuations.count == 2 else {
+                lock.unlock()
+                return
+            }
+            storedBlocked = false
+            let parked = continuations
+            continuations.removeAll()
+            lock.unlock()
+            for parkedContinuation in parked {
+                parkedContinuation.resume(returning: .allowed)
+            }
+        }
+    }
+}
+
+/// Parks a single remediation attempt so the test can interleave a close (or a
+/// registry swap) before letting it finish. Driven from the availability hooks,
+/// which run outside the test's actor, hence the lock.
+/// Invariant: `storedBlocked`, `remediation` and `parked` are only touched while
+/// `lock` is held, and continuations are always resumed after the lock is released.
+private final class ParkedRemediationBox: @unchecked Sendable {
+    let path = "/usr/bin/true"
+    private let lock = NSLock()
+    private var storedBlocked = true
+    private var remediation: CheckedContinuation<GatekeeperRemediator.Outcome, Never>?
+    private var parked: CheckedContinuation<Void, Never>?
+
+    var blocked: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedBlocked
+        }
+        set {
+            lock.lock()
+            storedBlocked = newValue
+            lock.unlock()
+        }
+    }
+
+    func remediate() async -> GatekeeperRemediator.Outcome {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            remediation = continuation
+            let waiter = parked
+            parked = nil
+            lock.unlock()
+            waiter?.resume()
+        }
+    }
+
+    func waitUntilRemediationIsParked() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if remediation != nil {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            parked = continuation
+            lock.unlock()
+        }
+    }
+
+    func finishRemediation(_ outcome: GatekeeperRemediator.Outcome) {
+        lock.lock()
+        let continuation = remediation
+        remediation = nil
+        lock.unlock()
+        continuation?.resume(returning: outcome)
     }
 }

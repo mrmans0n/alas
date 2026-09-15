@@ -856,32 +856,51 @@ struct RemoteServerIntegrationTests {
         return try await withCheckedThrowingContinuation { continuation in
             let completion = Completion<Data>()
             let accumulator = DataAccumulator()
-            let headerTerminator = Data("\r\n\r\n".utf8)
 
-            func receiveMore() {
-                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                    if let error {
-                        completion.finish(.failure(error), continuation: continuation)
-                        return
-                    }
-                    if let data, !data.isEmpty {
-                        let snapshot = accumulator.append(data)
-                        if snapshot.range(of: headerTerminator) != nil {
-                            completion.finish(.success(snapshot), continuation: continuation)
-                            return
-                        }
-                    }
-                    if isComplete {
-                        completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
-                    } else if !completion.isFinished {
-                        receiveMore()
-                    }
-                }
-            }
-
-            receiveMore()
+            Self.pumpUntilHeaderTerminator(
+                conn: conn,
+                completion: completion,
+                accumulator: accumulator,
+                continuation: continuation
+            )
             queue.asyncAfter(deadline: .now() + timeout) {
                 completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    /// Recursive read pump for `receiveHTTPResponse`. A `nonisolated static`
+    /// method rather than a local function so the `@Sendable` receive handler
+    /// captures only the explicit, lock-backed parameters — a local function
+    /// running concurrently would capture the enclosing scope implicitly.
+    private nonisolated static func pumpUntilHeaderTerminator(
+        conn: NWConnection,
+        completion: Completion<Data>,
+        accumulator: DataAccumulator,
+        continuation: CheckedContinuation<Data, Error>
+    ) {
+        let headerTerminator = Data("\r\n\r\n".utf8)
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+            if let error {
+                completion.finish(.failure(error), continuation: continuation)
+                return
+            }
+            if let data, !data.isEmpty {
+                let snapshot = accumulator.append(data)
+                if snapshot.range(of: headerTerminator) != nil {
+                    completion.finish(.success(snapshot), continuation: continuation)
+                    return
+                }
+            }
+            if isComplete {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            } else if !completion.isFinished {
+                Self.pumpUntilHeaderTerminator(
+                    conn: conn,
+                    completion: completion,
+                    accumulator: accumulator,
+                    continuation: continuation
+                )
             }
         }
     }
@@ -892,19 +911,25 @@ struct RemoteServerIntegrationTests {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()
 
-            func receiveUntilClosed() {
-                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, isComplete, error in
-                    if error != nil || isComplete {
-                        completion.finish(.success(()), continuation: continuation)
-                    } else if !completion.isFinished {
-                        receiveUntilClosed()
-                    }
-                }
-            }
-
-            receiveUntilClosed()
+            Self.pumpUntilClosed(conn: conn, completion: completion, continuation: continuation)
             queue.asyncAfter(deadline: .now() + timeout) {
                 completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    /// Recursive drain for `waitForConnectionClose`, hoisted out of a local
+    /// function for the same reason as `pumpUntilHeaderTerminator` above.
+    private nonisolated static func pumpUntilClosed(
+        conn: NWConnection,
+        completion: Completion<Void>,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, isComplete, error in
+            if error != nil || isComplete {
+                completion.finish(.success(()), continuation: continuation)
+            } else if !completion.isFinished {
+                Self.pumpUntilClosed(conn: conn, completion: completion, continuation: continuation)
             }
         }
     }
