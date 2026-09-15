@@ -222,6 +222,14 @@ struct RunScriptStackCatalogTests {
         #expect(withRuff["install"]?.body == "python3 -m pip install -e . -r requirements.txt")
     }
 
+    @Test func nonBarePythonInstallsRequirementsIntoManagedEnvironment() {
+        let uv = actions(.python, .init(pythonRunner: .uv, hasRequirementsFile: true, hasPytest: true))
+        #expect(uv["install"]?.body == "uv sync\nuv pip install -r requirements.txt")
+
+        let poetry = actions(.python, .init(pythonRunner: .poetry, hasRequirementsFile: true, hasRuff: true))
+        #expect(poetry["install"]?.body == "poetry install\npoetry run python -m pip install -r requirements.txt")
+    }
+
     @Test func oneShotCommandsCloseAndServersKeepThePane() {
         #expect(actions(.cargo)["build"]?.onExit == .close)
         #expect(actions(.cargo)["run"]?.onExit == .keep)

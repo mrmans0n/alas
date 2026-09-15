@@ -1358,11 +1358,12 @@ enum RunScriptStackDetector {
 
     private static func goSourceImportsC(_ contents: String) -> Bool {
         let stripped = stripGoCommentsPreservingStrings(contents)
-        if stripped.range(of: #"(?m)^\s*import\s+(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"C"\s*$"#, options: .regularExpression) != nil {
+        let cImport = #"(?:"C"|`C`)"#
+        if stripped.range(of: #"(?m)^\s*import\s+(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"# + cImport + #"\s*$"#, options: .regularExpression) != nil {
             return true
         }
         guard let blockRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*import\s*\((.*?)^\s*\)"#),
-              let cImportRegex = try? NSRegularExpression(pattern: #"(?m)^\s*(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"C"\s*$"#)
+              let cImportRegex = try? NSRegularExpression(pattern: #"(?m)^\s*(?:[._A-Za-z][A-Za-z0-9_]*\s+)?"# + cImport + #"\s*$"#)
         else { return false }
         let range = NSRange(stripped.startIndex..., in: stripped)
         return blockRegex.matches(in: stripped, range: range).contains { match in
@@ -1750,7 +1751,8 @@ enum RunScriptStackDetector {
             pattern: #"^\s*task\s*\("#
         ), let namespaceRegex = try? NSRegularExpression(pattern: #"^\s*namespace\b.*(?:\bdo\b|\{)\s*$"#),
            let methodRegex = try? NSRegularExpression(pattern: #"^\s*def\b"#),
-           let falseBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if\s+false|unless\s+true)\b"#)
+           let falseBranchRegex = try? NSRegularExpression(pattern: #"^\s*(?:if\s+false|unless\s+true)\b"#),
+           let postfixFalseBranchRegex = try? NSRegularExpression(pattern: #"\b(?:if\s+false|unless\s+true)\s*$"#)
         else { return false }
         var blockStack: [Bool] = []
         let originalSegments = commentless.components(separatedBy: .newlines).flatMap { $0.components(separatedBy: ";") }
@@ -1773,6 +1775,9 @@ enum RunScriptStackDetector {
             }
             if falseBranchRegex.firstMatch(in: segment, range: range) != nil {
                 blockStack.append(true)
+                continue
+            }
+            if postfixFalseBranchRegex.firstMatch(in: segment, range: range) != nil {
                 continue
             }
             if !blockStack.contains(true), taskRegex.firstMatch(in: segment, range: range) != nil {

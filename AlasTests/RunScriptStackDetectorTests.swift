@@ -1349,6 +1349,30 @@ struct RunScriptStackDetectorTests {
         #expect(blankIdentifier[.go]?.goRunTarget == nil)
     }
 
+    @Test func goTreatsRawStringCGOImportAsExcludedWhenCGOIsDisabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "package main\n\nimport `C`\n\nfunc main() {}\n", in: root)
+
+        let cgoDisabled = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(cgoDisabled[.go]?.goRunTarget == nil)
+
+        try write("main.go", "package main\n\nimport (\n  c `C`\n)\n\nfunc main() {}\n", in: root)
+        let aliasedBlock = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(minorVersion: 25, architectureFeatures: [])
+            }
+        ).map { ($0.stack, $0.context) })
+        #expect(aliasedBlock[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsTheStandardCompilerTagAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1546,6 +1570,12 @@ struct RunScriptStackDetectorTests {
         try write("Gemfile", "source \"https://rubygems.org\"\ngem \"rake\"\n", in: root)
         try write("Rakefile", "if false\n  task :test do\n    ruby \"test/all_test.rb\"\n  end\nend\n", in: root)
 
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "task :test if false\n", in: root)
+        #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
+
+        try write("Rakefile", "task :test unless true\n", in: root)
         #expect(detect(root)[.ruby]?.hasRakeTestTask == false)
     }
 

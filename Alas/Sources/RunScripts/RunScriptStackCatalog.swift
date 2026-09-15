@@ -462,8 +462,14 @@ enum RunScriptStackCatalog {
     /// (install command, prefix for running a tool inside the project env).
     private static func pythonCommands(_ context: RunScriptStackContext) -> (install: String, run: String) {
         switch context.pythonRunner {
-        case .uv:     ("uv sync", "uv run ")
-        case .poetry: ("poetry install", "poetry run ")
+        case .uv:
+            context.hasRequirementsFile
+                ? ("uv sync\nuv pip install -r requirements.txt", "uv run ")
+                : ("uv sync", "uv run ")
+        case .poetry:
+            context.hasRequirementsFile
+                ? ("poetry install\npoetry run python -m pip install -r requirements.txt", "poetry run ")
+                : ("poetry install", "poetry run ")
         case .bare:
             context.hasPyprojectFile && context.hasRequirementsFile && (context.hasPytest || context.hasRuff)
                 ? ("python3 -m pip install -e . -r requirements.txt", "")
