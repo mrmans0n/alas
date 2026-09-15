@@ -136,7 +136,8 @@ struct NavigationFeatureTests {
         })
         let transport = FakeTransport()
         defer { transport.finish() }
-        transport.onSend = { sent in
+        // The LSP client's executor invokes this callback, not the main actor.
+        transport.onSend = { @Sendable sent in
             guard let frame = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = frame["id"] else { return }
             let result: LSPJSONValue
             if frame["method"] == .string("initialize") { result = .object(["capabilities": .object(["definitionProvider": .bool(true)])]) }
