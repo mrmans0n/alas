@@ -977,14 +977,19 @@ struct WorktreeService {
         else {
             throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
         }
+        var hasActivePendingRemoval = false
         do {
-            try WorktreeTrash.markPending(
+            try WorktreeTrash.markPendingForActiveRemoval(
                 ticket,
                 originalPath: worktree.path,
                 linkedGitDirectory: expectedRegistration.gitDirectory
             )
+            hasActivePendingRemoval = true
             try moveItem(worktree.path, ticket.stagedPath)
         } catch {
+            if hasActivePendingRemoval {
+                WorktreeTrash.finishActivePendingRemoval(ticket)
+            }
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -996,6 +1001,7 @@ struct WorktreeService {
             )
             return .synchronous
         }
+        defer { WorktreeTrash.finishActivePendingRemoval(ticket) }
 
         func failAfterRollingBack(_ registryMessage: String) throws -> Never {
             try? FileManager.default.removeItem(
