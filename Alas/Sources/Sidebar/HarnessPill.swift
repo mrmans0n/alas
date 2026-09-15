@@ -55,6 +55,12 @@ struct HarnessPill: View {
 }
 
 struct HarnessSessionBadge: View {
+    /// E1's agent tile size. `WorktreeRowView` sizes its "+N" overflow
+    /// control to match so the badge group stays on one baseline.
+    static let diameter: CGFloat = 17
+    static let logoSize: CGFloat = 12
+    static let cornerRadius: CGFloat = 5.5
+
     let session: HarnessService.WorktreeHarnessSession
     let onActivate: () -> Void
     var isSelected = false
@@ -67,8 +73,8 @@ struct HarnessSessionBadge: View {
                 .resizable()
                 .renderingMode(.original)
                 .scaledToFit()
-                .frame(width: 14, height: 14)
-                .frame(width: 21, height: 21)
+                .frame(width: Self.logoSize, height: Self.logoSize)
+                .frame(width: Self.diameter, height: Self.diameter)
                 .modifier(HarnessSessionBadgeChrome(state: session.state, isSelected: isSelected))
         }
         .buttonStyle(.plain)
@@ -90,20 +96,22 @@ struct HarnessSessionBadgeChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: HarnessSessionBadge.cornerRadius)
                     .fill(fillColor)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: HarnessSessionBadge.cornerRadius)
                     .strokeBorder(borderColor, lineWidth: 0.75)
             )
             .overlay {
                 if state == .running {
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: HarnessSessionBadge.cornerRadius)
                         .strokeBorder(theme.color("add").opacity(0.20), lineWidth: 2)
                         .blur(radius: 2)
                 }
             }
+            // E1 lifts the tile off the row with a soft drop shadow.
+            .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
     }
 
     private var fillColor: Color {
