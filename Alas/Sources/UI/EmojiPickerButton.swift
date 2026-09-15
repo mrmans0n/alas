@@ -122,6 +122,7 @@ enum EmojiPickerWindowDismissal {
         }
     }
 
+    @MainActor
     private static func isCharacterPalette(_ window: NSWindow) -> Bool {
         let className = String(describing: type(of: window)).lowercased()
         let title = window.title.lowercased()

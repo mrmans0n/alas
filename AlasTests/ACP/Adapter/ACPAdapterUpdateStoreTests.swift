@@ -22,26 +22,26 @@ struct ACPAdapterUpdateStoreTests {
 
     @Test("read past success TTL returns nil")
     func successTtlExpires() async {
-        var clock = Date(timeIntervalSince1970: 1_000)
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000))
         let store = ACPAdapterUpdateStore(
             fileURL: tempFile(),
             successTTL: 10, failureTTL: 5,
-            now: { clock })
+            now: { clock.now })
         await store.write(agentID: "claude", state: .upToDate)
-        clock = clock.addingTimeInterval(11)
+        clock.advance(by: 11)
         let r = await store.read(agentID: "claude")
         #expect(r == nil)
     }
 
     @Test("failure TTL is shorter than success TTL")
     func failureTtlIsShorter() async {
-        var clock = Date(timeIntervalSince1970: 1_000)
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000))
         let store = ACPAdapterUpdateStore(
             fileURL: tempFile(),
             successTTL: 10, failureTTL: 5,
-            now: { clock })
+            now: { clock.now })
         await store.write(agentID: "claude", state: .unknown)
-        clock = clock.addingTimeInterval(6)
+        clock.advance(by: 6)
         let r = await store.read(agentID: "claude")
         #expect(r == nil)
     }
@@ -81,13 +81,13 @@ struct ACPAdapterUpdateStoreTests {
             successTTL: 60, failureTTL: 60,
             now: { Date() })
         await store.write(agentID: "claude", state: .upToDate)
-        var calls = 0
+        let calls = CallCounter()
         let r = await store.checkOrCompute(agentID: "claude") {
-            calls += 1
+            calls.increment()
             return .available(current: "1", latest: "2")
         }
         #expect(r == .upToDate)
-        #expect(calls == 0)
+        #expect(calls.count == 0)
     }
 
     @Test("checkOrCompute coalesces concurrent in-flight checks for the same agent")
@@ -200,7 +200,7 @@ struct ACPAdapterUpdateStoreTests {
     @Test("state persists across store instances")
     func persistsAcrossInstances() async {
         let url = tempFile()
-        let now = { Date() }
+        let now: @Sendable () -> Date = { Date() }
         let a = ACPAdapterUpdateStore(fileURL: url, successTTL: 60, failureTTL: 60, now: now)
         await a.write(agentID: "claude", state: .available(current: "1", latest: "2"))
         await a.dismiss(agentID: "claude", latest: "2")
@@ -213,7 +213,7 @@ struct ACPAdapterUpdateStoreTests {
     @Test("remote target state persists across store instances")
     func remoteStatePersistsAcrossInstances() async {
         let url = tempFile()
-        let now = { Date() }
+        let now: @Sendable () -> Date = { Date() }
         let key = ACPAdapterUpdateKey(target: .ssh(host: "dev.user@host:22"), agentID: "codex")
         let a = ACPAdapterUpdateStore(fileURL: url, successTTL: 60, failureTTL: 60, now: now)
         await a.write(key: key, state: .available(current: "1", latest: "2"))
@@ -260,18 +260,18 @@ struct ACPAdapterUpdateStoreTests {
 
     @Test("TTL timestamps are independent by target")
     func ttlIsTargetIsolated() async {
-        var clock = Date(timeIntervalSince1970: 1_000)
+        let clock = TestClock(Date(timeIntervalSince1970: 1_000))
         let store = ACPAdapterUpdateStore(
             fileURL: tempFile(),
             successTTL: 10, failureTTL: 5,
-            now: { clock })
+            now: { clock.now })
         let hostA = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
         let hostB = ACPAdapterUpdateKey(target: .ssh(host: "host-b"), agentID: "codex")
 
         await store.write(key: hostA, state: .upToDate)
-        clock = clock.addingTimeInterval(6)
+        clock.advance(by: 6)
         await store.write(key: hostB, state: .upToDate)
-        clock = clock.addingTimeInterval(5)
+        clock.advance(by: 5)
 
         #expect(await store.read(key: hostA) == nil)
         #expect(await store.read(key: hostB) == .upToDate)
@@ -310,5 +310,41 @@ struct ACPAdapterUpdateStoreTests {
         let persisted = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
         let entries = persisted?["entries"] as? [String: Any]
         #expect(entries?[local.storageKey] != nil)
+    }
+}
+
+/// Mutable test clock shared with a store's `now` closure.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) {
+        self.value = value
+    }
+
+    var now: Date {
+        lock.withLock { value }
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.withLock { value = value.addingTimeInterval(interval) }
+    }
+}
+
+/// Counts calls made from a concurrently-executing closure.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.withLock { value += 1 }
+    }
+
+    var count: Int {
+        lock.withLock { value }
     }
 }

@@ -45,8 +45,8 @@ struct WebPreviewAutomationRoutingTests {
         #expect(previews.count == 1)
         #expect(previews.first?["owner_key"] as? String == owner.storageKey)
         #expect(tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil).webView.url == nil)
-        tabs.closeAll(worktreeId: owner.storageKey)
-        tabs.closeAll(worktreeId: "other")
+        _ = tabs.closeAll(worktreeId: owner.storageKey)
+        _ = tabs.closeAll(worktreeId: "other")
     }
 
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {
@@ -54,15 +54,15 @@ struct WebPreviewAutomationRoutingTests {
         let owner = SessionOwnerID.worktree("owner")
         _ = tabs.openWebPreview(owner: owner)
         let old = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
-        tabs.closeAll(worktreeId: owner.storageKey)
+        _ = tabs.closeAll(worktreeId: owner.storageKey)
         _ = tabs.openWebPreview(owner: owner)
-        defer { tabs.closeAll(worktreeId: owner.storageKey) }
+        defer { _ = tabs.closeAll(worktreeId: owner.storageKey) }
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: owner, isAuthorized: { true },
             resolveOpen: { _ in throw WebPreviewAutomationError.unavailable }, focus: { _ in }
         )
         await #expect(throws: WebPreviewAutomationError.self) {
-            try await service.perform(.init(action: .console, previewID: old.automationID))
+            _ = try await service.perform(.init(action: .console, previewID: old.automationID))
         }
         #expect(old.isClosed)
     }
@@ -78,7 +78,7 @@ struct WebPreviewAutomationRoutingTests {
                 return .init(url: URL(string: "https://example.com"), remoteHost: nil)
             }, focus: { _ in Issue.record("Revoked caller cannot focus") }
         )
-        await #expect(throws: WebPreviewAutomationError.self) { try await service.perform(.init(action: .open)) }
+        await #expect(throws: WebPreviewAutomationError.self) { _ = try await service.perform(.init(action: .open)) }
         #expect(tabs.tabs(forWorktree: "owner").isEmpty)
     }
 
@@ -89,7 +89,7 @@ struct WebPreviewAutomationRoutingTests {
             resolveOpen: { _ in .init(url: URL(string: "http://127.0.0.1:3000"), remoteHost: "devbox") },
             focus: { _ in Issue.record("Blocked endpoint cannot focus") }
         )
-        await #expect(throws: WebPreviewAutomationError.self) { try await service.perform(.init(action: .open)) }
+        await #expect(throws: WebPreviewAutomationError.self) { _ = try await service.perform(.init(action: .open)) }
         #expect(tabs.tabs(forWorktree: "remote").isEmpty)
     }
 
@@ -102,7 +102,7 @@ struct WebPreviewAutomationRoutingTests {
         let operation = try browser.automationState.begin()
         defer {
             browser.automationState.finish(operation)
-            tabs.closeAll(worktreeId: owner.storageKey)
+            _ = tabs.closeAll(worktreeId: owner.storageKey)
         }
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: owner, isAuthorized: { true },
@@ -110,7 +110,7 @@ struct WebPreviewAutomationRoutingTests {
             focus: { _ in Issue.record("Busy open must not focus") }, resolveHost: { _ in ["192.0.2.1"] }
         )
         await #expect(throws: WebPreviewBrowserAutomationError.self) {
-            try await service.perform(.init(action: .open, url: "https://example.com/replacement"))
+            _ = try await service.perform(.init(action: .open, url: "https://example.com/replacement"))
         }
         #expect(tabs.tabs(for: owner) == [tab])
         #expect(!browser.isClosed)
@@ -123,7 +123,7 @@ struct WebPreviewAutomationRoutingTests {
         _ = tabs.openWebPreview(owner: owner)
         let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
         let other = tabs.appendTerminal(worktreeId: owner.storageKey, title: "Shell", sessionId: "shell")
-        defer { tabs.closeAll(worktreeId: owner.storageKey) }
+        defer { _ = tabs.closeAll(worktreeId: owner.storageKey) }
         let url = URL(string: "https://example.com/changed")!
         browser.onNavigate?(url)
         let preview = try #require(tabs.tabs(for: owner).compactMap { tab -> WebPreviewTabState? in
@@ -141,7 +141,7 @@ struct WebPreviewAutomationRoutingTests {
             resolveOpen: { _ in .init(url: URL(string: "http://local-alias:3000"), remoteHost: "devbox") },
             focus: { _ in Issue.record("Blocked endpoint cannot focus") }, resolveHost: { _ in ["127.0.0.1"] }
         )
-        await #expect(throws: WebPreviewAutomationError.self) { try await service.perform(.init(action: .open)) }
+        await #expect(throws: WebPreviewAutomationError.self) { _ = try await service.perform(.init(action: .open)) }
         #expect(tabs.tabs(forWorktree: "remote").isEmpty)
     }
 }

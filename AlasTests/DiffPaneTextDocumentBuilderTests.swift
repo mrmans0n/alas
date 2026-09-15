@@ -34,6 +34,7 @@ struct DiffPaneTextDocumentBuilderTests {
         #expect(DiffPaneCodeTextView.expandPillFillAlpha(hovered: false, pressed: true) == 0.36)
     }
 
+    @MainActor
     @Test func expandableContextRowContainsPillWithVerticalClearance() throws {
         let font = CenterTypography.resolveCodeFont(family: "", size: 32)
         let row = expandableContextRow(remainingLineCount: 46, boundary: .below)

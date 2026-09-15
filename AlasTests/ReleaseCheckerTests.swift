@@ -239,14 +239,14 @@ struct ReleaseCheckerTests {
     }
 
     @Test func nightlyHitsBothReleaseAndTagRefURLs() async {
-        var observed: [URL] = []
+        let recorder = FetchedURLRecorder()
         let checker = ReleaseChecker(
             stableReleaseURL: Self.stableTestURL,
             nightlyReleaseURL: Self.nightlyTestURL,
             nightlyTagRefURL: Self.tagRefTestURL,
             arch: "arm64",
             fetch: { url in
-                observed.append(url)
+                await recorder.record(url)
                 if url == Self.tagRefTestURL {
                     return self.nightlyTagRefJSON(sha: "fff9999")
                 }
@@ -254,8 +254,19 @@ struct ReleaseCheckerTests {
             }
         )
         _ = await checker.check(identity: nightlyIdentity(sha: "aaa", buildDate: "2026-06-02T10:00:00Z"))
+        let observed = await recorder.urls
         #expect(observed.contains(Self.nightlyTestURL))
         #expect(observed.contains(Self.tagRefTestURL))
         #expect(!observed.contains(Self.stableTestURL))
+    }
+}
+
+/// `ReleaseChecker.Fetch` is `@Sendable`, so the probe cannot append to a
+/// captured local `var`. This records the requested URLs instead.
+private actor FetchedURLRecorder {
+    private(set) var urls: [URL] = []
+
+    func record(_ url: URL) {
+        urls.append(url)
     }
 }

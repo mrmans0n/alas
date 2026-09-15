@@ -43,26 +43,23 @@ final class AppKitDiffScrollView: NSScrollView {
         flippedDocumentView.frame = NSRect(x: 0, y: 0, width: frameRect.width, height: 0)
         flippedDocumentView.autoresizingMask = [.width]
         contentView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
+        boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
-            object: contentView,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.programmaticAdjustmentDepth == 0 else { return }
-                if self.programmaticAnimationDepth > 0 {
-                    self.onProgrammaticViewportChange?()
-                    return
-                }
-                self.onUserViewportChange?()
+            object: contentView
+        ) { [weak self] in
+            guard let self, self.programmaticAdjustmentDepth == 0 else { return }
+            if self.programmaticAnimationDepth > 0 {
+                self.onProgrammaticViewportChange?()
+                return
             }
+            self.onUserViewportChange?()
         }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    deinit {
+    isolated deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
@@ -104,7 +101,7 @@ final class AppKitDiffScrollView: NSScrollView {
         }
     }
 
-    func setScrollY(_ y: CGFloat, animated: Bool, completion: (() -> Void)? = nil) {
+    func setScrollY(_ y: CGFloat, animated: Bool, completion: (@MainActor @Sendable () -> Void)? = nil) {
         let point = NSPoint(x: contentView.bounds.origin.x, y: clampedScrollY(y))
         guard abs(point.y - scrollY) > 0.01 else {
             completion?()
@@ -122,12 +119,18 @@ final class AppKitDiffScrollView: NSScrollView {
                     return
                 }
                 #endif
+                let completion = completion
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.25
                     contentView.animator().setBoundsOrigin(point)
                 } completionHandler: { [weak self] in
-                    self?.programmaticAnimationDidComplete()
-                    completion?()
+                    // `runAnimationGroup`'s completion handler type is `@Sendable`,
+                    // but AppKit always invokes it on the main thread, where the
+                    // main actor runs.
+                    MainActor.assumeIsolated {
+                        self?.programmaticAnimationDidComplete()
+                        completion?()
+                    }
                 }
             } else {
                 contentView.setBoundsOrigin(point)

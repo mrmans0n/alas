@@ -82,7 +82,10 @@ enum WebPreviewHostLookup {
             guard let address = info.ai_addr,
                   getnameinfo(address, info.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0
             else { return nil }
-            addresses.insert(String(cString: buffer))
+            // `String(cString:)` is deprecated; getnameinfo NUL-terminates, so
+            // decode up to the terminator rather than the whole fixed buffer.
+            let hostBytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            addresses.insert(String(decoding: hostBytes, as: UTF8.self))
             entry = info.ai_next
         }
         return Array(addresses)

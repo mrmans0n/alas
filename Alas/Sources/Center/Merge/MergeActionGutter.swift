@@ -42,6 +42,7 @@ struct MergeActionGutter: NSViewRepresentable {
         view.needsLayout = true
     }
 
+    @MainActor
     final class GutterView: NSView {
         var side: Side = .localToResult
         var conflictRanges: [MergeRegionVisualLayout.VisualConflictRange] = []
@@ -166,17 +167,16 @@ struct MergeActionGutter: NSViewRepresentable {
         }
 
         private final class ActionHandler: NSObject {
-            static var key: UInt8 = 0
+            // Used only as a stable address for objc_setAssociatedObject; the value is never read.
+            nonisolated(unsafe) static var key: UInt8 = 0
             let closure: () -> Void
             init(closure: @escaping () -> Void) { self.closure = closure }
             @objc func fire() { closure() }
         }
 
-        deinit {
+        isolated deinit {
             if let scrollObserverID, let observedCoordinator {
-                MainActor.assumeIsolated {
-                    observedCoordinator.removeScrollObserver(scrollObserverID)
-                }
+                observedCoordinator.removeScrollObserver(scrollObserverID)
             }
         }
     }

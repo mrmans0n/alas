@@ -1127,7 +1127,14 @@ actor WorkspaceCheckoutCoordinator {
         return try await self.checkout(id: checkoutID)
     }
 
-    private func failedDuringSetup(checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember) -> Bool {
+    /// `nonisolated` because it is a pure function of its two `Sendable`
+    /// parameters — it reads no actor state — and it has to be callable from
+    /// inside the `@Sendable` closures passed to `store.mutate`, which do not
+    /// inherit this actor's isolation.
+    private nonisolated func failedDuringSetup(
+        checkout: WorkspaceCheckout,
+        member: WorkspaceCheckoutMember
+    ) -> Bool {
         guard member.checkpoint == .failed,
               member.cleanupOwnership.worktreeCreated,
               member.gitLineageID != nil
@@ -1385,9 +1392,8 @@ actor WorkspaceCheckoutCoordinator {
             branchIntent: .init(plan.branchIntent, baseCommit: plan.baseCommit),
             expectedLineageID: expectedLineageID(checkoutID: checkout.id, memberID: plan.checkoutMemberID)
         )
-        var restoredCompletedMember = false
         do {
-            try await projectMutationGate.withMutation(projectID: plan.projectID) {
+            let restoredCompletedMember = try await projectMutationGate.withMutation(projectID: plan.projectID) { () async throws -> Bool in
                 if let staleRegistrationCleanup {
                     try await self.lifecycle.recoverStaleRegistrationCleanup(staleRegistrationCleanup)
                     if preservesCompletedMemberOnLockedRegistration,
@@ -1401,8 +1407,7 @@ actor WorkspaceCheckoutCoordinator {
                             member.recreationSourceCheckpoint = nil
                             member.recreationWorktreeCreationBegan = false
                         }
-                        restoredCompletedMember = true
-                        return
+                        return true
                     }
                     guard try await self.git.preparedBranchMatchesFrozenBase(operation) else {
                         throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
@@ -1467,6 +1472,7 @@ actor WorkspaceCheckoutCoordinator {
                         branchOwnership: branchOwnership
                     )
                 }
+                return false
             }
             guard restoredCompletedMember == false else { return }
             try await runSetupThrowing(member: plan, checkout: checkout)
@@ -1585,7 +1591,7 @@ actor WorkspaceCheckoutCoordinator {
     private func updateMember(
         checkoutID: UUID,
         memberID: UUID,
-        update: (inout WorkspaceCheckoutMember) -> Void
+        update: @Sendable (inout WorkspaceCheckoutMember) -> Void
     ) async throws {
         do {
             try await store.mutate { state in
@@ -1628,14 +1634,14 @@ actor WorkspaceCheckoutCoordinator {
     private func mutateMember(
         checkoutID: UUID,
         memberID: UUID,
-        update: (inout WorkspaceCheckoutMember) -> Void
+        update: @Sendable (inout WorkspaceCheckoutMember) -> Void
     ) async throws {
         try await updateMember(checkoutID: checkoutID, memberID: memberID, update: update)
     }
 
     private func mutateCheckout(
         _ checkoutID: UUID,
-        update: (inout WorkspaceCheckout) -> Void
+        update: @Sendable (inout WorkspaceCheckout) -> Void
     ) async throws {
         do {
             try await store.mutate { state in

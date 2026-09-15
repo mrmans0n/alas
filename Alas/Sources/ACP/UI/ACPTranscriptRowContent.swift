@@ -9,7 +9,11 @@ import SwiftUI
 /// values below lets SwiftUI skip re-diffing a row's subtree entirely when
 /// they're unchanged. See docs/plans/2026-07-17-acp-transcript-livelock-fix.md
 /// (Task 7) for the stale-closure audit backing the excluded fields below.
-struct ACPTranscriptRowContent: View, Equatable {
+// `==` is only invoked by SwiftUI view diffing via `.equatable()`/`EquatableView`,
+// which runs on the main actor; the only other caller is the `@MainActor` test
+// suite. The `equalityKey(...)` seam exists precisely so background callers
+// never reach `==`.
+struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     // Compared (render-relevant values):
     let stableId: String
     let messageIndex: Int

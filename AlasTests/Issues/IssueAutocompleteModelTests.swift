@@ -224,6 +224,7 @@ private actor ControlledLoader {
     private var cancellationWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
     private var continuations: [Int: CheckedContinuation<[CodeHostIssueSuggestion], Error>] = [:]
 
+    @Sendable
     nonisolated func load(projectID: String, limit: Int) async throws -> [CodeHostIssueSuggestion] {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in

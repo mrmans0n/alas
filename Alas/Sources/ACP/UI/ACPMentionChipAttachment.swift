@@ -8,6 +8,7 @@ final class ACPMentionChipAttachment: NSTextAttachment {
     let displayName: String
     let uri: String
 
+    @MainActor
     init(displayName: String, uri: String) {
         self.displayName = displayName
         self.uri = uri

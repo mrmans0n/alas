@@ -50,7 +50,11 @@ struct MergeSidePane: NSViewRepresentable {
         scroll.verticalRulerView = MergeSourceLineNumberRulerView(scrollView: scroll, theme: theme)
         context.coordinator.textView = textView
         // Forward scroll changes to the coordinator.
-        context.coordinator.observeScroll(scroll, side: side, into: coordinator)
+        context.coordinator.scrollBridge = MergePaneScrollBridge(
+            scroll: scroll,
+            source: side == .local ? .local : .remote,
+            coordinator: coordinator
+        )
         return scroll
     }
 
@@ -84,8 +88,6 @@ struct MergeSidePane: NSViewRepresentable {
             )
         }
         textView.backgroundColor = bg
-        context.coordinator.coordinator = coordinator
-        context.coordinator.side = side
         context.coordinator.lastRowHeight = lineHeight()
         coordinator.rowHeight = lineHeight()
         coordinator.contentTopInset = textView.textContainerInset.height
@@ -95,6 +97,7 @@ struct MergeSidePane: NSViewRepresentable {
         Coordinator()
     }
 
+    @MainActor
     final class Coordinator: NSObject {
         struct CacheKey: Equatable {
             let rows: [MergeRegionVisualLayout.VisualRow]
@@ -105,43 +108,9 @@ struct MergeSidePane: NSViewRepresentable {
             let fg: NSColor
         }
         weak var textView: NSTextView?
-        var side: Side = .local
-        var coordinator: MergeScrollCoordinator?
         var lastRowHeight: CGFloat = 16
         var lastKey: CacheKey?
-        private var token: NSObjectProtocol?
-
-        func observeScroll(_ scroll: NSScrollView, side: Side, into coord: MergeScrollCoordinator) {
-            self.side = side
-            self.coordinator = coord
-            scroll.contentView.postsBoundsChangedNotifications = true
-            token = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification,
-                object: scroll.contentView,
-                queue: .main
-            ) { [weak self] _ in
-                guard let self else { return }
-                let y = scroll.contentView.bounds.origin.y
-                self.coordinator?.applyPaneY(y, source: self.side == .local ? .local : .remote)
-            }
-            let mySource: MergeScrollCoordinator.Source = (side == .local) ? .local : .remote
-            MainActor.assumeIsolated {
-                let handler: @MainActor (CGFloat) -> Void = { [weak scroll] y in
-                    guard let scroll else { return }
-                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
-                    scroll.reflectScrolledClipView(scroll.contentView)
-                }
-                switch mySource {
-                case .local: coord.onSyncLocal = handler
-                case .remote: coord.onSyncRemote = handler
-                case .result: break // unreachable; this pane is always local or remote
-                }
-            }
-        }
-
-        deinit {
-            if let token { NotificationCenter.default.removeObserver(token) }
-        }
+        fileprivate var scrollBridge: MergePaneScrollBridge?
     }
 
     private func lineHeight() -> CGFloat {
@@ -184,6 +153,7 @@ struct MergeSidePane: NSViewRepresentable {
     }
 }
 
+@MainActor
 private final class MergeSourceLineNumberRulerView: NSRulerView {
     private var rows: [MergeRegionVisualLayout.VisualRow] = []
     private var theme: Theme
@@ -255,11 +225,10 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
 
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
+        boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
-        ) { [weak self] _ in
+            object: scrollView.contentView
+        ) { [weak self] in
             self?.needsDisplay = true
         }
     }
@@ -282,7 +251,7 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
         ]
     }
 
-    deinit {
+    isolated deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }

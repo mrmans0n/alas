@@ -8,9 +8,9 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
 
     private let runner: any CodeHostCommandRunning
 
-    // Reference-type buffer so the struct doesn't need to be mutating.
-    // Access is always from the single-threaded async call chain that begins in the
-    // provider methods, so no additional synchronization is needed.
+    // Reference-type buffer so the struct doesn't need to be mutating. The
+    // buffer serialises its own access with a lock, which is what lets this
+    // `Sendable` struct hold it (see `GitLabPendingComments`).
     private let pendingComments = GitLabPendingComments()
 
     init(runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner()) {
@@ -867,7 +867,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         _ = request
         _ = cwd
         let reviewID = UUID().uuidString
-        pendingComments.store[reviewID] = []
+        pendingComments.begin(reviewID: reviewID)
         return reviewID
     }
 
@@ -881,7 +881,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         _ = remote
         _ = request
         _ = cwd
-        pendingComments.store[reviewID, default: []].append(comment)
+        pendingComments.append(comment, reviewID: reviewID)
     }
 
     func submitReview(
@@ -892,7 +892,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         body: String,
         cwd: URL
     ) async throws {
-        let comments = pendingComments.store.removeValue(forKey: reviewID) ?? []
+        let comments = pendingComments.take(reviewID: reviewID)
 
         // Track how many have been successfully posted so unposted ones can be
         // restored to the buffer on partial failure (avoids duplication on retry).
@@ -902,13 +902,13 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             if !submitSucceeded {
                 let unposted = Array(comments[postedCount...])
                 if !unposted.isEmpty {
-                    pendingComments.store[reviewID] = unposted
+                    pendingComments.restore(unposted, reviewID: reviewID)
                 }
             }
         }
 
         // Fetch diff refs once if we have any inline (file-positioned) comments
-        let hasInlineComments = comments.contains { $0.filePath != nil && $0.line != nil }
+        let hasInlineComments = comments.contains { !$0.filePath.isEmpty && $0.line != nil }
         let diffRefs: GitLabDiffRefs? = hasInlineComments
             ? try await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd)
             : nil
@@ -1870,7 +1870,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                   !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab issue output is missing a valid URL."),
                   let createdAt = try parseOptionalGitLabDate(response.createdAt),
-                  case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
+                  case .url(let kind, let host, _, let number) = try CodeHostIssueInput.parse(url.absoluteString),
                   kind == .gitlab,
                   host.caseInsensitiveCompare(remote.host) == .orderedSame,
                   number == response.iid
@@ -2097,8 +2097,43 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     }
 }
 
-private final class GitLabPendingComments {
-    var store: [String: [StagedComment]] = [:]
+/// Staged inline comments for in-flight GitLab reviews, keyed by review id.
+///
+/// `@unchecked Sendable` is sound because the only mutable state is `store`
+/// and every access goes through `lock`; nothing escapes the critical section
+/// except copies of `StagedComment`, which is itself `Sendable`. The provider
+/// is a `Sendable` struct handed out by `CodeHostProviderRegistry`, so the
+/// same instance can in principle be reached from more than one task — the
+/// lock, not the review flow's call order, is what makes that safe.
+private final class GitLabPendingComments: @unchecked Sendable {
+    private let lock = NSLock()
+    private var store: [String: [StagedComment]] = [:]
+
+    func begin(reviewID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        store[reviewID] = []
+    }
+
+    func append(_ comment: StagedComment, reviewID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        store[reviewID, default: []].append(comment)
+    }
+
+    /// Removes and returns the staged comments for `reviewID`.
+    func take(reviewID: String) -> [StagedComment] {
+        lock.lock()
+        defer { lock.unlock() }
+        return store.removeValue(forKey: reviewID) ?? []
+    }
+
+    /// Puts comments back after a failed submit so a retry doesn't lose them.
+    func restore(_ comments: [StagedComment], reviewID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        store[reviewID] = comments
+    }
 }
 
 private struct MRListItem: Decodable {

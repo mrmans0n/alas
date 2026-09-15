@@ -216,7 +216,7 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
         super.scrollWheel(with: event)
     }
 
-    deinit {
+    isolated deinit {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
@@ -376,7 +376,6 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
         guard newY != lastReportedY else { return }
         let previous = lastReportedY
         lastReportedY = newY
-        let maxY = max(0, contentHeight - viewportHeight)
         onScroll?(previous, newY, viewportHeight, contentHeight, programmaticAdjustmentDepth > 0)
         applyLogicalScrollerMetrics()
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-protocol ReviewChangesGitClient {
+protocol ReviewChangesGitClient: Sendable {
     func status(worktreePath: URL) async throws -> [ChangedFile]
     func imageStatus(worktreePath: URL) async throws -> [ChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff

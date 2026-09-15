@@ -1,20 +1,67 @@
 import Darwin
 import Foundation
 
-final class AgentHookSocketServer {
-    /// Path that callers (and the `ALAS_SOCKET_PATH` env var) should use to
-    /// reach the live socket. May be a symlink pointing at `bindPath` —
-    /// see the convenience init's note on cross-relaunch persistence.
-    private(set) var socketPath: String?
-    /// The path the listening socket is actually bound to. Always the
-    /// pid-scoped `/tmp/alas-<uid>/pid-<pid>` file in production; the same
-    /// value as `socketPath` when callers passed an explicit path.
-    private var bindPath: String?
-    private var listenTask: Task<Void, Never>?
+/// Unix-socket listener for agent hook events, the Alas CLI, and the MCP
+/// hello handshake.
+///
+/// `@unchecked Sendable` is unavoidable here: the accept loop runs on a
+/// detached `Task`, every client is served on its own detached `Task`, and
+/// `shutdown()` is driven from the main actor, so the object really is
+/// touched from several threads at once. It cannot be `@MainActor` — the
+/// blocking `poll`/`accept`/`read` loop must stay off the main thread.
+///
+/// Soundness rests on two invariants, both enforced below:
+///
+/// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
+///    `_listenTask` and the three handlers are private and are only read or
+///    written inside `lock`. Nothing else in the class is mutable:
+///    `clientTasks` does its own locking, everything else is `let` or
+///    `static`.
+/// 2. **Handlers only ever run on the main actor.** They are deliberately
+///    *not* `Sendable` function types, because they are wired from the main
+///    actor (`AppState.startHarness` / `HarnessService.start`) and close over
+///    main-actor state, from which they inherit main-actor isolation. The
+///    synchronous ones are invoked from `deliverEvent`/`deliverMCPHello`,
+///    which only ever run inside `DispatchQueue.main.async`; the CLI handler
+///    is `async`, so awaiting it from a client task hops to the main actor
+///    instead of running its body on the client thread. Each handler is
+///    snapshotted under the lock and the lock is released before the call, so
+///    no handler ever executes while the lock is held.
+final class AgentHookSocketServer: @unchecked Sendable {
+    typealias EventHandler = (AgentHookEvent) -> Void
+    typealias CLIRequestHandler = (AlasCLIRequest) async -> AlasCLIResponse
+    typealias MCPHelloHandler = (MCPHelloEvent) -> Void
+
+    /// Guards every mutable field below. See the invariants on the type.
+    private let lock = NSLock()
+    private var _socketPath: String?
+    private var _bindPath: String?
+    private var _listenTask: Task<Void, Never>?
+    private var _onEvent: EventHandler?
+    private var _onCLIRequest: CLIRequestHandler?
+    private var _onMCPHello: MCPHelloHandler?
+
     private let clientTasks = ClientTaskRegistry(limit: AgentHookSocketServer.maxConcurrentClientTasks)
-    var onEvent: ((AgentHookEvent) -> Void)?
-    var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
-    var onMCPHello: ((MCPHelloEvent) -> Void)?
+
+    /// Path that callers (and the `ALAS_SOCKET_PATH` env var) should use to
+    /// reach the live socket. May be a symlink pointing at the bind path —
+    /// see the convenience init's note on cross-relaunch persistence.
+    var socketPath: String? { lock.withLock { _socketPath } }
+
+    var onEvent: EventHandler? {
+        get { lock.withLock { _onEvent } }
+        set { lock.withLock { _onEvent = newValue } }
+    }
+
+    var onCLIRequest: CLIRequestHandler? {
+        get { lock.withLock { _onCLIRequest } }
+        set { lock.withLock { _onCLIRequest = newValue } }
+    }
+
+    var onMCPHello: MCPHelloHandler? {
+        get { lock.withLock { _onMCPHello } }
+        set { lock.withLock { _onMCPHello = newValue } }
+    }
 
     static let maxPayloadSize = 65_536
     private static let maxConcurrentClientTasks = 16
@@ -23,8 +70,13 @@ final class AgentHookSocketServer {
     init(socketPath: String) {
         unlink(socketPath)
         guard startListening(path: socketPath) else { return }
-        self.socketPath = socketPath
-        self.bindPath = socketPath
+        // The listening socket is bound to the same path callers use, so
+        // `_socketPath` and `_bindPath` coincide here. They diverge only via
+        // `linkSession`, which hands out a symlink.
+        lock.withLock {
+            self._socketPath = socketPath
+            self._bindPath = socketPath
+        }
     }
 
     convenience init(uid: uid_t = getuid(), pid: pid_t = ProcessInfo.processInfo.processIdentifier) {
@@ -53,7 +105,7 @@ final class AgentHookSocketServer {
     /// Returns nil if the server isn't bound, or if symlink creation
     /// failed — the caller can fall back to the raw bind path.
     func linkSession(leafId: String, uid: uid_t = getuid()) -> String? {
-        guard let bindPath else { return nil }
+        guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
         let linkPath = "/tmp/alas-\(uid)/sock-\(leafId)"
         unlink(linkPath)
         guard symlink(bindPath, linkPath) == 0 else { return nil }
@@ -100,19 +152,24 @@ final class AgentHookSocketServer {
     }
 
     func shutdown() {
-        listenTask?.cancel()
-        listenTask = nil
+        let (cancelledTask, boundPath) = lock.withLock { () -> (Task<Void, Never>?, String?) in
+            let currentTask = _listenTask
+            let currentBindPath = _bindPath
+            _listenTask = nil
+            _socketPath = nil
+            _bindPath = nil
+            return (currentTask, currentBindPath)
+        }
+        cancelledTask?.cancel()
         clientTasks.cancelAll()
-        if let bindPath { unlink(bindPath) }
-        socketPath = nil
-        bindPath = nil
+        if let boundPath { unlink(boundPath) }
     }
 
     private func startListening(path: String) -> Bool {
         let socketFD = Self.createSocket(path: path)
         guard socketFD >= 0 else { return false }
 
-        listenTask = Task.detached { [weak self] in
+        let task = Task.detached { [weak self] in
             defer { close(socketFD) }
             while !Task.isCancelled {
                 var pollFD = pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0)
@@ -125,6 +182,7 @@ final class AgentHookSocketServer {
                 self?.acceptAndHandle(socketFD: socketFD)
             }
         }
+        lock.withLock { _listenTask = task }
         return true
     }
 
@@ -166,8 +224,7 @@ final class AgentHookSocketServer {
         if Self.payloadKind(data) == "mcp_hello" {
             if let hello = try? MCPHelloEvent.decode(from: data) {
                 Self.sendResponse(clientFD: clientFD, ok: true)
-                let handler = onMCPHello
-                DispatchQueue.main.async { handler?(hello) }
+                DispatchQueue.main.async { [self] in deliverMCPHello(hello) }
             } else {
                 Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
             }
@@ -177,8 +234,7 @@ final class AgentHookSocketServer {
         do {
             let event = try AgentHookEvent.decode(from: data)
             Self.sendResponse(clientFD: clientFD, ok: true)
-            let handler = onEvent
-            DispatchQueue.main.async { handler?(event) }
+            DispatchQueue.main.async { [self] in deliverEvent(event) }
         } catch is AgentHookEventError where (try? AgentHookEvent.isUnknownEvent(data)) == true {
             Self.sendResponse(clientFD: clientFD, ok: true)
         } catch {
@@ -186,8 +242,33 @@ final class AgentHookSocketServer {
         }
     }
 
+    /// Invoked only from `DispatchQueue.main.async`. Snapshots the handler
+    /// under the lock, then calls it with the lock released.
+    private func deliverEvent(_ event: AgentHookEvent) {
+        let handler = lock.withLock { _onEvent }
+        handler?(event)
+    }
+
+    /// Invoked only from `DispatchQueue.main.async`. Snapshots the handler
+    /// under the lock, then calls it with the lock released.
+    private func deliverMCPHello(_ hello: MCPHelloEvent) {
+        let handler = lock.withLock { _onMCPHello }
+        handler?(hello)
+    }
+
+    /// Snapshots the CLI handler under the lock and awaits it. The closure
+    /// never escapes this method, so it is never captured by a `@Sendable`
+    /// closure; because the production handler is created on the main actor
+    /// it hops back there for its body.
+    private func invokeCLIRequestHandler(_ request: AlasCLIRequest) async -> AlasCLIResponse {
+        guard let handler = lock.withLock({ _onCLIRequest }) else {
+            return .error("Alas CLI is not available.")
+        }
+        return await handler(request)
+    }
+
     private func cliResponse(for request: AlasCLIRequest) async -> AlasCLIResponse {
-        guard let handler = onCLIRequest else {
+        guard lock.withLock({ _onCLIRequest != nil }) else {
             return .error("Alas CLI is not available.")
         }
 
@@ -195,8 +276,8 @@ final class AgentHookSocketServer {
         return await withTaskCancellationHandler(operation: {
             await withCheckedContinuation { continuation in
                 box.setContinuation(continuation)
-                let task = Task {
-                    let response = await handler(request)
+                let task = Task { [self] in
+                    let response = await invokeCLIRequestHandler(request)
                     box.resume(returning: response)
                 }
                 box.setTask(task)

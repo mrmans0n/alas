@@ -195,7 +195,7 @@ struct AppStateSpacesTests {
         state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
         state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
 
-        state.switchToSpace(id: "s2")
+        _ = state.switchToSpace(id: "s2")
 
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
@@ -436,7 +436,7 @@ struct AppStateSpacesTests {
         let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
         state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
 
-        state.switchToSpace(id: "s2")
+        _ = state.switchToSpace(id: "s2")
 
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
@@ -457,7 +457,7 @@ struct AppStateSpacesTests {
         let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
         state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
 
-        state.switchToSpace(id: "s2")
+        _ = state.switchToSpace(id: "s2")
 
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")

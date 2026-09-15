@@ -47,7 +47,7 @@ struct IssueWorktreeLaunchTests {
         )
         let worktree = try #require(fixture.state.worktree(withId: id))
 
-        try? await fixture.state.startACPSession(
+        _ = try? await fixture.state.startACPSession(
             worktree: worktree,
             sessionID: prepared.sessionID,
             agentID: "missing-acp-agent",

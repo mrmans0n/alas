@@ -146,7 +146,10 @@ final class EditorBuffer {
     @ObservationIgnored private(set) var compositionOwner: UUID?
     @ObservationIgnored private var compositionSettlement: (() -> Void)?
     @ObservationIgnored private var compositionInvalidation: (() -> Void)?
-    @ObservationIgnored private var compositionReload: (() -> Void)?
+    // Dispatched via `DispatchQueue.main.async`, whose `execute:` parameter is
+    // `@MainActor @Sendable`. Every assignment is a `[weak self]` capture of this
+    // main-actor buffer, so the stricter type costs nothing.
+    @ObservationIgnored private var compositionReload: (@MainActor @Sendable () -> Void)?
     private final class SourceEditSelection {
         var ranges: [NSValue]
         init(_ ranges: [NSValue]) { self.ranges = ranges }
@@ -746,6 +749,7 @@ final class EditorBuffer {
               let lsp,
               let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
+        let worktreeRoot = self.worktreeRoot
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
         lspOpenGeneration &+= 1
@@ -1802,7 +1806,7 @@ final class EditorBuffer {
         originalVolumeIdentifier = volume as AnyObject
     }
 
-    private static let movedFileSearchSkippedDirectoryNames: Set<String> = [
+    nonisolated private static let movedFileSearchSkippedDirectoryNames: Set<String> = [
         ".build",
         ".git",
         ".gradle",
@@ -2076,7 +2080,7 @@ final class EditorBuffer {
                 finish(edits)
             }
             Task {
-                try? await timeoutTask.value
+                await timeoutTask.value
                 formatTask.cancel()
                 finish(nil)
             }
@@ -2405,6 +2409,9 @@ final class EditorBuffer {
         let documentText = text ?? storage.string
         lspOpenGeneration &+= 1
         let generation = lspOpenGeneration
+        // Hoisted so the `[weak self]` below is not defeated by an implicit
+        // `self` capture when the task reads the worktree root.
+        let worktreeRoot = self.worktreeRoot
         lspOpenTask = Task { [weak self] in
             let opened = await lsp.openDocument(
                 worktreeRoot: worktreeRoot,
@@ -2465,7 +2472,7 @@ final class EditorBuffer {
         let isExternal = self.isExternal
         let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
         let task = Task.detached(priority: .userInitiated) { () -> LoadResult in
-            if let gate = await EditorBuffer.loadGateForTesting {
+            if let gate = EditorBuffer.loadGateForTesting {
                 await gate()
             }
             guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
@@ -2473,7 +2480,7 @@ final class EditorBuffer {
             }
             let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
             if isDirectory { return .missing }
-            if let override = await EditorBuffer.loadResultForTesting,
+            if let override = EditorBuffer.loadResultForTesting,
                let raw = await override(resolvedURL) {
                 let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
                 return .loaded(raw: raw, resolvedURL: resolvedURL, isExternal: isExternal, isSymlink: isSymlink)

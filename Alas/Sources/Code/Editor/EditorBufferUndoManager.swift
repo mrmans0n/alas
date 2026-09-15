@@ -11,6 +11,9 @@ final class EditorBufferUndoManager: UndoManager {
         let removed: () -> Void
     }
 
+    // Nested types do not inherit the enclosing type's isolation, and
+    // `UndoManager()` is main-actor isolated.
+    @MainActor
     private final class Segment {
         let manager = UndoManager()
         var position = 0

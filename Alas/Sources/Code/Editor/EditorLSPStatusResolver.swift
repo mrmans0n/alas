@@ -9,10 +9,12 @@ import Foundation
 @MainActor
 struct EditorLSPStatusResolver {
     protocol ManagerProbe {
+        @MainActor
         func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus
     }
 
     protocol AvailabilityProbe {
+        @MainActor
         func status(forLanguage language: String) -> LanguageServerAvailability.Status?
         func command(forLanguage language: String) -> String?
     }

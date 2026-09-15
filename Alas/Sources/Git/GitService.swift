@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-struct GitService {
+struct GitService: Sendable {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
     func isGitRepository(_ path: URL) async throws -> Bool {
@@ -1113,13 +1113,11 @@ extension GitService {
             ["check-ignore", "-q", "--", path],
             cwd: worktreePath
         )
-        let ignoredByPattern: Bool
         switch result.exitCode {
-        case 0: ignoredByPattern = true
+        case 0: break
         case 1: return false
         default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
-        guard ignoredByPattern else { return false }
         if let comparisonRef, !comparisonRef.isEmpty {
             let existedAtRef = try await Process.git(
                 ["cat-file", "-e", "\(comparisonRef):\(path)"], cwd: worktreePath)
@@ -1260,14 +1258,14 @@ extension GitService {
     }
 
     private func defaultGlobalExcludesPath() -> String? {
-        if let xdgConfigHome = getenv("XDG_CONFIG_HOME").flatMap({ String(validatingUTF8: $0) }),
+        if let xdgConfigHome = getenv("XDG_CONFIG_HOME").flatMap({ String(validatingCString: $0) }),
            !xdgConfigHome.isEmpty {
             return URL(fileURLWithPath: xdgConfigHome)
                 .appendingPathComponent("git")
                 .appendingPathComponent("ignore")
                 .path
         }
-        guard let home = getenv("HOME").flatMap({ String(validatingUTF8: $0) }),
+        guard let home = getenv("HOME").flatMap({ String(validatingCString: $0) }),
               !home.isEmpty else {
             return nil
         }

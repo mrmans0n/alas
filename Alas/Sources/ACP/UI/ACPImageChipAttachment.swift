@@ -8,6 +8,7 @@ final class ACPImageChipAttachment: NSTextAttachment {
     let fileURL: URL
     let mimeType: String
 
+    @MainActor
     init(fileURL: URL, mimeType: String) {
         self.fileURL = fileURL
         self.mimeType = mimeType
@@ -20,8 +21,6 @@ final class ACPImageChipAttachment: NSTextAttachment {
 
 private final class ACPImageChipCell: NSTextAttachmentCell {
     private let thumbnail: NSImage?
-    private static let side: CGFloat = 20
-    private static let fallbackFont = NSFont.systemFont(ofSize: 13)
 
     init(thumbnail: NSImage?) {
         self.thumbnail = thumbnail
@@ -29,10 +28,16 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
     }
     required init(coder: NSCoder) { fatalError() }
 
-    override var cellSize: NSSize { NSSize(width: Self.side, height: Self.side) }
+    override var cellSize: NSSize {
+        ACPImageChipMetrics.cellSize(for: nil)
+    }
 
     override func cellBaselineOffset() -> NSPoint {
-        NSPoint(x: 0, y: Self.baselineOffset(for: Self.fallbackFont, attachmentHeight: cellSize.height))
+        let size = ACPImageChipMetrics.cellSize(for: nil)
+        return NSPoint(
+            x: 0,
+            y: ACPImageChipMetrics.baselineOffset(for: ACPImageChipMetrics.fallbackFont, attachmentHeight: size.height)
+        )
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
@@ -58,22 +63,38 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
                             proposedLineFragment lineFrag: NSRect,
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
-        let size = cellSize
+        let size = ACPImageChipMetrics.cellSize(for: nil)
         let font = textContainer.layoutManager?.textStorage?.attribute(
             .font,
             at: charIndex,
             effectiveRange: nil
-        ) as? NSFont ?? Self.fallbackFont
+        ) as? NSFont
         return NSRect(
             x: 0,
-            y: Self.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPImageChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
             width: size.width,
             height: size.height
         )
     }
+}
 
-    private static func baselineOffset(for font: NSFont, attachmentHeight: CGFloat) -> CGFloat {
-        let letterCenterFromBaseline = (font.ascender + font.descender) / 2
+/// Pure geometry for the image chip cell, kept nonisolated so TextKit's
+/// off-main layout pass can call it from the nonisolated
+/// `NSTextAttachmentCellProtocol` witnesses (`cellBaselineOffset()`,
+/// `cellFrame(for:proposedLineFragment:glyphPosition:characterIndex:)`)
+/// without crossing back into the main-actor `NSCell` API.
+private enum ACPImageChipMetrics {
+    static let side: CGFloat = 20
+    // Computed, not a stored global, so it stays nonisolated.
+    static var fallbackFont: NSFont { NSFont.systemFont(ofSize: 13) }
+
+    static func cellSize(for font: NSFont?) -> NSSize {
+        NSSize(width: side, height: side)
+    }
+
+    static func baselineOffset(for font: NSFont?, attachmentHeight: CGFloat) -> CGFloat {
+        let resolvedFont = font ?? fallbackFont
+        let letterCenterFromBaseline = (resolvedFont.ascender + resolvedFont.descender) / 2
         return letterCenterFromBaseline - attachmentHeight / 2
     }
 }

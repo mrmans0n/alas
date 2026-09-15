@@ -173,7 +173,7 @@ struct GGCommitMenuModelTests {
     @Test func checkoutIsHiddenForCurrentCommit() {
         let model = GGCommitMenuModel.make(context: context(target: entry(isCurrent: true)))
 
-        let checkout = try? #require(model.item(for: .checkout))
+        let checkout = model.item(for: .checkout)
         #expect(checkout?.isVisible == false)
     }
 
@@ -181,7 +181,7 @@ struct GGCommitMenuModelTests {
         let model = GGCommitMenuModel.make(context: context(target: entry(prState: .merged)))
 
         for action in [GGCommitAction.splitCommit, .dropCommit, .unstackHere] {
-            let item = try? #require(model.item(for: action))
+            let item = model.item(for: action)
             #expect(item?.isEnabled == false)
             #expect(item?.disabledReason == "Merged commits cannot be rewritten.")
         }
@@ -194,7 +194,7 @@ struct GGCommitMenuModelTests {
         for action in [
             GGCommitAction.checkout, .splitCommit, .dropCommit, .unstackHere, .landThrough,
         ] {
-            let item = try? #require(model.item(for: action))
+            let item = model.item(for: action)
             #expect(item?.isEnabled == false)
             #expect(item?.disabledReason == "Another GG operation is running.")
         }

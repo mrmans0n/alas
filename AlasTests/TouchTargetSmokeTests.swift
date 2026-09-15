@@ -63,7 +63,7 @@ struct TouchTargetSmokeTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func segmentedControlWithSystemImageRendersWithoutCrashing() {
@@ -72,7 +72,7 @@ struct TouchTargetSmokeTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func alasSegmentedControlRendersEnabledAndDisabledOptions() {
@@ -152,7 +152,7 @@ struct TouchTargetSmokeTests {
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func tabBarViewHostsOverflowingTabsInMarkedScrollView() {
@@ -314,7 +314,7 @@ struct TouchTargetSmokeTests {
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func tabBarViewWithRightSidebarRevealRendersWithoutCrashing() {
@@ -370,7 +370,7 @@ struct TouchTargetSmokeTests {
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func tabBarViewWithSidebarRevealRendersWithoutCrashing() {
@@ -426,7 +426,7 @@ struct TouchTargetSmokeTests {
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func stageChipRendersWithoutCrashing() {
@@ -434,7 +434,7 @@ struct TouchTargetSmokeTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func stageChipStagedRendersWithoutCrashing() {
@@ -442,7 +442,7 @@ struct TouchTargetSmokeTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

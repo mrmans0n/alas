@@ -1040,7 +1040,7 @@ struct ReviewSessionTabViewTests {
 
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host) != nil)
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pumpMainRunLoop(seconds: 0.05)
         host.layoutSubtreeIfNeeded()
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
@@ -1086,7 +1086,7 @@ struct ReviewSessionTabViewTests {
 
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host) != nil)
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pumpMainRunLoop(seconds: 0.05)
         host.layoutSubtreeIfNeeded()
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
@@ -1137,14 +1137,14 @@ struct ReviewSessionTabViewTests {
         host.layoutSubtreeIfNeeded()
 
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pumpMainRunLoop(seconds: 0.05)
         host.layoutSubtreeIfNeeded()
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
 
         let deadline = Date().addingTimeInterval(1)
         while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
         }
 
@@ -1295,7 +1295,7 @@ struct ReviewSessionTabViewTests {
         let deadline = Date().addingTimeInterval(1)
         while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
         }
 
@@ -1351,7 +1351,7 @@ struct ReviewSessionTabViewTests {
         let deadline = Date().addingTimeInterval(1)
         while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
         }
 
@@ -1432,7 +1432,7 @@ struct ReviewSessionTabViewTests {
         let deadline = Date().addingTimeInterval(1)
         while subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: host) == nil,
               Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
         }
 
@@ -1494,7 +1494,7 @@ struct ReviewSessionTabViewTests {
         #expect(!recursiveDescription(host).contains("external change reached the disk"))
 
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pumpMainRunLoop(seconds: 0.05)
         host.layoutSubtreeIfNeeded()
 
         #expect(recursiveDescription(host).contains("external change reached the disk"))
@@ -1889,9 +1889,7 @@ struct ReviewSessionTabViewTests {
             cwd: URL
         ) async throws {}
         func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
-            lock.lock()
-            recordedPublishRequests.append(request)
-            lock.unlock()
+            lock.withLock { recordedPublishRequests.append(request) }
             return publishResult
         }
         func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
@@ -1948,4 +1946,16 @@ struct ReviewSessionTabViewTests {
             nil
         }
     }
+}
+
+/// Spins the main run loop for `seconds` so AppKit/SwiftUI hosting work can settle.
+///
+/// `RunLoop.current`/`RunLoop.run(until:)` are `noasync`, but the pumping is exactly what
+/// these tests need: hosting-controller updates, layout and display are driven by run-loop
+/// observers in the default mode, which `Task.sleep` never fires. The suite is `@MainActor`,
+/// so `RunLoop.current` was already `RunLoop.main`; keeping the wait in a synchronous
+/// main-actor function preserves the timing behaviour while staying out of async contexts.
+@MainActor
+private func pumpMainRunLoop(seconds: TimeInterval) {
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
 }

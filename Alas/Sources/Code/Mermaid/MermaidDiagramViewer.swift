@@ -373,7 +373,7 @@ struct MermaidDiagramViewerView: View {
                                 fitted: fittedSize
                             )
                         }
-                        .onChange(of: proxy.size) { _ in
+                        .onChange(of: proxy.size) { _, _ in
                             updateActualSizeScale(
                                 intrinsic: diagram.image.size,
                                 fitted: fittedSize
@@ -502,7 +502,7 @@ private final class MermaidDiagramViewerBackingScaleView: NSView {
         publishScale()
     }
 
-    deinit {
+    isolated deinit {
         if let backingPropertiesObserver {
             NotificationCenter.default.removeObserver(backingPropertiesObserver)
         }
@@ -522,11 +522,10 @@ private final class MermaidDiagramViewerBackingScaleView: NSView {
             self.backingPropertiesObserver = nil
         }
         guard let window else { return }
-        backingPropertiesObserver = NotificationCenter.default.addObserver(
+        backingPropertiesObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSWindow.didChangeBackingPropertiesNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
+            object: window
+        ) { [weak self] in
             self?.publishScale()
         }
     }

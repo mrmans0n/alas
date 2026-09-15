@@ -43,7 +43,7 @@ struct CommitHeaderViewTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedHeaderWithBodyRendersWithoutCrashing() {
@@ -52,7 +52,7 @@ struct CommitHeaderViewTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedHeaderWithParentsRendersWithoutCrashing() {
@@ -61,7 +61,7 @@ struct CommitHeaderViewTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedHeaderWithEmptyBodyRendersWithoutCrashing() {
@@ -70,7 +70,7 @@ struct CommitHeaderViewTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedHeaderOnlyCapsLongBody() {
@@ -125,7 +125,7 @@ struct CommitHeaderViewTests {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     private func hostExpandedHeader(body: String) -> NSHostingController<some View> {

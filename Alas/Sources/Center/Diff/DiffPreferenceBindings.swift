@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct DiffPreferenceBindings {
     let appState: AppState
     private let wrapLinesStorage: Binding<Bool>

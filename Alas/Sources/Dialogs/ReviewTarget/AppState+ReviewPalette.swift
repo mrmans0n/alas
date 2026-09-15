@@ -54,23 +54,12 @@ extension AppState {
         // on MainActor, since `loadCommitsAhead` below runs concurrently
         // off-MainActor and must never touch `self.rightPaneStore` from its
         // body. A worktree with no loaded right pane (never activated)
-        // falls back to the global default above.
+        // falls back to the global default above. Built by a helper so the
+        // dictionary the closure captures is an immutable `let`.
         let projectId = selectedWorktreeId
             .flatMap { self.worktree(withId: $0)?.projectId }
             ?? projects.first?.id
-        var perWorktreeResolution: [String: (baseBranch: String, resolution: GitService.BaseResolution)] = [:]
-        if let projectId {
-            for worktree in projectsManager.visibleWorktrees(projectId: projectId) {
-                guard let state = rightPaneStore.activeState(worktreeId: worktree.id) else { continue }
-                perWorktreeResolution[worktree.id] = (
-                    state.baseBranch,
-                    GitService.BaseResolution.forCommits(
-                        mode: state.comparisonMode,
-                        userOverrodeBaseBranch: state.userOverrodeBaseBranch
-                    )
-                )
-            }
-        }
+        let perWorktreeResolution = perWorktreeBaseResolutions(projectId: projectId)
 
         return ReviewTargetPaletteEnvironment(
             worktrees: { [weak self] in
@@ -125,5 +114,27 @@ extension AppState {
                 )
             }
         )
+    }
+
+    /// Snapshot of each visible worktree's base-branch override, taken from
+    /// its already-loaded `RightPaneState`. Worktrees that were never
+    /// activated have no right pane and are simply absent from the result.
+    @MainActor
+    private func perWorktreeBaseResolutions(
+        projectId: String?
+    ) -> [String: (baseBranch: String, resolution: GitService.BaseResolution)] {
+        guard let projectId else { return [:] }
+        var resolutions: [String: (baseBranch: String, resolution: GitService.BaseResolution)] = [:]
+        for worktree in projectsManager.visibleWorktrees(projectId: projectId) {
+            guard let state = rightPaneStore.activeState(worktreeId: worktree.id) else { continue }
+            resolutions[worktree.id] = (
+                state.baseBranch,
+                GitService.BaseResolution.forCommits(
+                    mode: state.comparisonMode,
+                    userOverrodeBaseBranch: state.userOverrodeBaseBranch
+                )
+            )
+        }
+        return resolutions
     }
 }

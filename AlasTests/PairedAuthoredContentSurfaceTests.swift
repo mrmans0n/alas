@@ -63,7 +63,7 @@ struct PairedAuthoredContentSurfaceTests {
     private func drain(_ view: NSView) async {
         for _ in 0..<6 {
             view.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.001))
+            pumpMainRunLoop(seconds: 0.001)
             await Task.yield()
         }
     }
@@ -144,4 +144,15 @@ private struct MemoryStore: PersistenceStoreProtocol {
         }
         return nil
     }
+}
+
+/// Spins the main run loop for `seconds` so AppKit/SwiftUI hosting work can settle.
+///
+/// `RunLoop.run(until:)` is `noasync`, but the pumping is exactly what these tests need:
+/// hosting-controller updates, layout and display are driven by run-loop observers in the
+/// default mode, which `Task.sleep` never fires. Keeping the wait in a synchronous
+/// main-actor function preserves the timing behaviour while staying out of async contexts.
+@MainActor
+private func pumpMainRunLoop(seconds: TimeInterval) {
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
 }

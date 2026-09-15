@@ -48,7 +48,7 @@ struct CheckpointPresentationTests {
     }
 
     @Test func createModelNormalizesAndCapsLabels() {
-        var model = CreateCheckpointSheetModel()
+        let model = CreateCheckpointSheetModel()
         model.label = "   "
         #expect(model.canSubmit == false)
         model.label = "  Before edit  "

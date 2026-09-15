@@ -110,7 +110,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         let bootstrapped = await manager.bootstrapScheduledQueueSessions()
         try await waitUntilAsync {
-            await client.sent.contains { $0.method == "session/prompt" }
+            client.sent.contains { $0.method == "session/prompt" }
         }
 
         #expect(bootstrapped == [seededSession.id])

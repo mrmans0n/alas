@@ -126,18 +126,17 @@ struct LanguageServerAvailabilityTests {
 
     @Test("xcrun find uses bounded runner and parses successful output")
     nonisolated func xcrunFindUsesBoundedRunner() {
-        var observedExecutable: URL?
-        var observedArguments: [String] = []
-        var observedEnvironment: [String: String] = [:]
-        var observedTimeout: TimeInterval?
+        let recorder = SubprocessInvocationRecorder()
         let xcrunPath = """
         /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp
         """
         let runner = SubprocessRunner { executable, arguments, environment, timeout in
-            observedExecutable = executable
-            observedArguments = arguments
-            observedEnvironment = environment
-            observedTimeout = timeout
+            recorder.record(
+                executable: executable,
+                arguments: arguments,
+                environment: environment,
+                timeout: timeout
+            )
             return SubprocessRunner.Result(exitCode: 0, stdout: xcrunPath, stderr: "")
         }
 
@@ -147,11 +146,12 @@ struct LanguageServerAvailabilityTests {
             timeout: 1.25
         )
 
+        let observed = recorder.invocation
         #expect(resolved == xcrunPath.trimmingCharacters(in: .whitespacesAndNewlines))
-        #expect(observedExecutable?.path == "/usr/bin/xcrun")
-        #expect(observedArguments == ["--find", "sourcekit-lsp"])
-        #expect(observedEnvironment == ProcessInfo.processInfo.environment)
-        #expect(observedTimeout == 1.25)
+        #expect(observed.executable?.path == "/usr/bin/xcrun")
+        #expect(observed.arguments == ["--find", "sourcekit-lsp"])
+        #expect(observed.environment == ProcessInfo.processInfo.environment)
+        #expect(observed.timeout == 1.25)
     }
 
     @Test("xcrun find timeout is treated as missing")
@@ -656,5 +656,40 @@ struct LanguageServerAvailabilityTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+/// Records the arguments a `SubprocessRunner` closure was invoked with.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class SubprocessInvocationRecorder: @unchecked Sendable {
+    struct Invocation {
+        var executable: URL?
+        var arguments: [String] = []
+        var environment: [String: String] = [:]
+        var timeout: TimeInterval?
+    }
+
+    private let lock = NSLock()
+    private var value = Invocation()
+
+    func record(
+        executable: URL,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval
+    ) {
+        lock.withLock {
+            value = Invocation(
+                executable: executable,
+                arguments: arguments,
+                environment: environment,
+                timeout: timeout
+            )
+        }
+    }
+
+    var invocation: Invocation {
+        lock.withLock { value }
     }
 }

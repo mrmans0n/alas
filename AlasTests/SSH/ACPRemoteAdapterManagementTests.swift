@@ -82,7 +82,7 @@ struct ACPRemoteAdapterManagementTests {
             adapterPath: "/opt/node/bin/pi-acp",
             nodeBinDirectory: "/opt/node/bin"
         )))
-        let globalCommand = try? #require(await runner.commands.last)
+        let globalCommand = await runner.commands.last
         #expect(globalCommand?.contains("'pi-acp'") == true)
         #expect(globalCommand?.contains("'pi-acp'") == true)
         #expect(globalCommand?.contains("command -v 'pi-acp'") == true)
@@ -199,7 +199,7 @@ struct ACPRemoteAdapterManagementTests {
             adapterPath: "/usr/local/bin/claude-agent-acp",
             nodeBinDirectory: "/usr/local/bin"
         )))
-        let command = try? #require(await runner.commands.last)
+        let command = await runner.commands.last
         #expect(command?.contains("command -v 'claude-agent-acp'") == true)
         #expect(command?.contains("command -v node") == true)
         #expect(command?.contains("npm root -g") == false)

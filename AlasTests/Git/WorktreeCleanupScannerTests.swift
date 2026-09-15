@@ -45,6 +45,16 @@ struct WorktreeCleanupScannerTests {
         lastActivity: nil
     )
 
+    /// Returns an immutable `cleanFacts` variant so the `@Sendable` probe
+    /// closures below capture a `let`, never a mutable local.
+    private static func facts(
+        _ customize: (inout WorktreeCleanupGitFacts) -> Void
+    ) -> WorktreeCleanupGitFacts {
+        var facts = cleanFacts
+        customize(&facts)
+        return facts
+    }
+
     private static func scanner(
         facts: @escaping @Sendable (Worktree) async -> WorktreeCleanupGitFacts = { _ in cleanFacts },
         mergeIndex: @escaping @Sendable (ProjectConfig) async -> Result<WorktreeForgeMergeIndex, Error> = { _ in
@@ -139,8 +149,9 @@ struct WorktreeCleanupScannerTests {
             url: URL(string: "https://github.com/o/r/pull/99")!,
             headSHA: "new-commit-sha"
         )
-        var facts = Self.cleanFacts
-        facts.headSHA = "old-commit-sha"
+        let facts = Self.facts {
+            $0.headSHA = "old-commit-sha"
+        }
         let scanner = Self.scanner(
             facts: { _ in facts },
             mergeIndex: { _ in
@@ -176,8 +187,9 @@ struct WorktreeCleanupScannerTests {
     /// A local merge-base check that succeeded is still reported, even when the
     /// forge could not be reached — the two checks are independent.
     @Test func localMergeSurvivesForgeFailure() async {
-        var facts = Self.cleanFacts
-        facts.isMergedLocally = true
+        let facts = Self.facts {
+            $0.isMergedLocally = true
+        }
         let scanner = Self.scanner(
             facts: { _ in facts },
             mergeIndex: { _ in .failure(CodeHostProviderError.cliMissing("gh")) }
@@ -207,8 +219,9 @@ struct WorktreeCleanupScannerTests {
     /// drops the tracking ref. A branch the forge says is merged must not be
     /// held back as dirty by that artifact.
     @Test func mergedOnForgeSuppressesFalseUnpushedSignalFromPrunedUpstream() async {
-        var facts = Self.cleanFacts
-        facts.unpushedCommitCount = 1   // simulates a pruned/missing @{u}
+        let facts = Self.facts {
+            $0.unpushedCommitCount = 1   // simulates a pruned/missing @{u}
+        }
         let ref = MergedReviewRequestRef(
             number: 42,
             headRefName: "feature/a",
@@ -234,8 +247,9 @@ struct WorktreeCleanupScannerTests {
     /// The suppression is scoped to the forge-merged case only: a branch that
     /// is not merged still reports its real unpushed work.
     @Test func notMergedWorktreeStillReportsRealUnpushedCommits() async {
-        var facts = Self.cleanFacts
-        facts.unpushedCommitCount = 3
+        let facts = Self.facts {
+            $0.unpushedCommitCount = 3
+        }
         let scanner = Self.scanner(
             facts: { _ in facts },
             mergeIndex: { _ in
@@ -254,9 +268,10 @@ struct WorktreeCleanupScannerTests {
     /// signal is, and only because a pruned upstream cannot be told apart from
     /// an unpublished branch.
     @Test func mergedOnForgeStillBlocksOnUncommittedChanges() async {
-        var facts = Self.cleanFacts
-        facts.unpushedCommitCount = 1
-        facts.hasUncommittedChanges = true
+        let facts = Self.facts {
+            $0.unpushedCommitCount = 1
+            $0.hasUncommittedChanges = true
+        }
         let ref = MergedReviewRequestRef(
             number: 42,
             headRefName: "feature/a",
@@ -308,9 +323,10 @@ struct WorktreeCleanupScannerTests {
     /// freshly-touched worktree must not read as long-idle just because the
     /// cache is stale.
     @Test func freshActivityOverridesStaleCachedTimestamp() async {
-        var facts = Self.cleanFacts
-        facts.isMergedLocally = true
-        facts.lastActivity = Self.now   // fresh: touched right now
+        let facts = Self.facts {
+            $0.isMergedLocally = true
+            $0.lastActivity = Self.now   // fresh: touched right now
+        }
         let scanner = Self.scanner(facts: { _ in facts })
         // The cached worktree looks idle (30 days old by the fixture default).
         let results = await Self.scan(
@@ -326,9 +342,10 @@ struct WorktreeCleanupScannerTests {
     /// not exist before it was created, regardless of what its branch's ref
     /// history says.
     @Test func idleClockNeverStartsBeforeTheWorktreeWasCreated() async {
-        var facts = Self.cleanFacts
-        facts.isMergedLocally = true
-        facts.lastActivity = Self.now.addingTimeInterval(-60 * 86_400)   // an old branch
+        let facts = Self.facts {
+            $0.isMergedLocally = true
+            $0.lastActivity = Self.now.addingTimeInterval(-60 * 86_400)   // an old branch
+        }
         let scanner = Self.scanner(facts: { _ in facts })
         let freshWorktree = Worktree(
             id: "/tmp/wt-feature-a",

@@ -206,7 +206,7 @@ struct ACPAdapterVersionChecker: Sendable {
         // task cancellation actually terminates the npm process; otherwise
         // a stuck registry call would pin the per-agent in-flight slot in
         // the store until npm exited on its own.
-        nonisolated(unsafe) let proc = Process()
+        let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
         proc.environment = ACPProcessEnvironment.augmented()

@@ -494,7 +494,7 @@ final class CodeEditorCoordinator {
         // Keeping `currentLanguage` accurate is critical because hover,
         // definition, completion, diagnostics, didChange, and indentation
         // all route through it.
-        _ = withObservationTracking {
+        withObservationTracking {
             _ = buffer.effectiveLanguage
         } onChange: { [weak self, weak buffer] in
             Task { @MainActor [weak self, weak buffer] in
@@ -747,11 +747,10 @@ final class CodeEditorCoordinator {
 
         if let clipView = textView.enclosingScrollView?.contentView {
             clipView.postsBoundsChangedNotifications = true
-            let token = nc.addObserver(
+            let token = nc.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
-            ) { [weak self] _ in
+                object: clipView
+            ) { [weak self] in
                 guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
@@ -761,11 +760,10 @@ final class CodeEditorCoordinator {
             hoverObservers.append(token)
         }
 
-        let selectionToken = nc.addObserver(
+        let selectionToken = nc.addMainActorObserver(
             forName: NSTextView.didChangeSelectionNotification,
-            object: textView,
-            queue: .main
-        ) { [weak self] _ in
+            object: textView
+        ) { [weak self] in
             guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
             self?.hover?.notifyCaretChanged()
             self?.definition?.notifyCaretChanged()
@@ -776,15 +774,15 @@ final class CodeEditorCoordinator {
         // Subscribe with object: nil because attach(...) runs from
         // makeNSView before the text view is inserted into a window, so
         // textView.window is often nil here and never gets retried. The
-        // handler filters to the text view's current window at fire time.
-        let resizeToken = nc.addObserver(
+        // handler filters to the text view's current window at fire time by
+        // comparing the posting object's identity.
+        let resizeToken = nc.addMainActorObjectObserver(
             forName: NSWindow.didResizeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
+            object: nil
+        ) { [weak self] postingWindow in
             guard let self,
-                  let window = note.object as? NSWindow,
-                  window === self.textView?.window else { return }
+                  let window = self.textView?.window,
+                  postingWindow == ObjectIdentifier(window) else { return }
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
             self.signatureHelp?.notifyWindowResized()
@@ -1749,8 +1747,7 @@ final class CodeEditorCoordinator {
         in nsString: NSString,
         textView: CodeTextView
     ) {
-        guard nsString.length > 0,
-              let layoutManager = textView.layoutManager else { return }
+        guard nsString.length > 0, textView.layoutManager != nil else { return }
         clearRevealHighlight()
 
         let clampedTarget = min(max(0, target), max(0, nsString.length - 1))
@@ -1780,7 +1777,7 @@ final class CodeEditorCoordinator {
         revealHighlightTask = nil
         guard let range = revealHighlightRange,
               let textView,
-              let layoutManager = textView.layoutManager else {
+              textView.layoutManager != nil else {
             revealHighlightRange = nil
             return
         }

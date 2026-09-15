@@ -2,6 +2,13 @@ import Foundation
 import AppKit
 import Observation
 
+/// Main-actor confined. `current` drives SwiftUI through `@Observable`, and
+/// every mutation path (`activate`, `setAccent`, `setMatchSystem`, and the
+/// system-appearance observer) ends up writing it, so the whole store is
+/// isolated to the main actor. The only entry point that can arrive on
+/// another thread is the distributed-notification selector below, which is
+/// `nonisolated` and hops.
+@MainActor
 @Observable
 final class ThemeStore {
     private(set) var current: Theme
@@ -48,7 +55,7 @@ final class ThemeStore {
         return ThemeStore(fallbackWithCurrent: .fallback)
     }
 
-    deinit {
+    isolated deinit {
         DistributedNotificationCenter.default().removeObserver(self)
     }
 
@@ -104,11 +111,16 @@ final class ThemeStore {
         applyForCurrentMode()
     }
 
-    @objc private func systemAppearanceDidChange() {
-        if matchSystem {
-            DispatchQueue.main.async { [weak self] in
-                self?.applyForCurrentMode()
-            }
+    /// `DistributedNotificationCenter` does not document a delivery thread,
+    /// so this hops with a `Task` rather than asserting main-thread isolation.
+    /// The `matchSystem` check moves inside the hop because it reads
+    /// main-actor state; nothing depends on this running synchronously — the
+    /// previous implementation already deferred the work to a later main-queue
+    /// turn.
+    @objc nonisolated private func systemAppearanceDidChange() {
+        Task { @MainActor [weak self] in
+            guard let self, self.matchSystem else { return }
+            self.applyForCurrentMode()
         }
     }
 

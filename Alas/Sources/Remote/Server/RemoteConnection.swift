@@ -522,7 +522,7 @@ final class RemoteConnection: @unchecked Sendable {
 /// wins — its value is what the continuation resumes with — and the other
 /// is simply abandoned rather than cancelled.
 @MainActor
-private final class SingleResume<T> {
+private final class SingleResume<T: Sendable> {
     private var fired = false
     private let continuation: CheckedContinuation<T, Never>
 

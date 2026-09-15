@@ -2595,7 +2595,7 @@ struct ACPSessionTests {
             rawOutput: nil)))
         session.apply(update)
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(update)
+        _ = session.applySuppressedReplaySideEffects(update)
 
         let term = try #require(session.terminalHost.terminal(id: "term-replay-terminal"))
         #expect(term.snapshot(byteLimit: 1024).text == "building\n")
@@ -2625,7 +2625,7 @@ struct ACPSessionTests {
             ]))))
 
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-terminal-snapshot",
             status: "completed",
             rawOutput: nil,
@@ -2654,7 +2654,7 @@ struct ACPSessionTests {
             rawOutput: nil)))
 
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-frames",
             status: "in_progress",
             rawOutput: nil,
@@ -2664,7 +2664,7 @@ struct ACPSessionTests {
                     "cwd": AnyCodable("/tmp/project")
                 ])
             ]))))
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-frames",
             status: "in_progress",
             rawOutput: nil,
@@ -2674,7 +2674,7 @@ struct ACPSessionTests {
                     "data": AnyCodable("building\n")
                 ])
             ]))))
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-frames",
             status: "completed",
             rawOutput: nil,
@@ -2715,7 +2715,7 @@ struct ACPSessionTests {
             ]))))
 
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-buffered-exit",
             status: "in_progress",
             rawOutput: nil,
@@ -2725,7 +2725,7 @@ struct ACPSessionTests {
                     "data": AnyCodable("building\n")
                 ])
             ]))))
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-replay-buffered-exit",
             status: "completed",
             rawOutput: nil,
@@ -2831,7 +2831,7 @@ struct ACPSessionTests {
             rawInput: nil,
             rawOutput: nil)))
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(.toolCall(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCall(.init(
             toolCallId: "cmd-payload-exit-content",
             title: "swift test",
             kind: "execute",
@@ -2872,7 +2872,7 @@ struct ACPSessionTests {
             rawInput: nil,
             rawOutput: nil)))
         session.beginSuppressedReplaySideEffects()
-        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "cmd-update-exit-content",
             status: "completed",
             content: [.content(.text("final output"))],

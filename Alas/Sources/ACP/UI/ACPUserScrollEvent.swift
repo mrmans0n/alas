@@ -65,6 +65,7 @@ enum ACPUserScrollEvent {
         return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon
     }
 
+    @MainActor
     static func isScrollbarTrackMouseDown(_ event: NSEvent?) -> Bool {
         guard let event, event.type == .leftMouseDown, let contentView = event.window?.contentView else {
             return false
@@ -72,6 +73,7 @@ enum ACPUserScrollEvent {
         return isScrollbarView(contentView.hitTest(event.locationInWindow))
     }
 
+    @MainActor
     private static func isScrollbarView(_ view: NSView?) -> Bool {
         var current = view
         while let view = current {

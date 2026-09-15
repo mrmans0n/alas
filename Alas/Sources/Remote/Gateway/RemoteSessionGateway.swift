@@ -175,12 +175,12 @@ final class RemoteSessionGateway {
             // arrives LATER means `sendNow` already recorded the message with
             // these file URIs (the transcript bubble references them), so we
             // must keep the files.
-            var refusalIsSynchronous = true
+            let refusalIsSynchronous = RemoteRefusalWindowBox()
             let onResult: @MainActor (Bool) -> Void = { [weak self] accepted in
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
-                    if refusalIsSynchronous { self.discardAttachmentFiles(materialized) }
+                    if refusalIsSynchronous.value { self.discardAttachmentFiles(materialized) }
                 }
             }
             // "steer" cancels the running turn and sends immediately while
@@ -191,7 +191,7 @@ final class RemoteSessionGateway {
             } else {
                 await provider.sendPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
             }
-            refusalIsSynchronous = false
+            refusalIsSynchronous.value = false
         case .stop(let id):
             // Emergency brake: any authenticated subscriber may cancel the
             // running turn; no writer lease required. Ack immediately so the
@@ -1131,4 +1131,13 @@ final class RemoteSessionGateway {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return String(data: data, encoding: .utf8)
     }
+}
+
+/// The refusal window is flipped *after* the prompt call returns, and the
+/// `@MainActor` result closure is meant to observe that change, so it cannot be
+/// a captured `let`. Gateway and closure are both main-actor, so plain
+/// main-actor isolation is enough — no lock needed.
+@MainActor
+private final class RemoteRefusalWindowBox {
+    var value = true
 }

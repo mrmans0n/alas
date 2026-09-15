@@ -1,15 +1,26 @@
 import Foundation
 import CoreServices
 
-final class WorktreeWatcher {
-    private final class StreamContext {
-        weak var watcher: WorktreeWatcher?
+/// Box handed to FSEvents as the stream's `info` pointer. Deliberately a
+/// file-scope (non-nested) type so it is never inferred into
+/// `WorktreeWatcher`'s main-actor isolation: the FSEvents C callback reads
+/// `watcher` from the watcher's private event queue, not from the main
+/// thread.
+private final class WorktreeWatcherStreamContext {
+    weak var watcher: WorktreeWatcher?
 
-        init(watcher: WorktreeWatcher) {
-            self.watcher = watcher
-        }
+    init(watcher: WorktreeWatcher) {
+        self.watcher = watcher
     }
+}
 
+/// Main-actor confined. Every stored property is created, read, and torn
+/// down on the main actor (`RightPaneState`, itself `@MainActor`, is the
+/// only owner). The two entry points that genuinely arrive off-main — the
+/// FSEvents C callback and `DebounceTimer`'s work item — are `nonisolated`
+/// and hop explicitly.
+@MainActor
+final class WorktreeWatcher {
     var onChange: (() -> Void)?
     private let path: URL
     private var stream: FSEventStreamRef?
@@ -42,16 +53,16 @@ final class WorktreeWatcher {
         }
         // Resolve git-dir asynchronously so a slow or hung git invocation
         // never blocks watcher startup. Worktree-file events still flow.
+        // `Task` inherits the main actor here, so the continuation after the
+        // await is already back on main — no explicit `MainActor.run` needed.
         Task { [weak self] in
             guard let self else { return }
             guard let gitDir = await Self.resolveGitDir(at: self.path) else { return }
-            await MainActor.run {
-                guard self.stream != nil else { return }  // already stopped
-                self.gitDirStream = self.makeStream(paths: [gitDir.path], includeFileEvents: true)
-                if let s = self.gitDirStream {
-                    FSEventStreamSetDispatchQueue(s, self.eventQueue)
-                    FSEventStreamStart(s)
-                }
+            guard self.stream != nil else { return }  // already stopped
+            self.gitDirStream = self.makeStream(paths: [gitDir.path], includeFileEvents: true)
+            if let s = self.gitDirStream {
+                FSEventStreamSetDispatchQueue(s, self.eventQueue)
+                FSEventStreamStart(s)
             }
         }
     }
@@ -69,7 +80,7 @@ final class WorktreeWatcher {
         debouncer.cancel()
     }
 
-    deinit { stop() }
+    isolated deinit { stop() }
 
     private func releaseStream(_ stream: FSEventStreamRef) {
         let release = {
@@ -85,20 +96,20 @@ final class WorktreeWatcher {
     }
 
     private func makeStream(paths: [String], includeFileEvents: Bool) -> FSEventStreamRef? {
-        let streamContext = StreamContext(watcher: self)
+        let streamContext = WorktreeWatcherStreamContext(watcher: self)
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passRetained(streamContext).toOpaque(),
             retain: nil,
             release: { info in
                 guard let info else { return }
-                Unmanaged<StreamContext>.fromOpaque(info).release()
+                Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(info).release()
             },
             copyDescription: nil
         )
         let cb: FSEventStreamCallback = { _, ctx, numEvents, eventPaths, _, _ in
             guard let ctx else { return }
-            let streamContext = Unmanaged<StreamContext>.fromOpaque(ctx).takeUnretainedValue()
+            let streamContext = Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(ctx).takeUnretainedValue()
             guard let watcher = streamContext.watcher else { return }
 
             // With `kFSEventStreamCreateFlagUseCFTypes` set on the stream,
@@ -134,16 +145,21 @@ final class WorktreeWatcher {
             0.5,
             flags
         ) else {
-            Unmanaged<StreamContext>.fromOpaque(context.info!).release()
+            Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(context.info!).release()
             return nil
         }
         return stream
     }
 
-    private func pokeDebouncerFromStream() {
+    /// Called from the FSEvents callback, which runs on `eventQueue`.
+    /// `DispatchQueue.main` is the main actor's executor, so by the time the
+    /// block runs the assumption below always holds.
+    nonisolated private func pokeDebouncerFromStream() {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isRunning else { return }
-            self.debouncer.poke()
+            MainActor.assumeIsolated {
+                guard let self, self.isRunning else { return }
+                self.debouncer.poke()
+            }
         }
     }
 
@@ -154,7 +170,7 @@ final class WorktreeWatcher {
     /// Reacting would schedule redundant refreshes during the user's
     /// operation. Project lockfiles outside `.git/` (e.g. `Cargo.lock`,
     /// `package-lock.json`) are real changes and DO trigger a refresh.
-    static func shouldRefresh(forEventPaths paths: [String]) -> Bool {
+    nonisolated static func shouldRefresh(forEventPaths paths: [String]) -> Bool {
         for path in paths {
             if path.contains("/.git/"),
                path.hasSuffix(".lock") || path.hasSuffix("/FETCH_HEAD") {
@@ -169,7 +185,7 @@ final class WorktreeWatcher {
     /// `<worktree>/.git`; for a linked worktree it points into
     /// `<repo>/.git/worktrees/<name>/` instead. Returns nil if `git
     /// rev-parse` fails (not a repo, etc.).
-    private static func resolveGitDir(at worktree: URL) async -> URL? {
+    nonisolated private static func resolveGitDir(at worktree: URL) async -> URL? {
         guard let result = try? await Process.git(
             ["rev-parse", "--absolute-git-dir"],
             cwd: worktree

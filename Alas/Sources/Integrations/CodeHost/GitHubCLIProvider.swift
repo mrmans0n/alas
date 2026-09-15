@@ -2032,7 +2032,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                   !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let url = try parseOptionalHTTPURL(response.htmlURL, context: "GitHub issue output is missing a valid URL."),
                   let createdAt = parseDate(response.createdAt, formatOptions: [.withInternetDateTime]) ?? parseDate(response.createdAt, formatOptions: [.withInternetDateTime, .withFractionalSeconds]),
-                  case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
+                  case .url(let kind, let host, _, let number) = try CodeHostIssueInput.parse(url.absoluteString),
                   kind == .github,
                   host.caseInsensitiveCompare(remote.host) == .orderedSame,
                   number == response.number

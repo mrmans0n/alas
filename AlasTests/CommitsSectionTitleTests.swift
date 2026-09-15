@@ -1,6 +1,7 @@
 import Testing
 @testable import Alas
 
+@MainActor
 struct CommitsSectionTitleTests {
     @Test func commitRowsAreSplitIntoSmallContiguousBatches() {
         let batches = CommitsSectionView.rowBatches(count: 40)

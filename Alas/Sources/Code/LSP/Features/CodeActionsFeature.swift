@@ -274,7 +274,17 @@ private final class CodeActionContext {
 
 @MainActor
 final class CodeActionEditPresentation {
-    typealias ShowSheet = (WorkspaceEditPreviewModel, NSWindow, @escaping () -> Void, @escaping () -> Void) -> (() -> Void)
+    /// The factory and its callbacks all run on the main actor, so the alias
+    /// has to say so: `showNativeSheet` is a member of this `@MainActor` type
+    /// and its function value keeps that isolation. `cancelled` additionally
+    /// has to be `@Sendable` because `showNativeSheet` hands it to a
+    /// `@Sendable` notification-observer body.
+    typealias ShowSheet = @MainActor (
+        WorkspaceEditPreviewModel,
+        NSWindow,
+        @escaping () -> Void,
+        @escaping @MainActor @Sendable () -> Void
+    ) -> (() -> Void)
     private let showSheet: ShowSheet
     private var continuation: CheckedContinuation<Bool, Never>?
     private var dismissSheet: (() -> Void)?
@@ -333,12 +343,23 @@ final class CodeActionEditPresentation {
     }
 
     private static func showNativeSheet(model: WorkspaceEditPreviewModel, parent: NSWindow,
-                                        close: @escaping () -> Void, cancelled: @escaping () -> Void) -> () -> Void {
-        let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceEditPreview(model: model, close: close, cancel: cancelled)))
-        let observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: parent, queue: .main) { _ in
-            MainActor.assumeIsolated { cancelled() }
-        }
-        parent.beginSheet(window) { _ in cancelled() }
+                                        close: @escaping () -> Void,
+                                        cancelled: @escaping @MainActor @Sendable () -> Void) -> () -> Void {
+        // `cancelled` is `@MainActor @Sendable` so the willClose observer can
+        // capture it. The preview takes a plain callback, and a `@MainActor`
+        // function value does not convert to one, so wrap it in a closure that
+        // inherits this method's main-actor isolation instead.
+        let cancelFromPreview: () -> Void = { cancelled() }
+        let window = NSWindow(contentViewController: NSHostingController(rootView: WorkspaceEditPreview(model: model, close: close, cancel: cancelFromPreview)))
+        let observer = NotificationCenter.default.addMainActorObserver(
+            forName: NSWindow.willCloseNotification,
+            object: parent
+        ) { cancelled() }
+        // AppKit delivers sheet completion handlers on the main thread, which is
+        // where the main actor runs, so the hop is a check rather than a wait.
+        // `assumeIsolated` keeps the call legal even though the handler type is
+        // not itself main-actor isolated.
+        parent.beginSheet(window) { _ in MainActor.assumeIsolated { cancelled() } }
         return {
             NotificationCenter.default.removeObserver(observer)
             window.sheetParent?.endSheet(window)

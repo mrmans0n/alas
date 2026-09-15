@@ -151,8 +151,8 @@ struct GGSplitPrivatePlanWriter {
 @Observable
 @MainActor
 final class GGSplitCommitModel {
-    static let unavailableReason = "Update GG to use native Split Commit"
-    static let workflowUnavailableReason = "Native Split Commit is unavailable."
+    nonisolated static let unavailableReason = "Update GG to use native Split Commit"
+    nonisolated static let workflowUnavailableReason = "Native Split Commit is unavailable."
 
     private let service: any GGSplitCommitServicing
     private let target: GGSplitCommitTarget

@@ -813,7 +813,7 @@ final class AppState {
         acpDetachRunner: ACPDetachRunner? = nil,
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
-        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
+        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         tabsManager: TabsManager? = nil,
         lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
@@ -917,7 +917,7 @@ final class AppState {
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
-            await self?.cancelAllRunScriptCompletionTasks()
+            self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
         }
         Task.detached {
@@ -2800,7 +2800,7 @@ final class AppState {
         else { return false }
         let next = (current + offset + spaces.count) % spaces.count
         guard next != current else { return false }
-        switchToSpace(id: spaces[next].id)
+        _ = switchToSpace(id: spaces[next].id)
         return true
     }
 
@@ -5083,7 +5083,7 @@ final class AppState {
             },
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
-                      let (owner, manager) = self.acpManagers.first(where: { _, manager in
+                      let (owner, _) = self.acpManagers.first(where: { _, manager in
                           manager.liveSession(for: sessionId) != nil
                       }),
                       let worktreeId = owner.worktreeID,
@@ -8296,9 +8296,12 @@ final class AppState {
                         },
                         // Both hop to the main actor: session and operation
                         // state are main-actor isolated, the scanner is not.
-                        activeSessionCount: { [weak self] worktreeId in
+                        // `self` here is the outer `scan:` closure's
+                        // already-unwrapped strong binding, and these closures
+                        // never outlive that closure's body, so re-capturing it
+                        // weakly would only add a redundant weak box.
+                        activeSessionCount: { worktreeId in
                             await MainActor.run {
-                                guard let self else { return 0 }
                                 // Count every open terminal/ACP session tab, not just
                                 // ones the harness currently reports as busy or
                                 // awaiting input. `HarnessService.summary` filters
@@ -8318,9 +8321,9 @@ final class AppState {
                                 }
                             }
                         },
-                        operationInFlight: { [weak self] worktreeId in
+                        operationInFlight: { worktreeId in
                             await MainActor.run {
-                                self?.projectsManager.operationState(for: worktreeId) != nil
+                                self.projectsManager.operationState(for: worktreeId) != nil
                             }
                         }
                     )

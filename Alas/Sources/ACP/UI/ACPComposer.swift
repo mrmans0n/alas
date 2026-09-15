@@ -200,6 +200,7 @@ struct ACPInputField: NSViewRepresentable {
         )
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let editorUndoManager = UndoManager()
         let worktreeRoot: URL
@@ -1133,7 +1134,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     static func readImageFile(_ url: URL) async -> FileImageRead {
         await Task.detached(priority: .userInitiated) {
             #if DEBUG
-            if let gate = await ACPNSTextView.imageFileReadGateForTesting {
+            if let gate = ACPNSTextView.imageFileReadGateForTesting {
                 await gate()
             }
             #endif

@@ -496,6 +496,7 @@ struct DiffPaneLSPLineMapTests {
         transport.finish()
     }
 
+    @MainActor
     private func theme() -> Theme {
         try! ThemeStore().current
     }

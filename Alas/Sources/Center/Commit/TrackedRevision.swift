@@ -245,9 +245,9 @@ enum TrackedRevisionPolicy {
 }
 
 struct TrackedRevisionResolver {
-    var resolve: (URL, String) async throws -> String
-    var branch: (URL) async throws -> String
-    var stack: (URL) async throws -> GGStack? = { _ in nil }
+    var resolve: @Sendable (URL, String) async throws -> String
+    var branch: @Sendable (URL) async throws -> String
+    var stack: @Sendable (URL) async throws -> GGStack? = { _ in nil }
 
     static let live = TrackedRevisionResolver(
         resolve: { try await GitService().resolveRevision(at: $0, ref: $1) },
@@ -383,7 +383,6 @@ private extension TrackedRevision {
 
     static func isStableReflogSelector(_ selector: String) -> Bool {
         guard !selector.isEmpty else { return false }
-        let lowercased = selector.lowercased()
         if selector.allSatisfy(\.isNumber) { return true }
         if selector.first == "-", selector.dropFirst().allSatisfy(\.isNumber) {
             return true

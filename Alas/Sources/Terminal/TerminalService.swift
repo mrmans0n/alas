@@ -518,7 +518,7 @@ final class TerminalService {
     /// Checkout cleanup has no Project/worktree fallback: its typed owner is
     /// sufficient to derive the exact scoped zmx name and SSH destination.
     func closeSession(id: String, owner: SessionOwnerID) {
-        if let existing = registry.session(for: id) {
+        if registry.session(for: id) != nil {
             closeSession(id: id)
             return
         }
@@ -563,25 +563,10 @@ final class TerminalService {
     /// `ZmxClient.killSession` blocks up to ~5s, so we run the sweep on
     /// `Task.detached` to keep the MainActor (UI) responsive.
     func terminateAll(additionalSessions: [TerminalSessionIdentity] = []) {
-        var localNames = Set<String>()
-        var remoteNamesByHost: [String: Set<String>] = [:]
-        for session in registry.all {
-            let name = session.zmxSessionName ?? ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.id)
-            if let host = session.remoteHost {
-                remoteNamesByHost[host, default: []].insert(name)
-            } else {
-                localNames.insert(name)
-            }
-        }
+        let (localNames, remoteNamesByHost) = liveAndAdditionalSessionNames(
+            additionalSessions: additionalSessions
+        )
         let client = zmxClient
-        for session in additionalSessions {
-            let scoped = session.zmxSessionName
-            if let host = Self.remoteHostForCleanup(session: session) {
-                remoteNamesByHost[host, default: []].insert(scoped)
-            } else {
-                localNames.insert(scoped)
-            }
-        }
         dispatchTrackedKill {
             for name in localNames {
                 client.killSession(name: name)
@@ -640,16 +625,7 @@ final class TerminalService {
     /// `terminateAll`, this does not enumerate the live registry, so scoped
     /// lifecycle operations cannot affect unrelated terminals.
     func terminateSessions(_ sessions: [TerminalSessionIdentity]) {
-        var localNames = Set<String>()
-        var remoteNamesByHost: [String: Set<String>] = [:]
-        for session in sessions {
-            let scoped = session.zmxSessionName
-            if let host = Self.remoteHostForCleanup(session: session) {
-                remoteNamesByHost[host, default: []].insert(scoped)
-            } else {
-                localNames.insert(scoped)
-            }
-        }
+        let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
         dispatchTrackedKill {
             for name in localNames {
@@ -664,33 +640,67 @@ final class TerminalService {
     }
 
     func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
-        var localNames = Set<String>()
-        var remoteNamesByHost: [String: Set<String>] = [:]
-        for session in Set(sessions) {
-            let scoped = session.zmxSessionName
-            if let host = Self.remoteHostForCleanup(session: session) {
-                remoteNamesByHost[host, default: []].insert(scoped)
-            } else {
-                localNames.insert(scoped)
-            }
-        }
+        let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
-        let localNamesToKill = localNames
         let localExistingNames = await Task.detached {
             Set(client.listSessionInfos().map(\.name))
         }.value
-        for name in localNamesToKill where localExistingNames.contains(name) {
+        for name in localNames where localExistingNames.contains(name) {
             let killed = await Task.detached { client.killSessionResult(name: name) }.value
             guard killed else { throw SessionTerminationError.failed(name) }
         }
-        let remoteNamesToKill = remoteNamesByHost
-        for (host, names) in remoteNamesToKill {
+        for (host, names) in remoteNamesByHost {
             let existingNames = try await Self.remoteSessionNames(host: host, timeout: timeout)
             for name in names {
                 guard existingNames.contains(name) else { continue }
                 try await Self.killRemoteSessionChecked(host: host, name: name, timeout: timeout)
             }
         }
+    }
+
+    /// Splits persisted session identities into the local zmx session names
+    /// and the remote ones grouped by host.
+    ///
+    /// Returned as a tuple so both collections are `let` at every call site:
+    /// the kill closures below are `@Sendable` and cannot reference a captured
+    /// `var`, even one that is fully built before the closure is formed.
+    private nonisolated static func partitionedSessionNames(
+        for sessions: [TerminalSessionIdentity]
+    ) -> (local: Set<String>, remoteByHost: [String: Set<String>]) {
+        var local = Set<String>()
+        var remoteByHost: [String: Set<String>] = [:]
+        for session in sessions {
+            let scoped = session.zmxSessionName
+            if let host = remoteHostForCleanup(session: session) {
+                remoteByHost[host, default: []].insert(scoped)
+            } else {
+                local.insert(scoped)
+            }
+        }
+        return (local, remoteByHost)
+    }
+
+    /// `partitionedSessionNames` widened with every live registry session, for
+    /// `terminateAll`.
+    private func liveAndAdditionalSessionNames(
+        additionalSessions: [TerminalSessionIdentity]
+    ) -> (local: Set<String>, remoteByHost: [String: Set<String>]) {
+        var local = Set<String>()
+        var remoteByHost: [String: Set<String>] = [:]
+        for session in registry.all {
+            let name = session.zmxSessionName ?? ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.id)
+            if let host = session.remoteHost {
+                remoteByHost[host, default: []].insert(name)
+            } else {
+                local.insert(name)
+            }
+        }
+        let additional = Self.partitionedSessionNames(for: additionalSessions)
+        local.formUnion(additional.local)
+        for (host, names) in additional.remoteByHost {
+            remoteByHost[host, default: []].formUnion(names)
+        }
+        return (local, remoteByHost)
     }
 
     private nonisolated static func remoteHostForCleanup(session: TerminalSessionIdentity) -> String? {

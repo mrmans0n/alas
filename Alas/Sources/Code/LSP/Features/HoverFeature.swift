@@ -424,7 +424,7 @@ final class HoverFeature {
         inFlight = Task { [weak self] in
             let result: LSPHoverResult?
             let bound: (LSPClient, EditorRequestContext)?
-            if let synchronizeRequest {
+            if let synchronizeRequest = self?.synchronizeRequest {
                 bound = await synchronizeRequest(NSRange(location: offset, length: 0))
                 guard bound != nil else { return }
             } else {

@@ -33,7 +33,7 @@ struct FormatOnSaveTests {
 
     @Test func disabledFormatOnSaveDoesPlainSave() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -47,7 +47,7 @@ struct FormatOnSaveTests {
 
     @Test func noLspFallsBackToPlainSave() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -58,7 +58,7 @@ struct FormatOnSaveTests {
 
     @Test func formatterEditsAreAppliedBeforeSave() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -73,7 +73,7 @@ struct FormatOnSaveTests {
 
     @Test func formatterFailureFallsBackToPlainSave() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -85,7 +85,7 @@ struct FormatOnSaveTests {
 
     @Test func timeoutFallsBackToPlainSave() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -97,7 +97,7 @@ struct FormatOnSaveTests {
 
     @Test func bufferGenerationChangeDiscardsEdits() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -115,7 +115,7 @@ struct FormatOnSaveTests {
 
     @Test func invalidFormatterEditFallsBackWithoutPartialMutation() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
@@ -131,7 +131,7 @@ struct FormatOnSaveTests {
 
     @Test func syncsCurrentTextBeforeFormatting() async throws {
         let root = tempWorktree()
-        try writeFile(root, "a.txt", "hello")
+        _ = try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")

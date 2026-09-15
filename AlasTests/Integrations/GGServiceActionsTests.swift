@@ -81,9 +81,7 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
 
     func cancellationObserved() async -> Bool {
         for _ in 0..<1_000 {
-            lock.lock()
-            let didCancel = cancelled
-            lock.unlock()
+            let didCancel = lock.withLock { cancelled }
             if didCancel { return true }
             await Task.yield()
         }

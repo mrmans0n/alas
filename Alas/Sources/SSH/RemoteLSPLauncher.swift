@@ -34,9 +34,7 @@ enum RemoteLSPLauncher {
     /// not cached, so a host that comes back online probes again.
     static func isAvailable(command: String, host: String, env: [String: String] = [:]) async -> Bool {
         let key = availabilityCacheKey(command: command, host: host, env: env)
-        availabilityLock.lock()
-        let cached = availability[key]
-        availabilityLock.unlock()
+        let cached = availabilityLock.withLock { availability[key] }
         if let cached { return cached }
 
         guard let result = try? await RemoteExec.run(
@@ -49,9 +47,7 @@ enum RemoteLSPLauncher {
         }
 
         let available = result.exitCode == 0
-        availabilityLock.lock()
-        availability[key] = available
-        availabilityLock.unlock()
+        availabilityLock.withLock { availability[key] = available }
         return available
     }
 

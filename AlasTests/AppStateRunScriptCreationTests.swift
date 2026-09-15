@@ -188,7 +188,7 @@ struct AppStateRunScriptCreationTests {
     }
 
     @Test func failurePreservesPendingPresentation() throws {
-        let (state, project, worktree, root) = try fixture()
+        let (state, project, _, root) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         state.pendingRunScriptCreation = RunScriptCreationPresentation(
             scope: .repo,

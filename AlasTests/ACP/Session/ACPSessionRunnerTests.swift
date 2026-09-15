@@ -3595,12 +3595,11 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
         guard request.method == "session/prompt" else {
             throw ACPClientError.noScript(method: request.method)
         }
-        updateCountLock.lock()
-        promptCount += 1
-        let currentPromptCount = promptCount
-        _yieldedUpdateCount += 2
-        let secondPromptGate = self.secondPromptGate
-        updateCountLock.unlock()
+        let (currentPromptCount, secondPromptGate) = updateCountLock.withLock { () -> (Int, AsyncGate?) in
+            promptCount += 1
+            _yieldedUpdateCount += 2
+            return (promptCount, self.secondPromptGate)
+        }
         updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("first"))))
         if currentPromptCount == 2 {
             await secondPromptGate?.wait()

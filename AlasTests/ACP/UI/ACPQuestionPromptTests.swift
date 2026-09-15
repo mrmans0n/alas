@@ -2,6 +2,7 @@ import Testing
 @testable import Alas
 
 @Suite("ACPQuestionPrompt response builder")
+@MainActor
 struct ACPQuestionPromptTests {
     @Test("builds answered response from complete selections")
     func buildsAnsweredResponse() {

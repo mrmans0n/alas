@@ -56,13 +56,13 @@ struct DiffReviewSurfaceTests {
             #expect(model.selected == files[2].id)
 
             model.inlineFeedbackCommand = .init(feedbackID: "feedback", fileID: files[3].id, generation: 1)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+            pumpMainRunLoop(seconds: 0.2)
             await drainSwiftUI(controller.view)
             #expect(model.selected == files[3].id)
 
             model.inlineFeedbackCommand = nil
             model.draftCommentCommand = .init(commentID: "draft", fileID: files[4].id, generation: 1)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+            pumpMainRunLoop(seconds: 0.2)
             await drainSwiftUI(controller.view)
             #expect(model.selected == files[4].id)
         }
@@ -149,23 +149,23 @@ struct DiffReviewSurfaceTests {
             let scroller = try #require(appKitReviewScroller(in: controller.view))
 
             model.inlineFeedbackCommand = .init(feedbackID: "same-file-feedback", fileID: files[2].id, generation: 1)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            pumpMainRunLoop(seconds: 0.25)
             await drainSwiftUI(controller.view)
             #expect(model.selected == files[2].id)
 
             model.inlineFeedbackCommand = .init(feedbackID: "same-file-feedback", fileID: files[2].id, generation: 2)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
             #expect(model.selected == files[2].id)
 
             model.inlineFeedbackCommand = .init(feedbackID: "missing-feedback", fileID: files[2].id, generation: 3)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
             #expect(model.selected == files[2].id)
 
             model.inlineFeedbackCommand = nil
             model.draftCommentCommand = .init(commentID: "far-draft", fileID: files[4].id, generation: 1)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            pumpMainRunLoop(seconds: 0.05)
             scroller.contentView.scroll(to: NSPoint(x: 0, y: 0))
             scroller.reflectScrolledClipView(scroller.contentView)
             await drainSwiftUI(controller.view)
@@ -201,7 +201,7 @@ struct DiffReviewSurfaceTests {
                 withAccessibilityIdentifier: "diff-review-rail-row-\(secondSummary.id.rawValue)",
                 in: controller.view
             ))
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            pumpMainRunLoop(seconds: 0.25)
             await drainSwiftUI(controller.view)
             let beforeInsertionY = scroller.scrollY
 
@@ -245,7 +245,7 @@ struct DiffReviewSurfaceTests {
                 withAccessibilityIdentifier: "diff-review-rail-row-\(secondSummary.id.rawValue)",
                 in: controller.view
             ))
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.30))
+            pumpMainRunLoop(seconds: 0.30)
             await drainSwiftUI(controller.view)
             let beforeInsertionY = scroller.scrollY
             #expect(model.selected == secondSummary.id)
@@ -287,7 +287,7 @@ struct DiffReviewSurfaceTests {
             }
         )
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,
@@ -317,7 +317,7 @@ struct DiffReviewSurfaceTests {
         )
         let model = AppKitPostedDraftHarnessModel(file: file)
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitPostedDraftHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,
@@ -368,7 +368,7 @@ struct DiffReviewSurfaceTests {
             let collapsedHeight = scroller.documentView?.frame.height ?? 0
 
             #expect(pressButton(withToolTip: "Expand context", in: controller.view))
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
 
             #expect((scroller.documentView?.frame.height ?? 0) > collapsedHeight)
@@ -393,14 +393,14 @@ struct DiffReviewSurfaceTests {
             await drainSwiftUI(controller.view)
 
             try selectReviewLine(selectionIndex: 0, in: controller.view)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
             let composer = try #require(draftComposerTextView(in: controller.view))
             #expect(window.firstResponder === composer)
 
             let scroller = try #require(appKitReviewScroller(in: controller.view))
             scroller.setScrollY(900, animated: false)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.10))
+            pumpMainRunLoop(seconds: 0.10)
             await drainSwiftUI(controller.view)
             #expect(draftComposerTextView(in: controller.view) != nil)
             #expect(window.firstResponder === composer)
@@ -429,14 +429,14 @@ struct DiffReviewSurfaceTests {
             // notifications remount the visible band like a real scroll does.
             scroller.contentView.scroll(to: NSPoint(x: 0, y: 1_200))
             scroller.reflectScrolledClipView(scroller.contentView)
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.10))
+            pumpMainRunLoop(seconds: 0.10)
             await drainSwiftUI(controller.view)
             let yBefore = scroller.scrollY
             #expect(yBefore > 0)
 
             try selectReviewLine(selectionIndex: 40, in: controller.view)
             for _ in 0..<10 {
-                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+                pumpMainRunLoop(seconds: 0.05)
                 await drainSwiftUI(controller.view)
                 if draftComposerTextView(in: controller.view) != nil { break }
             }
@@ -491,7 +491,7 @@ struct DiffReviewSurfaceTests {
             )
             let window = attachWindow(controller, width: 1_000, height: 900)
             defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
 
             #expect(imageLoader.loadCount == 1)
@@ -499,7 +499,7 @@ struct DiffReviewSurfaceTests {
                 withAccessibilityIdentifier: "diff-review-image-retry-\(imageSummary.id.rawValue)",
                 in: controller.view
             ))
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+            pumpMainRunLoop(seconds: 0.20)
             await drainSwiftUI(controller.view)
             #expect(imageLoader.loadCount == 2)
 
@@ -532,7 +532,7 @@ struct DiffReviewSurfaceTests {
         )
         let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [stagedFile]))
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,
@@ -1219,7 +1219,7 @@ struct DiffReviewSurfaceTests {
         let window = attachWindow(controller, width: 1_200, height: 500)
         defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
         await drainSwiftUI(controller.view)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        pumpMainRunLoop(seconds: 0.6)
         await drainSwiftUI(controller.view)
 
         let scroller = try #require(appKitReviewScroller(in: controller.view))
@@ -2988,7 +2988,7 @@ struct DiffReviewSurfaceTests {
         // harness. A second, likely-related AppKit-scroller gap alongside the
         // materialization one noted on inlineFeedbackScrollRealizesTargetHunk...;
         // worth its own investigation rather than folding into this cleanup.
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.20))
+        pumpMainRunLoop(seconds: 0.20)
         await drainSwiftUI(controller.view)
     }
 
@@ -3407,7 +3407,7 @@ struct DiffReviewSurfaceTests {
         .environment(\.theme, theme())
 
         _ = host(view, width: 1000, height: 700)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pumpMainRunLoop(seconds: 0.05)
 
         #expect(selected == first.id)
     }
@@ -4656,7 +4656,7 @@ struct DiffReviewSurfaceTests {
     private func drainSwiftUI(_ view: NSView) async {
         for _ in 0..<6 {
             view.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.001))
+            pumpMainRunLoop(seconds: 0.001)
             await Task.yield()
         }
     }
@@ -4816,6 +4816,7 @@ private struct AppKitReviewFileHarness: View {
     }
 }
 
+@MainActor
 enum DebugBodyRenderCounter {
     static var harnessRenders = 0
 }
@@ -5133,4 +5134,15 @@ private final class AppKitImageRetryRecorder {
 private final class AppKitReviewActionRecorder {
     var unstagedFiles = 0
     var unstagedHunks = 0
+}
+
+/// Spins the main run loop for `seconds` so AppKit/SwiftUI hosting work can settle.
+///
+/// `RunLoop.run(until:)` is `noasync`, but the pumping is exactly what these tests need:
+/// hosting-controller updates, layout and display are driven by run-loop observers in the
+/// default mode, which `Task.sleep` never fires. Keeping the wait in a synchronous
+/// main-actor function preserves the timing behaviour while staying out of async contexts.
+@MainActor
+private func pumpMainRunLoop(seconds: TimeInterval) {
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
 }

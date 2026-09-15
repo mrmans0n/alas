@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 struct RangeReviewLoaderTests {
     @Test func loadsRangeFilesInOrderIntoUngroupedSession() async throws {
         let git = FakeRangeReviewGitClient(diffs: [
@@ -53,7 +54,7 @@ struct RangeReviewLoaderTests {
         #expect(session.summary.totalDeletions == 2)
     }
 
-    @Test @MainActor func attachesImageProviderOnlyWhenTheRangeClientSuppliesOne() async throws {
+    @Test func attachesImageProviderOnlyWhenTheRangeClientSuppliesOne() async throws {
         let provider = imageProvider(path: "Assets/logo.png", before: "merge-base", after: "head")
         let git = FakeRangeReviewGitClient(
             diffs: ["Assets/logo.png": ParsedDiff(hunks: [])],

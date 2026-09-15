@@ -52,7 +52,7 @@ struct WebSocketFrameTests {
         // Client frames MUST be masked. FIN+text, len=2 with mask bit, mask=0x01020304
         let mask: [UInt8] = [1, 2, 3, 4]
         let payload: [UInt8] = [0x68 ^ 1, 0x69 ^ 2] // "hi" masked
-        var bytes: [UInt8] = [0x81, 0x82] + mask + payload
+        let bytes: [UInt8] = [0x81, 0x82] + mask + payload
         var buffer = Data(bytes)
         let frame = try WebSocketFrame.decode(from: &buffer)
         #expect(frame?.opcode == .text)

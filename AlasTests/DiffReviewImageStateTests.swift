@@ -59,10 +59,10 @@ struct DiffReviewImageStateTests {
         let firstAttemptGate = PairLoadGate()
         let retryGate = PairLoadGate()
         let state = DiffReviewImageState(cache: DiffReviewImagePairCache())
-        var attempt = 0
+        let attempt = InvalidationCounter()
         let provider = provider(revision: "head") {
-            attempt += 1
-            if attempt == 1 {
+            attempt.increment()
+            if attempt.count == 1 {
                 return await firstAttemptGate.wait()
             }
             return await retryGate.wait()
@@ -85,9 +85,9 @@ struct DiffReviewImageStateTests {
     @Test func rematerializedStateServesCachedPairWithoutReloading() async {
         let cache = DiffReviewImagePairCache()
         let loadedPair = pair(color: .systemGreen)
-        var loadCount = 0
+        let loadCount = InvalidationCounter()
         let sharedProvider = provider(revision: "head") {
-            loadCount += 1
+            loadCount.increment()
             return loadedPair
         }
 
@@ -99,16 +99,16 @@ struct DiffReviewImageStateTests {
         let rematerialized = DiffReviewImageState(cache: cache)
         await rematerialized.load(provider: sharedProvider)
 
-        #expect(loadCount == 1)
+        #expect(loadCount.count == 1)
         #expect(rematerialized.pair?.afterImage === loadedPair.afterImage)
         #expect(!rematerialized.isLoading)
     }
 
     @Test func failedPairsAreNotCached() async {
         let cache = DiffReviewImagePairCache()
-        var loadCount = 0
+        let loadCount = InvalidationCounter()
         let failingProvider = provider(revision: "head") {
-            loadCount += 1
+            loadCount.increment()
             return ImageDiffPair(
                 before: .failed(.init(message: "Network error")),
                 after: .missing,
@@ -122,7 +122,7 @@ struct DiffReviewImageStateTests {
         let second = DiffReviewImageState(cache: cache)
         await second.load(provider: failingProvider)
 
-        #expect(loadCount == 2)
+        #expect(loadCount.count == 2)
     }
 
     @Test func clearOnAlreadyClearStateEmitsNoObservationEvents() {
@@ -200,7 +200,7 @@ private final class PairLoadGate {
 @MainActor
 private func provider(
     revision: String,
-    load: @escaping @MainActor () async -> ImageDiffPair
+    load: @escaping @MainActor @Sendable () async -> ImageDiffPair
 ) -> DiffReviewImageProvider {
     DiffReviewImageProvider(
         id: DiffReviewImageProviderID(

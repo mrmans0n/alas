@@ -1328,17 +1328,10 @@ final class DiffPaneCodeTextView: NSTextView {
         fatalError("not used")
     }
 
-    deinit {
-        let lspController = lspController
-        let observers = scrollBoundsObservers
-        let workItem = scheduledRebindWorkItem
-        Task { @MainActor in
-            for observer in observers {
-                NotificationCenter.default.removeObserver(observer)
-            }
-            workItem?.cancel()
-            lspController?.tearDown()
-        }
+    isolated deinit {
+        scheduledRebindWorkItem?.cancel()
+        lspController?.tearDown()
+        for observer in scrollBoundsObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     override func viewDidMoveToWindow() {
@@ -1629,14 +1622,11 @@ final class DiffPaneCodeTextView: NSTextView {
         for scrollView in scrollViews {
             let clipView = scrollView.contentView
             clipView.postsBoundsChangedNotifications = true
-            let token = NotificationCenter.default.addObserver(
+            let token = NotificationCenter.default.addMainActorObserver(
                 forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.lspController?.notifyScrolled()
-                }
+                object: clipView
+            ) { [weak self] in
+                self?.lspController?.notifyScrolled()
             }
             scrollBoundsObservers.append(token)
         }
@@ -2521,11 +2511,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
+        boundsObserver = NotificationCenter.default.addMainActorObserver(
             forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
-        ) { [weak self] _ in
+            object: scrollView.contentView
+        ) { [weak self] in
             self?.needsDisplay = true
         }
     }
@@ -2695,13 +2684,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
-    deinit {
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        if let boundsObserver {
-            NotificationCenter.default.removeObserver(boundsObserver)
-        }
+    isolated deinit {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
     }
 }
 

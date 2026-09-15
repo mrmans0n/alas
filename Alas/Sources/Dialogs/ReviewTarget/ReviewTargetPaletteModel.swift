@@ -323,10 +323,13 @@ final class ReviewTargetPaletteModel {
 
     func loadWorktreeMetrics(environment env: ReviewTargetPaletteEnvironment) async {
         let worktrees = env.worktrees()
+        // Hoisted so the child tasks capture only the Sendable closure, never
+        // the whole (MainActor-bound) environment value.
+        let loadCommitsAhead = env.loadCommitsAhead
         await withTaskGroup(of: (id: String, count: Int, ref: String?)?.self) { group in
             for worktree in worktrees {
                 group.addTask {
-                    guard let result = try? await env.loadCommitsAhead(worktree) else { return nil }
+                    guard let result = try? await loadCommitsAhead(worktree) else { return nil }
                     return (worktree.id, result.commits.count, result.comparisonRef)
                 }
             }
@@ -345,8 +348,10 @@ final class ReviewTargetPaletteModel {
         isLoadingTargets = true
         targetsError = nil
         do {
-            async let ahead = env.loadCommitsAhead(worktree)
-            async let branchList = env.loadBranches(worktree)
+            let loadCommitsAhead = env.loadCommitsAhead
+            let loadBranches = env.loadBranches
+            async let ahead = loadCommitsAhead(worktree)
+            async let branchList = loadBranches(worktree)
             let (result, loadedBranches) = try await (ahead, branchList)
             guard case .targets(let current) = level, current.id == worktree.id else { return }
             commits = result.commits

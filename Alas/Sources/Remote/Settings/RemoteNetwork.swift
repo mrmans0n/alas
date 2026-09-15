@@ -71,7 +71,9 @@ enum RemoteNetwork {
             )
             guard result == 0 else { continue }
 
-            let value = String(cString: host)
+            // `String(cString:)` is deprecated for arrays; getnameinfo NUL-terminates,
+            // so decode up to the terminator rather than the whole fixed buffer.
+            let value = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
             guard !value.isEmpty, !value.hasPrefix("fe80:") else { continue }
             output.append(RemoteNetworkInterface(
                 name: name,

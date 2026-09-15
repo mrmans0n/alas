@@ -24,7 +24,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(state)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        await manager.setEnabled(false, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(false, spacesFile: emptySpacesFile())
 
         #expect(manager.loadState == .notLoaded)
         guard case .loaded(let storedState) = await store.load() else {
@@ -44,7 +44,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(state)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
 
         guard case .loaded(let loadedState) = manager.loadState else {
             Issue.record("Expected enabled Workspace state")
@@ -79,7 +79,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [local, remote]))
         let observer = RecordingWorkspaceProgressObserver()
         let manager = WorkspacesManager(bridge: .init(workspaceStore: store), observer: observer)
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
         let remoteReport = manager.checkoutReconciliations[remote.id]
         try await store.mutate { state in
             state.checkouts[0].members[0].checkpoint = .setupComplete
@@ -90,7 +90,7 @@ struct WorkspaceFeatureFlagTests {
         #expect(await observer.checkoutIDs == [local.id, remote.id, local.id])
         #expect(manager.checkout(id: local.id)?.members[0].checkpoint == .setupComplete)
         #expect(manager.checkoutReconciliations[remote.id] == remoteReport)
-        await manager.setEnabled(false, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(false, spacesFile: emptySpacesFile())
         await manager.refreshCheckoutSnapshots(reconciling: local.id)
         #expect(await observer.checkoutIDs.count == 3)
         #expect(manager.loadState == .notLoaded)
@@ -159,7 +159,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .missing)
         guard case .loaded(let persistedState) = await store.load() else {
@@ -209,7 +209,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .explicitlyDeleted)
     }
@@ -230,7 +230,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.archivedAt == checkout.archivedAt)
     }
@@ -241,7 +241,7 @@ struct WorkspaceFeatureFlagTests {
         try Data("not JSON".utf8).write(to: url)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: url)))
 
-        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
 
         guard case .unreadable = manager.loadState else {
             Issue.record("Expected recovery state")

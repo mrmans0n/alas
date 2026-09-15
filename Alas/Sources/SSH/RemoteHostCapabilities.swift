@@ -78,38 +78,50 @@ final class RemoteHostCapabilityStore: @unchecked Sendable {
     private var cache: [String: RemoteHostCapabilities] = [:]
     private var inFlight: [String: Task<RemoteHostCapabilities?, Never>] = [:]
 
+    private enum Lookup {
+        case cached(RemoteHostCapabilities)
+        case joining(Task<RemoteHostCapabilities?, Never>)
+        case started(Task<RemoteHostCapabilities?, Never>)
+    }
+
     func capabilities(for host: String) async -> RemoteHostCapabilities? {
-        lock.lock()
-        if let cached = cache[host] {
-            lock.unlock()
-            return cached
-        }
-        if let running = inFlight[host] {
-            lock.unlock()
-            return await running.value
-        }
-
-        let task = Task<RemoteHostCapabilities?, Never> {
-            guard let result = try? await RemoteExec.run(
-                host: host,
-                cwd: nil,
-                command: RemoteHostCapabilities.probeCommand
-            ), !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
-                return nil
+        let lookup = lock.withLock { () -> Lookup in
+            if let cached = cache[host] {
+                return .cached(cached)
             }
-            return RemoteHostCapabilities.parse(result.stdout)
-        }
-        inFlight[host] = task
-        lock.unlock()
+            if let running = inFlight[host] {
+                return .joining(running)
+            }
 
-        let capabilities = await task.value
-        lock.lock()
-        inFlight.removeValue(forKey: host)
-        if let capabilities {
-            cache[host] = capabilities
+            let task = Task<RemoteHostCapabilities?, Never> {
+                guard let result = try? await RemoteExec.run(
+                    host: host,
+                    cwd: nil,
+                    command: RemoteHostCapabilities.probeCommand
+                ), !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+                    return nil
+                }
+                return RemoteHostCapabilities.parse(result.stdout)
+            }
+            inFlight[host] = task
+            return .started(task)
         }
-        lock.unlock()
-        return capabilities
+
+        switch lookup {
+        case .cached(let capabilities):
+            return capabilities
+        case .joining(let task):
+            return await task.value
+        case .started(let task):
+            let capabilities = await task.value
+            lock.withLock {
+                inFlight.removeValue(forKey: host)
+                if let capabilities {
+                    cache[host] = capabilities
+                }
+            }
+            return capabilities
+        }
     }
 
     func invalidate(host: String) {

@@ -43,7 +43,11 @@ struct RunScript: Equatable, Identifiable, Sendable {
 /// never hides a script from the list.
 enum RunScriptMetadata {
     private static let headerLineLimit = 20
-    private static let pattern = /^#\s*alas-(name|on-exit|cwd|url):\s*(.+?)\s*$/
+    /// `nonisolated(unsafe)` is sound: a compiled `Regex` built from a literal
+    /// is immutable, and `firstMatch(of:)` below does not mutate it — `Regex`
+    /// simply isn't `Sendable` yet. Do not rebuild this per call: `parse` runs
+    /// once per script file discovered on disk.
+    nonisolated(unsafe) private static let pattern = /^#\s*alas-(name|on-exit|cwd|url):\s*(.+?)\s*$/
 
     static func parse(
         fileName: String,

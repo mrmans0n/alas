@@ -29,7 +29,7 @@ struct SpacesManagerTests {
     }
 
     @Test func singleSpaceStaysHiddenWhenCustomizedByDefault() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         manager.renameSpace(id: manager.activeSpaceId, name: "Work")
         #expect(!manager.shouldShowSpaceAffordance)
@@ -40,7 +40,7 @@ struct SpacesManagerTests {
     }
 
     @Test func optInShowsAffordanceForSingleSpace() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         manager.setShowSingleSpaceAffordance(true)
 
@@ -74,7 +74,7 @@ struct SpacesManagerTests {
     }
 
     @Test func addingSecondSpaceShowsAffordance() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         let newId = manager.addSpace(name: "Personal", emoji: "🏠", now: date.addingTimeInterval(1))
 
@@ -83,7 +83,7 @@ struct SpacesManagerTests {
     }
 
     @Test func projectCanBelongToMultipleSpaces() {
-        var manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
         let workId = manager.activeSpaceId
         let personalId = manager.addSpace(name: "Personal", emoji: "🏠", now: date)
 
@@ -94,7 +94,7 @@ struct SpacesManagerTests {
     }
 
     @Test func finalProjectMembershipCannotBeRemoved() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         let removed = manager.removeProject("p1", fromSpace: manager.activeSpaceId)
 
@@ -103,7 +103,7 @@ struct SpacesManagerTests {
     }
 
     @Test func globalProjectRemovalPrunesAllSpaces() {
-        var manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
         let second = manager.addSpace(name: "Side", emoji: "🧪", now: date)
         manager.addProject("p1", toSpace: second)
 
@@ -114,7 +114,7 @@ struct SpacesManagerTests {
     }
 
     @Test func deletingActiveSpaceSwitchesToNeighborAndKeepsProjects() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
         let second = manager.addSpace(name: "Side", emoji: "🧪", now: date)
         manager.switchToSpace(id: second)
 
@@ -127,7 +127,7 @@ struct SpacesManagerTests {
     }
 
     @Test func cannotDeleteFinalSpace() {
-        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         let deleted = manager.deleteSpace(id: manager.activeSpaceId)
 
@@ -136,7 +136,7 @@ struct SpacesManagerTests {
     }
 
     @Test func activeProjectsFollowSpaceOrderAndPruneMissingIds() {
-        var manager = SpacesManager(
+        let manager = SpacesManager(
             file: SpacesFile(
                 version: 1,
                 activeSpaceId: "s1",
@@ -163,7 +163,7 @@ struct SpacesManagerTests {
     }
 
     @Test func reordersProjectsWithinActiveSpaceOnly() {
-        var manager = SpacesManager.migrating(projects: [project("p1"), project("p2"), project("p3")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2"), project("p3")], now: date)
         let second = manager.addSpace(name: "Other", emoji: "🧪", now: date)
         manager.addProject("p1", toSpace: second)
         manager.addProject("p3", toSpace: second)
@@ -176,7 +176,7 @@ struct SpacesManagerTests {
     }
 
     @Test func moveProjectToEndAffectsOnlyActiveSpace() {
-        var manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
         let second = manager.addSpace(name: "Other", emoji: "🧪", now: date)
         manager.addProject("p1", toSpace: second)
         manager.addProject("p2", toSpace: second)

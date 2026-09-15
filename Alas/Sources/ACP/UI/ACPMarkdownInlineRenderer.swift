@@ -43,8 +43,8 @@ enum ACPMarkdownInlineRenderer {
     static let badgeMaxSize = CGSize(width: 120, height: 18)
     static let normalImageMaxSize = CGSize(width: 240, height: 80)
 
-    private static let privateUsePrefix = "\u{E000}"
-    private static let privateUseSuffix = "\u{E001}"
+    nonisolated private static let privateUsePrefix = "\u{E000}"
+    nonisolated private static let privateUseSuffix = "\u{E001}"
 
     static func imageSourceKind(_ source: String) -> ACPMarkdownInlineImageSourceKind {
         switch MarkdownImageLoader.classify(source) {

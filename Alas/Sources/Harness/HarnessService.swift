@@ -54,6 +54,11 @@ final class HarnessService {
         self.socketServer = socketServer
     }
 
+    /// Main-actor isolated: it wires handlers that all run on the main queue
+    /// (the detector and socket server both dispatch there) and writes
+    /// `NotificationDelegate`'s main-actor state. Called from
+    /// `AppState.startHarness()`.
+    @MainActor
     func start(
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },

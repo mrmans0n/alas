@@ -92,20 +92,20 @@ struct WorkspaceAutomationTarget: Codable, Equatable, Sendable {
     var projectID: String
 }
 
-struct WorkspaceAutomationService {
+struct WorkspaceAutomationService: Sendable {
     var store: WorkspaceStore
-    var isEnabled: () -> Bool
-    var refreshNavigation: @MainActor () async -> Void
-    var selectCheckout: @MainActor (UUID) -> Void
-    var focusMember: @MainActor (UUID, UUID) -> Void
+    var isEnabled: @MainActor @Sendable () -> Bool
+    var refreshNavigation: @MainActor @Sendable () async -> Void
+    var selectCheckout: @MainActor @Sendable (UUID) -> Void
+    var focusMember: @MainActor @Sendable (UUID, UUID) -> Void
     var observer: any WorkspaceCheckoutObserving
 
     init(
         store: WorkspaceStore,
-        isEnabled: @escaping () -> Bool,
-        refreshNavigation: @escaping @MainActor () async -> Void = {},
-        selectCheckout: @escaping @MainActor (UUID) -> Void = { _ in },
-        focusMember: @escaping @MainActor (UUID, UUID) -> Void = { _, _ in },
+        isEnabled: @escaping @MainActor @Sendable () -> Bool,
+        refreshNavigation: @escaping @MainActor @Sendable () async -> Void = {},
+        selectCheckout: @escaping @MainActor @Sendable (UUID) -> Void = { _ in },
+        focusMember: @escaping @MainActor @Sendable (UUID, UUID) -> Void = { _, _ in },
         observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()
     ) {
         self.store = store
@@ -159,7 +159,7 @@ struct WorkspaceAutomationService {
     }
 
     private func loadedState() async throws -> WorkspaceStateFile {
-        guard isEnabled() else { throw WorkspaceAutomationError.disabled }
+        guard await isEnabled() else { throw WorkspaceAutomationError.disabled }
         switch await store.load() {
         case .loaded(let state): return await reconciled(state)
         case .missing: return WorkspaceStateFile()

@@ -74,11 +74,11 @@ private func makeZmxEnv(available: Bool = true) -> ZmxEnv {
 /// `TerminalService.closeSession` and `terminateAll` dispatch the zmx
 /// subprocess work to `Task.detached`, so tests need to wait for the
 /// recorded calls to materialize before asserting on them.
-private func waitForCalls<R>(
+private func waitForCalls<R: Sendable>(
     _ recorder: R,
     count: Int,
     timeout: TimeInterval = 2.0,
-    countOf: @escaping (R) -> Int
+    countOf: @escaping @Sendable (R) -> Int
 ) async {
     let deadline = Date().addingTimeInterval(timeout)
     while countOf(recorder) < count, Date() < deadline {
@@ -732,7 +732,7 @@ struct TerminalServiceZmxTests {
         svc.registry.register(session)
         svc.closeSession(id: "leaf-drain", worktreeId: "wt-1")
         // The detached task should have entered the runner by now.
-        _ = started.wait(timeout: .now() + 2.0)
+        _ = blockingWait(started, timeout: .now() + 2.0)
 
         // Drain runs on a background awaiter so the @MainActor task that
         // removes the completed task from the tracking set can schedule
@@ -788,7 +788,7 @@ struct TerminalServiceZmxTests {
             zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain-timeout")
         ))
         svc.closeSession(id: "leaf-drain-timeout", worktreeId: "wt-1")
-        _ = started.wait(timeout: .now() + 2.0)
+        _ = blockingWait(started, timeout: .now() + 2.0)
 
         let start = Date()
         await svc.drainPendingKills(timeout: 0.1)
@@ -928,4 +928,17 @@ struct TerminalServiceZmxTests {
         let killed = Set(recorder.calls.filter { $0.args.first == "kill" }.map { $0.args[1] })
         #expect(killed == ["alas-idle-1", "alas-idle-2"])
     }
+}
+
+/// Blocks the calling thread until `semaphore` is signalled or `timeout` elapses.
+///
+/// These tests rendezvous with a synchronous stall runner that only signals from another
+/// thread, so the wait has to block rather than suspend. `DispatchSemaphore.wait` is
+/// `noasync`, so the block lives in a synchronous helper and the behaviour is unchanged.
+@discardableResult
+private func blockingWait(
+    _ semaphore: DispatchSemaphore,
+    timeout: DispatchTime
+) -> DispatchTimeoutResult {
+    semaphore.wait(timeout: timeout)
 }

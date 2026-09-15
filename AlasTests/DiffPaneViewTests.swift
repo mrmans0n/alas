@@ -117,7 +117,7 @@ struct DiffPaneViewTests {
                     oldStart: 1,
                     newStart: 1,
                     lines: (1...15).map {
-                        .init(kind: .context, text: "let value\($0) = \($0)", oldNumber: $0, newNumber: $0)
+                        .init(kind: .context, text: "let value\(String(describing: $0)) = \(String(describing: $0))", oldNumber: $0, newNumber: $0)
                     }
                 )
             ]),
@@ -4574,7 +4574,7 @@ let second = true
         ))
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        NSGraphicsContext.current = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         NSColor.magenta.setFill()
         parent.bounds.fill()
 
@@ -4613,7 +4613,7 @@ let second = true
         ))
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        NSGraphicsContext.current = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 
         ruler.drawHashMarksAndLabels(in: NSRect(x: 0, y: 4_005, width: 60, height: 90))
 

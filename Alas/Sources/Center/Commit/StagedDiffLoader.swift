@@ -1,6 +1,6 @@
 import Foundation
 
-protocol StagedDiffGitClient {
+protocol StagedDiffGitClient: Sendable {
     func stagedChangedFiles(at worktreePath: URL) async throws -> [CommitChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
     func stagedImageProvider(worktreePath: URL, file: CommitChangedFile) async -> DiffReviewImageProvider

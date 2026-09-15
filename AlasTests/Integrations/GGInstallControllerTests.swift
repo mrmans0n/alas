@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -55,12 +56,12 @@ struct GGInstallControllerTests {
     }
 
     @Test func successfulUpgradeReachesSucceededAndReprobes() async {
-        var upgraded = false
+        let upgraded = Flag()
         var probed = false
         let controller = GGInstallController(
             runInstall: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
             runUpgrade: {
-                upgraded = true
+                upgraded.set()
                 return ProcessResult(exitCode: 0, stdout: "upgraded", stderr: "")
             },
             reprobe: {
@@ -71,7 +72,7 @@ struct GGInstallControllerTests {
 
         await controller.upgradeAndWait()
         #expect(controller.phase == .succeeded)
-        #expect(upgraded)
+        #expect(upgraded.isSet)
         #expect(probed)
     }
 
@@ -110,5 +111,21 @@ struct GGInstallControllerTests {
         await operation.finish()
         await first.value
         #expect(controller.phase == .succeeded)
+    }
+}
+
+/// One-shot flag set from a concurrently-executing closure.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func set() {
+        lock.withLock { value = true }
+    }
+
+    var isSet: Bool {
+        lock.withLock { value }
     }
 }

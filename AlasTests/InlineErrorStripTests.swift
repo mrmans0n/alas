@@ -17,7 +17,7 @@ struct InlineErrorStripTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 420, height: 80)
         controller.view.layoutSubtreeIfNeeded()
 
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func expandedErrorStripAllowsMoreVerticalSpaceForLongMessage() {

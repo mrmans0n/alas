@@ -6,7 +6,7 @@ final class EditorFindHighlightRenderer {
     private var projectionObserver: NSObjectProtocol?
     private var rendered: (matches: [NSRange], active: Int?, inactiveColor: NSColor, activeColor: NSColor, revision: Int?)?
 
-    deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
 
     func attach(textView: CodeTextView) {
         if self.textView !== textView {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -98,5 +99,45 @@ final class MergeScrollCoordinator {
         case .result: onSyncResult?(y)
         case .remote: onSyncRemote?(y)
         }
+    }
+}
+
+/// Shared scroll-sync wiring for a single merge pane's `NSScrollView`.
+/// `MergeResultPane` and `MergeSidePane` each need the same two things:
+/// a bounds observer that reports user scrolling into
+/// `MergeScrollCoordinator.applyPaneY`, and an `onSync*` handler that
+/// moves this pane's clip view when another pane drives the scroll.
+/// Owning both here keeps the wiring — and its teardown — in one place
+/// instead of duplicated per pane.
+@MainActor
+final class MergePaneScrollBridge {
+    private var token: (any NSObjectProtocol)?
+
+    init(scroll: NSScrollView, source: MergeScrollCoordinator.Source, coordinator: MergeScrollCoordinator) {
+        scroll.contentView.postsBoundsChangedNotifications = true
+        token = NotificationCenter.default.addMainActorObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scroll.contentView
+        ) {
+            coordinator.applyPaneY(scroll.contentView.bounds.origin.y, source: source)
+        }
+        // Weak scroll: onSync* handlers live on `coordinator`, which
+        // outlives any single pane instance, so a strong capture here
+        // would keep a stale NSScrollView alive after its pane is torn
+        // down.
+        let handler: @MainActor (CGFloat) -> Void = { [weak scroll] y in
+            guard let scroll else { return }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        switch source {
+        case .result: coordinator.onSyncResult = handler
+        case .local:  coordinator.onSyncLocal = handler
+        case .remote: coordinator.onSyncRemote = handler
+        }
+    }
+
+    isolated deinit {
+        if let token { NotificationCenter.default.removeObserver(token) }
     }
 }
