@@ -145,6 +145,19 @@ func makeAlasGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> ghostty
     )
 }
 
+/// Executes AppKit-dependent callback work on the main actor while preserving
+/// synchronous C callback semantics.
+func alasGhosttyOnMain<T: Sendable>(
+    _ body: @escaping @MainActor @Sendable () -> T
+) -> T {
+    if Thread.isMainThread {
+        return MainActor.assumeIsolated { body() }
+    }
+    return DispatchQueue.main.sync {
+        MainActor.assumeIsolated { body() }
+    }
+}
+
 // MARK: - C Runtime Callbacks (module-level @convention(c)-compatible free functions)
 //
 // Callbacks for wakeup and close_surface use the runtime config's `userdata` (the App box).
@@ -272,10 +285,11 @@ private func alasGhosttyReadClipboard(
     state: UnsafeMutableRawPointer?
 ) -> Bool {
     guard clipboard == GHOSTTY_CLIPBOARD_STANDARD else { return false }
-    guard let text = NSPasteboard.general.string(forType: .string) else { return false }
     guard let ud = userdata else { return false }
     let sv = Unmanaged<AlasGhostty.SurfaceView>.fromOpaque(ud).takeUnretainedValue()
-    guard let surface = sv.cSurface else { return false }
+    guard let text = alasGhosttyOnMain({
+        NSPasteboard.general.string(forType: .string)
+    }), let surface = sv.cSurface else { return false }
     text.withCString { ptr in
         ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
     }
@@ -289,12 +303,12 @@ private func alasGhosttyConfirmReadClipboard(
     _ userdata: UnsafeMutableRawPointer?,
     string: UnsafePointer<CChar>?,
     state: UnsafeMutableRawPointer?,
-    request: ghostty_clipboard_request_e
+    request _: ghostty_clipboard_request_e
 ) {
-    guard let ud = userdata else { return }
+    guard let ud = userdata, let string else { return }
     let sv = Unmanaged<AlasGhostty.SurfaceView>.fromOpaque(ud).takeUnretainedValue()
     guard let surface = sv.cSurface else { return }
-    let text = NSPasteboard.general.string(forType: .string) ?? ""
+    let text = String(cString: string)
     text.withCString { ptr in
         ghostty_surface_complete_clipboard_request(surface, ptr, state, true)
     }

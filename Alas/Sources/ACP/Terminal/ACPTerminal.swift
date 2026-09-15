@@ -58,11 +58,11 @@ final class ACPTerminal: ObservableObject {
     /// publishing `exitStatus` so a fast-exiting command's final bytes
     /// land in the buffer before `wait_for_exit` waiters resume.
     private var sawEOF: Bool = false
-    /// Set as soon as `terminationHandler` fires. We can't trust
+    /// Marked as soon as `terminationHandler` fires. We can't trust
     /// `process.isRunning` after that — the OS may reuse the root pid
     /// for an unrelated process, and `isRunning` polls by pid. Used by
     /// `kill()` to decide whether it's still safe to signal the root.
-    nonisolated(unsafe) private var rootHasExited: Bool = false
+    private let rootExitState = ACPTerminalRootExitState()
     /// `(pid, start time)` pairs accumulated by the periodic tracker
     /// while the root is alive. Needed because `terminationHandler`
     /// runs after the kernel has already reaped the root and
@@ -132,12 +132,13 @@ final class ACPTerminal: ObservableObject {
         process.standardInput = FileHandle.nullDevice
 
         let weakSelf = WeakBox(self)
+        let rootExitState = rootExitState
         installReadabilityHandler()
         process.terminationHandler = { proc in
             // Mark the root as exited synchronously here so any kill()
             // call that races ahead of the @MainActor handleExit Task
             // already sees the flag and skips signaling rootPid.
-            weakSelf.value?.rootHasExited = true
+            rootExitState.markExited()
             let status: ACPTerminalExitStatus
             if proc.terminationReason == .uncaughtSignal {
                 status = ACPTerminalExitStatus(exitCode: nil, signal: Self.signalName(proc.terminationStatus))
@@ -185,7 +186,7 @@ final class ACPTerminal: ObservableObject {
         // gate on exitStatus — a release()/killAll() after the EOF
         // timeout fired still needs to reach orphan descendants we
         // captured in the tracker. signalTargets handles the stale-
-        // rootPid risk via `rootHasExited` and stale-descendant risk
+        // rootPid risk via the synchronized exit state and stale-descendant risk
         // via per-PID start-time validation.
         guard pid > 0 else { return }
         // Union of: live ppid walk (works while root is alive) +
@@ -196,7 +197,7 @@ final class ACPTerminal: ObservableObject {
         // Cheap root/process-group signal stays synchronous so a
         // just-about-to-exit root cannot reparent uncached children
         // before any cleanup signal is sent.
-        let rootAliveAtKill = !rootHasExited
+        let rootAliveAtKill = !rootExitState.hasExited
         if rootAliveAtKill {
             _ = Darwin.kill(-pid, SIGTERM)
             _ = Darwin.kill(pid, SIGTERM)
@@ -209,9 +210,7 @@ final class ACPTerminal: ObservableObject {
                 initial.formUnion(Self.collectGroupMembers(of: pid))
             }
             initial.formUnion(cached)
-            let termRootAlive = await MainActor.run {
-                !strongSelf.value.rootHasExited
-            }
+            let termRootAlive = !strongSelf.value.rootExitState.hasExited
             Self.signalTargets(rootPid: pid, rootAlive: termRootAlive,
                                descendants: initial, signal: SIGTERM)
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -221,9 +220,7 @@ final class ACPTerminal: ObservableObject {
                 strongSelf.value.orphanedDescendants
             }
             union.formUnion(latestCached)
-            let killRootAlive = await MainActor.run {
-                !strongSelf.value.rootHasExited
-            }
+            let killRootAlive = !strongSelf.value.rootExitState.hasExited
             Self.signalTargets(rootPid: pid, rootAlive: killRootAlive,
                                descendants: union, signal: SIGKILL)
         }
@@ -261,9 +258,7 @@ final class ACPTerminal: ObservableObject {
             // terminationHandler runs (children are reparented to init
             // by then and unfindable via a ppid walk from the root).
             while !Task.isCancelled {
-                let shouldStop = await MainActor.run {
-                    weakSelf.value?.rootHasExited ?? true
-                }
+                let shouldStop = weakSelf.value?.rootExitState.hasExited ?? true
                 if shouldStop { return }
                 let live = Set(Self.collectDescendants(of: rootPid))
                 let cached = await MainActor.run {
@@ -693,6 +688,19 @@ final class ACPTerminal: ObservableObject {
         case SIGSEGV: return "SIGSEGV"
         default: return "SIG\(raw)"
         }
+    }
+}
+
+final class ACPTerminalRootExitState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exited = false
+
+    var hasExited: Bool {
+        lock.withLock { exited }
+    }
+
+    func markExited() {
+        lock.withLock { exited = true }
     }
 }
 

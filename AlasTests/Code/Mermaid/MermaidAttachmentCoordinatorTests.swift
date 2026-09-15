@@ -5,6 +5,32 @@ import Testing
 @MainActor
 @Suite("Mermaid attachment coordinator")
 struct MermaidAttachmentCoordinatorTests {
+    @Test("attachment layout state remains coherent across threads")
+    func attachmentLayoutStateIsSynchronized() async {
+        let state = MermaidCellLayoutState()
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<100 {
+                group.addTask {
+                    _ = state.snapshot(updatingMeasuredWidth: CGFloat(index + 1))
+                }
+                group.addTask {
+                    state.updateShowsSource(index.isMultiple(of: 2))
+                }
+                group.addTask {
+                    _ = state.snapshot
+                }
+            }
+        }
+
+        state.updateShowsSource(true)
+        state.updateSizingState(.rendered(CGSize(width: 800, height: 400)))
+        let snapshot = state.snapshot(updatingMeasuredWidth: 720)
+        #expect(snapshot.showsSource)
+        #expect(snapshot.measuredWidth == 720)
+        #expect(snapshot.sizingState == .rendered(CGSize(width: 800, height: 400)))
+    }
+
     @Test("source disclosure preserves exact selectable source and shifts later anchors")
     func sourceDisclosureMutatesTextStorageByUTF16Delta() throws {
         let source = "graph TD; A[👋]-->B"

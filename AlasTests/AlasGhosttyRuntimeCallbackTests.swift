@@ -1,4 +1,5 @@
 import Dispatch
+import Foundation
 import GhosttyKit
 import Testing
 @testable import Alas
@@ -13,6 +14,18 @@ private final class GhosttyRuntimeConfigBox: @unchecked Sendable {
 
 @Suite
 struct AlasGhosttyRuntimeCallbackTests {
+    @Test func mainThreadBridgeRunsOnMainFromBackground() async {
+        let ranOnMain = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: alasGhosttyOnMain {
+                    Thread.isMainThread
+                })
+            }
+        }
+
+        #expect(ranOnMain)
+    }
+
     @Test func runtimeCallbacksCanRunOffMainActor() async {
         let config = GhosttyRuntimeConfigBox(makeAlasGhosttyRuntimeConfig(userdata: nil))
 
