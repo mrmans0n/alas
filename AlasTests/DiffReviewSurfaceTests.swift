@@ -287,7 +287,7 @@ struct DiffReviewSurfaceTests {
             }
         )
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,
@@ -317,7 +317,7 @@ struct DiffReviewSurfaceTests {
         )
         let model = AppKitPostedDraftHarnessModel(file: file)
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitPostedDraftHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,
@@ -532,7 +532,7 @@ struct DiffReviewSurfaceTests {
         )
         let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [stagedFile]))
 
-        try await withAppKitReviewScroller {
+        await withAppKitReviewScroller {
             let controller = host(
                 AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
                 width: 1_000,

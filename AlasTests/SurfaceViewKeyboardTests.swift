@@ -445,7 +445,7 @@ struct SurfaceViewKeyboardTests {
             relativePath: "Sources/App State.swift",
             absolutePath: "/tmp/work tree/Sources/App State.swift"
         )
-        pasteboard.setData(try #require(payload.encoded()), forType: .alasDropPayload)
+        pasteboard.setData(payload.encoded(), forType: .alasDropPayload)
 
         #expect(second.handleAlasDrop(from: pasteboard))
         #expect(firstIO.calls.isEmpty)
@@ -460,7 +460,7 @@ struct SurfaceViewKeyboardTests {
         pasteboard.clearContents()
         let sha = "0123456789abcdef0123456789abcdef01234567"
         pasteboard.setData(
-            try #require(AlasDropPayload.commitSHA(sha).encoded()),
+            AlasDropPayload.commitSHA(sha).encoded(),
             forType: .alasDropPayload
         )
 

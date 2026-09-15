@@ -100,7 +100,7 @@ struct ACPWorktreeSessionBootstrapperTests {
             let bootstrapper = ACPWorktreeSessionBootstrapper(environment: fake.environment)
 
             do {
-                try await bootstrapper.start(Self.request)
+                _ = try await bootstrapper.start(Self.request)
                 Issue.record("Expected ACP bootstrap to fail")
             } catch let error as ACPWorktreeSessionBootstrapError {
                 #expect(error.message == expectedMessage)

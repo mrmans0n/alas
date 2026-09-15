@@ -51,7 +51,7 @@ struct AppStateRunRecordTests {
         guard case .text(let lines) = allowed else { Issue.record("Writable open session must be accepted")
         return }
         #expect(lines.first?.contains("previews") == true)
-        fixture.state.tabs.closeAll(worktreeId: owner.storageKey)
+        _ = fixture.state.tabs.closeAll(worktreeId: owner.storageKey)
         let closed = await router.handle(request)
         guard case .error = closed else { Issue.record("Closed session tab must be denied")
         return }

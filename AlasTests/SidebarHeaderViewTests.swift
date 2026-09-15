@@ -28,8 +28,8 @@ struct SidebarHeaderViewTests {
     }
 
     @Test func headerRendersWithoutCrashing() {
-        let controller = hostHeader()
-        #expect(controller.view != nil)
+        _ = hostHeader()
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func sortMenuKeepsHeaderHeightAndAccessibilityLabel() throws {

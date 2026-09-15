@@ -64,7 +64,7 @@ struct AppKitDiffReviewFlingPerfTests {
     }
 
     @Test func expandingContextInvalidatesOnlyTheAffectedHunkHeight() throws {
-        let theme = try ThemeStore().current
+        _ = try ThemeStore().current
         let file = collapsibleFile()
         let group = try #require(file.displayModel?.groups.first)
         let font = CenterTypography.resolveCodeFont(family: "SF Mono", size: 13)
@@ -142,7 +142,7 @@ struct AppKitDiffReviewFlingPerfTests {
     /// A hunk with enough leading context to collapse.
     private func collapsibleFile() -> DiffReviewFileSectionModel {
         var lines = (1...30).map { index in
-            ParsedDiff.Hunk.Line(kind: .context, text: "let context\(index) = \(index)", oldNumber: index, newNumber: index)
+            ParsedDiff.Hunk.Line(kind: .context, text: "let context\(String(describing: index)) = \(String(describing: index))", oldNumber: index, newNumber: index)
         }
         lines.append(.init(kind: .add, text: "let added = 0", oldNumber: nil, newNumber: 31))
         let hunk = ParsedDiff.Hunk(header: "@@ -1,30 +1,31 @@", oldStart: 1, newStart: 1, lines: lines)

@@ -292,7 +292,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func hunkViewHostsNativeSelectableTextView() throws {
@@ -370,7 +370,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func hunkViewWithEmptyLinesRendersWithoutCrashing() {
@@ -384,7 +384,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     // MARK: CommitDiffView integration
@@ -412,7 +412,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func commitDiffViewRendersTextDiffWithDiffPaneRenderer() throws {
@@ -581,7 +581,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     // MARK: Code font configuration
@@ -610,7 +610,7 @@ struct Foo {
                 .environment(\.theme, currentTheme())
             let controller = NSHostingController(rootView: view)
             controller.view.layoutSubtreeIfNeeded()
-            #expect(controller.view != nil)
+            // NSHostingController.view is never nil; reaching here without crashing is the assertion.
         }
     }
 
@@ -619,7 +619,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func commitDiffViewRendersWithCustomFont() {
@@ -643,7 +643,7 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 
     @Test func hunkViewWithPlainTextExtensionRendersWithoutCrashing() {
@@ -661,6 +661,6 @@ struct Foo {
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        // NSHostingController.view is never nil; reaching here without crashing is the assertion.
     }
 }

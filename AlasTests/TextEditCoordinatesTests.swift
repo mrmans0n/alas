@@ -126,7 +126,7 @@ struct TextEditCoordinatesTests {
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 1)), newText: "X"),
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 2, character: 0), end: LSPPosition(line: 2, character: 1)), newText: "Z")
         ]
-        var storage = NSMutableString(string: text)
+        let storage = NSMutableString(string: text)
         let nsEdits: [(NSRange, String)] = edits.compactMap { edit in
             guard let s = TextEditCoordinates.utf16Offset(from: edit.range.start, in: storage as String),
                   let e = TextEditCoordinates.utf16Offset(from: edit.range.end, in: storage as String) else { return nil }

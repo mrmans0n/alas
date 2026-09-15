@@ -305,7 +305,7 @@ struct ACPMessageTests {
 
     @Test("tool call truncation flag is excluded from equality and hashing")
     func toolCallTruncatedFlagExcludedFromEqualityAndHash() throws {
-        var a = ACPMessage.ToolCall(
+        let a = ACPMessage.ToolCall(
             toolCallId: "tc-5", title: "read", kind: "read",
             status: "completed", content: "output", preview: "output")
         var b = ACPMessage.ToolCall(

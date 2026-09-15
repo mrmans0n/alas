@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct TabsManagerReviewSessionTests {
     @Test func opensOrFocusesReviewSessionForSameTarget() {
-        var manager = TabsManager()
+        let manager = TabsManager()
         let target = ReviewSessionTarget.localChanges(
             worktreeID: "wt-1",
             repositoryPath: URL(fileURLWithPath: "/repo"),
@@ -29,7 +29,7 @@ struct TabsManagerReviewSessionTests {
     }
 
     @Test func updatesReviewSessionSelection() {
-        var manager = TabsManager()
+        let manager = TabsManager()
         let target = ReviewSessionTarget.commit(
             worktreeID: "wt-1",
             repositoryPath: URL(fileURLWithPath: "/repo"),
@@ -56,7 +56,7 @@ struct TabsManagerReviewSessionTests {
     }
 
     @Test func openOrFocusReviewSessionRefreshesExistingDestinationState() {
-        var manager = TabsManager()
+        let manager = TabsManager()
         let target = ReviewSessionTarget.commit(
             worktreeID: "wt-1",
             repositoryPath: URL(fileURLWithPath: "/repo"),
@@ -142,7 +142,7 @@ struct TabsManagerReviewSessionTests {
     }
 
     @Test func retargetingReviewSessionCoalescesExistingDestinationTab() throws {
-        var manager = TabsManager()
+        let manager = TabsManager()
         let repositoryPath = URL(fileURLWithPath: "/repo")
         let fixedTarget = ReviewSessionTarget.commit(
             worktreeID: "wt-1",
