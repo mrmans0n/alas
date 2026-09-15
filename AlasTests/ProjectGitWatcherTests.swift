@@ -4,6 +4,18 @@ import Foundation
 
 @MainActor
 struct ProjectGitWatcherTests {
+    @Test func stoppingAStartedWatcherReleasesItsStreamOffMainActor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("project-git-watcher-tests-\(UUID().uuidString)", isDirectory: true)
+        let gitDir = directory.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let watcher = makeWatcher(gitDir: gitDir)
+        watcher.start()
+        watcher.stop()
+    }
+
     /// Build a fake `<tmp>/repo/.git` layout with two linked worktrees,
     /// each having a HEAD pointing to a branch and a `gitdir` pointing
     /// at the worktree root. Returns (gitDir, [worktreeName: worktreeRoot]).
