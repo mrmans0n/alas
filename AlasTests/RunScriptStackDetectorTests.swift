@@ -1450,6 +1450,27 @@ struct RunScriptStackDetectorTests {
         #expect(stacks[.go]?.goRunTarget == nil)
     }
 
+    @Test func goTreatsGo125DefaultExperimentTagsAsEnabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !goexperiment.swissmap\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        let stacks = Dictionary(uniqueKeysWithValues: RunScriptStackDetector.detect(
+            worktreeRoot: root,
+            goToolchainEnvironment: { _ in
+                .init(
+                    minorVersion: 25,
+                    operatingSystem: "darwin",
+                    architecture: "amd64",
+                    architectureFeatures: []
+                )
+            }
+        ).map { ($0.stack, $0.context) })
+
+        #expect(stacks[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsDefaultArchitectureFeatureTagsAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1731,7 +1752,44 @@ struct RunScriptStackDetectorTests {
     @Test func pythonIgnoresRequirementsExcludedByPythonVersionMarkers() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try write("requirements.txt", "pytest; python_version < \"2\"\nruff; python_version >= \"4\"\n", in: root)
+        try write("requirements.txt", "pytest; python_version < \"3.1\"\nruff; python_version >= \"4\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonIgnoresPyprojectDependenciesExcludedByEnvironmentMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = ["pytest; sys_platform == 'win32'"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+    }
+
+    @Test func pythonIgnoresDependencyGroupEntriesExcludedByEnvironmentMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            dev = ["pytest; sys_platform == 'win32'", "ruff; python_version >= '4'"]
+            """,
+            in: root
+        )
 
         #expect(detect(root)[.python]?.hasPytest == false)
         #expect(detect(root)[.python]?.hasRuff == false)
@@ -1935,6 +1993,26 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonIgnoresPoetryDependenciesExcludedByEnvironmentMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("poetry.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [tool.poetry.dependencies]
+            pytest = { version = "^8", markers = "sys_platform == 'win32'" }
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == false)
     }
 
     @Test func barePythonIgnoresPoetryDependencyTables() throws {

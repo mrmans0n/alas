@@ -22,12 +22,17 @@ struct GoToolchainEnvironment: Equatable, Sendable {
         architecture: String = hostArchitecture
     ) -> Set<String> {
         let minor = minorVersion ?? 25
+        var tags: Set<String> = []
         switch architecture {
         case "amd64" where minor >= 17, "arm64" where minor >= 17:
-            return ["goexperiment.regabiargs", "goexperiment.regabiwrappers"]
+            tags.formUnion(["goexperiment.regabiargs", "goexperiment.regabiwrappers"])
         default:
-            return []
+            break
         }
+        if minor >= 25 {
+            tags.formUnion(["goexperiment.aliastypeparams", "goexperiment.swissmap", "goexperiment.synchashtriemap"])
+        }
+        return tags
     }
 
     static var hostOperatingSystem: String {
@@ -49,6 +54,13 @@ struct GoToolchainEnvironment: Equatable, Sendable {
 /// Reads one directory listing plus, when present, a few small manifests.
 /// Results follow `RunScriptStack.allCases` order so the picker is stable.
 enum RunScriptStackDetector {
+    private struct PythonMarkerEnvironment {
+        let pythonVersion: String?
+        let pythonFullVersion: String?
+
+        static let current = currentPythonMarkerEnvironment()
+    }
+
     // swiftlint:disable:next function_body_length cyclomatic_complexity
     static func detect(
         worktreeRoot: URL,
@@ -2254,25 +2266,62 @@ enum RunScriptStackDetector {
     }
 
     private static func requirementsDeclarePythonTool(_ requirements: String, tool: String) -> Bool {
-        let normalizedTool = normalizedPythonPackageName(tool)
         return requirements.components(separatedBy: .newlines).contains { rawLine in
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
                 .trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("-") else { return false }
-            let parts = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
-            let requirement = parts[0].trimmingCharacters(in: .whitespaces)
-            if parts.count == 2, !pythonRequirementMarkerAllowsCurrentEnvironment(String(parts[1])) {
-                return false
-            }
-            let packageName = requirement.prefix { character in
-                character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
-            }
-            return normalizedPythonPackageName(String(packageName)) == normalizedTool
+            return pythonDependencyString(line, declares: tool)
         }
+    }
+
+    private static func pythonDependencyString(_ text: String, declares tool: String) -> Bool {
+        let normalizedTool = normalizedPythonPackageName(tool)
+        let parts = text.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        let requirement = parts[0].trimmingCharacters(in: .whitespaces)
+        if parts.count == 2, !pythonRequirementMarkerAllowsCurrentEnvironment(String(parts[1])) {
+            return false
+        }
+        let packageName = requirement.prefix { character in
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        }
+        return normalizedPythonPackageName(String(packageName)) == normalizedTool
     }
 
     private static func pythonRequirementMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
         pythonMarkerAllowsCurrentEnvironment(marker)
+    }
+
+    private static func currentPythonMarkerEnvironment() -> PythonMarkerEnvironment {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "python3",
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')",
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            let deadline = Date().addingTimeInterval(0.25)
+            while process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            if process.isRunning {
+                process.terminate()
+                return .init(pythonVersion: nil, pythonFullVersion: nil)
+            }
+        } catch {
+            return .init(pythonVersion: nil, pythonFullVersion: nil)
+        }
+        guard process.terminationStatus == 0 else { return .init(pythonVersion: nil, pythonFullVersion: nil) }
+        let lines = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let pythonVersion = lines.indices.contains(0) && !lines[0].isEmpty ? lines[0] : nil
+        let pythonFullVersion = lines.indices.contains(1) && !lines[1].isEmpty ? lines[1] : pythonVersion
+        return .init(pythonVersion: pythonVersion, pythonFullVersion: pythonFullVersion)
     }
 
     private static func pythonMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
@@ -2359,8 +2408,12 @@ enum RunScriptStackDetector {
             return comparePythonMarkerString(actual: "Darwin", operatorText: operatorText, expected: expected)
         case "platform_machine":
             return comparePythonMarkerString(actual: GoToolchainEnvironment.hostArchitecture, operatorText: operatorText, expected: expected)
-        case "python_version", "python_full_version":
-            return comparePythonMarkerVersion(actual: "3.0", operatorText: operatorText, expected: expected)
+        case "python_version":
+            guard let actual = PythonMarkerEnvironment.current.pythonVersion else { return false }
+            return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
+        case "python_full_version":
+            guard let actual = PythonMarkerEnvironment.current.pythonFullVersion else { return false }
+            return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
         case "implementation_name":
             return comparePythonMarkerString(actual: "cpython", operatorText: operatorText, expected: expected)
         case "platform_python_implementation":
@@ -2484,38 +2537,52 @@ enum RunScriptStackDetector {
     }
 
     private static func tomlDependencyText(_ text: String, declares tool: String) -> Bool {
-        let escapedTool = NSRegularExpression.escapedPattern(for: tool)
         guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\[(.*?)\]"#),
-              let inlineTableRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\{(.*?)\}"#),
-              let quotedDependencyRegex = try? NSRegularExpression(
-                  pattern: #"["']"# + escapedTool + #"([<>=~! ;,\[][^"']*)?["']"#
-              ),
-              let tableDependencyRegex = try? NSRegularExpression(pattern: #"(?m)^\s*["']?"# + escapedTool + #"["']?\s*="#)
+              let inlineTableRegex = try? NSRegularExpression(pattern: #"(?ms)=\s*\{(.*?)\}"#)
         else { return false }
         let range = NSRange(text.startIndex..., in: text)
-        if tableDependencyRegex.firstMatch(in: text, range: range) != nil {
+        if tomlTableDependencyText(text, declares: tool) {
             return true
         }
         let arrayMatches = arrayRegex.matches(in: text, range: range)
         if arrayMatches.contains(where: { match in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
             let body = String(text[bodyRange])
-            return quotedDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+            return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool) }
         }) {
             return true
         }
         return inlineTableRegex.matches(in: text, range: range).contains { match in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
             let body = String(text[bodyRange])
-            return tableDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+            return tomlTableDependencyText(body, declares: tool)
         }
     }
 
-    private static func tomlKeyedDependencyText(_ text: String, declares tool: String, keys: [String]) -> Bool {
+    private static func tomlTableDependencyText(_ text: String, declares tool: String) -> Bool {
         let escapedTool = NSRegularExpression.escapedPattern(for: tool)
-        guard let quotedDependencyRegex = try? NSRegularExpression(
-            pattern: #"["']"# + escapedTool + #"([<>=~! ;,\[][^"']*)?["']"#
+        guard let dependencyRegex = try? NSRegularExpression(
+            pattern: #"(?m)^\s*["']?"# + escapedTool + #"["']?\s*=\s*(.*?)$"#
         ) else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        return dependencyRegex.matches(in: text, range: range).contains { match in
+            guard let valueRange = Range(match.range(at: 1), in: text) else { return false }
+            let value = String(text[valueRange])
+            guard let marker = tomlInlineMarkerValue(value) else { return true }
+            return pythonRequirementMarkerAllowsCurrentEnvironment(marker)
+        }
+    }
+
+    private static func tomlInlineMarkerValue(_ text: String) -> String? {
+        guard let markerRegex = try? NSRegularExpression(pattern: #"markers\s*=\s*["']([^"']+)["']"#) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = markerRegex.firstMatch(in: text, range: range),
+              let markerRange = Range(match.range(at: 1), in: text)
+        else { return nil }
+        return String(text[markerRange])
+    }
+
+    private static func tomlKeyedDependencyText(_ text: String, declares tool: String, keys: [String]) -> Bool {
         return keys.contains { key in
             let escapedKey = NSRegularExpression.escapedPattern(for: key)
             guard let arrayRegex = try? NSRegularExpression(pattern: #"(?ms)^\s*"# + escapedKey + #"\s*=\s*\[(.*?)\]"#)
@@ -2524,7 +2591,7 @@ enum RunScriptStackDetector {
             return arrayRegex.matches(in: text, range: range).contains { match in
                 guard let bodyRange = Range(match.range(at: 1), in: text) else { return false }
                 let body = String(text[bodyRange])
-                return quotedDependencyRegex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+                return tomlStringValues(body).contains { pythonDependencyString($0, declares: tool) }
             }
         }
     }
@@ -2537,12 +2604,17 @@ enum RunScriptStackDetector {
         let range = NSRange(text.startIndex..., in: text)
         return arrayRegex.matches(in: text, range: range).flatMap { match -> [String] in
             guard let bodyRange = Range(match.range(at: 1), in: text) else { return [] }
-            let body = String(text[bodyRange])
-            let fullBodyRange = NSRange(body.startIndex..., in: body)
-            return stringRegex.matches(in: body, range: fullBodyRange).compactMap { stringMatch in
-                guard let valueRange = Range(stringMatch.range(at: 1), in: body) else { return nil }
-                return String(body[valueRange])
-            }
+            return tomlStringValues(String(text[bodyRange]), stringRegex: stringRegex)
+        }
+    }
+
+    private static func tomlStringValues(_ text: String, stringRegex: NSRegularExpression? = nil) -> [String] {
+        let regex = stringRegex ?? (try? NSRegularExpression(pattern: #"["']([^"']+)["']"#))
+        guard let regex else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let valueRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[valueRange])
         }
     }
 
