@@ -1595,15 +1595,15 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         let state = makeState()
-        var branchContext = GGWorktreeContext.active(stackName: "agent-inbox")
+        let branchContext = GGWorktreeContextBox(.active(stackName: "agent-inbox"))
         state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in branchContext }
+        state.ggContextProvider = { _ in branchContext.value }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
 
         state.seedGGContext(branch: "nacho/agent-inbox")
         await state.refreshGGStack()
 
-        branchContext = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        branchContext.value = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
         state.seedGGContext(branch: "")
         await state.refreshGGStack()
 
@@ -1686,15 +1686,15 @@ struct RightPaneGGStackTests {
             ProcessResult(exitCode: 0, stdout: #"{"version":1,"stack":null}"#, stderr: ""),
         ])
         let state = makeState()
-        var branchContext = GGWorktreeContext.active(stackName: "agent-inbox")
+        let branchContext = GGWorktreeContextBox(.active(stackName: "agent-inbox"))
         state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in branchContext }
+        state.ggContextProvider = { _ in branchContext.value }
         state.commits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
         state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
 
         state.seedGGContext(branch: "nacho/agent-inbox")
         await state.refreshGGStack()
-        branchContext = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        branchContext.value = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
         state.seedGGContext(branch: "")
         await state.refreshGGStack()
 
@@ -2318,14 +2318,14 @@ struct RightPaneGGStackTests {
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
         state.ggService = GGService(runner: runner)
-        var stackName = "stack-a"
-        state.ggContextProvider = { _ in .active(stackName: stackName) }
+        let stackName = StackNameBox("stack-a")
+        state.ggContextProvider = { _ in .active(stackName: stackName.value) }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "h", count: 40), stackShaped: true)]
 
         await state.refreshGGStack()
         #expect(runner.callCount == 1)
 
-        stackName = "stack-b"
+        stackName.value = "stack-b"
         await state.refreshGGStack()
 
         #expect(state.ggContext == .active(stackName: "stack-b"))
@@ -3303,5 +3303,32 @@ struct RightPaneGGStackTests {
         #expect(RightPaneState.ggProviderReviewError(.ok) == nil)
         #expect(RightPaneState.ggProviderReviewError(.text(["opened"])) == nil)
         #expect(RightPaneState.ggProviderReviewError(.error("Review could not be opened")) == "Review could not be opened")
+    }
+}
+
+/// The tests below hand `ggContextProvider` a closure that must observe a value
+/// the test changes between refreshes, so the value cannot be a plain `let`.
+/// `ggContextProvider` is `@Sendable`, so the storage is guarded by a lock.
+private final class GGWorktreeContextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: GGWorktreeContext
+
+    init(_ value: GGWorktreeContext) { stored = value }
+
+    var value: GGWorktreeContext {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+private final class StackNameBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String
+
+    init(_ value: String) { stored = value }
+
+    var value: String {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }
