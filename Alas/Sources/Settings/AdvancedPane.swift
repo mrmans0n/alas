@@ -42,18 +42,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Right pane icon rail",
-                        desc: "Uses a vertical icon rail for the right pane. Turn off to use the classic tab bar."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.rightPaneRailEnabled },
-                            set: { enabled in
-                                state.config.rightPaneRailEnabled = enabled
-                                state.saveConfig()
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Needs attention",
                         desc: "Shows the attention inbox and repository attention counts."
                     ) {
