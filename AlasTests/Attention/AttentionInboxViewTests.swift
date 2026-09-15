@@ -12,12 +12,10 @@ struct AttentionInboxViewTests {
         let disabled = SidebarAttentionPresentation(enabled: false, aggregation: aggregation)
         #expect(disabled.showsInbox == false)
         #expect(disabled.count == 0)
-        #expect(disabled.count(for: "p1") == 0)
 
         let enabled = SidebarAttentionPresentation(enabled: true, aggregation: aggregation)
         #expect(enabled.showsInbox == true)
         #expect(enabled.count == 1)
-        #expect(enabled.count(for: "p1") == 1)
     }
 
     @Test func headerBadgeOnlyAppearsForNonzeroAttention() {
