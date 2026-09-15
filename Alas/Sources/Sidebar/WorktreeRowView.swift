@@ -91,33 +91,40 @@ struct WorktreeRowView: View {
         !isMain
     }
 
-    /// What line 2's status chip shows for a row.
+    /// What line 2's status chip shows for a row. The dot and its label are one
+    /// unit — a presentation always carries a label, so there is no way to
+    /// render a bare, unexplained dot.
     struct StatusPresentation: Equatable {
-        /// Nil renders a bare dot with no label.
-        let note: String?
+        let note: String
         /// Theme token for both the dot and the note text.
         let colorToken: String
         let pulses: Bool
     }
 
-    /// Derives the status chip from harness activity alone.
+    /// Derives the status chip from harness activity alone, or `nil` when there
+    /// is nothing to report.
     ///
     /// Deliberately never reports "clean". `Worktree.status` is written as
     /// `.clean` at construction (`WorktreeService.swift:329`, `:1886`) and no
     /// code path ever sets it otherwise, so surfacing it would state that a
-    /// worktree has no uncommitted work without anything having checked.
-    /// Real clean/dirty reporting arrives with the per-worktree git status
-    /// service; until then an idle row shows a bare neutral dot.
+    /// worktree has no uncommitted work without anything having checked. Real
+    /// clean/dirty reporting arrives with the per-worktree git status service.
+    ///
+    /// Until then an idle row gets no chip at all. Returning `nil` rather than a
+    /// label-less presentation is what makes that safe: an earlier version
+    /// handed back an empty note with a colour, and the view drew the dot
+    /// unconditionally while gating only the label, so every idle row carried a
+    /// meaningless grey circle.
     nonisolated static func statusPresentation(
         harnessState: HarnessService.AggregatedState?
-    ) -> StatusPresentation {
+    ) -> StatusPresentation? {
         switch harnessState {
         case .running:
             return StatusPresentation(note: "running", colorToken: "add", pulses: true)
         case .awaiting:
             return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
         case nil:
-            return StatusPresentation(note: nil, colorToken: "fg-faint", pulses: false)
+            return nil
         }
     }
 
@@ -203,7 +210,7 @@ struct WorktreeRowView: View {
                     .fill(theme.color("bg-2"))
             }
             VStack(alignment: .leading, spacing: 2) {
-                firstLine(status: status)
+                firstLine()
                 if operationState != nil {
                     operationLine
                 } else {
@@ -259,7 +266,7 @@ struct WorktreeRowView: View {
         }
     }
 
-    private func firstLine(status: StatusPresentation) -> some View {
+    private func firstLine() -> some View {
         HStack(spacing: 7) {
             Icon(
                 name: isMain ? "home" : "branch",
@@ -297,12 +304,15 @@ struct WorktreeRowView: View {
         return (isSelected || hovering) ? "fg" : "fg-muted"
     }
 
-    private func secondLine(status: StatusPresentation) -> some View {
+    private func secondLine(status: StatusPresentation?) -> some View {
         HStack(spacing: 7) {
-            HStack(spacing: 5) {
-                StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
-                if let note = status.note {
-                    Text(note)
+            // Dot and label render together or not at all. An idle worktree has
+            // nothing to report until the git status service lands, and a dot on
+            // its own reads as an unexplained decoration.
+            if let status {
+                HStack(spacing: 5) {
+                    StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
+                    Text(status.note)
                         .foregroundColor(theme.color(status.colorToken))
                 }
             }
