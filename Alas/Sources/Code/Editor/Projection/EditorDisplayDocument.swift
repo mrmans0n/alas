@@ -27,6 +27,52 @@ final class EditorDisplayDocument {
         storage.endEditing()
     }
 
+    /// Paint changes do not alter coordinates or hint geometry. Validate every
+    /// affected run before writing, so layout-affecting changes can fall back
+    /// to a complete rebuild without publishing a partial update.
+    func updatePaintAttributes(source: NSAttributedString, revision: Int, range: NSRange) -> Bool {
+        guard revision == map.revision, source.length == map.sourceLength,
+              (try? map.displaySegments(forSource: range)) != nil else { return false }
+        let paintKeys: Set<NSAttributedString.Key> = [
+            .foregroundColor, .backgroundColor, .underlineStyle, .underlineColor,
+            .strikethroughStyle, .strikethroughColor
+        ]
+        var updates: [(range: NSRange, attributes: [NSAttributedString.Key: Any])] = []
+        var compatible = true
+        source.enumerateAttributes(in: range) { attributes, sourceRange, stop in
+            guard let segments = try? map.displaySegments(forSource: sourceRange) else {
+                compatible = false
+                stop.pointee = true
+                return
+            }
+            let layoutAttributes = attributes.filter { !paintKeys.contains($0.key) }
+            let paintAttributes = attributes.filter { paintKeys.contains($0.key) }
+            for segment in segments {
+                storage.enumerateAttributes(in: segment) { previous, displayRange, innerStop in
+                    guard NSDictionary(dictionary: layoutAttributes).isEqual(to: previous.filter { !paintKeys.contains($0.key) }) else {
+                        compatible = false
+                        innerStop.pointee = true
+                        return
+                    }
+                    if !NSDictionary(dictionary: paintAttributes).isEqual(to: previous.filter { paintKeys.contains($0.key) }) {
+                        updates.append((displayRange, paintAttributes))
+                    }
+                }
+                if !compatible { stop.pointee = true
+                return }
+            }
+        }
+        guard compatible else { return false }
+        guard !updates.isEmpty else { return true }
+        storage.beginEditing()
+        for update in updates {
+            for key in paintKeys { storage.removeAttribute(key, range: update.range) }
+            storage.addAttributes(update.attributes, range: update.range)
+        }
+        storage.endEditing()
+        return true
+    }
+
     private static func assemble(source: NSAttributedString, map: EditorDisplayMap) -> NSAttributedString {
         let display = NSMutableAttributedString(string: "")
         var cursor = 0

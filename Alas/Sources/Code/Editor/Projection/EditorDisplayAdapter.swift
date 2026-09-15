@@ -34,6 +34,11 @@ final class EditorDisplayAdapter {
                     // Programmatic reloads suppress onTextEdit while installing
                     // text, but the separate display still needs the new source.
                     if self.document.map.revision != self.buffer.editGeneration || !EditorSourceText.exactlyEqual(self.sourceSnapshot, self.buffer.storage.string) { self.sourceChanged() }
+                } else if !self.composition.isActive,
+                          self.document.updatePaintAttributes(source: self.buffer.storage, revision: self.buffer.editGeneration, range: self.buffer.storage.editedRange) {
+                    // Native attribute invalidation repaints these runs. Source
+                    // coordinates, temporary overlays and scroll stay intact.
+                    return
                 } else { self.rebuild() }
             }
         }
@@ -194,10 +199,10 @@ final class EditorDisplayAdapter {
 
     func restoreScrollAnchor(_ anchor: EditorSourceScrollAnchor?) {
         guard let anchor, let view, let scroll = view.enclosingScrollView, let manager = view.layoutManager,
-              let container = view.textContainer,
+              view.textContainer != nil,
               let offset = try? document.map.displayOffset(forSource: min(anchor.sourceLine, buffer.storage.length), affinity: .beforeHints),
               offset < document.storage.length else { return }
-        manager.ensureLayout(for: container)
+        manager.ensureLayout(forCharacterRange: NSRange(location: offset, length: 1))
         let glyph = manager.glyphIndexForCharacter(at: offset)
         let y = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + view.textContainerOrigin.y + anchor.delta
         scroll.contentView.scroll(to: NSPoint(x: anchor.x, y: max(0, y)))

@@ -41,6 +41,37 @@ struct EditorDisplayDocumentTests {
         #expect(second.attachmentCell?.cellSize() == CGSize(width: 40, height: 16))
     }
 
+    @Test func paintRemovalCrossesHintsWithoutStylingOrReplacingAttachments() throws {
+        let original = NSMutableAttributedString(attributedString: source("abcd"))
+        original.addAttributes([.foregroundColor: NSColor.red, .underlineStyle: 1], range: NSRange(location: 0, length: 4))
+        let document = try EditorDisplayDocument(source: original, revision: 4, hints: pair)
+        let attachment = document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment
+        original.removeAttribute(.underlineStyle, range: NSRange(location: 0, length: 3))
+        original.addAttribute(.foregroundColor, value: NSColor.blue, range: NSRange(location: 0, length: 3))
+        #expect(document.updatePaintAttributes(source: original, revision: 4, range: NSRange(location: 0, length: 3)))
+        for offset in [0, 3, 4] {
+            #expect(document.storage.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor == .blue)
+            #expect(document.storage.attribute(.underlineStyle, at: offset, effectiveRange: nil) == nil)
+        }
+        #expect(document.storage.attribute(.underlineStyle, at: 5, effectiveRange: nil) as? Int == 1)
+        #expect(document.storage.attribute(.foregroundColor, at: 1, effectiveRange: nil) == nil)
+        #expect(document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment === attachment)
+        #expect(document.storage.string == "a\u{FFFC}\u{FFFC}bcd")
+    }
+
+    @Test func paintUpdateRefusesMixedLayoutChangesBeforeMutatingAnyRun() throws {
+        let original = NSMutableAttributedString(attributedString: source("abcd"))
+        let document = try EditorDisplayDocument(source: original, revision: 4, hints: pair)
+        let snapshot = NSAttributedString(attributedString: document.storage)
+        original.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 0, length: 1))
+        original.addAttribute(.font, value: NSFont.systemFont(ofSize: 30), range: NSRange(location: 2, length: 1))
+        #expect(!document.updatePaintAttributes(source: original, revision: 4, range: NSRange(location: 0, length: 4)))
+        #expect(document.storage.isEqual(to: snapshot))
+        #expect(!document.updatePaintAttributes(source: original, revision: 5, range: NSRange(location: 0, length: 1)))
+        #expect(!document.updatePaintAttributes(source: original, revision: 4, range: NSRange(location: 3, length: 2)))
+        #expect(document.storage.isEqual(to: snapshot))
+    }
+
     @Test func replacementRetainsStorageIdentityAndRejectsInvalidInputAtomically() throws {
         let document = try EditorDisplayDocument(source: source("ab"), revision: 4, hints: pair)
         let storage = document.storage
