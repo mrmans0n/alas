@@ -159,7 +159,7 @@ struct GitServiceStagingTests {
         try writeFile(repo, "a.txt", "x\n")
         let svc = GitService()
         try await svc.stage(worktreePath: repo, files: ["a.txt"])
-        try await svc.commit(
+        _ = try await svc.commit(
             worktreePath: repo,
             subject: "feat: add a",
             body: "explanation goes here",
@@ -176,11 +176,11 @@ struct GitServiceStagingTests {
         try writeFile(repo, "a.txt", "x\n")
         let svc = GitService()
         try await svc.stage(worktreePath: repo, files: ["a.txt"])
-        try await svc.commit(worktreePath: repo, subject: "wip", body: "", amend: false)
+        _ = try await svc.commit(worktreePath: repo, subject: "wip", body: "", amend: false)
 
         try writeFile(repo, "b.txt", "y\n")
         try await svc.stage(worktreePath: repo, files: ["b.txt"])
-        try await svc.commit(
+        _ = try await svc.commit(
             worktreePath: repo,
             subject: "feat: a and b",
             body: "single combined commit",
