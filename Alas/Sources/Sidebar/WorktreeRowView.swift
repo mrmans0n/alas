@@ -91,6 +91,36 @@ struct WorktreeRowView: View {
         !isMain
     }
 
+    /// What line 2's status chip shows for a row.
+    struct StatusPresentation: Equatable {
+        /// Nil renders a bare dot with no label.
+        let note: String?
+        /// Theme token for both the dot and the note text.
+        let colorToken: String
+        let pulses: Bool
+    }
+
+    /// Derives the status chip from harness activity alone.
+    ///
+    /// Deliberately never reports "clean". `Worktree.status` is written as
+    /// `.clean` at construction (`WorktreeService.swift:329`, `:1886`) and no
+    /// code path ever sets it otherwise, so surfacing it would state that a
+    /// worktree has no uncommitted work without anything having checked.
+    /// Real clean/dirty reporting arrives with the per-worktree git status
+    /// service; until then an idle row shows a bare neutral dot.
+    nonisolated static func statusPresentation(
+        harnessState: HarnessService.AggregatedState?
+    ) -> StatusPresentation {
+        switch harnessState {
+        case .running:
+            return StatusPresentation(note: "running", colorToken: "add", pulses: true)
+        case .awaiting:
+            return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
+        case nil:
+            return StatusPresentation(note: nil, colorToken: "fg-faint", pulses: false)
+        }
+    }
+
     private static func stackSummaryText(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
