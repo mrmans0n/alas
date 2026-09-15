@@ -72,12 +72,11 @@ struct MarkdownImageLoaderTests {
         let loader = MarkdownImageLoader(session: session)
         let url = try #require(URL(string: "https://example.com/badge.png"))
 
-        var completions = 0
+        let completions = CompletionCounter()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            func recordCompletion(_ image: NSImage?) {
+            let recordCompletion: @MainActor @Sendable (NSImage?) -> Void = { image in
                 #expect(image != nil)
-                completions += 1
-                if completions == 2 {
+                if completions.increment() == 2 {
                     continuation.resume()
                 }
             }
@@ -106,22 +105,44 @@ struct MarkdownImageLoaderTests {
     }
 }
 
+/// Response payload and request tally shared by every stub protocol instance.
+///
+/// Safe under `@unchecked Sendable`: `data` and `count` are only ever read or written
+/// inside `lock`.
+private final class MarkdownImageLoaderStubState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var count = 0
+
+    var requestCount: Int {
+        lock.withLock { count }
+    }
+
+    func reset(responseData: Data) {
+        lock.withLock {
+            data = responseData
+            count = 0
+        }
+    }
+
+    /// Counts one request and returns the payload to serve for it.
+    func consumeRequest() -> Data {
+        lock.withLock {
+            count += 1
+            return data
+        }
+    }
+}
+
 private final class MarkdownImageLoaderURLProtocol: URLProtocol {
-    private static let lock = NSLock()
-    private static var data = Data()
-    private static var count = 0
+    private static let state = MarkdownImageLoaderStubState()
 
     static var requestCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
+        state.requestCount
     }
 
     static func reset(responseData: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        data = responseData
-        count = 0
+        state.reset(responseData: responseData)
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -133,10 +154,7 @@ private final class MarkdownImageLoaderURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
-        Self.lock.lock()
-        Self.count += 1
-        let responseData = Self.data
-        Self.lock.unlock()
+        let responseData = Self.state.consumeRequest()
         if let url = request.url,
            let response = HTTPURLResponse(
                url: url,
@@ -151,4 +169,21 @@ private final class MarkdownImageLoaderURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+/// Counts completion callbacks delivered from a concurrently-executing closure.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class CompletionCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    /// Increments the tally and returns the new count.
+    @discardableResult
+    func increment() -> Int {
+        lock.withLock {
+            value += 1
+            return value
+        }
+    }
 }

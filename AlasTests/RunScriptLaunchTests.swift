@@ -399,7 +399,7 @@ struct RunScriptLaunchTests {
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
 
-        final class Gate {
+        @MainActor final class Gate {
             var continuation: CheckedContinuation<Void, Never>?
 
             func wait() async {

@@ -111,18 +111,18 @@ struct AppStateCreateWorktreeCompletionTests {
 
     @Test
     func waiterTimesOutAfterThePollLimit() async {
-        var sleeps = 0
+        let sleeps = CallCounter()
 
         let result = await WorktreeCreationCompletion.wait(
             id: "pending",
             maxPolls: 2,
             operationState: { nil },
             worktree: { nil },
-            sleep: { sleeps += 1 }
+            sleep: { sleeps.increment() }
         )
 
         #expect(result == .failure(.init(message: "Timed out waiting for worktree creation.")))
-        #expect(sleeps == 2)
+        #expect(sleeps.count == 2)
     }
 
     @Test
@@ -276,5 +276,21 @@ private actor WorktreeCreationWaitOutcome {
         self.event = event
         continuation?.resume(returning: event)
         continuation = nil
+    }
+}
+
+/// Counts calls made from a concurrently-executing closure.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.withLock { value += 1 }
+    }
+
+    var count: Int {
+        lock.withLock { value }
     }
 }

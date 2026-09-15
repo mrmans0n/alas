@@ -190,9 +190,10 @@ struct SearchModelTests {
     @Test func workspaceCheckoutFileResultsCarryMemberIdentity() async {
         let checkoutID = UUID()
         let memberID = UUID()
-        var member = wt("member", projectId: "p1")
-        member.workspaceCheckoutID = checkoutID
-        member.workspaceCheckoutMemberID = memberID
+        var built = wt("member", projectId: "p1")
+        built.workspaceCheckoutID = checkoutID
+        built.workspaceCheckoutMemberID = memberID
+        let member = built
         let env = makeEnv(
             files: ["member": [.init(relativePath: "Sources/App.swift", ext: "swift")]],
             workspaceCheckoutWorktrees: { [member] }
@@ -210,9 +211,10 @@ struct SearchModelTests {
     @Test func workspaceCheckoutContentResultsCarryCheckoutAndMemberIdentity() async {
         let checkoutID = UUID()
         let memberID = UUID()
-        var member = wt("member", projectId: "p1")
-        member.workspaceCheckoutID = checkoutID
-        member.workspaceCheckoutMemberID = memberID
+        var built = wt("member", projectId: "p1")
+        built.workspaceCheckoutID = checkoutID
+        built.workspaceCheckoutMemberID = memberID
+        let member = built
         let env = makeEnv(
             contentSearch: { _, _, targets in
                 let target = targets[0]

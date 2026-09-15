@@ -140,15 +140,15 @@ struct ACPAdapterVersionCheckerTests {
 
     @Test("local runner argv remains exactly `npm outdated -g <pkg> --json`")
     func localArgvIsUnchanged() async {
-        var captured: [String] = []
+        let captured = ArgvRecorder()
         let c = ACPAdapterVersionChecker(
             timeout: 5,
             runner: { cmd, args in
-                captured = [cmd] + args
+                captured.record([cmd] + args)
                 return (status: 0, stdout: "")
             })
         _ = await c.check(packageName: "pi-acp")
-        #expect(captured == ["npm", "outdated", "-g", "pi-acp", "--json"])
+        #expect(captured.argv == ["npm", "outdated", "-g", "pi-acp", "--json"])
     }
 
     @Test("remote managed package uses its private prefix and resolved Node environment")
@@ -246,5 +246,21 @@ struct AdapterUpdateStateCodableTests {
     func available() throws {
         #expect(try roundTrip(.available(current: "1.0.0", latest: "1.1.0"))
                 == .available(current: "1.0.0", latest: "1.1.0"))
+    }
+}
+
+/// Records the argv a runner closure was invoked with.
+///
+/// Safe under `@unchecked Sendable`: `value` is only ever read or written inside `lock`.
+private final class ArgvRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: [String] = []
+
+    func record(_ argv: [String]) {
+        lock.withLock { value = argv }
+    }
+
+    var argv: [String] {
+        lock.withLock { value }
     }
 }
