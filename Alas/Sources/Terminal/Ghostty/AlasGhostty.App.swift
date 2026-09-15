@@ -4,7 +4,7 @@
 // Threading:
 //   - All methods must be called on the main thread (@MainActor).
 //   - C callbacks may arrive on any thread; they dispatch back to main when needed.
-//   - `userdata` in ghostty_runtime_config_s = Unmanaged<App>.passUnretained(self).toOpaque()
+//   - `userdata` in ghostty_runtime_config_s points to the AppWakeupBox owned by App.
 //   - Surface-level callbacks use the SurfaceView's userdata pointer (set in SurfaceView.init).
 
 import AppKit
@@ -55,32 +55,7 @@ extension AlasGhostty {
             // `box` is a heap object whose lifetime is tied to this App instance.
             let boxPtr = Unmanaged.passUnretained(box).toOpaque()
 
-            var rtCfg = ghostty_runtime_config_s(
-                userdata: boxPtr,
-                supports_selection_clipboard: false,
-                wakeup_cb: { ud in
-                    guard let ud else { return }
-                    // Recover the AppWakeupBox and from it the App.
-                    let box = Unmanaged<AppWakeupBox>.fromOpaque(ud).takeUnretainedValue()
-                    guard let app = box.app else { return }
-                    DispatchQueue.main.async { app.tick() }
-                },
-                action_cb: { cApp, target, action in
-                    alasGhosttyAction(cApp, target: target, action: action)
-                },
-                read_clipboard_cb: { ud, clipboard, state in
-                    alasGhosttyReadClipboard(ud, clipboard: clipboard, state: state)
-                },
-                confirm_read_clipboard_cb: { ud, str, state, request in
-                    alasGhosttyConfirmReadClipboard(ud, string: str, state: state, request: request)
-                },
-                write_clipboard_cb: { ud, clipboard, content, len, confirm in
-                    alasGhosttyWriteClipboard(ud, clipboard: clipboard, content: content, len: len, confirm: confirm)
-                },
-                close_surface_cb: { ud, processAlive in
-                    alasGhosttyCloseSurface(ud, processAlive: processAlive)
-                }
-            )
+            var rtCfg = makeAlasGhosttyRuntimeConfig(userdata: boxPtr)
 
             guard let rawApp = ghostty_app_new(&rtCfg, cfg.cValue) else {
                 throw AppError.allocationFailed
@@ -139,6 +114,35 @@ extension AlasGhostty {
             var errorDescription: String? { "ghostty_app_new() returned nil" }
         }
     }
+}
+
+/// Builds callbacks without inheriting the caller's actor isolation.
+func makeAlasGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> ghostty_runtime_config_s {
+    ghostty_runtime_config_s(
+        userdata: userdata,
+        supports_selection_clipboard: false,
+        wakeup_cb: { @Sendable ud in
+            guard let ud else { return }
+            let box = Unmanaged<AppWakeupBox>.fromOpaque(ud).takeUnretainedValue()
+            guard let app = box.app else { return }
+            DispatchQueue.main.async { app.tick() }
+        },
+        action_cb: { @Sendable cApp, target, action in
+            alasGhosttyAction(cApp, target: target, action: action)
+        },
+        read_clipboard_cb: { @Sendable ud, clipboard, state in
+            alasGhosttyReadClipboard(ud, clipboard: clipboard, state: state)
+        },
+        confirm_read_clipboard_cb: { @Sendable ud, str, state, request in
+            alasGhosttyConfirmReadClipboard(ud, string: str, state: state, request: request)
+        },
+        write_clipboard_cb: { @Sendable ud, clipboard, content, len, confirm in
+            alasGhosttyWriteClipboard(ud, clipboard: clipboard, content: content, len: len, confirm: confirm)
+        },
+        close_surface_cb: { @Sendable ud, processAlive in
+            alasGhosttyCloseSurface(ud, processAlive: processAlive)
+        }
+    )
 }
 
 // MARK: - C Runtime Callbacks (module-level @convention(c)-compatible free functions)
