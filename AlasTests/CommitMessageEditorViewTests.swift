@@ -78,42 +78,42 @@ struct CommitMessageEditorViewTests {
         let view = makeView()
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func rendersWhenBusy() {
         let view = makeView(busy: true)
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func rendersWhenNotDirty() {
         let view = makeView(dirty: false)
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func rendersWithError() {
         let view = makeView(error: "Something went wrong")
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func rendersWithEmptySubject() {
         let view = makeView(subject: "")
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func rendersWithWhitespaceOnlySubject() {
         let view = makeView(subject: "   ")
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
+        #expect(controller.view.fittingSize.height > 0)
     }
 
     @Test func pairedSubjectAndBodyWrapSelectedText() async throws {
