@@ -4,16 +4,10 @@ import AppKit
 struct SidebarAttentionPresentation {
     let showsInbox: Bool
     let count: Int
-    private let countsByProject: [String: Int]
 
     init(enabled: Bool, aggregation: AttentionAggregation) {
         showsInbox = enabled
         count = enabled ? aggregation.unresolvedCount : 0
-        countsByProject = enabled ? aggregation.unresolvedCountByProject : [:]
-    }
-
-    func count(for projectID: String) -> Int {
-        countsByProject[projectID, default: 0]
     }
 }
 
@@ -209,8 +203,7 @@ struct SidebarView: View {
                                             destinationId: destinationId
                                         )
                                         state.saveSpaces()
-                                    },
-                                    attentionCount: attentionPresentation.count(for: project.id)
+                                    }
                                 )
                             }
                             Color.clear

@@ -46,7 +46,6 @@ struct RepoGroupView: View {
     let onRemoveFailed: (Worktree) -> Void
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
-    var attentionCount: Int = 0
     @Environment(\.theme) var theme
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
@@ -60,13 +59,14 @@ struct RepoGroupView: View {
             // fire the collapse action.
             HStack(spacing: 7) {
                 Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
-                    .frame(width: 14, height: 14)
+                    .frame(width: 12, height: 14)
                     .contentShape(Rectangle())
-                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .repoHeader)
                     .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
                 Text(project.name)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(theme.color("fg-muted"))
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .tracking(-0.12)
+                    .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
                 if let host = project.host {
                     HStack(spacing: 3) {
@@ -77,21 +77,22 @@ struct RepoGroupView: View {
                         }
                         Text(host)
                     }
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundColor(theme.color("fg-faint"))
-                        .padding(.horizontal, 5)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(theme.color("bg-4"))
-                        .clipShape(Capsule())
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         .help(hostStatus.isOffline(host)
                             ? "Host \(host) is unreachable"
                             : "Remote project on \(host) (SSH)")
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, attentionCount > 0 ? 84 : 0)
-            .padding(.vertical, 5)
+            .padding(5)
+            .background(hovering ? theme.color("bg-2") : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.top, 3)
             .contentShape(Rectangle())
             .onTapGesture { collapsed.toggle() }
             .nativeContextMenu {
@@ -124,19 +125,6 @@ struct RepoGroupView: View {
                 // it stays visible — and its tooltip stays reachable — when
                 // the user hovers the row.
                 HStack(spacing: 6) {
-                    if attentionCount > 0 {
-                        HStack(spacing: 3) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 8))
-                            Text("\(attentionCount)")
-                                .font(.system(size: 10, weight: .medium))
-                                .monospacedDigit()
-                        }
-                        .foregroundStyle(theme.color("warn"))
-                        .help("\(attentionCount) attention \(attentionCount == 1 ? "item" : "items") in \(project.name)")
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(attentionCount) attention \(attentionCount == 1 ? "item" : "items") in \(project.name)")
-                    }
                     if collapsed, let summary = projectSummary() {
                         HarnessPill(
                             summary: summary,
@@ -166,7 +154,7 @@ struct RepoGroupView: View {
                     }
                     .frame(width: 18, height: 18)
                 }
-                .padding(.trailing, 12)
+                .padding(.trailing, 5)
             }
             .onHover { hovering = $0 }
             .draggable(ProjectDragId(id: project.id))
