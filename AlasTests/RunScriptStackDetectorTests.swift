@@ -1668,6 +1668,27 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.python]?.hasRuff == true)
     }
 
+    @Test func pythonUVRunnerIncludesImplicitDevDependencyGroupForToolAvailability() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("uv.lock", in: root)
+        try write(
+            "pyproject.toml",
+            """
+            [project]
+            name = "lib"
+            dependencies = []
+
+            [dependency-groups]
+            dev = ["pytest", "ruff"]
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.python]?.hasPytest == true)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
     @Test func pythonBareRunnerIgnoresOptionalExtrasForToolAvailability() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

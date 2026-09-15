@@ -2167,7 +2167,8 @@ enum RunScriptStackDetector {
 
     private static func uvDefaultDependencyGroups(_ pyproject: String) -> Set<String> {
         let stripped = stripHashComments(pyproject)
-        guard let toolUV = tomlSections(stripped).first(where: { $0.name == "tool.uv" }) else { return [] }
+        guard let toolUV = tomlSections(stripped).first(where: { $0.name == "tool.uv" }) else { return ["dev"] }
+        guard tomlHasArrayKey(toolUV.body, key: "default-groups") else { return ["dev"] }
         return Set(tomlStringArrayValues(toolUV.body, key: "default-groups"))
     }
 
@@ -2251,6 +2252,11 @@ enum RunScriptStackDetector {
                 return String(body[valueRange])
             }
         }
+    }
+
+    private static func tomlHasArrayKey(_ text: String, key: String) -> Bool {
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
+        return text.range(of: #"(?m)^\s*"# + escapedKey + #"\s*=\s*\["#, options: .regularExpression) != nil
     }
 
     private static func stripHashComments(_ text: String) -> String {
