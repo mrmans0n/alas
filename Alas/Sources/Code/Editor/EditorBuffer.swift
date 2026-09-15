@@ -952,10 +952,12 @@ final class EditorBuffer {
             queue: Self.watchQueue
         )
         let deliverEvent = watcherEventDelivery()
-        src.setEventHandler {
+        // Dispatch invokes both callbacks on watchQueue, not the main actor.
+        // Explicit sendability prevents inheriting startWatching's isolation.
+        src.setEventHandler { @Sendable in
             Task { @MainActor in deliverEvent() }
         }
-        src.setCancelHandler { Darwin.close(fd) }
+        src.setCancelHandler { @Sendable in Darwin.close(fd) }
         src.resume()
         watcherSource = src
         watcherFD = fd
@@ -972,7 +974,7 @@ final class EditorBuffer {
         revert()
     }
 
-    private func watcherEventDelivery() -> @MainActor () -> Void {
+    private func watcherEventDelivery() -> @MainActor @Sendable () -> Void {
         let generation = watcherDeliveryGeneration
         return { [weak self] in
             guard let self, self.watcherDeliveryGeneration == generation else { return }

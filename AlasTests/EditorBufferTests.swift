@@ -7,6 +7,31 @@ import AppKit
 @MainActor
 @Suite(.serialized)
 struct EditorBufferTests {
+    @Test func fileWatcherReloadsAfterWritesAndCanRestart() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "watch.txt", "original\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "watch.txt")
+        defer {
+            buffer.close(persistDirtySnapshot: false)
+            try? FileManager.default.removeItem(at: root)
+        }
+        await buffer.awaitLoadForTesting()
+        buffer.startWatching()
+        for (index, content) in ["updated\n", "again\n"].enumerated() {
+            try Data(content.utf8).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(Double(index + 2))], ofItemAtPath: url.path)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while buffer.storage.string != content, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(buffer.storage.string == content)
+            #expect(!buffer.dirty)
+            buffer.stopWatching()
+            buffer.startWatching()
+            #expect(buffer.isWatchingForTesting)
+        }
+    }
+
     private actor RemoteAvailabilityGate {
         private var available = false
         private var probes = 0
