@@ -1911,6 +1911,12 @@ extension ACPSessionRunner {
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     throw CancellationError()
                 }
+                // Hydration suspends for file I/O. A steer can invalidate this
+                // prompt while that work is in progress, so verify ownership
+                // again before sending a stale RPC.
+                guard await MainActor.run(body: { self.activePromptID == promptID }) else {
+                    throw CancellationError()
+                }
                 let promptAcknowledgement = try await self.connection.prompt(
                     sessionId: remoteId,
                     blocks: wireBlocks,
