@@ -199,7 +199,6 @@ extension View {
         overlay {
             NativeContextMenuHost(menuItems: menuItems())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityHidden(true)
         }
     }
 }
@@ -223,6 +222,9 @@ private final class NativeContextMenuView<MenuItems: View>: NSView {
         hostingMenu = NSHostingMenu(rootView: Group { menuItems })
         super.init(frame: .zero)
         menu = hostingMenu
+        setAccessibilityElement(true)
+        setAccessibilityRole(.menuButton)
+        setAccessibilityLabel("Context menu")
     }
 
     @available(*, unavailable)
@@ -238,5 +240,15 @@ private final class NativeContextMenuView<MenuItems: View>: NSView {
                 || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
         else { return nil }
         return self
+    }
+
+    override func accessibilityActionNames() -> [NSAccessibility.Action] {
+        [.showMenu]
+    }
+
+    override func accessibilityPerformShowMenu() -> Bool {
+        guard let menu else { return false }
+        menu.popUp(positioning: nil, at: .zero, in: self)
+        return true
     }
 }

@@ -20,6 +20,7 @@ struct NativeContextMenuTests {
 
         let menuView = try #require(descendants(of: controller.view).first { $0.menu != nil })
         #expect(menuView.frame.size == controller.view.bounds.size)
+        #expect(menuView.isAccessibilityElement())
         let menu = try #require(menuView.menu)
         let submenu = try #require(menu.items.first { $0.title == "Parent" }?.submenu)
         #expect(submenu.items.map(\.title) == ["One", "Two"])
