@@ -243,6 +243,7 @@ struct WorktreeRowView: View {
                 agentBadges(summary: summary)
             }
         }
+        .frame(minHeight: HarnessSessionBadge.diameter)
     }
 
     /// E1 tints the branch glyph green while a session runs, so activity
