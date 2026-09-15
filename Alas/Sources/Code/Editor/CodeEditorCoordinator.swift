@@ -1747,8 +1747,7 @@ final class CodeEditorCoordinator {
         in nsString: NSString,
         textView: CodeTextView
     ) {
-        guard nsString.length > 0,
-              let layoutManager = textView.layoutManager else { return }
+        guard nsString.length > 0, textView.layoutManager != nil else { return }
         clearRevealHighlight()
 
         let clampedTarget = min(max(0, target), max(0, nsString.length - 1))
@@ -1778,7 +1777,7 @@ final class CodeEditorCoordinator {
         revealHighlightTask = nil
         guard let range = revealHighlightRange,
               let textView,
-              let layoutManager = textView.layoutManager else {
+              textView.layoutManager != nil else {
             revealHighlightRange = nil
             return
         }
