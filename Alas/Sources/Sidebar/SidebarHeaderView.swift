@@ -73,8 +73,8 @@ struct SidebarHeaderView: View {
         .windowDragHandle()
     }
 
-    private var attentionToolbarButton: some View {
-        AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen) {
+    private func attentionToolbarButton(metrics: ToolbarControlMetrics = .standard) -> some View {
+        AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen, metrics: metrics) {
             AttentionInboxView(
                 aggregation: attentionAggregation,
                 loadError: attentionLoadError,
@@ -99,7 +99,7 @@ struct SidebarHeaderView: View {
                 ToolbarBtn(icon: "search", tooltip: "Search",
                            metrics: .sidebarHeader, action: onSearch)
                 if showsAttentionInbox {
-                    attentionToolbarButton
+                    attentionToolbarButton(metrics: .sidebarHeader)
                 }
                 if let onNewWorkspace {
                     Menu {
@@ -137,7 +137,7 @@ struct SidebarHeaderView: View {
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
                 if showsAttentionInbox {
-                    attentionToolbarButton
+                    attentionToolbarButton()
                 }
                 Menu {
                     Menu("Sort worktrees") {
@@ -178,6 +178,7 @@ struct SidebarHeaderView: View {
 private struct AttentionToolbarButton<Content: View>: View {
     let count: Int
     @Binding var isOpen: Bool
+    var metrics: ToolbarControlMetrics = .standard
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -189,10 +190,10 @@ private struct AttentionToolbarButton<Content: View>: View {
             Image(systemName: "tray")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.color(hovering || isOpen ? "fg" : "fg-muted"))
-                .frame(width: 23, height: 23)
+                .frame(width: metrics.width, height: metrics.height)
                 .contentShape(Rectangle())
                 .background(theme.color("bg-3").opacity(hovering || isOpen ? 1 : 0))
-                .clipShape(.rect(cornerRadius: 6))
+                .clipShape(.rect(cornerRadius: metrics.cornerRadius))
                 .overlay(alignment: .topTrailing) {
                     if SidebarHeaderView.showsAttentionBadge(count: count) {
                         Text(count > 999 ? "999+" : "\(count)")
