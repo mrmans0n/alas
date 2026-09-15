@@ -169,6 +169,8 @@ struct RootView: View {
             )
         } else {
             let rightPaneSelection = rightPaneSelectionState
+            let rightPaneRailExists = rightPaneSelection.showsRightPane
+                && !state.suppressesRestoredRightPaneAfterAbandonedStartup
             ThreePaneLayout(
                 sidebarWidth: Binding(
                     get: { state.config.sidebarWidth },
@@ -189,7 +191,10 @@ struct RootView: View {
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { effectiveRightPaneVisible in
-                    centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+                    centerContent(
+                        effectiveRightPaneVisible: effectiveRightPaneVisible,
+                        hasRightPaneRail: rightPaneRailExists
+                    )
                 },
                 right: { collapsed in rightContent(selection: rightPaneSelection, collapsed: collapsed) }
             )
@@ -282,12 +287,21 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
-        worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+    private func centerContent(
+        effectiveRightPaneVisible: Bool,
+        hasRightPaneRail: Bool
+    ) -> some View {
+        worktreeCenterContent(
+            effectiveRightPaneVisible: effectiveRightPaneVisible,
+            hasRightPaneRail: hasRightPaneRail
+        )
     }
 
     @ViewBuilder
-    private func worktreeCenterContent(effectiveRightPaneVisible: Bool) -> some View {
+    private func worktreeCenterContent(
+        effectiveRightPaneVisible: Bool,
+        hasRightPaneRail: Bool
+    ) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,
@@ -303,7 +317,8 @@ struct RootView: View {
                 worktree: wt,
                 sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
                 allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                effectiveRightPaneVisible: effectiveRightPaneVisible
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail
             )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)
@@ -342,7 +357,8 @@ struct RootView: View {
                     worktree: fallback,
                     sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
                     allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                    effectiveRightPaneVisible: effectiveRightPaneVisible
+                    effectiveRightPaneVisible: effectiveRightPaneVisible,
+                    hasRightPaneRail: hasRightPaneRail
                 )
             } else {
                 EmptyTabView(
