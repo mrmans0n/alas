@@ -1403,6 +1403,15 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.go]?.goRunTarget == nil)
     }
 
+    @Test func goTreatsDefaultExperimentTagsAsEnabled() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try touch("go.mod", in: root)
+        try write("main.go", "//go:build !goexperiment.regabiwrappers\n\npackage main\n\nfunc main() {}\n", in: root)
+
+        #expect(detect(root)[.go]?.goRunTarget == nil)
+    }
+
     @Test func goTreatsDefaultArchitectureFeatureTagsAsEnabled() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1670,6 +1679,15 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == true)
         #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonIgnoresRequirementsExcludedByEnvironmentMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest; sys_platform == \"win32\"\nruff; sys_platform != \"darwin\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == false)
     }
 
     @Test func pythonBareRunnerIgnoresDependencyGroupsForToolAvailability() throws {
@@ -1991,6 +2009,10 @@ struct RunScriptStackDetectorTests {
         try write("composer.json", #"{"require-dev":{"phpunit/phpunit":"^11"},"config":{"bin-dir":"bin"}}"#, in: root)
         #expect(detect(root)[.php]?.hasPHPUnit == true)
         #expect(detect(root)[.php]?.phpUnitBinaryPath == "bin/phpunit")
+
+        try write("composer.json", #"{"require-dev":{"phpunit/phpunit":"^11"},"config":{"vendor-dir":"third_party/vendor"}}"#, in: root)
+        #expect(detect(root)[.php]?.hasPHPUnit == true)
+        #expect(detect(root)[.php]?.phpUnitBinaryPath == "third_party/vendor/bin/phpunit")
 
         try write("composer.json", #"{"scripts":{"test":"vendor/bin/phpunit"}}"#, in: root)
         #expect(detect(root)[.php]?.hasPHPUnit == false)

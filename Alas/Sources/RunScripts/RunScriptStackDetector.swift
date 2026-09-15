@@ -13,7 +13,10 @@ struct GoToolchainEnvironment: Equatable, Sendable {
     var architecture = Self.hostArchitecture
     var architectureFeatures: Set<String>
     var buildTags: Set<String> = []
+    var experimentTags: Set<String> = Self.defaultExperimentTags
     var cgoEnabled = false
+
+    static let defaultExperimentTags: Set<String> = ["goexperiment.regabiwrappers"]
 
     static var hostOperatingSystem: String {
         "darwin"
@@ -1359,6 +1362,7 @@ enum RunScriptStackDetector {
             || (tag == "cgo" && toolchainEnvironment.cgoEnabled)
             || toolchainEnvironment.architectureFeatures.contains(tag)
             || toolchainEnvironment.buildTags.contains(tag)
+            || toolchainEnvironment.experimentTags.contains(tag)
             || goReleaseTags(minorVersion: toolchainEnvironment.minorVersion).contains(tag)
     }
 
@@ -1505,7 +1509,7 @@ enum RunScriptStackDetector {
     private static func currentGoToolchainEnvironment(worktreeRoot: URL) -> GoToolchainEnvironment? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED", "GOFLAGS"]
+        process.arguments = ["go", "env", "GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT"]
         process.currentDirectoryURL = worktreeRoot
         let output = Pipe()
         process.standardOutput = output
@@ -1539,12 +1543,14 @@ enum RunScriptStackDetector {
             : nil
         let cgoValue = line(5)
         let goflags = line(6) ?? ""
+        let experiments = line(7) ?? ""
         return .init(
             minorVersion: goToolchainMinorVersion(from: version),
             operatingSystem: operatingSystem,
             architecture: architecture,
             architectureFeatures: goArchitectureFeatureTags(level: architectureFeatureLevel, architecture: architecture),
             buildTags: goBuildTags(fromGOFLAGS: goflags),
+            experimentTags: goExperimentTags(fromGOEXPERIMENT: experiments),
             cgoEnabled: cgoValue != "0"
         )
     }
@@ -1620,6 +1626,18 @@ enum RunScriptStackDetector {
         Set(value.split { $0 == "," || $0 == " " || $0 == "\t" }.map(String.init).filter { !$0.isEmpty })
     }
 
+    private static func goExperimentTags(fromGOEXPERIMENT experiments: String) -> Set<String> {
+        var tags = GoToolchainEnvironment.defaultExperimentTags
+        for experiment in experiments.split(separator: ",").map(String.init).filter({ !$0.isEmpty }) {
+            if experiment.hasPrefix("no") {
+                tags.remove("goexperiment.\(experiment.dropFirst(2))")
+            } else {
+                tags.insert("goexperiment.\(experiment)")
+            }
+        }
+        return tags
+    }
+
     private static func goToolModeBuildTag(fromGOFLAGSFlag flag: String) -> String? {
         for mode in ["race", "msan", "asan"] {
             if flag == "-\(mode)" {
@@ -1650,11 +1668,13 @@ enum RunScriptStackDetector {
             return Array(dependencies.keys)
         }
         let config = object["config"] as? [String: Any]
-        let binDirectory = (config?["bin-dir"] as? String).map(composerBinDirectory)
+        let vendorDirectory = (config?["vendor-dir"] as? String).map(composerPath)
+        let binDirectory = (config?["bin-dir"] as? String).map(composerPath)
+            ?? vendorDirectory.map { "\($0)/bin" }
         return (dependencyKeys.contains("phpunit/phpunit"), binDirectory?.isEmpty == false ? binDirectory! : "vendor/bin")
     }
 
-    private static func composerBinDirectory(_ configuredValue: String) -> String {
+    private static func composerPath(_ configuredValue: String) -> String {
         var path = configuredValue.trimmingCharacters(in: .whitespacesAndNewlines)
         while path.count > 1, path.hasSuffix("/") {
             path.removeLast()
@@ -2163,10 +2183,32 @@ enum RunScriptStackDetector {
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
                 .trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("-") else { return false }
-            let packageName = line.prefix { character in
+            let parts = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+            let requirement = parts[0].trimmingCharacters(in: .whitespaces)
+            if parts.count == 2, !pythonRequirementMarkerAllowsCurrentEnvironment(String(parts[1])) {
+                return false
+            }
+            let packageName = requirement.prefix { character in
                 character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
             }
             return normalizedPythonPackageName(String(packageName)) == normalizedTool
+        }
+    }
+
+    private static func pythonRequirementMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
+        let currentSysPlatform = "darwin"
+        guard let regex = try? NSRegularExpression(pattern: #"\bsys_platform\s*(==|!=)\s*['"]([^'"]+)['"]"#) else { return true }
+        let range = NSRange(marker.startIndex..., in: marker)
+        return regex.matches(in: marker, range: range).allSatisfy { match in
+            guard let operatorRange = Range(match.range(at: 1), in: marker),
+                  let valueRange = Range(match.range(at: 2), in: marker)
+            else { return true }
+            let value = String(marker[valueRange])
+            switch String(marker[operatorRange]) {
+            case "==": return currentSysPlatform == value
+            case "!=": return currentSysPlatform != value
+            default: return true
+            }
         }
     }
 
