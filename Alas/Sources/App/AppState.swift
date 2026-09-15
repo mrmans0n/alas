@@ -83,6 +83,7 @@ final class AppState {
     var projectsManager: ProjectsManager
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
+    let inAppNotifications = InAppNotificationStore()
     /// Observed command lifecycles, keyed by worktree then script. Deliberately
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
@@ -7414,6 +7415,7 @@ final class AppState {
     /// touching git or persistence. Shared between Close-All, archive, and
     /// delete so the bookkeeping stays in one place.
     private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
+        inAppNotifications.remove(worktreeID: worktreeId)
         if purgeRunScriptFailures {
             cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
         } else {

@@ -49,6 +49,9 @@ struct CodeActionsFeatureTests {
         try await client.initialize()
         let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200), textContainer: nil)
         view.string = "symbol"
+        let notifications = InAppNotificationStore()
+        view.notificationStore = notifications
+        view.notificationWorktreeID = "fixture"
         let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = view
         window.orderFront(nil)
@@ -83,19 +86,21 @@ struct CodeActionsFeatureTests {
             #expect(try picker().model === replacement.model)
             #expect(replacement.model.isLoading)
             resume?.resume(returning: nil)
-            for _ in 0..<200 where replacement.model.isLoading { try await Task.sleep(for: .milliseconds(10)) }
-            #expect(replacement.model.message == "Language server unavailable")
+            for _ in 0..<200 where notifications.entries.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(notifications.entries.first?.message == "Language server unavailable")
+            #expect(notifications.entries.first?.severity == .error)
             return
         }
         resume?.resume(returning: state == "unavailable" ? nil : (client, context))
-        for _ in 0..<200 where original.model.isLoading { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(!original.model.isLoading)
+        for _ in 0..<200 where notifications.entries.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let result = try #require(notifications.entries.first)
+        #expect(result.severity == (state == "empty" ? .information : .error))
+        #expect(Mirror(reflecting: feature).children.first { $0.label == "popover" }?.value as? NSPopover == nil)
         switch state {
-        case "unavailable": #expect(original.model.message == "Language server unavailable")
-        case "unsupported": #expect(original.model.message?.contains("not supported") == true)
-        case "failure": #expect(original.model.message?.contains("Action fixture failure") == true)
-        default: #expect(original.model.message == nil)
-        #expect(original.model.filtered.isEmpty)
+        case "unavailable": #expect(result.message == "Language server unavailable")
+        case "unsupported": #expect(result.message.contains("not supported"))
+        case "failure": #expect(result.message.contains("Action fixture failure"))
+        default: #expect(result.message == "No code actions available")
         }
     }
 

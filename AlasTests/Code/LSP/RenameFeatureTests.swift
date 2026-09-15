@@ -160,11 +160,15 @@ struct RenameFeatureTests {
         layout.addTextContainer(container)
         buffer.storage.addLayoutManager(layout)
         let view = CodeTextView(frame: .zero, textContainer: container)
+        let notifications = InAppNotificationStore()
+        view.notificationStore = notifications
+        view.notificationWorktreeID = "w"
         let feature = RenameFeature(textView: view, tabs: tabs, root: root,
                                     synchronize: { await binding.synchronizeRequest(range: $0, language: "swift") },
                                     isCurrent: { binding.isCurrent($0) })
         feature.format(range: NSRange(location: 0, length: 0), selectionOnly: false)
         await feature.awaitRequestForTesting()
+        #expect(notifications.notifications(in: "w").map(\.severity) == [.success])
         #expect(buffer.storage.string == "let x = 1\n  x")
         #expect(buffer.dirty)
         #expect(try String(contentsOf: file, encoding: .utf8) == original)
@@ -216,9 +220,18 @@ struct RenameFeatureTests {
         buffer.storage.addLayoutManager(layout)
         let view = CodeTextView(frame: .zero, textContainer: container)
         view.bindUndo(to: buffer)
+        let notifications = InAppNotificationStore()
+        view.notificationStore = notifications
+        view.notificationWorktreeID = "w"
         let feature = RenameFeature(textView: view, tabs: tabs, root: root, synchronize: { _ in nil }, isCurrent: { $0 == context })
-        let model = feature.makePreviewModel(plan: plan, context: context)
+        let model = feature.makePreviewModel(plan: plan, context: context, reportOutcome: true)
+        #expect(notifications.entries.isEmpty)
         #expect(await model.apply())
+        #expect(notifications.notifications(in: "w").map(\.severity) == [.success])
+        let stale = RenameFeature(textView: view, tabs: tabs, root: root, synchronize: { _ in nil }, isCurrent: { _ in false })
+        let staleModel = stale.makePreviewModel(plan: plan, context: context, reportOutcome: true)
+        #expect(await staleModel.apply() == false)
+        #expect(notifications.notifications(in: "w").map(\.severity) == [.success, .error])
         #expect(try String(contentsOf: resourceOnly ? movedURL : targetURL, encoding: .utf8) == (resourceOnly ? "old" : "new"))
         #expect(buffer.storage.string == "origin")
         #expect(!buffer.dirty)

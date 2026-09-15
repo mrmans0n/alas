@@ -108,6 +108,8 @@ final class CodeEditorCoordinator {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
+        textView.notificationStore = appState.inAppNotifications
+        textView.notificationWorktreeID = worktreeId
         self.currentTabId = tabId
         self.currentTheme = theme
         self.currentExternalAbsolutePath = externalAbsolutePath
@@ -680,6 +682,7 @@ final class CodeEditorCoordinator {
         clearHoverObservers()
         hover?.tearDown()
         hover = nil
+        definition?.notifyCaretChanged()
         definition = nil
         hoverHighlight = nil
         completion?.cancelAndDismiss()
@@ -713,6 +716,8 @@ final class CodeEditorCoordinator {
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
+        textView?.notificationStore = nil
+        textView?.notificationWorktreeID = nil
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file

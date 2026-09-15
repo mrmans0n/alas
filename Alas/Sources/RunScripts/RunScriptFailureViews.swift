@@ -54,53 +54,14 @@ struct RunScriptFailureBanner: View {
     let presentation: RunScriptFailureBannerPresentation
     let onOpen: () -> Void
     let onDismiss: () -> Void
-    @Environment(\.theme) private var theme
-
     var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onOpen) {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.color("del"))
-                    Text(presentation.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.color("fg"))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let overflowText = presentation.overflowText {
-                        Text(overflowText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.color("fg-muted"))
-                    }
-                    Spacer(minLength: 0)
-                    Text("Show output")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.color("accent"))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(presentation.title). Show output.")
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss run script failure")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.color("del").opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(theme.color("del").opacity(0.3), lineWidth: 0.75)
+        InAppNotificationBanner(
+            message: presentation.title + (presentation.overflowText.map { " · " + $0 } ?? ""),
+            severity: .error,
+            actionTitle: "Show output",
+            action: onOpen,
+            dismiss: onDismiss
         )
-        .clipShape(.rect(cornerRadius: 8))
         .accessibilityIdentifier("run-script-failure-banner")
     }
 }

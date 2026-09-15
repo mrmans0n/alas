@@ -740,6 +740,8 @@ struct CenterPaneView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 8) {
+                    InAppNotificationStack(store: state.inAppNotifications, worktreeID: worktree.id)
+                        .frame(maxWidth: 360)
                     if !runScriptFailures.isEmpty {
                         ForEach(runScriptFailures, id: \.id) { failure in
                             RunScriptFailureBanner(

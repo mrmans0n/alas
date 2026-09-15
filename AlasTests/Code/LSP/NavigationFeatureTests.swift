@@ -23,6 +23,9 @@ struct NavigationFeatureTests {
         let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///fixture")
         try await client.initialize()
         let view = makeTextView("symbol")
+        let notifications = InAppNotificationStore()
+        view.notificationStore = notifications
+        view.notificationWorktreeID = "fixture"
         let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = view
         window.orderFront(nil)
@@ -37,32 +40,31 @@ struct NavigationFeatureTests {
             started.continuation.yield(()) }
         })
         defer { feature.notifyCaretChanged() }
-        func status() throws -> DefinitionRequestStatusView {
-            let popover = try #require(Mirror(reflecting: feature).children.first { $0.label == "popover" }?.value as? NSPopover)
-            return try #require(popover.contentViewController as? NSHostingController<DefinitionRequestStatusView>).rootView
+        func status() throws -> InAppNotificationStore.Entry {
+            try #require(notifications.notifications(in: "fixture").first)
         }
         view.triggerCommandClick(atUTF16Offset: 1)
         let original = try status()
-        #expect(original.loading)
+        #expect(original.severity == .progress)
         var iterator = started.stream.makeAsyncIterator()
         _ = await iterator.next()
         if state == "cancel" {
-            original.cancel()
+            original.cancel?()
             resume?.resume(returning: (client, context))
             view.triggerCommandClick(atUTF16Offset: 1)
             _ = await iterator.next()
-            original.cancel()
-            #expect(try status().loading)
+            original.cancel?()
+            #expect(try status().severity == .progress)
             resume?.resume(returning: nil)
         } else { resume?.resume(returning: state == "unavailable" ? nil : (client, context)) }
-        for _ in 0..<200 where try status().loading { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<200 where try status().severity == .progress { try await Task.sleep(for: .milliseconds(10)) }
         let result = try status()
-        #expect(!result.loading)
+        #expect(result.severity == .error)
         switch state {
         case "unavailable", "cancel": #expect(result.message == "Language server unavailable")
         case "unsupported": #expect(result.message.contains("not supported"))
         case "failure": #expect(result.message.contains("Navigation fixture failure"))
-        default: #expect(result.message == "No navigation targets found")
+        default: #expect(result.message == "No definition found")
         }
     }
 

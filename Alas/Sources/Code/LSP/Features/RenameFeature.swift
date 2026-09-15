@@ -88,9 +88,8 @@ final class RenameFeature {
         return error.localizedDescription
     }
 
-    private func showStatus(_ message: String) {
-        guard let textView, textView.window != nil else { return }
-        textView.showCommandStatus(message)
+    private func showStatus(_ message: String, severity: InAppNotificationSeverity = .error) {
+        textView?.showCommandStatus(message, severity: severity)
     }
 
     func cancel() {
@@ -209,11 +208,17 @@ final class RenameFeature {
         })
     }
 
-    func makePreviewModel(plan: WorkspaceEditPlan, context: EditorRequestContext) -> WorkspaceEditPreviewModel {
+    func makePreviewModel(plan: WorkspaceEditPlan, context: EditorRequestContext,
+                          reportOutcome: Bool = false) -> WorkspaceEditPreviewModel {
         let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: context.document.worktreeID, worktreeRoot: root)
+        let notifications = textView?.notificationStore
         return WorkspaceEditPreviewModel(plan: plan) { [isCurrent] plan in
-            guard isCurrent(context) else { return .conflict([context.document]) }
-            let outcome = await coordinator.executor.apply(plan)
+            let outcome: WorkspaceEditOutcome
+            if isCurrent(context) {
+                outcome = await coordinator.executor.apply(plan)
+            } else {
+                outcome = .conflict([context.document])
+            }
             if case .applied(let id) = outcome {
                 // The initiating editor owns an accessible undo entry even
                 // when every edited target is unopened. Inverse writes still
@@ -221,16 +226,21 @@ final class RenameFeature {
                 let affected = Set(plan.steps.flatMap { [$0.document, $0.destination].compactMap { $0 } })
                 coordinator.register(operationID: id, affectedDocuments: affected, initiatingDocument: context.document)
             }
+            if reportOutcome {
+                let error = WorkspaceEditPreviewModel.message(for: outcome)
+                notifications?.post(error ?? "Changes applied", severity: error == nil ? .success : .error,
+                                    worktreeID: context.document.worktreeID)
+            }
             return outcome
         }
     }
 
     private func presentOrApply(_ plan: WorkspaceEditPlan, context: EditorRequestContext) async {
         guard plan.steps.contains(where: { $0.before.content != $0.after.content || $0.kind != .text }) else {
-            showStatus("No changes")
+            showStatus("No changes", severity: .information)
             return
         }
-        let model = makePreviewModel(plan: plan, context: context)
+        let model = makePreviewModel(plan: plan, context: context, reportOutcome: true)
         if plan.requiresPreview {
             guard let parent = textView?.window, parent.attachedSheet == nil else {
                 showStatus("Close the current sheet and run the command again.")
@@ -245,7 +255,6 @@ final class RenameFeature {
             parent.beginSheet(window, completionHandler: nil)
         } else {
             _ = await model.apply()
-            showStatus(model.errorMessage ?? "Changes applied")
         }
     }
 }

@@ -12,6 +12,14 @@ final class DefinitionFeature {
         case definition
         case typeDefinition
         case implementation
+
+        var emptyMessage: String {
+            switch self {
+            case .definition: "No definition found"
+            case .typeDefinition: "No type definition found"
+            case .implementation: "No implementation found"
+            }
+        }
     }
     typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
     private weak var textView: CodeTextView?
@@ -24,6 +32,7 @@ final class DefinitionFeature {
     private var popover: NSPopover?
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
+    private var progressNotification: UUID?
     private var pickerSourcePosition: LSPPosition?
     private var pickerContext: EditorRequestContext?
     private let snippetStore: () -> EditorNavigationStore?
@@ -54,6 +63,8 @@ final class DefinitionFeature {
     func notifyCaretChanged() { dismiss() }
     func notifyWindowResized() { dismiss() }
 
+    func awaitRequestForTesting() async { await inFlight?.value }
+
     func notifyProjectionChanged() {
         guard let textView, let position = pickerSourcePosition, let rect = textView.firstRect(for: position) else { return }
         popover?.positioningRect = rect
@@ -68,6 +79,7 @@ final class DefinitionFeature {
     }
 
     private func dismiss() {
+        clearProgress()
         endPickerSnippets()
         requestID += 1
         inFlight?.cancel()
@@ -116,6 +128,7 @@ final class DefinitionFeature {
         showRequestStatus("Finding navigation targets…", loading: true, id: currentRequestID)
         inFlight = Task { [weak self] in
             guard let self else { return }
+            defer { if self.requestID == currentRequestID { self.clearProgress() } }
             let bound: (LSPClient, EditorRequestContext)?
             if let synchronizeRequest {
                 bound = await synchronizeRequest(NSRange(location: offset, length: 0))
@@ -165,6 +178,7 @@ final class DefinitionFeature {
                 self.popover?.close()
                 self.handle(
                     locations: locations,
+                    emptyMessage: method.emptyMessage,
                     anchorPoint: self.textView?.firstRect(for: position).map { NSPoint(x: $0.midX, y: $0.midY) } ?? anchorPoint,
                     sourcePosition: context?.range.start ?? position
                 )
@@ -176,25 +190,32 @@ final class DefinitionFeature {
     }
 
     private func showRequestStatus(_ message: String, loading: Bool = false, id: UInt64) {
-        guard let textView, textView.window != nil, requestID == id else { return }
+        guard let textView, requestID == id else { return }
+        clearProgress()
         popover?.close()
-        let popover = NSPopover()
-        popover.behavior = .applicationDefined
-        popover.contentViewController = NSHostingController(rootView: DefinitionRequestStatusView(message: message, loading: loading, cancel: { [weak self] in
-            guard let self, self.requestID == id else { return }
-            self.dismiss()
-        }))
-        self.popover = popover
-        popover.show(relativeTo: textView.symbolAnchorRect(for: textView.sourceSelectedRange) ?? .zero, of: textView, preferredEdge: .maxY)
+        if loading {
+            progressNotification = textView.showCommandStatus(message, severity: .progress) { [weak self] in
+                guard let self, self.requestID == id else { return }
+                self.dismiss()
+            }
+        } else {
+            textView.showCommandStatus(message, severity: .error)
+        }
+    }
+
+    private func clearProgress() {
+        if let progressNotification { textView?.notificationStore?.dismiss(progressNotification) }
+        progressNotification = nil
     }
 
     private func handle(
         locations: [LSPLocation],
+        emptyMessage: String,
         anchorPoint: NSPoint,
         sourcePosition: LSPPosition
     ) {
         switch locations.count {
-        case 0: showRequestStatus("No navigation targets found", id: requestID)
+        case 0: showRequestStatus(emptyMessage, id: requestID)
         case 1: openLocation(locations[0], sourcePosition: sourcePosition)
         default: presentPicker(locations: locations, anchor: anchorPoint, sourcePosition: sourcePosition)
         }
@@ -251,18 +272,5 @@ final class DefinitionFeature {
     private func endPickerSnippets() {
         if let session = pickerSnippetSession { session.store.endSnippetSession(session.id) }
         pickerSnippetSession = nil
-    }
-}
-
-struct DefinitionRequestStatusView: View {
-    let message: String
-    let loading: Bool
-    let cancel: () -> Void
-    var body: some View {
-        HStack {
-            if loading { ProgressView().controlSize(.small) }
-            Text(message)
-            Button(loading ? "Cancel" : "Close", action: cancel).keyboardShortcut(.cancelAction)
-        }.padding(10)
     }
 }
