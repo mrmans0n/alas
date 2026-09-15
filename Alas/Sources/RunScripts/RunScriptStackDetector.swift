@@ -57,6 +57,7 @@ enum RunScriptStackDetector {
     private struct PythonMarkerEnvironment {
         let pythonVersion: String?
         let pythonFullVersion: String?
+        let platformMachine: String?
 
         static let current = currentPythonMarkerEnvironment()
     }
@@ -1779,12 +1780,29 @@ enum RunScriptStackDetector {
     /// like `name:` or `name: deps`, is not a tab-prefixed recipe, and is not
     /// a variable assignment.
     private static func makefileDeclaresTarget(_ makefile: String, target: String) -> Bool {
+        var conditionals: [MakeConditionalState] = []
         for rawLine in makefile.components(separatedBy: .newlines) {
             guard !rawLine.hasPrefix("\t") else { continue }
             // Drop a "#" comment before parsing, so "# test: disabled" isn't
             // read as a rule for "test".
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
                 .drop { $0 == " " }
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if let conditional = makeConditionalState(for: trimmedLine, parentIsActive: conditionals.allSatisfy(\.branchIsActive)) {
+                conditionals.append(conditional)
+                continue
+            }
+            if trimmedLine == "else" {
+                if let current = conditionals.popLast() {
+                    conditionals.append(current.elseState())
+                }
+                continue
+            }
+            if trimmedLine == "endif" {
+                _ = conditionals.popLast()
+                continue
+            }
+            guard conditionals.allSatisfy(\.branchIsActive) else { continue }
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
             guard !makeColonStartsAssignmentOperator(in: line, at: colonIndex) else { continue }
             let beforeColon = line[line.startIndex..<colonIndex]
@@ -1793,6 +1811,68 @@ enum RunScriptStackDetector {
             if names.contains(target) { return true }
         }
         return false
+    }
+
+    private struct MakeConditionalState {
+        let parentIsActive: Bool
+        let conditionIsKnown: Bool
+        let branchIsActive: Bool
+
+        func elseState() -> MakeConditionalState {
+            guard conditionIsKnown else { return self }
+            return .init(
+                parentIsActive: parentIsActive,
+                conditionIsKnown: conditionIsKnown,
+                branchIsActive: parentIsActive && !branchIsActive
+            )
+        }
+    }
+
+    private static func makeConditionalState(for line: String, parentIsActive: Bool) -> MakeConditionalState? {
+        if line.hasPrefix("ifeq") {
+            guard let comparison = makeConditionalEqualityValue(line.dropFirst("ifeq".count)) else {
+                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+            }
+            return .init(parentIsActive: parentIsActive, conditionIsKnown: true, branchIsActive: parentIsActive && comparison)
+        }
+        if line.hasPrefix("ifneq") {
+            guard let comparison = makeConditionalEqualityValue(line.dropFirst("ifneq".count)) else {
+                return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+            }
+            return .init(parentIsActive: parentIsActive, conditionIsKnown: true, branchIsActive: parentIsActive && !comparison)
+        }
+        if line.hasPrefix("ifdef") || line.hasPrefix("ifndef") {
+            return .init(parentIsActive: parentIsActive, conditionIsKnown: false, branchIsActive: parentIsActive)
+        }
+        return nil
+    }
+
+    private static func makeConditionalEqualityValue(_ expression: Substring) -> Bool? {
+        let trimmed = expression.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("("), trimmed.hasSuffix(")") {
+            let innerStart = trimmed.index(after: trimmed.startIndex)
+            let innerEnd = trimmed.index(before: trimmed.endIndex)
+            let parts = trimmed[innerStart..<innerEnd].split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            return makeConditionalToken(parts[0]) == makeConditionalToken(parts[1])
+        }
+        let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        return makeConditionalToken(parts[0]) == makeConditionalToken(parts[1])
+    }
+
+    private static func makeConditionalToken(_ token: some StringProtocol) -> String {
+        var value = token.trimmingCharacters(in: .whitespaces)
+        if value.count >= 2,
+           let first = value.first,
+           let last = value.last,
+           (first == "\"" || first == "'"),
+           first == last
+        {
+            value.removeFirst()
+            value.removeLast()
+        }
+        return value
     }
 
     private static func makeColonStartsAssignmentOperator(in line: Substring, at colonIndex: Substring.Index) -> Bool {
@@ -2297,31 +2377,32 @@ enum RunScriptStackDetector {
         process.arguments = [
             "python3",
             "-c",
-            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')",
+            "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'); print(platform.machine())",
         ]
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
         do {
             try process.run()
-            let deadline = Date().addingTimeInterval(0.25)
+            let deadline = Date().addingTimeInterval(1)
             while process.isRunning, Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.005)
             }
             if process.isRunning {
                 process.terminate()
-                return .init(pythonVersion: nil, pythonFullVersion: nil)
+                return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil)
             }
         } catch {
-            return .init(pythonVersion: nil, pythonFullVersion: nil)
+            return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil)
         }
-        guard process.terminationStatus == 0 else { return .init(pythonVersion: nil, pythonFullVersion: nil) }
+        guard process.terminationStatus == 0 else { return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil) }
         let lines = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let pythonVersion = lines.indices.contains(0) && !lines[0].isEmpty ? lines[0] : nil
         let pythonFullVersion = lines.indices.contains(1) && !lines[1].isEmpty ? lines[1] : pythonVersion
-        return .init(pythonVersion: pythonVersion, pythonFullVersion: pythonFullVersion)
+        let platformMachine = lines.indices.contains(2) && !lines[2].isEmpty ? lines[2] : nil
+        return .init(pythonVersion: pythonVersion, pythonFullVersion: pythonFullVersion, platformMachine: platformMachine)
     }
 
     private static func pythonMarkerAllowsCurrentEnvironment(_ marker: String) -> Bool {
@@ -2407,7 +2488,8 @@ enum RunScriptStackDetector {
         case "platform_system":
             return comparePythonMarkerString(actual: "Darwin", operatorText: operatorText, expected: expected)
         case "platform_machine":
-            return comparePythonMarkerString(actual: GoToolchainEnvironment.hostArchitecture, operatorText: operatorText, expected: expected)
+            guard let actual = PythonMarkerEnvironment.current.platformMachine else { return false }
+            return comparePythonMarkerString(actual: actual, operatorText: operatorText, expected: expected)
         case "python_version":
             guard let actual = PythonMarkerEnvironment.current.pythonVersion else { return false }
             return comparePythonMarkerVersion(actual: actual, operatorText: operatorText, expected: expected)
@@ -2472,7 +2554,12 @@ enum RunScriptStackDetector {
     }
 
     private static func comparePythonMarkerVersion(actual: String, operatorText: String, expected: String) -> Bool {
-        let comparison = compareDottedVersions(actual, expected)
+        if expected.contains("*") {
+            guard operatorText == "==" || operatorText == "!=" else { return false }
+            let matches = pythonVersion(actual, matchesWildcard: expected)
+            return operatorText == "==" ? matches : !matches
+        }
+        guard let comparison = compareDottedVersions(actual, expected) else { return false }
         switch operatorText {
         case "==": return comparison == .orderedSame
         case "!=": return comparison != .orderedSame
@@ -2484,9 +2571,20 @@ enum RunScriptStackDetector {
         }
     }
 
-    private static func compareDottedVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        let lhsParts = lhs.split(separator: ".").map { Int($0) ?? 0 }
-        let rhsParts = rhs.split(separator: ".").map { Int($0) ?? 0 }
+    private static func pythonVersion(_ actual: String, matchesWildcard expected: String) -> Bool {
+        guard expected.hasSuffix(".*") else { return false }
+        let prefix = String(expected.dropLast(2))
+        guard let actualParts = dottedVersionParts(actual),
+              let prefixParts = dottedVersionParts(prefix),
+              actualParts.count >= prefixParts.count
+        else { return false }
+        return Array(actualParts.prefix(prefixParts.count)) == prefixParts
+    }
+
+    private static func compareDottedVersions(_ lhs: String, _ rhs: String) -> ComparisonResult? {
+        guard let lhsParts = dottedVersionParts(lhs),
+              let rhsParts = dottedVersionParts(rhs)
+        else { return nil }
         for index in 0..<max(lhsParts.count, rhsParts.count) {
             let left = index < lhsParts.count ? lhsParts[index] : 0
             let right = index < rhsParts.count ? rhsParts[index] : 0
@@ -2494,6 +2592,17 @@ enum RunScriptStackDetector {
             if left > right { return .orderedDescending }
         }
         return .orderedSame
+    }
+
+    private static func dottedVersionParts(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty else { return nil }
+        var integers: [Int] = []
+        for part in parts {
+            guard !part.isEmpty, part.allSatisfy(\.isNumber), let integer = Int(part) else { return nil }
+            integers.append(integer)
+        }
+        return integers
     }
 
     private static func normalizedPythonPackageName(_ name: String) -> String {

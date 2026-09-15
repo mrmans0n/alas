@@ -587,6 +587,44 @@ struct RunScriptStackDetectorTests {
         #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
     }
 
+    @Test func makefileIgnoresTargetsInsideStaticallyInactiveConditionals() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(
+            "Makefile",
+            """
+            ifeq (1,0)
+            test:
+            \techo inactive
+            endif
+
+            ifneq "same" "same"
+            clean:
+            \techo inactive
+            endif
+            """,
+            in: root
+        )
+
+        #expect(detect(root)[.make]?.hasMakeTestTarget == false)
+        #expect(detect(root)[.make]?.hasMakeCleanTarget == false)
+
+        try write(
+            "Makefile",
+            """
+            ifeq (1,0)
+            all:
+            \techo inactive
+            else
+            test:
+            \techo active
+            endif
+            """,
+            in: root
+        )
+        #expect(detect(root)[.make]?.hasMakeTestTarget == true)
+    }
+
     @Test func makefileAllowsSpaceIndentedTargets() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1756,6 +1794,24 @@ struct RunScriptStackDetectorTests {
 
         #expect(detect(root)[.python]?.hasPytest == false)
         #expect(detect(root)[.python]?.hasRuff == false)
+    }
+
+    @Test func pythonUsesInterpreterPlatformMachineForMarkers() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest; platform_machine == \"amd64\"\nruff; platform_machine != \"amd64\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
+    }
+
+    @Test func pythonIgnoresWildcardVersionMarkersThatExcludeCurrentInterpreter() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("requirements.txt", "pytest; python_full_version != \"3.*\"\nruff; python_full_version == \"3.*\"\n", in: root)
+
+        #expect(detect(root)[.python]?.hasPytest == false)
+        #expect(detect(root)[.python]?.hasRuff == true)
     }
 
     @Test func pythonIgnoresPyprojectDependenciesExcludedByEnvironmentMarkers() throws {
