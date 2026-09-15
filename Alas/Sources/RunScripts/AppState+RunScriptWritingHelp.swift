@@ -3,7 +3,7 @@ import Foundation
 extension AppState {
     func runScriptWritingHelpAgent(in worktree: Worktree) throws -> String {
         guard !worktree.path.isRemoteAlasPath else { throw RunScriptWritingHelpError.remoteWorktree }
-        guard let agentID = config.agents.worktreeAutoLaunch.agentId, agentID != "none" else {
+        guard let agentID = defaultAgentID(projectID: worktree.projectId), agentID != "none" else {
             throw RunScriptWritingHelpError.noDefaultAgent
         }
         guard agentRegistry.enabled().contains(where: { $0.id == agentID }),

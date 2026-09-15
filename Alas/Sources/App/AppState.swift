@@ -3413,6 +3413,11 @@ final class AppState {
         return overrides
     }
 
+    func defaultAgentID(projectID: String?) -> String? {
+        let scripts = projects.first { $0.id == projectID }?.startupScripts ?? .defaults
+        return scripts.defaultAgentID(globalAgentID: config.agents.worktreeAutoLaunch.agentId)
+    }
+
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
         switch project.startupScripts.worktreeAgentMode {
         case .disabled:
@@ -3554,14 +3559,18 @@ final class AppState {
         displayName: String,
         icon: ProjectIcon,
         host: String? = nil,
-        id: String = UUID().uuidString
+        id: String = UUID().uuidString,
+        startupScripts: ProjectStartupScripts = .defaults,
+        mcpServers: [ProjectMCPServer] = []
     ) async throws {
         let project = try await projectsManager.addProject(
             path: path,
             displayName: displayName,
             icon: icon,
             host: host,
-            id: id
+            id: id,
+            startupScripts: startupScripts,
+            mcpServers: mcpServers
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()

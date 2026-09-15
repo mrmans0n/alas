@@ -25,6 +25,29 @@ struct ProjectsManagerTests {
         #expect(project.name == "alpha")
     }
 
+    @Test func addProjectPersistsDraftAgentAndAutomationSettings() async throws {
+        let repo = try await makeRepo(name: "agent-default")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let manager = ProjectsManager(persistedProjects: [])
+        var scripts = ProjectStartupScripts.defaults
+        scripts.agentSelection = .agent("codex")
+        scripts.worktreeCreateMode = .overrideGlobal
+        scripts.worktreeCreateScript = "echo prepare"
+        let servers = [ProjectMCPServer(id: "example", name: "Example", transport: .http(url: "https://example.com/mcp", headers: []))]
+        let project = try await manager.addProject(
+            path: repo,
+            displayName: "Agent default",
+            icon: .default(color: "#5fb7c4"),
+            startupScripts: scripts,
+            mcpServers: servers
+        )
+        #expect(project.startupScripts == scripts)
+        #expect(manager.projects.first?.startupScripts == scripts)
+        #expect(manager.projects.first?.mcpServers == servers)
+        let data = try JSONEncoder().encode(project)
+        #expect(try JSONDecoder().decode(ProjectConfig.self, from: data).startupScripts == scripts)
+    }
+
     @Test func addProjectUsesProvidedIconAndMirrorsColor() async throws {
         let repo = try await makeRepo(name: "lambda")
         defer { try? FileManager.default.removeItem(at: repo) }

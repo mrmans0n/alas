@@ -3,6 +3,35 @@ import Testing
 
 @MainActor
 struct AgentLauncherModelTests {
+    @Test func repositoryDefaultIsFirstAndExplicitSelectionStillWins() {
+        let model = AgentLauncherModel()
+        let enabled = [agent("claude", "Claude Code"), agent("codex", "Codex")]
+        let rows = model.rows(enabledAgents: enabled, preferredAgentID: "codex")
+        #expect(rows.map(\.id) == ["codex", "claude"])
+        #expect(model.selectedAgent(in: rows)?.id == "codex")
+        model.moveSelectionDown(rowCount: rows.count)
+        #expect(model.selectedAgent(in: rows)?.id == "claude")
+    }
+
+    @Test func unavailableDefaultDoesNotHideOtherAgents() {
+        let model = AgentLauncherModel()
+        let enabled = [agent("claude", "Claude Code"), agent("codex", "Codex")]
+        #expect(model.rows(enabledAgents: enabled, preferredAgentID: "missing").map(\.id) == ["claude", "codex"])
+        model.mode = .acp
+        let rows = model.rows(enabledAgents: enabled + [agent("custom", "Custom")], preferredAgentID: "custom")
+        #expect(!rows.contains { $0.id == "custom" })
+    }
+
+    @Test func searchCanSelectAnAgentOtherThanTheDefault() {
+        let model = AgentLauncherModel()
+        model.query = "claude"
+        let rows = model.rows(
+            enabledAgents: [agent("claude", "Claude Code"), agent("codex", "Codex")],
+            preferredAgentID: "codex"
+        )
+        #expect(rows.map(\.id) == ["claude"])
+    }
+
     private func agent(_ id: String, _ name: String) -> AgentDefinition {
         AgentDefinition(
             id: id,
