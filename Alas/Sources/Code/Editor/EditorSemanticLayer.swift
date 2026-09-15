@@ -10,8 +10,13 @@ final class EditorSemanticLayer {
     private var sourceRevision: Int?
     private weak var textView: CodeTextView?
     private var projectionObserver: NSObjectProtocol?
+    private var projectionWillChangeObserver: NSObjectProtocol?
+    private var paintedRanges: [NSRange] = []
 
-    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit {
+        if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
+        if let projectionWillChangeObserver { NotificationCenter.default.removeObserver(projectionWillChangeObserver) }
+    }
 
     init(layoutManager: NSLayoutManager, theme: EditorTheme, textView: CodeTextView? = nil, isCurrent: @escaping (EditorRequestContext) -> Bool) {
         self.layoutManager = layoutManager
@@ -19,6 +24,9 @@ final class EditorSemanticLayer {
         self.isCurrent = isCurrent
         self.textView = textView
         if let textView {
+            projectionWillChangeObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clearPaint() }
+            }
             projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { guard let self else { return }
                 self.reapply(theme: self.theme) }
@@ -37,15 +45,23 @@ final class EditorSemanticLayer {
         reapply(theme: theme)
     }
 
-    /// Temporary foreground belongs exclusively to this layer. Clearing the
-    /// whole current storage also removes ranges shifted by a character edit.
     func clear() {
-        if let layoutManager, let storage = layoutManager.textStorage {
-            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: NSRange(location: 0, length: storage.length))
-        }
+        clearPaint()
         spans = []
         context = nil
         sourceRevision = nil
+    }
+
+    private func clearPaint() {
+        defer { paintedRanges = [] }
+        guard let layoutManager, let storage = layoutManager.textStorage else { return }
+        // Legacy, unprojected storage can move before we receive an edit. The
+        // projected path clears before mutation and can use exact owned ranges.
+        let ranges = textView?.displayAdapter == nil ? [NSRange(location: 0, length: storage.length)] : paintedRanges
+        for range in ranges {
+            guard let clipped = range.intersection(NSRange(location: 0, length: storage.length)), clipped.length > 0 else { continue }
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clipped)
+        }
     }
 
     func reapply(theme: EditorTheme) {
@@ -56,10 +72,11 @@ final class EditorSemanticLayer {
         let length = textView?.sourceAttributedText.length ?? storage.length
         guard spans.allSatisfy({ $0.range.location <= length && $0.range.length <= length - $0.range.location }) else { clear()
         return }
-        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: NSRange(location: 0, length: storage.length))
+        clearPaint()
         for span in spans {
             for range in textView?.displaySegments(forSource: span.range) ?? [span.range] {
                 layoutManager.addTemporaryAttribute(.foregroundColor, value: theme.attributes(for: span.capture)[.foregroundColor]!, forCharacterRange: range)
+                paintedRanges.append(range)
             }
         }
     }

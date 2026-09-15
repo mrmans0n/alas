@@ -4,15 +4,24 @@ import AppKit
 final class EditorFindHighlightRenderer {
     private weak var textView: CodeTextView?
     private var projectionObserver: NSObjectProtocol?
+    private var projectionWillChangeObserver: NSObjectProtocol?
+    private var paintedRanges: [NSRange] = []
     private var rendered: (matches: [NSRange], active: Int?, inactiveColor: NSColor, activeColor: NSColor, revision: Int?)?
 
-    isolated deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
+    isolated deinit {
+        if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
+        if let projectionWillChangeObserver { NotificationCenter.default.removeObserver(projectionWillChangeObserver) }
+    }
 
     func attach(textView: CodeTextView) {
         if self.textView !== textView {
             clear()
             if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
+            if let projectionWillChangeObserver { NotificationCenter.default.removeObserver(projectionWillChangeObserver) }
             self.textView = textView
+            projectionWillChangeObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clearPaint() }
+            }
             projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let rendered = self.rendered else { return }
@@ -26,13 +35,27 @@ final class EditorFindHighlightRenderer {
 
     func clear() {
         rendered = nil
+        clearPaint()
+    }
+
+    private func clearPaint() {
+        defer { paintedRanges = [] }
         guard let textView,
               let layoutManager = textView.layoutManager else {
             return
         }
 
         let textLength = (textView.string as NSString).length
-        for range in markedRanges(layoutManager: layoutManager, textLength: textLength).reversed() {
+        let ranges = textView.displayAdapter == nil ? markedRanges(layoutManager: layoutManager, textLength: textLength) : paintedRanges
+        // Merge overlaps so restoring a saved background never clears it again.
+        var merged: [NSRange] = []
+        for range in ranges.sorted(by: { $0.location < $1.location }) {
+            guard let clipped = range.intersection(NSRange(location: 0, length: textLength)), clipped.length > 0 else { continue }
+            if let last = merged.last, NSMaxRange(last) >= clipped.location {
+                merged[merged.count - 1] = last.union(clipped)
+            } else { merged.append(clipped) }
+        }
+        for range in merged.reversed() {
             clearMarkedRange(range, layoutManager: layoutManager)
         }
     }
@@ -53,6 +76,7 @@ final class EditorFindHighlightRenderer {
             let color = index == activeIndex ? activeColor : inactiveColor
             for segment in textView.displaySegments(forSource: range) {
                 addFindBackground(color, for: segment, layoutManager: layoutManager)
+                paintedRanges.append(segment)
             }
         }
     }

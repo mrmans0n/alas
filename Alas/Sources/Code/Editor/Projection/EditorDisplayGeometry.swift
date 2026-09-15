@@ -1,6 +1,7 @@
 import AppKit
 
 extension Notification.Name {
+    static let editorDisplayProjectionWillChange = Notification.Name("alas.editorDisplayProjectionWillChange")
     static let editorDisplayProjectionDidChange = Notification.Name("alas.editorDisplayProjectionDidChange")
     static let editorSourceDidChange = Notification.Name("alas.editorSourceDidChange")
 }

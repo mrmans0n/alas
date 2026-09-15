@@ -173,13 +173,9 @@ final class EditorDisplayAdapter {
         let selections = view.selectedRanges.compactMap { try? document.map.sourceRange(forDisplay: $0.rangeValue) }.map(NSValue.init(range:))
         let typingAttributes = view.typingAttributes
         let scroll = captureScrollAnchor()
-        if let layout = view.layoutManager {
-            let range = NSRange(location: 0, length: document.storage.length)
-            for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .underlineStyle, .underlineColor,
-                        NSAttributedString.Key("alas.editorFindHighlightMarker"), NSAttributedString.Key("alas.editorFindPreviousBackgroundColor")] {
-                layout.removeTemporaryAttribute(key, forCharacterRange: range)
-            }
-        }
+        // Owners clear only their painted ranges while old display coordinates
+        // are still valid, then reapply current results after the projection.
+        NotificationCenter.default.post(name: .editorDisplayProjectionWillChange, object: view)
         // Publish matching text and line offsets before native storage observers
         // can query geometry. Only validated incremental edits may reuse the index.
         document.storage.beginEditing()
