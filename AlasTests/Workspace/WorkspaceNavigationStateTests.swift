@@ -42,7 +42,7 @@ struct WorkspaceNavigationStateTests {
     @Test func unavailableFocusedMemberFallsForwardWithOneWrap() {
         let first = unavailableMember
         let second = availableMember
-        let third = member(id: "33333333-3333-3333-3333-333333333333", availability: .available)
+        let third = Self.member(id: "33333333-3333-3333-3333-333333333333", availability: .available)
         let checkout = fixtureCheckout(members: [first, second, third])
         var state = WorkspaceNavigationState(
             selectedWorkspaceID: nil,
@@ -108,8 +108,8 @@ struct WorkspaceNavigationStateTests {
         #expect(ids.isEmpty)
     }
 
-    private let availableMember = member(id: "11111111-1111-1111-1111-111111111111", availability: .available)
-    private let unavailableMember = member(id: "22222222-2222-2222-2222-222222222222", availability: .missing)
+    private let availableMember = Self.member(id: "11111111-1111-1111-1111-111111111111", availability: .available)
+    private let unavailableMember = Self.member(id: "22222222-2222-2222-2222-222222222222", availability: .missing)
 
     private static func member(id: String, availability: WorkspaceCheckoutMemberAvailability) -> WorkspaceCheckoutMember {
         WorkspaceCheckoutMember(
@@ -119,9 +119,6 @@ struct WorkspaceNavigationStateTests {
         )
     }
 
-    private func member(id: String, availability: WorkspaceCheckoutMemberAvailability) -> WorkspaceCheckoutMember {
-        Self.member(id: id, availability: availability)
-    }
 
     private func fixtureCheckout(members: [WorkspaceCheckoutMember]) -> WorkspaceCheckout {
         WorkspaceCheckout(
