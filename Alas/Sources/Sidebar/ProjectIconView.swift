@@ -76,20 +76,31 @@ struct ProjectIconView: View {
         }
     }
 
+    /// The squircle fill. Transparent icons drop it and tint the glyph instead.
+    private var backgroundColor: Color {
+        icon.transparentBackground ? .clear : Color(hex: icon.color)
+    }
+
+    /// White reads well on the filled squircle; without a fill the glyph has to
+    /// carry the color itself.
+    private var glyphColor: Color {
+        icon.transparentBackground ? Color(hex: icon.color) : .white
+    }
+
     private func labelView(_ label: String) -> some View {
         Text(label)
             .font(.system(size: size.fontSize, weight: .bold))
-            .foregroundColor(.white)
+            .foregroundColor(glyphColor)
             .minimumScaleFactor(0.65)
             .lineLimit(1)
             .frame(width: size.dimension, height: size.dimension)
-            .background(Color(hex: icon.color))
+            .background(backgroundColor)
     }
 
     private func symbolView(_ name: String) -> some View {
         ZStack {
-            Color(hex: icon.color)
-            Icon(name: name, size: size.fontSize + 2, color: .white)
+            backgroundColor
+            Icon(name: name, size: size.fontSize + 2, color: glyphColor)
         }
     }
 
@@ -99,7 +110,7 @@ struct ProjectIconView: View {
             .minimumScaleFactor(0.55)
             .lineLimit(1)
             .frame(width: size.dimension, height: size.dimension)
-            .background(Color(hex: icon.color))
+            .background(backgroundColor)
     }
 
     private func loadImage() -> NSImage? {

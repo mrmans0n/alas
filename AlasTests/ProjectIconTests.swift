@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -11,6 +12,7 @@ struct ProjectIconTests {
         #expect(icon.symbolName == nil)
         #expect(icon.emoji == nil)
         #expect(icon.imagePath == nil)
+        #expect(icon.transparentBackground == false)
     }
 
     @Test func fallbackLabelUsesLastPathComponentInitial() {
@@ -41,5 +43,42 @@ struct ProjectIconTests {
         #expect(ProjectIcon.sanitizedEmoji("abc 🚀") == "🚀")
         #expect(ProjectIcon.sanitizedEmoji("abc") == nil)
         #expect(ProjectIcon(mode: .emoji, color: "#112233", emoji: "abc").emoji == nil)
+    }
+
+    @Test func transparentBackgroundSurvivesRoundTrip() throws {
+        for transparent in [true, false] {
+            let icon = ProjectIcon(
+                mode: .symbol,
+                color: "#112233",
+                symbolName: "folder",
+                transparentBackground: transparent
+            )
+            let data = try JSONEncoder().encode(icon)
+
+            #expect(try JSONDecoder().decode(ProjectIcon.self, from: data) == icon)
+        }
+    }
+
+    @Test func opaqueIconOmitsTransparentBackgroundKey() throws {
+        let data = try JSONEncoder().encode(ProjectIcon.default())
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        #expect(json["transparentBackground"] == nil)
+    }
+
+    @Test func legacyIconDecodesAsOpaque() throws {
+        let json = ##"{"mode":"letter","color":"#112233"}"##
+        let icon = try JSONDecoder().decode(ProjectIcon.self, from: Data(json.utf8))
+
+        #expect(icon.transparentBackground == false)
+    }
+
+    @Test func withColorPreservesTransparentBackground() {
+        let icon = ProjectIcon(mode: .letter, color: "#112233", transparentBackground: true)
+
+        #expect(icon.withColor("#445566").transparentBackground == true)
+        #expect(icon.withColor("#445566").color == "#445566")
     }
 }
