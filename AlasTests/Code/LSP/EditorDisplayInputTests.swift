@@ -5,6 +5,34 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func typingRetainsHintsOutsideTouchedLinesWithoutReplacingTheirAttachments() async throws {
+        let f = try await Fixture("aa\nbb\ncc\n")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        let hints = [1, 4, 7].map { EditorDisplayHint(id: "hint-\($0)", sourceOffset: $0, label: "x:", size: CGSize(width: 12, height: 16)) }
+        try adapter.updateHints(hints, revision: f.buffer.editGeneration)
+        let before = try #require(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment)
+        let after = try #require(f.document.storage.attribute(.attachment, at: 9, effectiveRange: nil) as? EditorHintAttachment)
+        let recorder = DisplayEditRecorder()
+        f.document.storage.delegate = recorder
+        defer { f.document.storage.delegate = nil }
+        #expect(adapter.replaceSource(NSRange(location: 4, length: 0), with: "🙂\n"))
+        #expect(f.buffer.storage.string == "aa\nb🙂\nb\ncc\n")
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 10])
+        #expect(f.document.storage.string == "a\u{FFFC}a\nb🙂\nb\nc\u{FFFC}c\n")
+        #expect(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment === before)
+        #expect(f.document.storage.attribute(.attachment, at: 11, effectiveRange: nil) as? EditorHintAttachment === after)
+        #expect(recorder.requestedEdits.count == 1)
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 5, length: 3))
+        #expect(adapter.sourceLineStarts == [0, 3, 7, 9, 12])
+        // Joining lines invalidates hints on both sides of the removed newline.
+        #expect(adapter.replaceSource(NSRange(location: 2, length: 1), with: ""))
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [9])
+        f.document.storage.delegate = nil
+        f.buffer.undoManager.undo()
+        #expect(f.document.map.hintRuns.isEmpty) // Unowned/undo edits remain conservative.
+    }
+
     @Test func lineOffsetsStayCurrentThroughTypingHintFallbackAndUndo() async throws {
         let f = try await Fixture("ab\ncd\n")
         defer { f.remove() }

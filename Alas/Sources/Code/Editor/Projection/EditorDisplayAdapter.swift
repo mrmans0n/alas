@@ -125,7 +125,9 @@ final class EditorDisplayAdapter {
     private func sourceChanged(edit: EditorTextEdit? = nil) {
         deferredSourceNotification = false
         if composition.isActive, !isApplyingSourceEdit { composition.invalidate() }
-        hints = [] // Server anchors are stale after every source character edit.
+        // Protocol actions are invalidated separately. A validated owned edit
+        // can retain visual hints on untouched lines; uncertain edits clear them.
+        hints = []
         rebuild(sourceEdit: isApplyingSourceEdit ? edit : nil, sourceDidChange: true)
         if let view { NotificationCenter.default.post(name: .editorSourceDidChange, object: view) }
     }
@@ -184,9 +186,11 @@ final class EditorDisplayAdapter {
         var appliedEdit = false
         do {
             appliedEdit = !composition.isActive && sourceEdit.map {
-                document.applySourceEdit($0, source: buffer.storage, revision: buffer.editGeneration)
+                document.applySourceEdit($0, source: buffer.storage, revision: buffer.editGeneration, preservingUneditedLineHints: true)
             } == true
-            if !appliedEdit {
+            if appliedEdit {
+                hints = document.map.hintRuns.map(\.hint)
+            } else {
                 try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
             }
         } catch {

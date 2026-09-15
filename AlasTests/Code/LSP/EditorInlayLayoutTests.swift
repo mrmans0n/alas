@@ -66,6 +66,18 @@ struct EditorInlayLayoutTests {
         #expect(view.displayAdapter?.document.map.hintRuns.isEmpty == true)
         try reply(requests[1])
         try await eventually("apply current response") { view.displayAdapter?.document.map.hintRuns.count == 1 }
+        let retainedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == false)
+        view.setSourceSelectedRange(NSRange(location: 32, length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
+        try await eventually("refresh retained hints") { requests.count >= 3 }
+        try reply(requests[2])
+        try await eventually("fresh hints replace retained visuals") {
+            guard let id = view.displayAdapter?.document.map.hintRuns.first?.hint.id else { return false }
+            return id != retainedID && view.inlayAccessibilityActions?(id).isEmpty == false
+        }
         let revision = buffer.editGeneration
         let version = view.displayAdapter?.document.map.revision
         app.config.code.inlayHintsByLanguage["swift"] = .init(enabled: false)
@@ -73,7 +85,7 @@ struct EditorInlayLayoutTests {
         #expect(buffer.editGeneration == revision)
         #expect(view.displayAdapter?.document.map.revision == version)
         app.config.code.inlayHintsByLanguage["swift"] = .init()
-        try await eventually("settings enable request") { requests.count >= 3 }
+        try await eventually("settings enable request") { requests.count >= 4 }
         try reply(requests.last!)
         try await eventually("settings enable response") { view.displayAdapter?.document.map.hintRuns.count == 1 }
         let before = requests.count
