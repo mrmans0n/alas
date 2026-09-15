@@ -18,6 +18,27 @@ struct TouchTargetSmokeTests {
         #expect(NewRunScriptDialog.canCreate(name: "Dev Server"))
     }
 
+    @Test func newRunScriptDialogRendersTemplateModeWithoutCrashing() {
+        let state = AppState()
+        let presentation = RunScriptCreationPresentation(
+            scope: .repo,
+            projectId: "project",
+            worktreeId: "worktree",
+            repositoryName: "Alas",
+            detectedStacks: [
+                RunScriptStackDetection(stack: .gradle, context: .init(hasWrapper: true)),
+                RunScriptStackDetection(stack: .javascript, context: .init(packageManager: .pnpm, packageScripts: ["dev"])),
+            ]
+        )
+        let view = NewRunScriptDialog(state: state, presentation: presentation)
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(controller.view.fittingSize.width == DialogContainerLayout.defaultWidth)
+    }
+
     @Test func newRunScriptDialogRendersWithoutCrashing() {
         let state = AppState()
         let presentation = RunScriptCreationPresentation(
