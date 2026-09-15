@@ -198,6 +198,9 @@ struct WorktreeRowView: View {
             if isSelected {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(theme.color("accent-soft"))
+            } else if hovering {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(theme.color("bg-2"))
             }
             VStack(alignment: .leading, spacing: 2) {
                 firstLine(status: status)
@@ -214,6 +217,37 @@ struct WorktreeRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
+        // Both overlays deliberately draw outside the row's bounds, into the
+        // container's leading padding where the rail lives. SwiftUI does not
+        // clip offset overlays, so no extra geometry plumbing is needed.
+        .overlay(alignment: .topLeading) {
+            Rectangle()
+                .fill(theme.color("line-soft"))
+                .frame(
+                    width: SidebarTreeGuide.elbowWidth,
+                    height: SidebarTreeGuide.elbowHeight
+                )
+                .offset(
+                    x: SidebarTreeGuide.elbowOffsetX,
+                    y: SidebarTreeGuide.elbowOffsetY
+                )
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .topLeading) {
+            if isSelected {
+                Circle()
+                    .fill(theme.color("accent"))
+                    .frame(
+                        width: SidebarTreeGuide.selectionDotDiameter,
+                        height: SidebarTreeGuide.selectionDotDiameter
+                    )
+                    .offset(
+                        x: SidebarTreeGuide.selectionDotOffsetX,
+                        y: SidebarTreeGuide.selectionDotOffsetY
+                    )
+                    .accessibilityHidden(true)
+            }
+        }
         .onHover { hovering = $0 }
         .onTapGesture {
             if !isPending {

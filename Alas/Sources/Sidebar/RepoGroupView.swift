@@ -198,7 +198,17 @@ struct RepoGroupView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 6)
+                // Inner padding: content sits this far right of the rail.
+                .padding(.leading, SidebarTreeGuide.indent)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(theme.color("line-soft"))
+                        .frame(width: SidebarTreeGuide.railWidth)
+                        .accessibilityHidden(true)
+                }
+                // Outer margin: the rail itself sits this far right of the group.
+                .padding(.leading, SidebarTreeGuide.indent)
+                .padding(.trailing, 6)
             }
         }
     }
