@@ -193,7 +193,8 @@ struct RootView: View {
                 center: { effectiveRightPaneVisible in
                     centerContent(
                         effectiveRightPaneVisible: effectiveRightPaneVisible,
-                        hasRightPaneRail: rightPaneRailExists
+                        hasRightPaneRail: rightPaneRailExists,
+                        rightPaneStartupSuppressed: state.suppressesRestoredRightPaneAfterAbandonedStartup
                     )
                 },
                 right: { collapsed in rightContent(selection: rightPaneSelection, collapsed: collapsed) }
@@ -289,18 +290,21 @@ struct RootView: View {
     @ViewBuilder
     private func centerContent(
         effectiveRightPaneVisible: Bool,
-        hasRightPaneRail: Bool
+        hasRightPaneRail: Bool,
+        rightPaneStartupSuppressed: Bool
     ) -> some View {
         worktreeCenterContent(
             effectiveRightPaneVisible: effectiveRightPaneVisible,
-            hasRightPaneRail: hasRightPaneRail
+            hasRightPaneRail: hasRightPaneRail,
+            rightPaneStartupSuppressed: rightPaneStartupSuppressed
         )
     }
 
     @ViewBuilder
     private func worktreeCenterContent(
         effectiveRightPaneVisible: Bool,
-        hasRightPaneRail: Bool
+        hasRightPaneRail: Bool,
+        rightPaneStartupSuppressed: Bool
     ) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
@@ -318,7 +322,8 @@ struct RootView: View {
                 sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
                 allowsPaneFocus: !state.isKeyboardOverlayOpen,
                 effectiveRightPaneVisible: effectiveRightPaneVisible,
-                hasRightPaneRail: hasRightPaneRail
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
             )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)
@@ -358,7 +363,8 @@ struct RootView: View {
                     sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
                     allowsPaneFocus: !state.isKeyboardOverlayOpen,
                     effectiveRightPaneVisible: effectiveRightPaneVisible,
-                    hasRightPaneRail: hasRightPaneRail
+                    hasRightPaneRail: hasRightPaneRail,
+                    rightPaneStartupSuppressed: rightPaneStartupSuppressed
                 )
             } else {
                 EmptyTabView(

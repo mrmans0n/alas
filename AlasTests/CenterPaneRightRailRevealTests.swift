@@ -17,6 +17,14 @@ struct CenterPaneRightRailRevealTests {
             rightPaneVisible: false
         ))
     }
+
+    @Test func startupRecoverySuppressionHidesTheUnusableLegacyReveal() {
+        #expect(!CenterPaneView.showsLegacyRightSidebarReveal(
+            rightPaneRailExists: false,
+            rightPaneVisible: false,
+            rightPaneStartupSuppressed: true
+        ))
+    }
 }
 
 private func centerPaneSource() throws -> String {

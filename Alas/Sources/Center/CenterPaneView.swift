@@ -130,6 +130,9 @@ struct CenterPaneView: View {
     /// The permanent right rail is the sole reveal control while it is mounted.
     /// A center-only layout still retains the legacy control as its recovery path.
     var hasRightPaneRail: Bool = false
+    /// An abandoned-startup recovery intentionally suppresses the right pane
+    /// and rail for the whole launch, so its legacy reveal action cannot work.
+    var rightPaneStartupSuppressed: Bool = false
     @Environment(\.theme) var theme
     @State private var startupRecoveryReadyKey: String?
 
@@ -360,7 +363,8 @@ struct CenterPaneView: View {
                 },
                 rightSidebarHidden: Self.showsLegacyRightSidebarReveal(
                     rightPaneRailExists: hasRightPaneRail,
-                    rightPaneVisible: state.config.rightPaneVisible
+                    rightPaneVisible: state.config.rightPaneVisible,
+                    rightPaneStartupSuppressed: rightPaneStartupSuppressed
                 ),
                 onRevealSidebar: {
                     state.config.sidebarVisible = true
@@ -798,9 +802,10 @@ struct CenterPaneView: View {
 
     static func showsLegacyRightSidebarReveal(
         rightPaneRailExists: Bool,
-        rightPaneVisible: Bool
+        rightPaneVisible: Bool,
+        rightPaneStartupSuppressed: Bool = false
     ) -> Bool {
-        !rightPaneRailExists && !rightPaneVisible
+        !rightPaneRailExists && !rightPaneVisible && !rightPaneStartupSuppressed
     }
 
     private func completeStartupRecoveryIfPaneIsStable() {
