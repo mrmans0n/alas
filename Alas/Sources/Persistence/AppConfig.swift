@@ -47,9 +47,6 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Run tab. This remains off until the
     /// command lifecycle UI has completed preview testing.
     var runTabEnabled: Bool = false
-    /// Temporary compatibility accessor while right-pane presentation readers
-    /// are removed. It is neither persisted nor configurable.
-    var rightPaneRailEnabled: Bool { true }
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false

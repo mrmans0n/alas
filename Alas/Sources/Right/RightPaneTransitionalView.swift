@@ -5,18 +5,14 @@ import SwiftUI
 ///
 /// Does not touch `RightPaneStore`, so no per-worktree state is allocated
 /// for a worktree that is not yet (or no longer) backed by a real path
-/// on disk. The tab bar is rendered for layout consistency but is
-/// `.disabled(true)` — all controls (including the hide-pane button) are
-/// inert. Recovery actions for the failure states live on the sidebar row
+/// on disk. Recovery actions for the failure states live on the sidebar row
 /// context menu and the center pane.
 ///
-/// The icon rail is the one exception: under the preview flag it is the
-/// pane's only reveal affordance (the center pane suppresses its own
-/// reveal button whenever the flag is on), so a rail tap must still be able
-/// to expand a collapsed pane here — otherwise a pane collapsed before a
-/// worktree entered a transitional state could never be reopened to show
-/// its status. Tab identity has no real effect on `content` beyond which
-/// skeleton variant `.creating` shows, so this reuses the same
+/// The permanent icon rail is the pane's only reveal affordance, so a rail
+/// tap must still be able to expand a collapsed pane here — otherwise a pane
+/// collapsed before a worktree entered a transitional state could never be
+/// reopened to show its status. Tab identity affects only the `.creating`
+/// skeleton variant, so this reuses the same
 /// `RightPaneRailModel.apply` transition `RightPaneView` uses.
 struct RightPaneTransitionalView: View {
     enum Kind {
@@ -39,44 +35,23 @@ struct RightPaneTransitionalView: View {
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
-            Group {
-                if state.config.rightPaneRailEnabled {
-                    HStack(spacing: 0) {
-                        if !collapsed {
-                            // Unlike the active pane, a transitional pane has
-                            // no separate toolbar row — `content` is the only
-                            // header-equivalent region, so it carries the
-                            // drag handle the removed tab bar used to.
-                            content
-                                .windowDragHandle()
-                        }
-                        RightPaneRail(
-                            activeTab: activeTab,
-                            collapsed: collapsed,
-                            changesCount: 0,
-                            activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
-                            showRunTab: state.config.runTabEnabled,
-                            onAction: { handle($0) }
-                        )
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        RightPaneTabBar(
-                            activeTab: $activeTab,
-                            changesCount: 0,
-                            totalAdd: 0,
-                            totalDel: 0,
-                            onHidePane: {},
-                            showIgnored: state.config.files.showIgnored,
-                            onToggleShowIgnored: {},
-                            showRunTab: state.config.runTabEnabled,
-                            activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
-                        )
-                        .disabled(true)
-
-                        content
-                    }
+            HStack(spacing: 0) {
+                if !collapsed {
+                    // Unlike the active pane, a transitional pane has
+                    // no separate toolbar row — `content` is the only
+                    // header-equivalent region, so it carries the
+                    // drag handle the removed tab bar used to.
+                    content
+                        .windowDragHandle()
                 }
+                RightPaneRail(
+                    activeTab: activeTab,
+                    collapsed: collapsed,
+                    changesCount: 0,
+                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
+                    showRunTab: state.config.runTabEnabled,
+                    onAction: { handle($0) }
+                )
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
             .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in

@@ -182,8 +182,7 @@ struct RootView: View {
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
-                rightCollapsedWidth: state.config.rightPaneRailEnabled
-                    && rightPaneSelection.showsRightPane
+                collapsedRailWidth: rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup
                     ? Double(RightPaneRail.width)
                     : nil,
