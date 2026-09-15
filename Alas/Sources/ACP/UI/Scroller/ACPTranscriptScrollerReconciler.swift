@@ -742,12 +742,12 @@ final class ACPTranscriptScrollerReconciler {
 
     func remeasureRow(id: String) {
         guard !isApplyingSpecs else { return }
-        guard let spec = specsById[id] else { return }
+        // Invalidation is a notification from a live row, never a mount request.
+        guard let view = pool.mountedView(id: id) else { return }
         // Read BEFORE measuring: `applyMeasuredHeight` can change both the
         // document height and the offset, after which "was the viewport at
         // the tail when this arrived?" is no longer answerable.
         let repins = repinsToTail(followsTail: lastFollowsTail, wasFollowingTail: lastFollowsTail)
-        let (view, _) = pool.view(for: spec)
         applyMeasuredHeight(id: id, view: view)
         if repins {
             scroller.scrollToBottom()

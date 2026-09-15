@@ -4,6 +4,12 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixes
+
+- Prevent retired transcript rows from remounting during delayed layout invalidation, and avoid redundant same-width row-root updates.
+
 ## [0.17.6] - 2026-09-15
 
 ### ✨ Features

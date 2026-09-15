@@ -87,9 +87,9 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
         }
     }
 
-    /// Height the row wants at `width`. Re-wraps the root view in a
-    /// fixed-width frame pinned to `width` and reads the resulting intrinsic
-    /// content size, which SwiftUI recomputes synchronously. The pinned-width
+    /// Height the row wants at `width`. Only changes the fixed-width wrapper
+    /// when the width changes, but always reads the current intrinsic content
+    /// size so streaming and image updates still remeasure. The pinned-width
     /// wrapper becomes the view's displayed content, matching the frame the
     /// tiling layout will place the view at; `lastMeasuredWidth` is updated to
     /// `width` so callers can later verify the view is still pinned to the
@@ -103,8 +103,10 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     /// zero/negative-width frame.
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         guard width > 0 else { return 0 }
-        rootView = AnyView(baseRootView.frame(width: width, alignment: .topLeading))
-        lastMeasuredWidth = width
+        if lastMeasuredWidth != width {
+            lastMeasuredWidth = width
+            rootView = AnyView(baseRootView.frame(width: width, alignment: .topLeading))
+        }
         return intrinsicContentSize.height
     }
 }
