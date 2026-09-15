@@ -815,6 +815,7 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         tabsManager: TabsManager? = nil,
+        lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
         workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge? = nil,
         workspacesManager: WorkspacesManager? = nil,
@@ -836,6 +837,7 @@ final class AppState {
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
+        self.lspManager = lspManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
@@ -7415,6 +7417,7 @@ final class AppState {
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
+        if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }
     }
 
     func closeAllTabs(worktreeId: String) {

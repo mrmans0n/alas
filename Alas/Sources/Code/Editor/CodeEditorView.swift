@@ -197,6 +197,8 @@ struct CodeEditorView: NSViewRepresentable {
 
         let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
         let textView = CodeTextView(frame: initialFrame, textContainer: textContainer)
+        // System-generated rewrites need a reviewed source edit plan first.
+        textView.writingToolsBehavior = .none
         textView.font = CodeEditorCoordinator.resolveFont(
             family: fontFamily,
             size: CGFloat(fontSize)

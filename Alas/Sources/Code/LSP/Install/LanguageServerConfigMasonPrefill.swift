@@ -44,6 +44,11 @@ extension AppConfig.Code {
         }
         languageServers = list
 
+        if let original = originalLanguage, original != entry.language {
+            let override = inlayHintsByLanguage.removeValue(forKey: original)
+            inlayHintsByLanguage[entry.language] = override
+        }
+
         if let recipes, !recipes.isEmpty {
             userDefinedRecipes[entry.language] = recipes
         } else if let original = originalLanguage, original != entry.language {

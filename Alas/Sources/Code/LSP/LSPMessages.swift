@@ -263,37 +263,194 @@ struct LSPDocumentSymbol: Decodable, Sendable {
     let children: [LSPDocumentSymbol]?
 }
 
+enum LSPDiagnosticCode: Hashable, Sendable {
+    case number(String)
+    case string(String)
+
+    var displayValue: String {
+        switch self {
+        case .number(let value), .string(let value): value
+        }
+    }
+
+    init?(wireValue: LSPJSONValue?) {
+        switch wireValue {
+        case .number(let value): self = .number(value)
+        case .string(let value): self = .string(value)
+        default: return nil
+        }
+    }
+}
+
+struct LSPDiagnosticCodeDescription: Codable, Hashable, Sendable {
+    let href: String
+}
+
+struct LSPDiagnosticRelatedInformation: Codable, Hashable, Sendable {
+    let location: LSPLocation
+    let message: String
+}
+
 struct LSPDiagnostic: Codable, Hashable, Sendable {
+    /// Original protocol fields, including numeric codes, tags, related information and opaque data.
+    var wireValue: LSPJSONValue?
     let range: LSPRange
     let severity: Int?       // 1=error 2=warning 3=info 4=hint
-    let code: String?
+    let code: LSPDiagnosticCode?
+    let codeDescription: LSPDiagnosticCodeDescription?
     let source: String?
+    let tags: [Int]?
+    let relatedInformation: [LSPDiagnosticRelatedInformation]?
+    let data: LSPJSONValue?
     let message: String
 
-    enum CodingKeys: String, CodingKey { case range, severity, code, source, message }
+    enum CodingKeys: String, CodingKey {
+        case range, severity, code, codeDescription, source, tags, relatedInformation, data, message
+    }
+
+    init(wireValue: LSPJSONValue) throws {
+        let raw = try wireValue.encodedData()
+        let c = try JSONDecoder().decode(DecodedFields.self, from: raw)
+        self.wireValue = wireValue
+        range = c.range
+        severity = c.severity
+        code = LSPDiagnosticCode(wireValue: wireValue["code"])
+        codeDescription = c.codeDescription
+        source = c.source
+        tags = c.tags
+        relatedInformation = c.relatedInformation
+        data = wireValue["data"]
+        message = c.message
+    }
+
     init(from decoder: Decoder) throws {
+        wireValue = try? LSPJSONValue(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         range = try c.decode(LSPRange.self, forKey: .range)
         severity = try c.decodeIfPresent(Int.self, forKey: .severity)
-        if let s = try? c.decodeIfPresent(String.self, forKey: .code) { code = s }
-        else if let i = try? c.decodeIfPresent(Int.self, forKey: .code) { code = String(i) }
-        else { code = nil }
+        code = LSPDiagnosticCode(wireValue: wireValue?["code"])
+        codeDescription = try c.decodeIfPresent(LSPDiagnosticCodeDescription.self, forKey: .codeDescription)
         source = try c.decodeIfPresent(String.self, forKey: .source)
+        tags = try c.decodeIfPresent([Int].self, forKey: .tags)
+        relatedInformation = try c.decodeIfPresent([LSPDiagnosticRelatedInformation].self, forKey: .relatedInformation)
+        data = wireValue?["data"]
         message = try c.decode(String.self, forKey: .message)
     }
     func encode(to encoder: Encoder) throws {
+        if let wireValue { try wireValue.encode(to: encoder)
+        return }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(range, forKey: .range)
         try c.encodeIfPresent(severity, forKey: .severity)
-        try c.encodeIfPresent(code, forKey: .code)
+        if let code {
+            switch code {
+            case .number(let value):
+                guard let number = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
+                    throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Invalid diagnostic code"))
+                }
+                try c.encode(number, forKey: .code)
+            case .string(let value): try c.encode(value, forKey: .code)
+            }
+        }
+        try c.encodeIfPresent(codeDescription, forKey: .codeDescription)
         try c.encodeIfPresent(source, forKey: .source)
+        try c.encodeIfPresent(tags, forKey: .tags)
+        try c.encodeIfPresent(relatedInformation, forKey: .relatedInformation)
+        if let data { try data.encode(to: c.superEncoder(forKey: .data)) }
         try c.encode(message, forKey: .message)
+    }
+
+    private struct DecodedFields: Decodable {
+        let range: LSPRange
+        let severity: Int?
+        let codeDescription: LSPDiagnosticCodeDescription?
+        let source: String?
+        let tags: [Int]?
+        let relatedInformation: [LSPDiagnosticRelatedInformation]?
+        let message: String
+    }
+}
+
+extension LSPJSONValue {
+    subscript(_ key: String) -> LSPJSONValue? {
+        guard case .object(let fields) = self else { return nil }
+        return fields[key]
+    }
+
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+}
+
+struct LSPCommand: Sendable {
+    let title: String
+    let command: String
+    let arguments: [LSPJSONValue]?
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let title = wireValue["title"]?.stringValue, let command = wireValue["command"]?.stringValue else {
+            throw LSPError.invalidPayload
+        }
+        self.title = title
+        self.command = command
+        if case .array(let arguments) = wireValue["arguments"] { self.arguments = arguments } else { self.arguments = nil }
+    }
+}
+
+/// Both Command and CodeAction retain their original union shape on the wire.
+struct LSPCodeAction: Codable, Sendable {
+    struct Disabled: Sendable { let reason: String }
+    let wireValue: LSPJSONValue
+    let title: String
+    let kind: String?
+    let diagnostics: [LSPJSONValue]?
+    let disabled: Disabled?
+    let edit: LSPWorkspaceEdit?
+    let command: LSPCommand?
+    let data: LSPJSONValue?
+    let isPreferred: Bool?
+    let isCommand: Bool
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let title = wireValue["title"]?.stringValue else { throw LSPError.invalidPayload }
+        self.wireValue = wireValue
+        self.title = title
+        kind = wireValue["kind"]?.stringValue
+        if case .array(let values) = wireValue["diagnostics"] { diagnostics = values } else { diagnostics = nil }
+        disabled = wireValue["disabled"]?["reason"]?.stringValue.map(Disabled.init)
+        if let value = wireValue["edit"], value != .null {
+            edit = try JSONDecoder().decode(LSPWorkspaceEdit.self, from: value.encodedData())
+        } else { edit = nil }
+        isCommand = wireValue["command"]?.stringValue != nil
+        if isCommand { command = try LSPCommand(wireValue: wireValue) }
+        else if let value = wireValue["command"], value != .null { command = try LSPCommand(wireValue: value) }
+        else { command = nil }
+        data = wireValue["data"]
+        if case .bool(let value) = wireValue["isPreferred"] { isPreferred = value } else { isPreferred = nil }
+    }
+
+    init(from decoder: Decoder) throws { try self.init(wireValue: LSPJSONValue(from: decoder)) }
+    func encode(to encoder: Encoder) throws { try wireValue.encode(to: encoder) }
+
+    static func decodeList(_ data: Data?) throws -> [LSPCodeAction] {
+        guard let data else { return [] }
+        let value = try LSPJSONValue.decode(from: data)
+        if value == .null { return [] }
+        guard case .array(let values) = value else { throw LSPError.invalidPayload }
+        return try values.map { try LSPCodeAction(wireValue: $0) }
     }
 }
 
 struct LSPPublishDiagnosticsParams: Decodable, Sendable {
     let uri: String
     let diagnostics: [LSPDiagnostic]
+}
+
+extension LSPDiagnostic {
+    static func decodeWire(_ values: [LSPJSONValue]) throws -> [LSPDiagnostic] {
+        try values.map(LSPDiagnostic.init(wireValue:))
+    }
 }
 
 // MARK: - Formatting
@@ -315,15 +472,18 @@ struct LSPTextDocumentIdentifier: Codable, Hashable, Sendable {
 struct LSPTextEdit: Codable, Hashable, Sendable {
     let range: LSPRange
     let newText: String
+    let annotationID: String?
 
-    init(range: LSPRange, newText: String) {
+    init(range: LSPRange, newText: String, annotationID: String? = nil) {
         self.range = range
         self.newText = newText
+        self.annotationID = annotationID
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.newText = try container.decode(String.self, forKey: .newText)
+        self.annotationID = try container.decodeIfPresent(String.self, forKey: .annotationId)
         if let range = try container.decodeIfPresent(LSPRange.self, forKey: .range) {
             self.range = range
         } else if let replace = try container.decodeIfPresent(LSPRange.self, forKey: .replace) {
@@ -337,6 +497,7 @@ struct LSPTextEdit: Codable, Hashable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(range, forKey: .range)
         try container.encode(newText, forKey: .newText)
+        try container.encodeIfPresent(annotationID, forKey: .annotationId)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -344,6 +505,7 @@ struct LSPTextEdit: Codable, Hashable, Sendable {
         case newText
         case insert
         case replace
+        case annotationId
     }
 }
 
@@ -371,7 +533,13 @@ enum LSPInsertTextFormat: Int, Codable, Hashable, Sendable {
     case snippet = 2
 }
 
-struct LSPCompletionItem: Decodable, Sendable {
+struct LSPInsertReplaceEdit: Codable, Equatable, Sendable {
+    let newText: String
+    let insert: LSPRange
+    let replace: LSPRange
+}
+
+struct LSPCompletionItem: Codable, Sendable {
     let label: String
     let kind: Int?
     let detail: String?
@@ -382,6 +550,38 @@ struct LSPCompletionItem: Decodable, Sendable {
     let insertTextFormat: LSPInsertTextFormat?
     let textEdit: LSPTextEdit?
     let additionalTextEdits: [LSPTextEdit]?
+    var insertReplaceEdit: LSPInsertReplaceEdit? = nil
+    var insertTextMode: Int? = nil
+    var command: LSPCommand? = nil
+    var data: LSPJSONValue? = nil
+    private var originalWireValue: LSPJSONValue? = nil
+
+    var wireValue: LSPJSONValue {
+        if let originalWireValue { return originalWireValue }
+        var fields: [String: LSPJSONValue] = ["label": .string(label)]
+        for (key, value) in [("detail", detail), ("sortText", sortText), ("filterText", filterText), ("insertText", insertText)] {
+            if let value { fields[key] = .string(value) }
+        }
+        if let kind { fields["kind"] = .number(String(kind)) }
+        if let insertTextFormat { fields["insertTextFormat"] = .number(String(insertTextFormat.rawValue)) }
+        if let insertTextMode { fields["insertTextMode"] = .number(String(insertTextMode)) }
+        if let textEdit { fields["textEdit"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(textEdit)) }
+        if let insertReplaceEdit { fields["textEdit"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(insertReplaceEdit)) }
+        if let additionalTextEdits { fields["additionalTextEdits"] = try? LSPJSONValue.decode(from: JSONEncoder().encode(additionalTextEdits)) }
+        if let documentation {
+            switch documentation {
+            case .plain(let text): fields["documentation"] = .string(text)
+            case .markupContent(let kind, let value): fields["documentation"] = .object(["kind": .string(kind), "value": .string(value)])
+            }
+        }
+        fields["data"] = data
+        if let command {
+            var value: [String: LSPJSONValue] = ["title": .string(command.title), "command": .string(command.command)]
+            if let arguments = command.arguments { value["arguments"] = .array(arguments) }
+            fields["command"] = .object(value)
+        }
+        return .object(fields)
+    }
 
     init(
         label: String,
@@ -419,6 +619,39 @@ struct LSPCompletionItem: Decodable, Sendable {
         case textEdit
         case additionalTextEdits
     }
+
+    init(wireValue: LSPJSONValue) throws {
+        guard let label = wireValue["label"]?.stringValue else { throw LSPError.invalidPayload }
+        func decode<T: Decodable>(_ key: String, as type: T.Type) throws -> T? {
+            guard let value = wireValue[key], value != .null else { return nil }
+            return try JSONDecoder().decode(type, from: value.encodedData())
+        }
+        self.label = label
+        kind = try decode("kind", as: Int.self)
+        detail = try decode("detail", as: String.self)
+        documentation = try decode("documentation", as: LSPMarkup.self)
+        sortText = try decode("sortText", as: String.self)
+        filterText = try decode("filterText", as: String.self)
+        insertText = try decode("insertText", as: String.self)
+        insertTextFormat = try decode("insertTextFormat", as: LSPInsertTextFormat.self)
+        insertTextMode = try decode("insertTextMode", as: Int.self)
+        if wireValue["textEdit"]?["insert"] != nil {
+            insertReplaceEdit = try decode("textEdit", as: LSPInsertReplaceEdit.self)
+            textEdit = insertReplaceEdit.map { LSPTextEdit(range: $0.replace, newText: $0.newText) }
+        } else { textEdit = try decode("textEdit", as: LSPTextEdit.self) }
+        additionalTextEdits = try decode("additionalTextEdits", as: [LSPTextEdit].self)
+        if let command = wireValue["command"], command != .null { self.command = try LSPCommand(wireValue: command) }
+        data = wireValue["data"]
+        originalWireValue = wireValue
+    }
+
+    init(from decoder: Decoder) throws { try self.init(wireValue: LSPJSONValue(from: decoder)) }
+    func encode(to encoder: Encoder) throws { try wireValue.encode(to: encoder) }
+
+    func mergingResolved(_ resolved: LSPCompletionItem) throws -> LSPCompletionItem {
+        guard case .object(let original) = wireValue, case .object(let changes) = resolved.wireValue else { throw LSPError.invalidPayload }
+        return try LSPCompletionItem(wireValue: .object(original.merging(changes) { _, new in new }))
+    }
 }
 
 struct LSPCompletionResult: Decodable, Sendable {
@@ -431,15 +664,31 @@ struct LSPCompletionResult: Decodable, Sendable {
     }
 
     init(from decoder: Decoder) throws {
-        if let items = try? [LSPCompletionItem](from: decoder) {
-            self.isIncomplete = false
-            self.items = items
+        try self.init(wireValue: LSPJSONValue(from: decoder))
+    }
+
+    init(wireValue: LSPJSONValue) throws {
+        if case .array(let values) = wireValue {
+            isIncomplete = false
+            items = try values.map { try LSPCompletionItem(wireValue: $0) }
             return
         }
-
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.isIncomplete = try container.decodeIfPresent(Bool.self, forKey: .isIncomplete) ?? false
-        self.items = try container.decode([LSPCompletionItem].self, forKey: .items)
+        guard case .array(let values) = wireValue["items"] else { throw LSPError.invalidPayload }
+        isIncomplete = wireValue["isIncomplete"] == .bool(true)
+        let defaults = wireValue["itemDefaults"]
+        items = try values.map { value in
+            guard case .object(var fields) = value else { throw LSPError.invalidPayload }
+            for key in ["commitCharacters", "insertTextFormat", "insertTextMode", "data"] where fields[key] == nil {
+                fields[key] = defaults?[key]
+            }
+            if fields["textEdit"] == nil, let range = defaults?["editRange"] {
+                let text = fields["textEditText"] ?? fields["label"] ?? .string("")
+                if range["insert"] != nil {
+                    fields["textEdit"] = .object(["insert": range["insert"] ?? .null, "replace": range["replace"] ?? .null, "newText": text])
+                } else { fields["textEdit"] = .object(["range": range, "newText": text]) }
+            }
+            return try LSPCompletionItem(wireValue: .object(fields))
+        }
     }
 
     enum CodingKeys: String, CodingKey {

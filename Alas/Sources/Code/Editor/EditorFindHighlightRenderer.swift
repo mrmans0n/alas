@@ -3,15 +3,29 @@ import AppKit
 @MainActor
 final class EditorFindHighlightRenderer {
     private weak var textView: CodeTextView?
+    private var projectionObserver: NSObjectProtocol?
+    private var rendered: (matches: [NSRange], active: Int?, inactiveColor: NSColor, activeColor: NSColor, revision: Int?)?
+
+    deinit { if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) } }
 
     func attach(textView: CodeTextView) {
         if self.textView !== textView {
             clear()
+            if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
             self.textView = textView
+            projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let rendered = self.rendered else { return }
+                    guard rendered.revision == self.textView?.displayAdapter?.buffer.editGeneration else { self.clear()
+                    return }
+                    self.render(matches: rendered.matches, activeIndex: rendered.active, inactiveColor: rendered.inactiveColor, activeColor: rendered.activeColor)
+                }
+            }
         }
     }
 
     func clear() {
+        rendered = nil
         guard let textView,
               let layoutManager = textView.layoutManager else {
             return
@@ -26,16 +40,20 @@ final class EditorFindHighlightRenderer {
     func render(matches: [NSRange], activeIndex: Int?, inactiveColor: NSColor, activeColor: NSColor) {
         clear()
 
+        rendered = (matches, activeIndex, inactiveColor, activeColor, textView?.displayAdapter?.buffer.editGeneration)
+
         guard let textView,
               let layoutManager = textView.layoutManager,
               !matches.isEmpty else { return }
 
-        let textLength = (textView.string as NSString).length
+        let textLength = textView.sourceAttributedText.length
         for (index, range) in matches.enumerated() {
             guard isRenderable(range: range, textLength: textLength) else { continue }
 
             let color = index == activeIndex ? activeColor : inactiveColor
-            addFindBackground(color, for: range, layoutManager: layoutManager)
+            for segment in textView.displaySegments(forSource: range) {
+                addFindBackground(color, for: segment, layoutManager: layoutManager)
+            }
         }
     }
 

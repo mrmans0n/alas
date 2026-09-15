@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class HoverFeature {
     typealias RequestHover = (_ uri: String, _ position: LSPPosition) async throws -> LSPHoverResult?
+    typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
 
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
@@ -13,6 +14,8 @@ final class HoverFeature {
     private let getMonoFontFamily: () -> String
     private let getMonoFontSize: () -> Int
     private let requestHover: RequestHover
+    private let synchronizeRequest: SynchronizeRequest?
+    private let isContextCurrent: (EditorRequestContext) -> Bool
 
     private let windowController = HoverWindowController()
     private var requestID: UInt64 = 0
@@ -43,7 +46,9 @@ final class HoverFeature {
         getTheme: @escaping () -> Theme,
         getMonoFontFamily: @escaping () -> String,
         getMonoFontSize: @escaping () -> Int,
-        requestHover: RequestHover? = nil
+        requestHover: RequestHover? = nil,
+        synchronizeRequest: SynchronizeRequest? = nil,
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
     ) {
         self.textView = textView
         self.getClient = getClient
@@ -55,6 +60,9 @@ final class HoverFeature {
             guard let client = getClient() else { return nil }
             return try await client.hover(uri: uri, position: position)
         }
+        self.synchronizeRequest = synchronizeRequest
+        self.isContextCurrent = isContextCurrent
+        textView.cancelSourceHoverHandler = { [weak self] in self?.dismiss() }
 
         let priorHover = textView.hoverHandler
         textView.hoverHandler = { [weak self] p in
@@ -85,11 +93,66 @@ final class HoverFeature {
     func notifyCaretChanged() { dismiss() }
     func notifyWindowResized() { dismiss() }
 
+    func notifyProjectionChanged() {
+        guard let textView, let range = shownSymbolRange ?? currentSymbolRange,
+              let rect = textView.symbolAnchorRect(for: range) else { return }
+        windowController.reposition(anchor: rect, in: textView)
+    }
+
     /// Returns true if the popover was visible and consumed the Esc key.
     func handleEscape() -> Bool {
         guard isShowingPopover else { return false }
         dismiss()
         return true
+    }
+
+    /// Presents protocol diagnostic metadata in the existing hover overlay.
+    /// The range here is a source `NSRange`; callers retain the original
+    /// `LSPDiagnostic` for all LSP follow-up requests.
+    func showDiagnosticDetails(
+        _ diagnostic: LSPDiagnostic,
+        at range: NSRange,
+        openRelatedLocation: @escaping (LSPLocation) -> Void,
+        showQuickFixes: @escaping () -> Void
+    ) {
+        guard let textView else { return }
+        let theme = getTheme()
+        let document = Document(parsing: DiagnosticsFeature.detailMarkdown(for: diagnostic))
+        let renderResult = MarkdownRenderer().render(
+            document: document,
+            theme: theme,
+            monospacedFontFamily: getMonoFontFamily(),
+            monospacedFontSize: getMonoFontSize(),
+            baseDirectory: URL(fileURLWithPath: "/"),
+            mermaidProfile: .compact
+        )
+        let anchor = textView.symbolAnchorRect(for: range)
+            ?? textView.firstRect(for: diagnostic.range.start)
+            ?? CGRect(origin: lastMousePoint ?? .zero, size: .zero)
+        windowController.show(
+            result: renderResult,
+            size: HoverFeatureTesting.computePreferredSize(for: renderResult),
+            theme: theme,
+            anchor: anchor,
+            in: textView,
+            onWillPresentMermaidViewer: { [weak self] in self?.dismiss() },
+            onOpenLink: { url in
+                guard url.scheme == "alas-diagnostic" else { return false }
+                if url.host == "actions" {
+                    showQuickFixes()
+                    return true
+                }
+                guard url.host == "related",
+                      let index = Int(url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
+                      let related = diagnostic.relatedInformation,
+                      related.indices.contains(index)
+                else { return true }
+                openRelatedLocation(related[index].location)
+                return true
+            }
+        )
+        shownSymbolRange = range
+        installMouseMonitor()
     }
 
     // MARK: - Event entry points
@@ -350,7 +413,8 @@ final class HoverFeature {
     private func issueRequest(at point: NSPoint) {
         guard let textView, let uri = getURI(),
               let symbolRange = currentSymbolRange,
-              let position = textView.lspPosition(at: point) else {
+              let position = textView.lspPosition(at: point),
+              let offset = textView.utf16Offset(at: point) else {
             return
         }
         requestID &+= 1
@@ -359,8 +423,23 @@ final class HoverFeature {
         let perform = requestHover
         inFlight = Task { [weak self] in
             let result: LSPHoverResult?
+            let bound: (LSPClient, EditorRequestContext)?
+            if let synchronizeRequest {
+                bound = await synchronizeRequest(NSRange(location: offset, length: 0))
+                guard bound != nil else { return }
+            } else {
+                bound = nil
+            }
+            let context = bound?.1
             do {
-                result = try await perform(uri, position)
+                if let bound {
+                    result = try await bound.0.hover(
+                        uri: bound.1.document.uri,
+                        position: bound.1.range.start
+                    )
+                } else {
+                    result = try await perform(uri, position)
+                }
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self,
@@ -373,7 +452,8 @@ final class HoverFeature {
             }
             await MainActor.run { [weak self] in
                 guard let self,
-                      self.isCurrentRequest(currentRequestID, uri: uri, symbolRange: symbolRange)
+                      self.isCurrentRequest(currentRequestID, uri: uri, symbolRange: symbolRange),
+                      context.map(self.isContextCurrent) ?? true
                 else { return }
                 self.handleResult(result, symbolRange: symbolRange)
             }
@@ -487,18 +567,30 @@ enum HoverFeatureTesting {
 }
 
 extension CodeTextView {
-    /// Resolves an `LSPPosition` (line, UTF-16 character) for a point in the
-    /// view's coordinate space. Returns nil if outside the text area.
-    func lspPosition(at point: NSPoint) -> LSPPosition? {
+    func utf16Offset(at point: NSPoint) -> Int? {
         guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
         let containerPoint = NSPoint(
             x: point.x - textContainerInset.width,
             y: point.y - textContainerInset.height
         )
         let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        guard rect.contains(containerPoint) else { return nil }
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-        let nsString = storage.string as NSString
-        guard charIndex < nsString.length else { return nil }
+        guard charIndex < (storage.string as NSString).length else { return nil }
+        if let adapter = displayAdapter {
+            guard !adapter.document.map.hintRuns.contains(where: { $0.displayOffset == charIndex }) else { return nil }
+            return adapter.sourceRange(forDisplay: NSRange(location: charIndex, length: 0))?.location
+        }
+        return charIndex
+    }
+
+    /// Resolves an `LSPPosition` (line, UTF-16 character) for a point in the
+    /// view's coordinate space. Returns nil if outside the text area.
+    func lspPosition(at point: NSPoint) -> LSPPosition? {
+        guard let charIndex = utf16Offset(at: point) else { return nil }
+        let nsString = sourceString as NSString
         var line = 0
         var lineStart = 0
         var i = 0
@@ -515,20 +607,9 @@ extension CodeTextView {
     /// Returns the rect (in view coords) of the character at `position`,
     /// or nil if the position is invalid.
     func firstRect(for position: LSPPosition) -> NSRect? {
-        guard let storage = textStorage, let layoutManager else { return nil }
-        let nsString = storage.string as NSString
-        var charIndex = 0
-        var line = 0
-        while line < position.line {
-            let r = nsString.range(of: "\n", options: [], range: NSRange(location: charIndex, length: nsString.length - charIndex))
-            if r.location == NSNotFound { return nil }
-            charIndex = r.location + 1
-            line += 1
-        }
-        charIndex += position.character
-        guard charIndex < nsString.length else { return nil }
-        let glyph = layoutManager.glyphIndexForCharacter(at: charIndex)
-        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer!)
-        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        guard let offset = try? LSPPositionCodec.offset(position, in: sourceString) else { return nil }
+        if offset == sourceAttributedText.length { return sourceInsertionRect(inViewAt: offset) }
+        let range = (sourceString as NSString).rangeOfComposedCharacterSequence(at: offset)
+        return sourceRects(inViewFor: range).first
     }
 }

@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 import Observation
 
+struct EditorSourceScrollAnchor {
+    let sourceLine: Int
+    let delta: CGFloat
+    let x: CGFloat
+}
+
 struct RemoteConflictCheckCoalescer {
     private var isChecking = false
     private var hasPendingCheck = false
@@ -95,6 +101,7 @@ struct RemoteHelperFileWatchMatcher {
 final class EditorBuffer {
     enum SaveError: LocalizedError {
         case loadPending
+        case localSaveTargetChanged
         case remoteSaveRequiresAwait
         case remoteSaveConflict
 
@@ -102,6 +109,8 @@ final class EditorBuffer {
             switch self {
             case .loadPending:
                 "File is still loading. Try saving again after it finishes."
+            case .localSaveTargetChanged:
+                "The file's directory or symbolic links changed. Reopen it before saving."
             case .remoteSaveRequiresAwait:
                 "Remote saves must finish before this action can continue."
             case .remoteSaveConflict:
@@ -111,6 +120,8 @@ final class EditorBuffer {
     }
 
     let worktreeRoot: URL
+    private let localSaveRoot: URL?
+    private let navigationResolvedRoot: URL?
     private(set) var relativePath: String
 
     /// `true` when this buffer represents a file outside the worktree (e.g.
@@ -130,8 +141,122 @@ final class EditorBuffer {
     /// the view detaches it without releasing it.
     let storage: NSTextStorage
 
+    @ObservationIgnored let undoManager = EditorBufferUndoManager()
+
+    @ObservationIgnored private(set) var compositionOwner: UUID?
+    @ObservationIgnored private var compositionSettlement: (() -> Void)?
+    @ObservationIgnored private var compositionInvalidation: (() -> Void)?
+    @ObservationIgnored private var compositionReload: (() -> Void)?
+    private final class SourceEditSelection {
+        var ranges: [NSValue]
+        init(_ ranges: [NSValue]) { self.ranges = ranges }
+    }
+    @ObservationIgnored private var lastSourceEditSelection: SourceEditSelection?
+    @ObservationIgnored private var selectionObservers: [UUID: ([NSValue]) -> Void] = [:]
+
+    var acceptsSourceInput: Bool {
+        !readOnly && (!isExternal || externalEditable) && !workspaceEditMutationInFlight && !undoManager.workspaceActionInFlight
+    }
+
+    func beginComposition(owner: UUID, settle: @escaping () -> Void, invalidate: @escaping () -> Void) -> Bool {
+        guard acceptsSourceInput, compositionOwner == nil else { return false }
+        undoManager.breakTypingCoalescing()
+        compositionOwner = owner
+        compositionSettlement = settle
+        compositionInvalidation = invalidate
+        return true
+    }
+
+    func endComposition(owner: UUID) {
+        guard compositionOwner == owner else { return }
+        compositionOwner = nil
+        compositionSettlement = nil
+        compositionInvalidation = nil
+        let reload = compositionReload
+        compositionReload = nil
+        if let reload { DispatchQueue.main.async(execute: reload) }
+    }
+
+    private func invalidateComposition() {
+        let invalidate = compositionInvalidation
+        compositionOwner = nil
+        compositionSettlement = nil
+        compositionInvalidation = nil
+        compositionReload = nil
+        invalidate?()
+    }
+
+    func observeSourceSelection(_ observer: @escaping ([NSValue]) -> Void) -> UUID {
+        let id = UUID()
+        selectionObservers[id] = observer
+        return id
+    }
+
+    func removeSourceSelectionObserver(_ id: UUID) { selectionObservers.removeValue(forKey: id) }
+
+    func recordSourceEditSelection(_ ranges: [NSValue]) { lastSourceEditSelection?.ranges = ranges }
+
+    @discardableResult
+    func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil, attributes: [NSAttributedString.Key: Any] = [:]) -> Bool {
+        guard acceptsSourceInput, compositionOwner == composition,
+              range.location >= 0, range.location <= storage.length, range.length >= 0, range.length <= storage.length - range.location,
+              let map = try? EditorDisplayMap(source: storage.string, revision: editGeneration, hints: []),
+              (try? map.displaySegments(forSource: range)) != nil else { return false }
+        let previous = (storage.string as NSString).substring(with: range)
+        guard !EditorSourceText.exactlyEqual(previous, replacement) else { return true }
+        if composition == nil {
+            registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
+                                  replacement: previous, selections: finalSelections, restoredSelections: selections,
+                                  coalescingRange: range)
+        }
+        storage.beginEditing()
+        storage.replaceCharacters(in: range, with: replacement)
+        if !replacement.isEmpty, !attributes.isEmpty {
+            storage.setAttributes(attributes, range: NSRange(location: range.location, length: replacement.utf16.count))
+        }
+        storage.endEditing()
+        return true
+    }
+
+    /// Composition registers after provisional edits using its immutable original,
+    /// never by reading the already-replaced source to discover the inverse.
+    func registerSourceInverse(range: NSRange, expected: String, replacement: String, selections: [NSValue], restoredSelections: [NSValue], coalescingRange: NSRange? = nil) {
+        guard !EditorSourceText.exactlyEqual(expected, replacement) else { return }
+        let selection = SourceEditSelection(selections)
+        lastSourceEditSelection = selection
+        let simple = (replacement.isEmpty && expected.count == 1 && expected.rangeOfCharacter(from: .newlines) == nil)
+            || (expected.isEmpty && replacement.count == 1)
+        undoManager.registerBufferUndo(target: self, actionName: "Typing", coalescingRange: simple ? coalescingRange : nil, replacementLength: expected.utf16.count) { buffer in
+            guard NSMaxRange(range) <= buffer.storage.length,
+                  EditorSourceText.exactlyEqual((buffer.storage.string as NSString).substring(with: range), expected) else { return }
+            buffer.registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
+                                         replacement: expected, selections: restoredSelections, restoredSelections: selection.ranges)
+            buffer.storage.replaceCharacters(in: range, with: replacement)
+            for observer in Array(buffer.selectionObservers.values) { observer(restoredSelections) }
+        }
+    }
+
+    /// The inverse targets stable storage, never a text view reused by a tab.
+    func registerTextUndo(range: NSRange, replacement: String, actionName: String = "Typing", coalescing: Bool = false) {
+        guard programmaticEditDepth == 0, !workspaceEditMutationInFlight,
+              range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return }
+        let previous = (storage.string as NSString).substring(with: range)
+        guard !EditorSourceText.exactlyEqual(previous, replacement) else { return }
+        let inverseRange = NSRange(location: range.location, length: (replacement as NSString).length)
+        let simpleTyping = coalescing && actionName == "Typing"
+            && (previous.isEmpty && replacement.count == 1 && replacement.rangeOfCharacter(from: .newlines) == nil
+                || replacement.isEmpty && previous.count == 1)
+        undoManager.registerBufferUndo(target: self, actionName: actionName,
+                                       coalescingRange: simpleTyping ? range : nil, replacementLength: inverseRange.length) { buffer in
+            guard NSMaxRange(inverseRange) <= buffer.storage.length,
+                  EditorSourceText.exactlyEqual((buffer.storage.string as NSString).substring(with: inverseRange), replacement) else { return }
+            buffer.registerTextUndo(range: inverseRange, replacement: previous, actionName: actionName)
+            buffer.storage.replaceCharacters(in: inverseRange, with: previous)
+        }
+    }
+
     @ObservationIgnored
-    var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint)] = [:]
+    var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint, sourceScrollAnchor: EditorSourceScrollAnchor?)] = [:]
 
     private(set) var originalText: String = ""
     private(set) var originalMtime: Date = .distantPast
@@ -154,6 +279,101 @@ final class EditorBuffer {
     private(set) var loadKind: LoadKind = .loaded
 
     private(set) var editGeneration: Int = 0
+    private(set) var fileWatchGeneration: Int = 0
+    private(set) var workspaceEditDeleted = false
+    private var workspaceEditMutationInFlight = false
+
+    var workspaceEditHost: String? { remoteHost }
+
+    func beginWorkspaceEditMutation() throws {
+        guard compositionOwner == nil, !workspaceEditMutationInFlight, !remoteSaveInFlight,
+              initialLoadFinished, !readOnly, !isExternal || externalEditable else { throw SaveError.remoteSaveConflict }
+        workspaceEditMutationInFlight = true
+    }
+
+    func endWorkspaceEditMutation() { workspaceEditMutationInFlight = false }
+
+    func refreshWorkspaceEditDiskMetadata(modifiedAt: Date?) {
+        if remoteHost != nil {
+            if let modifiedAt { originalMtime = modifiedAt }
+        } else {
+            updateOriginalMtime(from: absoluteFileURL)
+            updateOriginalFileIdentity(from: absoluteFileURL)
+        }
+    }
+
+    func awaitWorkspaceEditLifecycle() async {
+        await languageReopenTask?.value
+        await lspOpenTask?.value
+    }
+
+    /// Workspace edits keep open text unsaved, including resource deletion.
+    /// A tombstone retains the live storage and its baseline for recovery.
+    func applyWorkspaceEditContent(_ content: Data?, expectedGeneration: Int) throws {
+        guard compositionOwner == nil, editGeneration == expectedGeneration, initialLoadFinished,
+              !readOnly, !isExternal || externalEditable,
+              !remoteSaveInFlight else { throw SaveError.remoteSaveConflict }
+        let wasDeleted = workspaceEditDeleted
+        if let content {
+            guard let text = String(data: content, encoding: .utf8) else { throw SaveError.remoteSaveConflict }
+            setStorageText(text)
+            workspaceEditDeleted = false
+            conflict = nil
+        } else {
+            workspaceEditDeleted = true
+            conflict = .deletedOnDisk
+            stopWatching()
+        }
+        if wasDeleted != workspaceEditDeleted {
+            transitionWorkspaceEditLifecycle(from: absoluteFileURL, oldLanguage: openedLanguage)
+        }
+        handleEdit(edit: nil)
+        snapshotNow()
+        if let lsp, let language = openedLanguage, !workspaceEditDeleted, !wasDeleted {
+            let url = absoluteFileURL
+            let text = storage.string
+            Task { await lsp.didChange(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text, edits: nil) }
+        }
+    }
+
+    func rebindWorkspaceEdit(to document: EditorDocumentID, expectedGeneration: Int) throws {
+        guard editGeneration == expectedGeneration, !isExternal,
+              document.host == remoteHost, let url = URL(string: document.uri),
+              let path = Self.relativePath(for: url, worktreeRoot: worktreeRoot),
+              shouldFollowPathChange?(relativePath, path) ?? true else { throw SaveError.remoteSaveConflict }
+        let oldURL = absoluteFileURL
+        let oldPath = relativePath
+        let oldLanguage = openedLanguage
+        stopWatching()
+        relativePath = path
+        language = lsp?.language(forPath: path)
+        workspaceEditDeleted = false
+        conflict = nil
+        editGeneration &+= 1
+        onPathChanged?(oldPath, path)
+        snapshotNow()
+        transitionWorkspaceEditLifecycle(from: oldURL, oldLanguage: oldLanguage)
+    }
+
+    private func transitionWorkspaceEditLifecycle(from oldURL: URL, oldLanguage: String?) {
+        let pendingOpen = lspOpenTask
+        cancelPendingLSPOpen()
+        let prior = languageReopenTask
+        prior?.cancel()
+        openedLanguage = nil
+        let path = relativePath
+        languageReopenTask = Task { [weak self] in
+            await prior?.value
+            await pendingOpen?.value
+            guard let self else { return }
+            if let lsp, let oldLanguage {
+                await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: oldURL, languageId: oldLanguage)
+            }
+            guard !Task.isCancelled, relativePath == path, !workspaceEditDeleted else { return }
+            if remoteHost != nil { openRemoteLSPIfNeeded() } else { openLSPDocumentIfReady() }
+            startWatching()
+        }
+    }
 
     @ObservationIgnored
     private var editObservers: [UUID: (EditorTextEdit?) -> Void] = [:]
@@ -188,6 +408,7 @@ final class EditorBuffer {
     private var watcherSource: DispatchSourceFileSystemObject?
     @ObservationIgnored
     private var watcherFD: Int32 = -1
+    private var watcherDeliveryGeneration = 0
     @ObservationIgnored
     private let remoteHost: String?
     var isRemote: Bool { remoteHost != nil }
@@ -322,8 +543,10 @@ final class EditorBuffer {
     /// from / written to disk. Computed from `storage.string` against
     /// `originalText` (cheap for files under ~1 MB).
     var dirty: Bool {
-        guard !readOnly else { return false }
-        return storage.string != originalText
+        // Losing navigation trust disables input, but must not hide a recovered
+        // draft from snapshot persistence or Save All's error reporting.
+        guard !readOnly || navigationResolvedRoot != nil else { return false }
+        return !EditorSourceText.exactlyEqual(storage.string, originalText)
     }
 
     /// Convenience initializer for callers that do not need hot-exit support
@@ -334,24 +557,24 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// Synchronous load variant for non-UI save materialization. Normal editor
     /// opens use the async load path to avoid blocking the main thread.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
     }
 
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
@@ -382,14 +605,17 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        self.remoteHost = RemoteHostRegistry.shared.host(
+        let remoteHost = RemoteHostRegistry.shared.host(
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
         )
+        self.remoteHost = remoteHost
+        self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
+        self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -399,6 +625,7 @@ final class EditorBuffer {
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
+        undoManager.beforeUndo = { [weak self] in self?.compositionSettlement?() }
         let snapshot: EditorBufferStore.Snapshot?
         if restoreEnabled, let store, let worktreeId, let tabId {
             snapshot = (try? store.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
@@ -414,6 +641,9 @@ final class EditorBuffer {
                 lsp: lsp,
                 checkConflictOnRestore: checkConflictOnRestore
             )
+        }
+        if self.navigationResolvedRoot != nil {
+            readOnly = navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath())
         }
         if isExternal || loadSynchronously {
             loadFromDiskSync()
@@ -465,6 +695,10 @@ final class EditorBuffer {
             loadKind = .loaded
             readOnly = false
         }
+        // Restoring draft text must not restore trust in a retargeted path.
+        if navigationResolvedRoot != nil {
+            readOnly = readOnly || navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath())
+        }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
         }
@@ -476,7 +710,11 @@ final class EditorBuffer {
         // empty storage and the loadFromDisk setAttributedString wiped
         // everything, leaving the text view unstyled.
         handleEdit(edit: nil)
-        openLSPDocumentIfReady()
+        if remoteHost != nil {
+            openRemoteLSPIfNeeded()
+        } else {
+            openLSPDocumentIfReady()
+        }
         onInitialLoadFinished?()
     }
 
@@ -491,11 +729,16 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        openLSPDocumentIfReady()
+        if remoteHost != nil {
+            openRemoteLSPIfNeeded()
+        } else {
+            openLSPDocumentIfReady()
+        }
     }
 
     private func openLSPDocumentIfReady() {
         guard initialLoadFinished,
+              !workspaceEditDeleted,
               !isExternal,
               remoteHost == nil,
               openedLanguage == nil,
@@ -676,6 +919,7 @@ final class EditorBuffer {
     }
 
     func revert() {
+        invalidateComposition()
         if let remoteHost {
             beginRemoteLoad(host: remoteHost, replacingDirty: true)
             discardSnapshot()
@@ -703,13 +947,33 @@ final class EditorBuffer {
             eventMask: [.write, .extend, .rename, .delete, .attrib],
             queue: Self.watchQueue
         )
-        src.setEventHandler { [weak self] in
-            Task { @MainActor in self?.handleWatcherEvent() }
+        let deliverEvent = watcherEventDelivery()
+        src.setEventHandler {
+            Task { @MainActor in deliverEvent() }
         }
         src.setCancelHandler { Darwin.close(fd) }
         src.resume()
         watcherSource = src
         watcherFD = fd
+    }
+
+    private func reloadAfterExternalChange() {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in self?.reloadAfterExternalChange() }
+            return
+        }
+        // A queued watcher reload must recheck the settled composition's source.
+        if dirty { conflict = .changedOnDisk
+        return }
+        revert()
+    }
+
+    private func watcherEventDelivery() -> @MainActor () -> Void {
+        let generation = watcherDeliveryGeneration
+        return { [weak self] in
+            guard let self, self.watcherDeliveryGeneration == generation else { return }
+            self.handleWatcherEvent()
+        }
     }
 
     func startWatchingIfNeeded() {
@@ -722,6 +986,9 @@ final class EditorBuffer {
     }
 
     func stopWatching() {
+        // A canceled source may already have queued a MainActor callback.
+        // It belongs to the old inode/path and must not affect a rebound buffer.
+        watcherDeliveryGeneration &+= 1
         remotePollTask?.cancel()
         remotePollTask = nil
         remoteHelperSession?.stop()
@@ -767,6 +1034,7 @@ final class EditorBuffer {
         session.onEvent = { [weak self] event in
             guard let self, event.kind == .files else { return }
             guard fileWatchMatcher.matches(event: event) else { return }
+            self.fileWatchGeneration &+= 1
             Task { @MainActor in await self.checkRemoteConflict(host: host) }
         }
         session.onAvailabilityChanged = { [weak self] _ in
@@ -795,7 +1063,7 @@ final class EditorBuffer {
             if dirty {
                 conflict = .changedOnDisk
             } else {
-                revert()
+                reloadAfterExternalChange()
             }
         } catch {
             if case .connectionFailed = error as? RemoteFileAccessError {
@@ -805,6 +1073,7 @@ final class EditorBuffer {
     }
 
     private func handleWatcherEvent() {
+        fileWatchGeneration &+= 1
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if !FileManager.default.fileExists(atPath: url.path) {
             watcherSource?.cancel()
@@ -827,7 +1096,7 @@ final class EditorBuffer {
             conflict = .changedOnDisk
             return
         }
-        revert()
+        reloadAfterExternalChange()
         // Re-arm watcher in case rename swapped the inode (atomic save by an
         // external tool).
         startWatching()
@@ -1015,7 +1284,9 @@ final class EditorBuffer {
     /// `originalMtime`, and clears `dirty`. Throws on any IO failure; the
     /// buffer is left dirty so the user can retry.
     func save() throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         switch saveDisposition {
         case .blockedByLoad:
@@ -1032,7 +1303,9 @@ final class EditorBuffer {
     }
 
     func saveAwaitingRemote() async throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         switch saveDisposition {
         case .blockedByLoad:
@@ -1050,7 +1323,7 @@ final class EditorBuffer {
     }
 
     private func saveLocal() throws {
-        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let url = try localMutationURL(relativePath: relativePath)
         if dirty,
            let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
            onDiskMtime != originalMtime {
@@ -1064,7 +1337,69 @@ final class EditorBuffer {
         updateOriginalMtime(from: url)
         startWatching()
         discardSnapshot()
-        notifyDidSave(url: url)
+        notifyDidSave(url: absoluteFileURL)
+    }
+
+    private func localMutationURL(relativePath: String, allowMissingDirectories: Bool = false) throws -> URL {
+        let logicalRoot = worktreeRoot.standardizedFileURL
+        let logicalURL = worktreeRoot.appendingPathComponent(relativePath).standardizedFileURL
+        guard let localSaveRoot,
+              logicalURL.pathComponents.count > logicalRoot.pathComponents.count,
+              logicalURL.pathComponents.starts(with: logicalRoot.pathComponents),
+              worktreeRoot.resolvingSymlinksInPath().standardizedFileURL == localSaveRoot else {
+            throw SaveError.localSaveTargetChanged
+        }
+        // Resolve the nearest existing parent before creating any directories.
+        // Whole-path resolution can stop at a missing component; lstat also
+        // keeps a dangling symlink from being mistaken for a missing directory.
+        var ancestor = logicalURL.deletingLastPathComponent()
+        var missingDirectories: [String] = []
+        var value = stat()
+        while lstat(ancestor.path, &value) != 0 {
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            guard allowMissingDirectories,
+                  ancestor.pathComponents.count > logicalRoot.pathComponents.count else {
+                throw SaveError.localSaveTargetChanged
+            }
+            missingDirectories.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        var directory = ancestor.resolvingSymlinksInPath().standardizedFileURL
+        guard directory.pathComponents.starts(with: localSaveRoot.pathComponents),
+              (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+            throw SaveError.localSaveTargetChanged
+        }
+        for component in missingDirectories.reversed() {
+            directory.appendPathComponent(component, isDirectory: true)
+        }
+        let url = directory.appendingPathComponent(logicalURL.lastPathComponent)
+        if lstat(url.path, &value) == 0 {
+            guard value.st_mode & S_IFMT == S_IFREG else { throw SaveError.localSaveTargetChanged }
+        } else if errno != ENOENT {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        // Write via the resolved parent so later changes to the logical alias
+        // cannot redirect the write. Replacing this canonical parent concurrently
+        // retains the atomic writer's existing external-process race.
+        return url
+    }
+
+    private func validateNavigationWriteTrust() throws {
+        guard navigationResolvedRoot != nil else { return }
+        if navigationLoadIsReadOnly(resolvedURL: absoluteFileURL.resolvingSymlinksInPath()) {
+            throw SaveError.localSaveTargetChanged
+        }
+    }
+
+    /// A navigation decision belongs to the root resolved when the tab opened,
+    /// not whichever root an alias names when a lazy load eventually starts.
+    private func navigationLoadIsReadOnly(resolvedURL: URL) -> Bool {
+        guard let navigationResolvedRoot else { return false }
+        let rootComponents = navigationResolvedRoot.pathComponents
+        let targetComponents = resolvedURL.standardizedFileURL.pathComponents
+        return worktreeRoot.resolvingSymlinksInPath().standardizedFileURL != navigationResolvedRoot
+            || targetComponents.count <= rootComponents.count
+            || !targetComponents.starts(with: rootComponents)
     }
 
     /// Remote writes must not block the main actor. Keep the buffer dirty and
@@ -1083,6 +1418,7 @@ final class EditorBuffer {
                 guard remoteSaveGeneration == generation else { return }
             }
             guard remoteSaveGeneration == generation else { return }
+            guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
             remoteSaveInFlight = true
             defer {
                 remoteSaveInFlight = false
@@ -1162,7 +1498,9 @@ final class EditorBuffer {
     }
 
     func saveAs(relativePath newRelativePath: String) throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
         if remoteHost != nil { throw remotePathOperationError() }
@@ -1170,7 +1508,7 @@ final class EditorBuffer {
             throw CocoaError(.fileWriteFileExists)
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
-        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let newURL = try localMutationURL(relativePath: newRelativePath, allowMissingDirectories: true)
         let canonical = storage.string
         stopWatching()
         languageReopenTask?.cancel()
@@ -1185,7 +1523,7 @@ final class EditorBuffer {
             discardSnapshot()
             notifyDidClose(url: oldURL)
             notifyDidOpen()
-            notifyDidSave(url: newURL)
+            notifyDidSave(url: absoluteFileURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
@@ -1195,7 +1533,9 @@ final class EditorBuffer {
     }
 
     func moveTo(relativePath newRelativePath: String) throws {
+        guard !workspaceEditMutationInFlight else { throw SaveError.remoteSaveConflict }
         lastSaveError = nil
+        try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
         if remoteHost != nil { throw remotePathOperationError() }
@@ -1203,19 +1543,20 @@ final class EditorBuffer {
             throw CocoaError(.fileWriteFileExists)
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
-        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let sourceURL = try localMutationURL(relativePath: relativePath)
+        let newURL = try localMutationURL(relativePath: newRelativePath, allowMissingDirectories: true)
         stopWatching()
         languageReopenTask?.cancel()
         languageReopenTask = nil
         do {
             try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: newURL.path) {
-                guard sameExistingFile(oldURL, newURL) else {
+                guard sameExistingFile(sourceURL, newURL) else {
                     throw CocoaError(.fileWriteFileExists)
                 }
-                try renameItem(at: oldURL, to: newURL)
+                try renameItem(at: sourceURL, to: newURL)
             } else {
-                try FileManager.default.moveItem(at: oldURL, to: newURL)
+                try FileManager.default.moveItem(at: sourceURL, to: newURL)
             }
             relativePath = newRelativePath
             language = lsp?.language(forPath: newRelativePath)
@@ -1239,6 +1580,8 @@ final class EditorBuffer {
     func saveAsRemote(relativePath newRelativePath: String) async throws {
         guard let host = remoteHost else { throw remotePathOperationError() }
         guard !readOnly else { return }
+        try beginWorkspaceEditMutation()
+        defer { endWorkspaceEditMutation() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1290,6 +1633,8 @@ final class EditorBuffer {
     func moveToRemote(relativePath newRelativePath: String) async throws {
         guard let host = remoteHost else { throw remotePathOperationError() }
         guard !readOnly else { return }
+        try beginWorkspaceEditMutation()
+        defer { endWorkspaceEditMutation() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1615,15 +1960,7 @@ final class EditorBuffer {
             notifyDidOpen()
             return
         }
-        guard initialLoadFinished,
-              !isExternal,
-              openedLanguage == nil,
-              let lsp,
-              let effective = effectiveLanguage
-        else { return }
-        openedLanguage = effective
-        let worktreeRoot = worktreeRoot
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
+        openRemoteLSPIfNeeded(fileURL: url, text: text)
     }
 
     func saveRecordingError() throws {
@@ -1701,7 +2038,7 @@ final class EditorBuffer {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let text = storage.string
         await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
-        let options = LSPFormattingOptions(tabSize: 4, insertSpaces: true)
+        let options = RenameFeature.formattingOptions(text: text)
         let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
         guard editGeneration == generation else {
             try await saveAwaitingRemote()
@@ -1750,34 +2087,30 @@ final class EditorBuffer {
     /// not shift. Returns `false` if any edit range is invalid, leaving the
     /// buffer untouched.
     private func applyFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
-        let text = storage.string
-        var nsEdits: [(range: NSRange, newText: String)] = []
-        for edit in edits {
-            guard let start = TextEditCoordinates.utf16Offset(from: edit.range.start, in: text),
-                  let end = TextEditCoordinates.utf16Offset(from: edit.range.end, in: text),
-                  start <= end, end <= (text as NSString).length else { return false }
-            nsEdits.append((NSRange(location: start, length: end - start), edit.newText))
-        }
-        let ascending = nsEdits.sorted { first, second in
-            if first.range.location == second.range.location {
-                return first.range.length < second.range.length
-            }
-            return first.range.location < second.range.location
-        }
-        for index in ascending.indices.dropFirst() {
-            guard NSMaxRange(ascending[index - 1].range) <= ascending[index].range.location else {
-                return false
-            }
-        }
+        guard compositionOwner == nil, !undoManager.workspaceActionInFlight else { return false }
+        let snapshot = WorkspaceFileSnapshot(
+            document: .init(host: workspaceEditHost, worktreeID: "", uri: worktreeRoot.appendingPathComponent(relativePath).lspURI),
+            content: Data(storage.string.utf8)
+        )
+        guard let result = try? WorkspaceEditPlanner.applying(edits, to: snapshot),
+              let data = result.content, let formatted = String(data: data, encoding: .utf8) else { return false }
+        registerTextUndo(range: NSRange(location: 0, length: storage.length), replacement: formatted, actionName: "Format Document")
         withLoadEditTrackingSuppressed {
             storage.beginEditing()
-            for edit in ascending.reversed() {
-                storage.replaceCharacters(in: edit.range, with: edit.newText)
-            }
+            storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: formatted)
             storage.endEditing()
         }
-        editGeneration &+= 1
+        // The suppressed storage transaction can already have refreshed display
+        // attributes. Publish its final revision to every source observer too.
+        handleEdit(edit: nil)
         return true
+    }
+
+    /// Applies a previously validated explicit formatting response without
+    /// saving the buffer. The coordinator sends the matching didChange after
+    /// this returns so the server keeps the open document authoritative.
+    func applyExplicitFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
+        applyFormattingEdits(edits)
     }
 
     // MARK: - Snapshot / restore (hot-exit)
@@ -1926,12 +2259,14 @@ final class EditorBuffer {
     }
 
     private func setStorageText(_ text: String) {
+        invalidateComposition()
         withLoadEditTrackingSuppressed {
             storage.setAttributedString(NSAttributedString(string: text))
         }
     }
 
     private func applyLoadedText(_ raw: String) {
+        invalidateComposition()
         let detected = LineEnding.detect(in: raw)
         let canonical = LineEnding.lf.normalize(raw)
         storage.setAttributedString(NSAttributedString(string: canonical))
@@ -1940,6 +2275,10 @@ final class EditorBuffer {
     }
 
     private func beginRemoteLoad(host: String, replacingDirty: Bool) {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in self?.beginRemoteLoad(host: host, replacingDirty: replacingDirty) }
+            return
+        }
         remoteLoadGeneration &+= 1
         let generation = remoteLoadGeneration
         let path = absoluteFileURL.path
@@ -2047,17 +2386,52 @@ final class EditorBuffer {
         readOnly = false
     }
 
-    private func openRemoteLSPIfNeeded() {
-        guard !isExternal,
+    /// Remote document attachment has exactly one lifecycle owner. Local
+    /// documents attach from `finishInitialLoad`; remote documents wait for a
+    /// successful remote read so didOpen never advertises a placeholder.
+    private func openRemoteLSPIfNeeded(fileURL: URL? = nil, text: String? = nil) {
+        guard initialLoadFinished,
+              !workspaceEditDeleted,
+              !readOnly,
+              case .loaded = loadKind,
+              !isExternal,
               remoteHost != nil,
               openedLanguage == nil,
+              lspOpenTask == nil,
               let lsp,
-              let language
+              let language = effectiveLanguage
         else { return }
-        let url = worktreeRoot.appendingPathComponent(relativePath)
-        openedLanguage = language
-        let text = storage.string
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+        let url = fileURL ?? worktreeRoot.appendingPathComponent(relativePath)
+        let documentText = text ?? storage.string
+        lspOpenGeneration &+= 1
+        let generation = lspOpenGeneration
+        lspOpenTask = Task { [weak self] in
+            let opened = await lsp.openDocument(
+                worktreeRoot: worktreeRoot,
+                fileURL: url,
+                languageId: language,
+                text: documentText
+            ) != nil
+            guard let self else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                }
+                return
+            }
+            guard !Task.isCancelled,
+                  self.lspOpenGeneration == generation,
+                  self.remoteHost != nil,
+                  self.effectiveLanguage == language else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                }
+                return
+            }
+            self.lspOpenTask = nil
+            if opened {
+                self.openedLanguage = language
+            }
+        }
     }
 
     /// Load the file from disk, calling `completion` on the main actor
@@ -2071,6 +2445,13 @@ final class EditorBuffer {
         hasPendingSnapshot: Bool = false,
         completion: @escaping @MainActor (LoadState.Pending?) -> Void
     ) {
+        if compositionOwner != nil {
+            compositionReload = { [weak self] in
+                self?.loadFromDisk(preservePendingEdits: preservePendingEdits, replacingDirty: replacingDirty,
+                                   notifyAfterLoad: notifyAfterLoad, hasPendingSnapshot: hasPendingSnapshot, completion: completion)
+            }
+            return
+        }
         if let remoteHost {
             let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
             beginRemoteLoad(host: remoteHost, replacingDirty: replacingDirty)
@@ -2143,6 +2524,7 @@ final class EditorBuffer {
 
     @discardableResult
     private func applyLoadResult(_ result: LoadResult) -> Bool {
+        invalidateComposition()
         switch result {
         case .missing:
             let didApplyChange = storage.string != "(unable to read file)" || !readOnly
@@ -2164,7 +2546,7 @@ final class EditorBuffer {
         case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
             let detected = LineEnding.detect(in: raw)
             let canonical = LineEnding.lf.normalize(raw)
-            let nextReadOnly = (isExternal && !externalEditable) || isSymlink
+            let nextReadOnly = (isExternal && !externalEditable) || isSymlink || navigationLoadIsReadOnly(resolvedURL: resolvedURL)
             let didApplyChange = storage.string != canonical
                 || originalText != canonical
                 || lineEnding != detected
@@ -2195,6 +2577,7 @@ final class EditorBuffer {
 
     @discardableResult
     private func loadFromDiskSync() -> Self {
+        invalidateComposition()
         let url = absoluteFileURL
         let resolvedURL = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
@@ -2231,7 +2614,7 @@ final class EditorBuffer {
         lineEnding = detected
         updateOriginalFileAttributes(from: resolvedURL)
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        readOnly = (isExternal && !externalEditable) || isSymlink
+        readOnly = (isExternal && !externalEditable) || isSymlink || navigationLoadIsReadOnly(resolvedURL: resolvedURL)
         loadKind = .loaded
         return self
     }
@@ -2252,6 +2635,10 @@ final class EditorBuffer {
 
     func handleWatcherEventForTesting() {
         handleWatcherEvent()
+    }
+
+    func watcherEventDeliveryForTesting() -> @MainActor () -> Void {
+        watcherEventDelivery()
     }
 
     var isWatchingForTesting: Bool {

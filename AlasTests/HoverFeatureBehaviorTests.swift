@@ -5,6 +5,21 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct HoverFeatureBehaviorTests {
+    @Test func enteringInlayCancelsPendingSourceDwellThroughMouseRouting() async throws {
+        let view = makeTextView()
+        let recorder = HoverRequestRecorder()
+        let feature = makeFeature(textView: view, recorder: recorder)
+        defer { feature.tearDown() }
+        feature.simulateMouseMoved(at: point(forCharacterAt: 4, in: view))
+        let timer = try #require(Mirror(reflecting: feature).children.first { $0.label == "dwellTimer" }?.value as? Task<Void, Never>)
+        view.inlayHoverHandler = { _ in true }
+        let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: .init(x: 20, y: 10), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        view.mouseMoved(with: event)
+        #expect(timer.isCancelled)
+        await timer.value
+        #expect(await recorder.calls.isEmpty)
+    }
+
     private func makeTextView() -> CodeTextView {
         let storage = NSTextStorage(string: "let value = foo + bar\n")
         let layoutManager = NSLayoutManager()

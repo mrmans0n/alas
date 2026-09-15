@@ -13,7 +13,7 @@ final class CodeEditorScrollView: MinimapScrollView {
     func configureMinimap(shown: Bool, theme: Theme) {
         let wasShown = showsMinimap
         showsMinimap = shown
-        guard shown, let textView = documentView as? NSTextView else {
+        guard shown, let textView = documentView as? CodeTextView else {
             stopObserving()
             minimap.update(drawing: MinimapDrawing())
             return
@@ -22,21 +22,31 @@ final class CodeEditorScrollView: MinimapScrollView {
         minimap.indicatorColor = NSColor(theme.color("fg-muted"))
         if !minimap.preservesLineScale { minimap.preservesLineScale = true }
         minimap.onNavigate = { [weak self] value in
-            guard let self, let documentView = self.documentView else { return }
-            let maximum = max(0, documentView.frame.height - self.contentView.bounds.height)
-            self.contentView.scroll(to: NSPoint(x: self.contentView.bounds.minX, y: CGFloat(value) * maximum))
+            guard let self, let view = self.documentView as? CodeTextView else { return }
+            let maximumY = max(0, view.frame.height - self.contentView.bounds.height)
+            let lastPosition = view.sourceLinePosition(atViewY: maximumY)
+            let position = max(0, min(1, value)) * lastPosition
+            let line = Int(position)
+            let top = view.sourceLineY(line) ?? maximumY
+            let bottom = view.sourceLineY(line + 1) ?? view.frame.height
+            let y = min(maximumY, top + CGFloat(position - Double(line)) * (bottom - top))
+            self.contentView.scroll(to: NSPoint(x: self.contentView.bounds.minX, y: y))
             self.reflectScrolledClipView(self.contentView)
             self.updateMinimapViewport()
         }
-        if observedStorage !== textView.textStorage || !wasShown {
+        let sourceStorage = textView.displayAdapter?.buffer.storage ?? textView.textStorage
+        if observedStorage !== sourceStorage || !wasShown {
             stopObserving()
-            observedStorage = textView.textStorage
+            observedStorage = sourceStorage
             let center = NotificationCenter.default
-            if let storage = textView.textStorage {
+            if let storage = sourceStorage {
                 observers.append(center.publisher(for: NSTextStorage.didProcessEditingNotification, object: storage).sink { [weak self] _ in
                     MainActor.assumeIsolated { self?.scheduleDrawing() }
                 })
             }
+            observers.append(center.publisher(for: .editorDisplayProjectionDidChange, object: textView).sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateMinimapViewport() }
+            })
             contentView.postsBoundsChangedNotifications = true
             textView.postsFrameChangedNotifications = true
             for (name, object) in [(NSView.boundsDidChangeNotification, contentView as NSView),
@@ -68,11 +78,12 @@ final class CodeEditorScrollView: MinimapScrollView {
     }
 
     private func updateMinimapViewport() {
-        guard showsMinimap, let documentView else { return }
-        let height = max(1, documentView.frame.height)
-        let viewport = contentView.bounds.height
-        minimap.proportion = min(1, viewport / height)
-        minimap.value = Double(max(0, contentView.bounds.minY) / max(1, height - viewport))
+        guard showsMinimap, let view = documentView as? CodeTextView else { return }
+        let first = view.sourceLinePosition(atViewY: contentView.bounds.minY)
+        let last = view.sourceLinePosition(atViewY: contentView.bounds.maxY)
+        let maximum = view.sourceLinePosition(atViewY: max(0, view.frame.height - contentView.bounds.height))
+        minimap.proportion = min(1, CGFloat(last - first) / CGFloat(max(1, view.sourceLineStarts.count)))
+        minimap.value = maximum > 0 ? min(1, max(0, first / maximum)) : 0
     }
 
     private func stopObserving() {

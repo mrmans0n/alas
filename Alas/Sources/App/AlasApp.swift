@@ -5,6 +5,7 @@ import SwiftUI
 struct AlasApp: App {
     @NSApplicationDelegateAdaptor(AlasApplicationDelegate.self) private var appDelegate
     @State private var state: AppState
+    @State private var editorCommandAvailability = EditorCommandAvailability.shared
 
     private static var isRunningUnitTests: Bool {
         let environment = ProcessInfo.processInfo.environment
@@ -23,6 +24,7 @@ struct AlasApp: App {
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())
         } else {
+            try? WorkspaceEditJournal().cleanSuccessfulRecords(retaining: [])
             let recovery = StartupRecovery()
             _state = State(initialValue: AppState(
                 restoreActiveTabsOnStartup: !recovery.begin()
@@ -64,6 +66,7 @@ struct AlasApp: App {
         .defaultSize(width: 1320, height: 820)
         .commands {
             appCommands
+            EditorCommands(availability: editorCommandAvailability)
         }
 
         Window("Settings", id: "settings") {

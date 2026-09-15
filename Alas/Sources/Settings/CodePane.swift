@@ -47,6 +47,18 @@ struct CodePane: View {
                     }
                 }
 
+                SettingsGroup(title: "Inlay Hints") {
+                    SettingsRow(name: "Show inlay hints", desc: "Language servers can show parameter names and inferred types beside source text.") {
+                        AlasToggle(on: state.bind(\.code.inlayHints.enabled))
+                    }
+                    SettingsRow(name: "Parameter names") {
+                        AlasToggle(on: state.bind(\.code.inlayHints.parameters)).disabled(!state.config.code.inlayHints.enabled)
+                    }
+                    SettingsRow(name: "Inferred types") {
+                        AlasToggle(on: state.bind(\.code.inlayHints.types)).disabled(!state.config.code.inlayHints.enabled)
+                    }
+                }
+
                 SettingsGroup(title: "Text Rendering") {
                     SettingsRow(name: "Show Invisible Characters") {
                         AlasToggle(on: state.bind(\.code.showInvisibleCharacters))
@@ -95,6 +107,10 @@ struct CodePane: View {
             CodeLanguageDetailView(
                 initial: entry,
                 isNew: false,
+                inlayHints: Binding(get: { state.config.code.inlayHintsByLanguage[entry.language] }, set: {
+                    state.config.code.inlayHintsByLanguage[entry.language] = $0
+                }),
+                defaultInlayHints: state.config.code.inlayHints,
                 onSave: { saved, _ in save(originalLanguage: entry.language, saved, recipes: nil) },
                 onCancel: { selected = nil }
             )

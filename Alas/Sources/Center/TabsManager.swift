@@ -38,6 +38,10 @@ final class TabsManager {
     }
 
     private var byWorktree: [String: TabsFile] = [:]
+    /// Runtime navigation state belongs to the worktree rather than an editor
+    /// view, so a reference search survives tab switches and view recreation.
+    private var navigationStores: [String: EditorNavigationStore] = [:]
+    @ObservationIgnored private var workspaceUndoCoordinators: [String: WorkspaceEditUndoCoordinator] = [:]
     /// `true` once `loadAll` has been called at least once, meaning any
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
@@ -82,21 +86,100 @@ final class TabsManager {
     /// Runtime-only display titles for terminal pane leaves. Key = leafId.
     var terminalRuntimeTitles: [String: String] = [:]
     private let lsp: WorkspaceLSPManager?
+    private let workspaceEditJournal: WorkspaceEditJournal
 
     init(
         bufferStore: EditorBufferStore = EditorBufferStore(),
         lsp: WorkspaceLSPManager? = nil,
         store: any PersistenceStoreProtocol = PersistenceStore(),
-        tabsDirectory: URL = Paths.tabsDir
+        tabsDirectory: URL = Paths.tabsDir,
+        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal()
     ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
         self.store = store
         self.tabsDirectory = tabsDirectory
+        self.workspaceEditJournal = workspaceEditJournal
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
         byWorktree[id]?.tabs ?? []
+    }
+
+    func navigationStore(forWorktreeId worktreeId: String) -> EditorNavigationStore {
+        if let store = navigationStores[worktreeId] { return store }
+        let store = EditorNavigationStore(openBuffer: { [weak self] document in self?.workspaceEditBuffer(for: document) })
+        navigationStores[worktreeId] = store
+        return store
+    }
+
+    func workspaceEditUndoCoordinator(forWorktreeId worktreeId: String, worktreeRoot: URL) -> WorkspaceEditUndoCoordinator {
+        if let coordinator = workspaceUndoCoordinators[worktreeId] { return coordinator }
+        let access = TabsWorkspaceEditUndoAccess(tabs: self, worktreeID: worktreeId, root: worktreeRoot)
+        let coordinator = WorkspaceEditUndoCoordinator(access: access, journal: workspaceEditJournal) { [weak self] document in
+            self?.workspaceEditBuffer(for: document)
+        }
+        workspaceUndoCoordinators[worktreeId] = coordinator
+        return coordinator
+    }
+
+    func disposeWorkspaceEditHistory(worktreeId: String) {
+        workspaceUndoCoordinators[worktreeId]?.disposeHistory()
+        if workspaceUndoCoordinators[worktreeId]?.retainedJournalIDs.isEmpty == true { workspaceUndoCoordinators.removeValue(forKey: worktreeId) }
+        navigationStores.removeValue(forKey: worktreeId)?.close()
+    }
+
+    /// Opens an LSP target using the worktree's explicit host context. In
+    /// particular, a remote absolute path is only ever handed to the remote
+    /// editor-buffer route, never to local `FileManager` APIs.
+    @discardableResult
+    func openNavigationTarget(
+        _ target: EditorNavigationTarget,
+        worktreeRoot: URL,
+        originatingRelativePath: String?,
+        language: String?
+    ) -> Bool {
+        guard target.document.host == RemoteHostRegistry.shared.host(forPath: worktreeRoot.path),
+              let url = URL(string: target.document.uri)
+        else { return false }
+        let normalizedURL = url.standardizedFileURL
+        let normalizedRoot = worktreeRoot.standardizedFileURL
+        let rootComponents = normalizedRoot.pathComponents
+        let targetComponents = normalizedURL.pathComponents
+        var isContained = targetComponents.count > rootComponents.count
+            && targetComponents.starts(with: rootComponents)
+        var navigationResolvedRoot: URL?
+        if isContained, target.document.host == nil {
+            let resolvedRoot = normalizedRoot.resolvingSymlinksInPath().standardizedFileURL
+            navigationResolvedRoot = resolvedRoot
+            let resolvedRootComponents = resolvedRoot.pathComponents
+            let resolvedTargetComponents = normalizedURL.resolvingSymlinksInPath().pathComponents
+            // A directory symlink can escape the worktree despite a contained
+            // logical path. Missing targets cannot establish resolved identity.
+            isContained = FileManager.default.fileExists(atPath: normalizedURL.path)
+                && resolvedTargetComponents.count > resolvedRootComponents.count
+                && resolvedTargetComponents.starts(with: resolvedRootComponents)
+        }
+        if isContained {
+            _ = openEditor(
+                worktreeId: target.document.worktreeID,
+                relativePath: targetComponents.dropFirst(rootComponents.count).joined(separator: "/"),
+                revealLine: target.position.line,
+                revealCharacter: target.position.character,
+                navigationResolvedRoot: navigationResolvedRoot
+            )
+        } else {
+            _ = openExternalEditor(
+                worktreeId: target.document.worktreeID,
+                absoluteURL: normalizedURL,
+                revealLine: target.position.line,
+                revealCharacter: target.position.character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktreeRoot,
+                language: language
+            )
+        }
+        return true
     }
 
     /// Owner-aware session tab lookup. The worktree overload intentionally
@@ -619,7 +702,8 @@ final class TabsManager {
         relativePath: String,
         revealLine: Int?,
         revealCharacter: Int?,
-        revealEndLine: Int? = nil
+        revealEndLine: Int? = nil,
+        navigationResolvedRoot: URL? = nil
     ) -> Tab {
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
             && MarkdownFileType.supportsRichPreview(relativePath: relativePath)
@@ -629,6 +713,7 @@ final class TabsManager {
                return false
            }) {
             if case .editor(var s) = file.tabs[idx] {
+                s.navigationResolvedRoot = s.navigationResolvedRoot ?? navigationResolvedRoot
                 s.revealLine = revealLine
                 s.revealEndLine = revealEndLine
                 s.revealCharacter = revealCharacter
@@ -652,7 +737,8 @@ final class TabsManager {
             relativePath: relativePath,
             revealLine: revealLine,
             revealEndLine: revealEndLine,
-            revealCharacter: revealCharacter
+            revealCharacter: revealCharacter,
+            navigationResolvedRoot: navigationResolvedRoot
         )
         if shouldRevealInMarkdownEditor {
             state.markdownViewMode = .editor
@@ -1887,6 +1973,12 @@ final class TabsManager {
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let existing = tabBuffers[tabId] { return existing }
+        let navigationResolvedRoot: URL?
+        if case .editor(let state)? = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) {
+            navigationResolvedRoot = state.navigationResolvedRoot
+        } else {
+            navigationResolvedRoot = nil
+        }
         let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
         var restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
         if restoresToDifferentPath {
@@ -1911,7 +2003,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 lsp: lsp,
-                checkConflictOnRestore: true
+                checkConflictOnRestore: true,
+                navigationResolvedRoot: navigationResolvedRoot
             )
         } else {
             buffer = EditorBuffer(
@@ -1920,7 +2013,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                checkConflictOnRestore: true
+                checkConflictOnRestore: true,
+                navigationResolvedRoot: navigationResolvedRoot
             )
         }
         buffer.startWatching()
@@ -1949,6 +2043,7 @@ final class TabsManager {
         buffer.onInitialLoadFinished = { [weak self, weak buffer] in
             guard let self, let buffer else { return }
             self.indexRestoredPathBufferIfAvailable(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+            self.reattachWorkspaceUndo(buffer, worktreeId: worktreeId)
         }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
             guard let buffer else { return }
@@ -1973,7 +2068,15 @@ final class TabsManager {
             buffers[key] = buffer
             bufferKeys[tabId] = key
         }
+        if buffer.initialLoadFinished { reattachWorkspaceUndo(buffer, worktreeId: worktreeId) }
         return buffer
+    }
+
+    private func reattachWorkspaceUndo(_ buffer: EditorBuffer, worktreeId: String) {
+        let document = EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: worktreeId,
+                                        uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
+        guard workspaceEditBuffer(for: document) === buffer else { return }
+        workspaceUndoCoordinators[worktreeId]?.reattachCleanBuffer(buffer, document: document)
     }
 
     /// Returns (or creates) a read-only external buffer keyed by absolute URL.
@@ -2106,6 +2209,40 @@ final class TabsManager {
         tabBuffers[tabId] ?? peekExternalBuffer(tabId: tabId)
     }
 
+    /// Looks across inactive tabs and external editors without creating a buffer.
+    func workspaceEditBuffer(for document: EditorDocumentID) -> EditorBuffer? {
+        for (tabID, buffer) in tabBuffers {
+            guard bufferKeys[tabID]?.worktreeId == document.worktreeID,
+                  buffer.workspaceEditHost == document.host,
+                  buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI == document.uri else { continue }
+            return buffer
+        }
+        for (tabID, entry) in externalTabURLs where entry.worktreeId == document.worktreeID && entry.url.lspURI == document.uri {
+            if let buffer = peekExternalBuffer(tabId: tabID), buffer.workspaceEditHost == document.host { return buffer }
+        }
+        return nil
+    }
+
+    /// Capture before sending rename/code-action requests. The receipt path
+    /// must reject changed or closed identities, even if text changed back.
+    func workspaceEditGenerations(host: String?, worktreeID: String) -> [EditorDocumentID: WorkspaceEditBufferGeneration] {
+        var result: [EditorDocumentID: WorkspaceEditBufferGeneration] = [:]
+        for (tabID, buffer) in tabBuffers where bufferKeys[tabID]?.worktreeId == worktreeID && buffer.workspaceEditHost == host {
+            let document = EditorDocumentID(host: host, worktreeID: worktreeID, uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
+            result[document] = WorkspaceEditBufferGeneration(buffer)
+        }
+        for (tabID, entry) in externalTabURLs where entry.worktreeId == worktreeID {
+            if let buffer = peekExternalBuffer(tabId: tabID), buffer.workspaceEditHost == host {
+                result[EditorDocumentID(host: host, worktreeID: worktreeID, uri: entry.url.lspURI)] = WorkspaceEditBufferGeneration(buffer)
+            }
+        }
+        return result
+    }
+
+    func workspaceEditVersion(for document: EditorDocumentID, buffer: EditorBuffer) -> Int? {
+        lsp?.workspaceEditVersion(for: document, worktreeRoot: buffer.worktreeRoot)
+    }
+
     /// Non-creating lookup for an external editor buffer. Returns nil if no
     /// external buffer has been registered for this tab (or if the tab isn't
     /// an external editor tab). Used by read-only checks (e.g.
@@ -2200,6 +2337,9 @@ final class TabsManager {
                 }
             }
             openedExternalDocs.remove(tabId)
+            if let buffer = bufferStore.peekExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url) {
+                workspaceUndoCoordinators[ext.worktreeId]?.bufferWillClose(buffer)
+            }
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }
@@ -2221,6 +2361,7 @@ final class TabsManager {
         if buffers[key] === buffer {
             buffers.removeValue(forKey: key)
         }
+        workspaceUndoCoordinators[worktreeId]?.bufferWillClose(buffer)
         buffer.close(persistDirtySnapshot: false)
     }
 
@@ -2570,7 +2711,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 lsp: lsp,
-                loadSynchronously: true
+                loadSynchronously: true,
+                navigationResolvedRoot: state.navigationResolvedRoot
             )
         } else {
             buffer = EditorBuffer(
@@ -2579,7 +2721,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                loadSynchronously: true
+                loadSynchronously: true,
+                navigationResolvedRoot: state.navigationResolvedRoot
             )
         }
         if buffer.relativePath != relativePath {

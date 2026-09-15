@@ -312,6 +312,93 @@ jobs:
             -parallel-testing-enabled NO \
             test-without-building
 
+      # Editor/LSP checks stay in separate behavior batches so native editor
+      # teardown does not share an invocation with subprocess-heavy suites.
+      - name: Test - LSP protocol and scheduling
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
+            -only-testing AlasTests/LSPCapabilitiesTests \
+            -only-testing AlasTests/LSPMessagesTests \
+            -only-testing AlasTests/LSPPositionCodecTests \
+            -only-testing AlasTests/LSPTransportFramingTests \
+            -only-testing AlasTests/JSONRPCFramerBoundsTests \
+            -only-testing AlasTests/JSONRPCStdioFramingFailureTests \
+            -only-testing AlasTests/ProcessTransportTerminationTests \
+            -only-testing AlasTests/LSPClientLifecycleTests \
+            -only-testing AlasTests/LSPServerRequestsTests \
+            -only-testing AlasTests/EditorLSPBindingTests \
+            -only-testing AlasTests/SemanticTokensClientTests \
+            -only-testing AlasTests/SemanticTokensCoalescingTests \
+            -only-testing AlasTests/SemanticTokensSchedulingTests \
+            -only-testing AlasTests/InlayHintsFeatureTests \
+            -skipMacroValidation -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 60 \
+            test-without-building
+
+      - name: Test - workspace edits and recovery
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
+            -only-testing AlasTests/WorkspaceEditPlannerTests \
+            -only-testing AlasTests/WorkspaceEditExecutorTests \
+            -only-testing AlasTests/WorkspaceEditRemoteTests \
+            -only-testing AlasTests/WorkspaceEditPreviewTests \
+            -only-testing AlasTests/WorkspaceEditUndoTests \
+            -only-testing AlasTests/RenameFeatureTests \
+            -only-testing AlasTests/CodeActionsFeatureTests \
+            -skipMacroValidation -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 60 \
+            test-without-building
+
+      - name: Test - editor projection and language features
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
+            -only-testing AlasTests/EditorDisplayMapTests \
+            -only-testing AlasTests/EditorDisplayDocumentTests \
+            -only-testing AlasTests/EditorDisplayInputTests \
+            -only-testing AlasTests/EditorDisplayIntegrationTests \
+            -only-testing AlasTests/EditorInlayLayoutTests \
+            -only-testing AlasTests/EditorCommandRouterTests \
+            -only-testing AlasTests/EditorNavigationHistoryTests \
+            -only-testing AlasTests/NavigationFeatureTests \
+            -only-testing AlasTests/DefinitionSnippetCacheTests \
+            -only-testing AlasTests/HoverFeatureBehaviorTests \
+            -only-testing AlasTests/CompletionFeatureTests \
+            -only-testing AlasTests/CodeTextViewCompletionTests \
+            -only-testing AlasTests/EditorBufferTests \
+            -only-testing AlasTests/HoverWindowControllerTests \
+            -only-testing AlasTests/SnippetSessionTests \
+            -only-testing AlasTests/SignatureHelpFeatureTests \
+            -only-testing AlasTests/DiagnosticDetailsTests \
+            -only-testing AlasTests/DiagnosticsRangeTests \
+            -only-testing AlasTests/SemanticTokensFeatureTests \
+            -only-testing AlasTests/EditorSemanticLayerTests \
+            -only-testing AlasTests/AppConfigInlayHintsTests \
+            -only-testing AlasTests/CodeLanguageDetailViewTests \
+            -only-testing AlasTests/MinimapTests \
+            -only-testing AlasTests/EditorFindControllerTests \
+            -only-testing AlasTests/EditorFindRequestTests \
+            -skipMacroValidation -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 60 \
+            test-without-building
+
       - name: Test - web previews
         timeout-minutes: 8
         run: |

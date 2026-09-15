@@ -116,15 +116,23 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             guard let self, !d.isEmpty else { return }
             self.lock.lock()
             let frames: [Data]
+            let framingFailed: Bool
             switch self.framing {
             case .contentLength:
                 self.contentLengthFramer.append(d)
                 frames = self.contentLengthFramer.drainFrames()
+                framingFailed = self.contentLengthFramer.hasFailed
             case .newline:
                 self.newlineFramer.append(d)
                 frames = self.newlineFramer.drainFrames()
+                framingFailed = false
             }
             self.lock.unlock()
+            if framingFailed {
+                self.continuation?.finish()
+                self.terminate()
+                return
+            }
             for f in frames { self.continuation?.yield(.frame(f)) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] h in

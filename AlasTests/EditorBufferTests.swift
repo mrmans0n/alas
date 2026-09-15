@@ -7,6 +7,19 @@ import AppKit
 @MainActor
 @Suite(.serialized)
 struct EditorBufferTests {
+    private actor RemoteAvailabilityGate {
+        private var available = false
+        private var probes = 0
+
+        func probe() -> Bool {
+            probes += 1
+            return available
+        }
+
+        func enable() { available = true }
+        func probeCount() -> Int { probes }
+    }
+
     private func tempWorktree() -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-buffer-\(UUID().uuidString)")
@@ -113,6 +126,72 @@ struct EditorBufferTests {
         #expect(buffer.originalText == expectedContent)
         #expect(buffer.loadKind == .loaded)
         #expect(notifications > 0, "Remote content arrival must notify edit observers so the coordinator can re-apply editor styling")
+    }
+
+    @Test func remoteFailedLSPOpenRetriesThroughNormalReopen() async throws {
+        let root = tempWorktree()
+        let file = root.appendingPathComponent("main.swift")
+        RemoteHostRegistry.shared.register(root: root.path, host: "retry-host")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+
+        let availability = RemoteAvailabilityGate()
+        var createdTransport: FakeTransport?
+        let manager = WorkspaceLSPManager(
+            registry: LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(
+                    language: "swift", extensions: ["swift"], command: "/usr/bin/true",
+                    args: [], env: [:], rootMarkers: [], enabled: true
+                )
+            ]),
+            remoteLSPAvailable: { _, _, _ in await availability.probe() },
+            makeClient: { _, _, _, language, rootURI in
+                let transport = FakeTransport()
+                transport.onSend = { message in
+                    guard let data = message.data(using: .utf8),
+                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let id = object["id"] as? Int else { return }
+                    if message.contains(#""method":"initialize""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{}}}"#)
+                    } else if message.contains(#""method":"shutdown""#) {
+                        transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
+                    }
+                }
+                createdTransport = transport
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
+        EditorBuffer.remoteReadResultForTesting = { _, _ in
+            .file(data: Data("let value = 1\n".utf8), mtime: .now)
+        }
+        defer { EditorBuffer.remoteReadResultForTesting = nil }
+
+        let buffer = EditorBuffer(
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            store: EditorBufferStore(rootOverride: tempWorktree()),
+            worktreeId: "remote-worktree",
+            tabId: "remote-tab",
+            lsp: manager
+        )
+        defer { buffer.close(persistDirtySnapshot: false) }
+        await buffer.awaitLoadForTesting()
+        let initialProbeDeadline = Date().addingTimeInterval(2)
+        while await availability.probeCount() == 0, Date() < initialProbeDeadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await availability.probeCount() == 1)
+        #expect(!manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
+
+        await availability.enable()
+        buffer.reopenLSPDocument()
+        let deadline = Date().addingTimeInterval(2)
+        while !manager.isDocumentOpen(fileURL: file, worktreeRoot: root), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
+        let opens = try #require(createdTransport?.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) })
+        #expect(opens.count == 1)
+        #expect(opens[0].contains(#""text":"let value = 1\n""#))
     }
 
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
@@ -273,6 +352,138 @@ struct EditorBufferTests {
         #expect(FileManager.default.fileExists(atPath: originalURL.path))
         #expect(buffer.relativePath == "a.txt")
         #expect(try String(contentsOf: originalURL, encoding: .utf8) == "hello\n")
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func retargetedDestinationsCannotSaveAsOrMoveOutsideRoot(retargetRoot: Bool, move: Bool) async throws {
+        try await checkRetargetedPathOperation(retargetRoot: retargetRoot, move: move)
+    }
+
+    @Test(arguments: [false, true])
+    func retargetedSaveAsCannotOverwriteOutsideFile(retargetRoot: Bool) async throws {
+        try await checkRetargetedPathOperation(retargetRoot: retargetRoot, move: false, overwrite: true)
+    }
+
+    private func checkRetargetedPathOperation(retargetRoot: Bool, move: Bool, overwrite: Bool = false) async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let original = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(original, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        let alias = fixture.appendingPathComponent(retargetRoot ? "root-alias" : "root/destination")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: original)
+        let root = retargetRoot ? alias : original
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "draft")
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        let leaf = overwrite ? "file.txt" : "nested/new.txt"
+        let destination = retargetRoot ? leaf : "destination/\(leaf)"
+
+        do {
+            if move { try buffer.moveTo(relativePath: destination) }
+            else { try buffer.saveAs(relativePath: destination) }
+            Issue.record("A retargeted destination must refuse filesystem changes")
+        } catch {}
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("nested").path))
+        #expect(buffer.relativePath == "file.txt")
+        #expect(buffer.storage.string == "draft")
+        #expect(buffer.dirty)
+    }
+
+    @Test(arguments: ["../outside/file.txt", "dangling/nested/new.txt", "leaf-link.txt"], [false, true])
+    func pathOperationsRefuseTraversalAndSymlinks(destination: String, move: Bool) async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let root = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(root, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("dangling"), withDestinationURL: outside.appendingPathComponent("missing"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("leaf-link.txt"), withDestinationURL: outsideFile)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+
+        #expect(throws: (any Error).self) {
+            if move { try buffer.moveTo(relativePath: destination) }
+            else { try buffer.saveAs(relativePath: destination) }
+        }
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("missing").path))
+        #expect(buffer.relativePath == "file.txt")
+    }
+
+    @Test func moveRefusesRetargetedSourceEvenWithContainedDestination() async throws {
+        let fixture = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let root = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let originalFile = try writeFile(root, "file.txt", "original")
+        let outsideFile = try writeFile(outside, "file.txt", "outside")
+        let alias = root.appendingPathComponent("source")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "source/file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+
+        do {
+            try buffer.moveTo(relativePath: "nested/moved.txt")
+            Issue.record("Moving an outside source must be refused")
+        } catch {}
+
+        #expect(try String(contentsOf: originalFile, encoding: .utf8) == "original")
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "outside")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("nested").path))
+        #expect(buffer.relativePath == "source/file.txt")
+    }
+
+    @Test(arguments: [false, true])
+    func pathOperationsPreserveContainedAliases(move: Bool) async throws {
+        let root = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("internal"), withDestinationURL: directory)
+        let source = try writeFile(root, "file.txt", "original")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "draft")
+        var changedPath: (String, String)?
+        buffer.onPathChanged = { changedPath = ($0, $1) }
+
+        if move { try buffer.moveTo(relativePath: "internal/nested/new.txt") }
+        else { try buffer.saveAs(relativePath: "internal/nested/new.txt") }
+
+        #expect(buffer.relativePath == "internal/nested/new.txt")
+        #expect(changedPath?.0 == "file.txt")
+        #expect(changedPath?.1 == "internal/nested/new.txt")
+        #expect(FileManager.default.fileExists(atPath: source.path) == !move)
+        #expect(try String(contentsOf: directory.appendingPathComponent("nested/new.txt"), encoding: .utf8) == (move ? "original" : "draft"))
+        try buffer.save()
+        #expect(try String(contentsOf: directory.appendingPathComponent("nested/new.txt"), encoding: .utf8) == "draft")
+        #expect(!buffer.dirty)
     }
 
     @Test func saveAsWritesNewPathAndLeavesOriginalFile() async throws {
@@ -1200,10 +1411,13 @@ struct EditorBufferTests {
             revealCharacter: nil,
             theme: theme
         )
-        #expect(buffer.storage.layoutManagers.contains { $0 === layoutManager })
+        let display = try #require(textView.displayAdapter?.document.storage)
+        #expect(display.layoutManagers.contains { $0 === layoutManager })
+        #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
 
         coordinator.detach()
 
+        #expect(!display.layoutManagers.contains { $0 === layoutManager })
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
 
@@ -1291,6 +1505,9 @@ struct EditorBufferTests {
         textView.setSelectedRanges(expectedSelections, affinity: .downstream, stillSelecting: false)
         scrollView.contentView.scroll(to: expectedOrigin)
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        // A rebind cancels presentation but must not detach signature-help handlers.
+        #expect(textView.signatureHelpManualTriggerHandler != nil)
+        #expect(textView.signatureHelpChangeHandler != nil)
         coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
 
         let deadline = Date(timeIntervalSinceNow: 1)
@@ -1430,7 +1647,7 @@ struct EditorBufferTests {
         #expect(appliedFont?.isFixedPitch == true)
     }
 
-    @Test func coordinatorPathChangeRebindsLayoutManagerToNewBufferStorage() async throws {
+    @Test func coordinatorPathChangeRebindsLayoutManagerToNewDisplayStorage() async throws {
         // Regression: when the active editor tab switched, the coordinator
         // updated its bookkeeping but never moved the layout manager off the
         // first buffer's NSTextStorage, so the text view kept rendering the
@@ -1465,7 +1682,9 @@ struct EditorBufferTests {
             revealCharacter: nil,
             theme: theme
         )
-        #expect(bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+        let displayA = try #require(textView.displayAdapter?.document.storage)
+        #expect(displayA.layoutManagers.contains { $0 === layoutManager })
+        #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
 
         coordinator.updateIfNeeded(
             worktreeId: "wt",
@@ -1484,8 +1703,12 @@ struct EditorBufferTests {
             relativePath: "b.swift"
         )
         await bufferB.awaitLoadForTesting()
+        #expect(!displayA.layoutManagers.contains { $0 === layoutManager })
         #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
-        #expect(bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        let displayB = try #require(textView.displayAdapter?.document.storage)
+        #expect(displayB.layoutManagers.contains { $0 === layoutManager })
+        #expect(!bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        #expect(textView.sourceString == "let beta = 1\n")
         // The newly bound storage must come back styled monospaced. The
         // original bug here was that applyBaseStyle resolved the font from
         // textView.font, which after rebinding read char 0 of the new
@@ -2203,11 +2426,7 @@ struct EditorBufferTests {
         #expect(trailingConstrained.origin.x == 500)
     }
 
-    @Test func coordinatorPathChangeClearsTextViewUndoStack() async throws {
-        // Regression: NSTextView's undoManager survives across tab swaps
-        // because CenterPaneView reuses the same text view. Without an
-        // explicit removeAllActions on rebind, Undo would mutate the wrong
-        // buffer's storage.
+    @Test func coordinatorPathChangeUsesTheNewBuffersUndoStack() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let a = 1\n")
         _ = try writeFile(root, "b.swift", "let b = 2\n")
@@ -2221,9 +2440,7 @@ struct EditorBufferTests {
         let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
         layoutManager.addTextContainer(textContainer)
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
-        // NSTextView's undoManager comes from the responder chain; in this
-        // headless test we don't have a window, so feed one in via a
-        // delegate so the rebind path has something concrete to clear.
+        // A fallback responder manager must not replace the buffer history.
         let undoOwner = TestUndoOwner()
         textView.delegate = undoOwner
         let coordinator = CodeEditorCoordinator(appState: appState)
@@ -2234,8 +2451,7 @@ struct EditorBufferTests {
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
-        // Stage an undoable action so canUndo flips on; payload is irrelevant.
-        textView.undoManager?.registerUndo(withTarget: bufferA) { _ in }
+        textView.insertText("changed", replacementRange: NSRange(location: 0, length: bufferA.storage.length))
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.updateIfNeeded(
@@ -2245,13 +2461,13 @@ struct EditorBufferTests {
         )
 
         #expect(textView.undoManager?.canUndo == false)
+        bufferA.undoManager.undo()
+        #expect(bufferA.storage.string == "let a = 1\n")
+        #expect(textView.string != "let a = 1\n")
+        coordinator.detach()
     }
 
-    @Test func coordinatorDetachClearsTextViewUndoStack() async throws {
-        // Regression: AppKit text undo actions target the NSTextView/TextKit
-        // objects that created them. If SwiftUI tears down the editor while
-        // those actions remain in the responder-chain undo manager, a later
-        // Edit > Undo can send _undoRedoTextOperation: to stale objects.
+    @Test func coordinatorDetachDisconnectsViewWithoutClearingBufferHistory() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let a = 1\n")
         let appState = AppState()
@@ -2274,12 +2490,14 @@ struct EditorBufferTests {
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
-        textView.undoManager?.registerUndo(withTarget: textView) { _ in }
+        textView.insertText("changed", replacementRange: NSRange(location: 0, length: buffer.storage.length))
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.detach()
 
-        #expect(textView.undoManager?.canUndo == false)
+        #expect(textView.undoManager?.canUndo != true)
+        buffer.undoManager.undo()
+        #expect(buffer.storage.string == "let a = 1\n")
     }
 }
 

@@ -40,6 +40,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// processes — a user override won't be silently merged onto the
     /// first match's environment.
     private struct Key: Hashable {
+        /// A URI is only unique within an LSP host. Two remote hosts can both
+        /// legitimately serve file:///srv/repo/main.swift.
+        let host: String?
         let root: String
         let command: String
         let args: [String]
@@ -74,6 +77,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private struct Holder {
         let client: LSPClient
         let ready: Task<Bool, Never>
+        let serverGeneration: UUID
         var refsByURI: [String: Int]
         var temporaryRefsByURI: [String: Int]
         var temporaryTextsByURI: [String: String]
@@ -119,6 +123,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     private var registry: LanguageServerRegistry
     private let makeClient: (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient
+    private let remoteLSPAvailable: (_ command: String, _ host: String, _ environment: [String: String]) async -> Bool
 
     /// Cached per-language availability so the status badge doesn't re-run
     /// `LanguageServerAvailability.status(for:)` on every SwiftUI breadcrumb
@@ -133,6 +138,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
     init(
         registry: LanguageServerRegistry,
         makeAvailability: @escaping () -> LanguageServerAvailability = { LanguageServerAvailability() },
+        remoteLSPAvailable: @escaping (_ command: String, _ host: String, _ environment: [String: String]) async -> Bool = { command, host, environment in
+            await RemoteLSPLauncher.isAvailable(command: command, host: host, env: environment)
+        },
         makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient = { executable, arguments, environment, language, rootURI in
             LSPClient(
                 transport: LSPTransport(executable: executable, arguments: arguments, environment: environment),
@@ -144,6 +152,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         self.registry = registry
         self.makeAvailability = makeAvailability
         self.cachedAvailability = makeAvailability()
+        self.remoteLSPAvailable = remoteLSPAvailable
         self.makeClient = makeClient
     }
 
@@ -233,7 +242,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         } else {
             lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
         }
-        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        let key = Key(host: remoteHost, root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
         let uri = fileURL.lspURI
         var shouldReplaceTemporaryText = false
         // If a previous holder's server died (process exited, transport
@@ -284,7 +293,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             addPendingOpenRef(key: key, uri: uri, ownership: ownership)
             let availability = makeAvailability()
             if let remoteHost {
-                guard await RemoteLSPLauncher.isAvailable(command: entry.command, host: remoteHost, env: entry.env) else {
+                guard await remoteLSPAvailable(entry.command, remoteHost, entry.env) else {
                     _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
                     return nil
                 }
@@ -340,12 +349,16 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 )
                 let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI)
                 let task = Task<Bool, Never> {
+                    await newClient.setConfigurationHandler { [weak self] scope, section in
+                        await self?.configurationValue(scope: scope, section: section, key: key) ?? .null
+                    }
                     do { try await newClient.initialize()
                     return true } catch { return false }
                 }
                 holders[key] = Holder(
                     client: newClient,
                     ready: task,
+                    serverGeneration: UUID(),
                     refsByURI: [uri: 1],
                     temporaryRefsByURI: ownership == .temporary ? [uri: 1] : [:],
                     temporaryTextsByURI: ownership == .temporary ? [uri: text] : [:],
@@ -457,7 +470,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // entry: if the user edited the registry (command/args/env) after
         // the file was opened, the original holder lives under the old key
         // and a recomputed lookup would miss it, leaking the server.
-        guard let key = holderKey(forURI: uri), var holder = holders[key] else { return }
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot), var holder = holders[key] else { return }
         if !holder.openedURIs.contains(uri) {
             // Server still in `initialize()`. Update the pending text so the
             // suspended `openDocument` reads the new value when it resumes.
@@ -494,7 +507,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         // See `didChange` — find the holder by URI so registry edits made
         // after the open don't strand the original server.
-        guard let key = holderKey(forURI: uri), var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else {
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot), var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else {
             _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot, ownership: ownership)
             return
         }
@@ -646,7 +659,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         // See `didChange` — find the holder by URI so registry edits made
         // after the open still hit the original server.
-        guard let key = holderKey(forURI: uri), let holder = holders[key], holder.openedURIs.contains(uri) else { return }
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot), let holder = holders[key], holder.openedURIs.contains(uri) else { return }
         let initOk = await holder.ready.value
         guard initOk, let cur = holders[key], cur.openedURIs.contains(uri) else { return }
         try? await cur.client.didSave(uri: uri)
@@ -744,6 +757,68 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return holder.client
     }
 
+    /// Captures the server-owned ordering token for a position request only
+    /// after this document's didOpen/didChange sequence has been acknowledged.
+    /// The caller is responsible for flushing its debounced editor edits before
+    /// calling this method.
+    func requestContext(
+        forFile fileURL: URL,
+        worktreeRoot: URL,
+        worktreeID: String,
+        range: LSPRange
+    ) async -> EditorRequestContext? {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.openedURIs.contains(uri) else {
+            return nil
+        }
+        let ready = await holder.ready.value
+        guard ready,
+              let current = holders[key],
+              current.client === holder.client,
+              current.serverGeneration == holder.serverGeneration,
+              current.openedURIs.contains(uri),
+              let version = current.versions[uri] else {
+            return nil
+        }
+        return EditorRequestContext(
+            document: EditorDocumentID(host: key.host, worktreeID: worktreeID, uri: uri),
+            version: version,
+            serverGeneration: current.serverGeneration,
+            range: range
+        )
+    }
+
+    func isCurrent(_ context: EditorRequestContext) -> Bool {
+        holders.contains { key, holder in
+            key.host == context.document.host
+                && holder.openedURIs.contains(context.document.uri)
+                && holder.serverGeneration == context.serverGeneration
+                && holder.versions[context.document.uri] == context.version
+        }
+    }
+
+    /// Indentation uses the same document-derived options as explicit formatting.
+    /// Unknown sections and scopes never borrow configuration from another holder.
+    private func configurationValue(scope: String?, section: String?, key: Key) -> LSPJSONValue {
+        guard let scope, let holder = holders[key], holder.openedURIs.contains(scope),
+              let text = holder.texts[scope] else { return .null }
+        let options = RenameFeature.formattingOptions(text: text)
+        switch section {
+        case "editor": return .object(["tabSize": .number(String(options.tabSize)), "insertSpaces": .bool(options.insertSpaces)])
+        case "editor.tabSize": return .number(String(options.tabSize))
+        case "editor.insertSpaces": return .bool(options.insertSpaces)
+        default: return .null
+        }
+    }
+
+    func workspaceEditVersion(for document: EditorDocumentID, worktreeRoot: URL) -> Int? {
+        guard let key = holderKey(forURI: document.uri, withinWorktreeRoot: worktreeRoot), key.host == document.host,
+              let holder = holders[key], holder.openedURIs.contains(document.uri) else { return nil }
+        return holder.versions[document.uri]
+    }
+
     /// Returns `nil` when the file is not currently open on an LSP server.
     /// Returns `false` when it is open but the served text does not contain
     /// `text` at `line`.
@@ -792,7 +867,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
     func restartHolder(forLanguage language: String, rootURL: URL) async {
         guard let entry = registry.entry(forLanguage: language) else { return }
         let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
-        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        let key = Key(
+            host: RemoteHostRegistry.shared.host(forPath: rootURL.path),
+            root: lspRoot.path,
+            command: entry.command,
+            args: entry.args,
+            env: entry.env
+        )
         guard let existing = holders[key] else { return }
         await restartHolder(key: key, existing: existing, language: language)
     }
@@ -965,6 +1046,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return Holder(
             client: holder.client,
             ready: holder.ready,
+            serverGeneration: holder.serverGeneration,
             refsByURI: refs,
             temporaryRefsByURI: temporaryRefs,
             temporaryTextsByURI: temporaryTexts,
@@ -988,8 +1070,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private func holderKey(forURI uri: String, withinWorktreeRoot worktreeRoot: URL) -> Key? {
         let rootPath = worktreeRoot.path
         let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        let host = RemoteHostRegistry.shared.host(forPath: rootPath)
         for (key, holder) in holders where holder.refsByURI[uri] != nil {
-            if key.root == rootPath || key.root.hasPrefix(rootPrefix) {
+            if key.host == host, (key.root == rootPath || key.root.hasPrefix(rootPrefix)) {
                 return key
             }
         }
@@ -1009,10 +1092,12 @@ final class WorkspaceLSPManager: DocumentFormatter {
         guard let entry = registry.entry(forLanguage: language) else { return nil }
         let worktreePath = worktreeRoot.path
         let pathPrefix = worktreePath.hasSuffix("/") ? worktreePath : worktreePath + "/"
+        let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
         for (key, holder) in holders {
             guard key.command == entry.command,
                   key.args == entry.args,
-                  key.env == entry.env else { continue }
+                  key.env == entry.env,
+                  key.host == host else { continue }
             // The holder's lspRoot may be the worktree itself or a nested
             // package directory inside it. Either way, its path must start
             // with the worktree path.
@@ -1059,7 +1144,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = absoluteURL.lspURI
         let key: Key?
         if let originatingFileURL,
-           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI, withinWorktreeRoot: originatingWorktreeRoot) {
             key = preciseKey
         } else {
             // Fall back to prefix-scan; also try scanning by the external
@@ -1141,7 +1226,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = absoluteURL.lspURI
         let key: Key?
         if let originatingFileURL,
-           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI, withinWorktreeRoot: originatingWorktreeRoot) {
             key = preciseKey
         } else {
             // Scan the external URI itself first (scoped to the worktree) to

@@ -5,6 +5,69 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct CodeTextViewCompletionTests {
+    @Test func snippetChoicePickerSupportsKeyboardMouseAndTabNavigation() throws {
+        let expansion = try SnippetSession.parse("${1|one,two,three|}=$1 ${2:end}$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        #expect(view.snippetChoiceWindow.isVisible)
+        view.moveDown(nil)
+        view.insertNewline(nil)
+        #expect(view.string == "two=two end")
+        #expect(!view.snippetChoiceWindow.isVisible)
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 8, length: 3))
+        view.insertBacktab(nil)
+        #expect(view.snippetChoiceWindow.isVisible)
+        view.selectSnippetChoice(at: 2)
+        #expect(view.string == "three=three end")
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 12, length: 3))
+        view.insertBacktab(nil)
+        view.moveUp(nil)
+        view.insertTab(nil)
+        #expect(view.string == "two=two end")
+        #expect(view.selectedRange() == NSRange(location: 8, length: 3))
+        view.insertBacktab(nil)
+        view.cancelOperation(nil)
+        #expect(view.snippetSession == nil)
+        #expect(!view.snippetChoiceWindow.isVisible)
+    }
+
+    @Test func snippetMirrorsDeletionNavigationEscapeAndOrdinaryTab() throws {
+        let expansion = try SnippetSession.parse("${1:foo}=$1 ${2:bar}$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        view.insertText("😀", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.string == "😀=😀 bar")
+        view.deleteBackward(nil)
+        #expect(view.string == "= bar")
+        view.insertTab(nil)
+        #expect(view.selectedRange() == NSRange(location: 2, length: 3))
+        view.insertBacktab(nil)
+        #expect(view.selectedRange() == NSRange(location: 0, length: 0))
+        view.cancelOperation(nil)
+        #expect(view.snippetSession == nil)
+        view.insertTab(nil)
+        #expect(view.string == "\t= bar")
+    }
+
+    @Test func malformedSnippetIsNeverOfferedForRawInsertion() {
+        let item = LSPCompletionItem.testing(label: "call", sortText: nil, filterText: nil,
+                                             insertText: "call(${1:broken", insertTextFormat: .snippet)
+        #expect(CompletionEngine.lspCandidates(from: [item], prefix: CompletionPrefix(text: "", range: .init(location: 0, length: 0))).isEmpty)
+    }
+
+    @Test func externalBufferChangeEndsSnippetBeforeTab() throws {
+        let expansion = try SnippetSession.parse("${1:foo}=$1$0")
+        let view = makeTextView(expansion.text)
+        view.startSnippet(expansion, offset: 0)
+        view.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 7), with: "changed")
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.insertTab(nil)
+        #expect(view.string == "changed\t")
+        #expect(view.snippetSession == nil)
+    }
+
     private func makeTextView(_ text: String = "") -> CodeTextView {
         let storage = NSTextStorage(string: text)
         let layoutManager = NSLayoutManager()
@@ -40,6 +103,57 @@ struct CodeTextViewCompletionTests {
 
         #expect(actions == [.acceptSelected])
         #expect(textView.string == "let value = open")
+    }
+
+    @Test("Escape dismisses completion before signature or hover overlays")
+    func escapePrioritizesCompletionDismissal() {
+        let textView = makeTextView("call(")
+        var events: [String] = []
+        textView.completionKeyHandler = { action in
+            guard action == .dismiss else { return false }
+            events.append("completion")
+            return true
+        }
+        textView.escapeHandler = {
+            events.append("overlay")
+            return true
+        }
+
+        textView.cancelOperation(nil)
+
+        #expect(events == ["completion"])
+    }
+
+    @Test("stepping over an inner closing pair re-evaluates signature help without selection dismissal")
+    func stepOverClosingPairReevaluatesSignatureHelp() {
+        let textView = makeTextView("outer(inner(a))")
+        textView.setSelectedRange(NSRange(location: 13, length: 0)) // outer(inner(a|))
+        var completionDismissals = 0
+        var selectionDismissals = 0
+        var signatureReevaluations = 0
+        textView.completionSelectionChangeHandler = {
+            completionDismissals += 1
+        }
+        textView.signatureHelpSelectionChangeHandler = {
+            selectionDismissals += 1
+        }
+        textView.signatureHelpChangeHandler = {
+            signatureReevaluations += 1
+        }
+
+        textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(textView.string == "outer(inner(a))")
+        #expect(textView.selectedRange() == NSRange(location: 14, length: 0))
+        #expect(completionDismissals == 1)
+        #expect(selectionDismissals == 0)
+        #expect(signatureReevaluations == 1)
+        #expect(SignatureHelpFeature.contentChangeContext(
+            text: textView.string,
+            caret: textView.selectedRange().location,
+            previousCallStart: 11,
+            isVisible: true
+        )?.triggerKind == .contentChange)
     }
 
     @Test func insertNewlineRoutesAcceptSelectedAndDoesNotMutateTextWhenHandled() {

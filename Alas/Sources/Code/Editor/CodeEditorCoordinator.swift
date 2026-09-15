@@ -34,10 +34,30 @@ final class CodeEditorCoordinator {
     private var pendingReveal: (tabId: TabID, line: Int, endLine: Int?, character: Int, revision: Int)?
     private var revealHighlightTask: Task<Void, Never>?
     private var revealHighlightRange: NSRange?
+    private var revealHighlightRevision: Int?
     private var currentExternalAbsolutePath: String?
     private var currentExternalEditable: Bool = false
     private var currentOriginatingWorktreeRoot: URL?
     private var currentOriginatingRelativePath: String?
+    private var lspBinding: EditorLSPBinding?
+    private var editorCommandRouter: EditorCommandRouter?
+    private var editorCommandStatusTask: Task<Void, Never>?
+    private var renameFeature: RenameFeature?
+    private var codeActionsFeature: CodeActionsFeature?
+    private var semanticFeature: SemanticTokensFeature?
+    private var semanticLayer: EditorSemanticLayer?
+    private var semanticClient: LSPClient?
+    private var semanticSubscription: Task<Void, Never>?
+    private var semanticBindingID = UUID()
+    private var semanticSupportsRange = false
+    private var inlayFeature: InlayHintsFeature?
+    private var inlayLayout: EditorInlayLayout?
+    private var inlayClient: LSPClient?
+    private var inlaySubscription: Task<Void, Never>?
+    private var inlaySettings: InlayHintSettings?
+    private var inlaySupported = false
+    private var inlayBindingID = UUID()
+    private var inlayResponse: (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -53,8 +73,10 @@ final class CodeEditorCoordinator {
     private var hover: HoverFeature?
     private var hoverObservers: [NSObjectProtocol] = []
     private var definition: DefinitionFeature?
+    private var navigation: NavigationFeature?
     private var hoverHighlight: HoverHighlightFeature?
     private var completion: CompletionFeature?
+    private var signatureHelp: SignatureHelpFeature?
     private var reportedInitialHighlightReady = false
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
@@ -121,16 +143,7 @@ final class CodeEditorCoordinator {
 
         hover = HoverFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -141,21 +154,14 @@ final class CodeEditorCoordinator {
             },
             getTheme: { [weak self] in self?.currentTheme ?? (try? ThemeStore().current) ?? (try? Theme.loadBundled(id: "cool-slate")) ?? Theme(id: "fallback", name: "Fallback", tokens: [:]) },
             getMonoFontFamily: { [weak self] in self?.currentFontFamily ?? self?.appState.config.code.fontFamily ?? "JetBrainsMono Nerd Font" },
-            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 }
+            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         installHoverObservers(textView: textView)
         definition = DefinitionFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -164,59 +170,60 @@ final class CodeEditorCoordinator {
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             },
-            openTarget: { [weak self] url, line, character in
+            openTarget: { [weak self] url, line, character, sourcePosition in
                 guard let self,
+                      let source = self.navigationSource(at: sourcePosition),
                       let wid = self.currentWorktreeId else { return }
-                // For external buffers, the originating worktree root is the
-                // anchor for in-worktree-vs-external classification, not the
-                // sentinel that bindBuffer set on currentRoot.
                 let anchor = self.currentOriginatingWorktreeRoot ?? self.currentRoot
                 guard let root = anchor else { return }
-                let abs = url.path
-                let prefix = root.path + "/"
-                if abs.hasPrefix(prefix) {
-                    let rel = String(abs.dropFirst(prefix.count))
-                    self.appState.tabs.openEditor(
-                        worktreeId: wid,
-                        relativePath: rel,
-                        revealLine: line,
-                        revealCharacter: character
-                    )
-                } else {
-                    // Pass the current in-worktree file as the originating
-                    // path so LSP traffic for the external file is routed to
-                    // the correct holder in nested-package layouts.
-                    // Also pass the worktree root and language so TabsManager
-                    // can rebind the LSP holder even when the tab is inactive.
-                    let originatingRel = self.currentExternalAbsolutePath == nil
+                let target = EditorNavigationTarget(
+                    document: EditorDocumentID(
+                        host: RemoteHostRegistry.shared.host(forPath: root.path),
+                        worktreeID: wid,
+                        uri: url.lspURI
+                    ),
+                    position: LSPPosition(line: line, character: character)
+                )
+                if self.appState.tabs.openNavigationTarget(
+                    target,
+                    worktreeRoot: root,
+                    originatingRelativePath: self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
-                        : self.currentOriginatingRelativePath
-                    let originatingRoot = self.currentOriginatingWorktreeRoot ?? self.currentRoot
-                    let lang = self.currentLanguage
-                    self.appState.tabs.openExternalEditor(
-                        worktreeId: wid,
-                        absoluteURL: url,
-                        revealLine: line,
-                        revealCharacter: character,
-                        originatingRelativePath: originatingRel,
-                        originatingWorktreeRoot: originatingRoot,
-                        language: lang
-                    )
+                        : self.currentOriginatingRelativePath,
+                    language: self.currentLanguage
+                ) {
+                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordJump(from: source, to: target)
+                } else {
+                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordActivationFailure(for: target)
                 }
+            },
+            cancelPendingNavigation: { [weak self] in
+                self?.navigation?.cancelPendingRequest()
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            snippetStore: { [weak self] in
+                guard let self, let id = self.currentWorktreeId else { return nil }
+                return self.appState.tabs.navigationStore(forWorktreeId: id)
+            }
+        )
+        let initialNavigationStore = appState.tabs.navigationStore(forWorktreeId: worktreeId)
+        navigation = NavigationFeature(
+            store: { [weak self, initialNavigationStore] in
+                guard let self else { return initialNavigationStore }
+                return self.appState.tabs.navigationStore(forWorktreeId: self.currentWorktreeId ?? worktreeId)
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            isQueryCurrent: { [weak tabs = appState.tabs, weak manager = appState.lsp] context in
+                guard let buffer = tabs?.workspaceEditBuffer(for: context.document) else { return false }
+                return ObjectIdentifier(buffer) == context.bufferID && buffer.editGeneration == context.sourceGeneration
+                    && manager?.isCurrent(context) == true
             }
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -225,20 +232,13 @@ final class CodeEditorCoordinator {
                 guard let root = self.currentRoot,
                       let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
-            }
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         completion = CompletionFeature(
             textView: textView,
-            getClient: { [weak self] in
-                guard let self, let lang = self.currentLanguage else { return nil }
-                if let abs = self.currentExternalAbsolutePath,
-                   let originating = self.currentOriginatingWorktreeRoot {
-                    let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
-                }
-                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
-            },
+            getClient: { [weak self] in self?.currentLSPClient() },
             getURI: { [weak self] in
                 guard let self else { return nil }
                 if let abs = self.currentExternalAbsolutePath {
@@ -263,8 +263,41 @@ final class CodeEditorCoordinator {
             getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 },
             prepareForCompletionRequest: { [weak self] in
                 await self?.flushPendingLSPDidChangeForCompletion()
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
+            applyWorkspaceCompletion: { [weak self] plan, snapshot, context in
+                await self?.applyWorkspaceCompletion(plan, snapshot: snapshot, context: context) ?? false
+            },
+            executeFollowup: { [weak self] command, client, context in
+                await self?.codeActionsFeature?.performCompletionCommand(command, client: client, context: context)
             }
         )
+        signatureHelp = SignatureHelpFeature(
+            textView: textView,
+            getClient: { [weak self] in self?.currentLSPClient() },
+            getURI: { [weak self] in
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return root.appendingPathComponent(rel).lspURI
+            },
+            isEnabled: { [weak self] in
+                guard let self,
+                      self.currentLanguage != nil,
+                      self.buffer?.readOnly == false,
+                      self.buffer?.isExternal != true else { return false }
+                return true
+            },
+            prepareForSignatureHelpRequest: { [weak self] in
+                await self?.flushPendingLSPDidChangeForSignatureHelp()
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
+        )
+        installEditorCommands(on: textView)
 
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
@@ -344,6 +377,8 @@ final class CodeEditorCoordinator {
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
+            textView?.endSnippet()
+            signatureHelp?.cancelAndDismiss()
             reportedInitialHighlightReady = false
             didChangeTask?.cancel()
             hasPendingDidChange = false
@@ -418,6 +453,7 @@ final class CodeEditorCoordinator {
         let family = appState.config.code.fontFamily
         let size = CGFloat(appState.config.code.fontSize)
         let fontChanged = currentFontFamily != family || currentFontSize != size
+        updateInlaySettings(force: fontChanged)
         if fontChanged {
             currentFontFamily = family
             currentFontSize = size
@@ -464,6 +500,11 @@ final class CodeEditorCoordinator {
             Task { @MainActor [weak self, weak buffer] in
                 guard let self, let buffer, self.buffer === buffer else { return }
                 self.currentLanguage = buffer.effectiveLanguage
+                self.semanticFeature?.invalidate()
+                self.updateSemanticClient()
+                self.inlayFeature?.invalidate()
+                self.updateInlaySettings()
+                self.updateInlayClient()
                 self.applyIndentationMode()
                 self.observeEffectiveLanguage(buffer)
             }
@@ -471,6 +512,15 @@ final class CodeEditorCoordinator {
     }
 
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        lspBinding?.invalidate()
+        hover?.notifyCaretChanged()
+        definition?.notifyCaretChanged()
+        navigation?.cancelPendingRequest()
+        renameFeature?.cancel()
+        codeActionsFeature?.cancel()
+        stopSemanticTokens()
+        textView?.displayAdapter?.composition.commit()
+        textView?.bindUndo(to: nil)
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
         let isRebind = self.buffer != nil
@@ -479,13 +529,26 @@ final class CodeEditorCoordinator {
                 previous.removeOnEdit(token)
             }
             editObserverToken = nil
-            if let layoutManager {
-                previous.storage.removeLayoutManager(layoutManager)
-            }
+            try? textView?.bindDisplay(to: nil)
         }
         self.buffer = buffer
+        textView?.bindUndo(to: buffer)
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
+        if let worktreeID = currentWorktreeId {
+            lspBinding = EditorLSPBinding(
+                manager: appState.lsp,
+                buffer: buffer,
+                worktreeID: worktreeID,
+                holderRoot: currentOriginatingWorktreeRoot,
+                flushPendingChanges: { [weak self] in
+                    await self?.flushPendingLSPDidChangeForCompletion()
+                }
+            )
+        } else {
+            lspBinding = nil
+        }
+        if isRebind, let textView { installEditorCommands(on: textView) }
         let ext = LanguageServerRegistry.extensionKey(forPath: buffer.relativePath)
         let freshlyInferred = appState.lsp.language(forFileExtension: ext)
         // Layer a pre-existing override on top of the freshly inferred
@@ -497,20 +560,19 @@ final class CodeEditorCoordinator {
         currentLanguage = buffer.languageOverride ?? freshlyInferred
         observeEffectiveLanguage(buffer)
         applyIndentationMode()
-        if let layoutManager {
-            buffer.storage.addLayoutManager(layoutManager)
+        do { try textView?.bindDisplay(to: buffer) }
+        catch {
+            if let layoutManager { buffer.storage.addLayoutManager(layoutManager) }
         }
         if isRebind {
             // Drop any state captured against the previous buffer before we
             // start the highlight: stale diagnostics would otherwise be
-            // re-applied to the new storage by the async highlight task, and
-            // stale undo records would let Undo/Redo mutate the wrong tab
-            // because the NSUndoManager belongs to the (reused) NSTextView.
+            // re-applied to the new storage by the async highlight task.
             diagnosticsFeature.reset()
-            textView?.undoManager?.removeAllActions()
-            textView?.setSelectedRange(NSRange(location: 0, length: 0))
+            textView?.setSourceSelectedRange(NSRange(location: 0, length: 0))
         }
         applyBaseStyle(theme: theme)
+        configureSemanticTokens(theme: theme)
         runHighlight(theme: theme)
         subscribeIfPossible(theme: theme)
         editObserverToken = buffer.onTextEdit { [weak self] edit in
@@ -521,8 +583,9 @@ final class CodeEditorCoordinator {
     private func saveViewState() {
         guard let textView, let buffer, let currentTabId else { return }
         buffer.viewStates[currentTabId] = (
-            textView.selectedRanges,
-            textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
+            textView.sourceSelectedRanges,
+            textView.enclosingScrollView?.contentView.bounds.origin ?? .zero,
+            textView.displayAdapter?.captureScrollAnchor()
         )
     }
 
@@ -552,7 +615,7 @@ final class CodeEditorCoordinator {
     }
 
     private func applyViewState(
-        _ viewState: (selectedRanges: [NSValue], scrollOrigin: NSPoint),
+        _ viewState: (selectedRanges: [NSValue], scrollOrigin: NSPoint, sourceScrollAnchor: EditorSourceScrollAnchor?),
         for buffer: EditorBuffer?,
         textView: CodeTextView?,
         tabId: TabID
@@ -567,8 +630,9 @@ final class CodeEditorCoordinator {
             let length = min(range.length, buffer.storage.length - location)
             return NSValue(range: NSRange(location: location, length: length))
         }
-        textView.setSelectedRanges(ranges, affinity: .downstream, stillSelecting: false)
+        textView.setSourceSelectedRanges(ranges)
         scroll(textView, to: viewState.scrollOrigin)
+        textView.displayAdapter?.restoreScrollAnchor(viewState.sourceScrollAnchor)
     }
 
     private func scroll(_ textView: CodeTextView, to origin: NSPoint) {
@@ -578,7 +642,11 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
+        stopSemanticTokens()
+        textView?.displayAdapter?.composition.commit()
         let detachedTextView = textView
+        textView?.endSnippet()
+        textView?.bindUndo(to: nil)
         saveViewState()
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
@@ -605,9 +673,8 @@ final class CodeEditorCoordinator {
         diagnosticsSetupTask = nil
         didChangeTask?.cancel()
         didChangeTask = nil
-        if let buffer, let layoutManager {
-            buffer.storage.removeLayoutManager(layoutManager)
-        }
+        try? textView?.bindDisplay(to: nil)
+        if let layoutManager { layoutManager.textStorage?.removeLayoutManager(layoutManager) }
         layoutManager = nil
         clearHoverObservers()
         hover?.tearDown()
@@ -616,6 +683,21 @@ final class CodeEditorCoordinator {
         hoverHighlight = nil
         completion?.cancelAndDismiss()
         completion = nil
+        signatureHelp?.tearDown()
+        signatureHelp = nil
+        lspBinding?.invalidate()
+        lspBinding = nil
+        editorCommandStatusTask?.cancel()
+        renameFeature?.cancel()
+        renameFeature = nil
+        codeActionsFeature?.cancel()
+        codeActionsFeature = nil
+        editorCommandStatusTask = nil
+        if let editorCommandRouter {
+            EditorCommandAvailability.shared.deactivate(editorCommandRouter)
+        }
+        editorCommandRouter = nil
+        textView?.editorCommandRouter = nil
         textView?.hoverHandler = nil
         textView?.commandClickHandler = nil
         textView?.flagsChangedHandler = nil
@@ -624,10 +706,12 @@ final class CodeEditorCoordinator {
         textView?.completionChangeHandler = nil
         textView?.completionSelectionChangeHandler = nil
         textView?.completionKeyHandler = nil
+        textView?.signatureHelpManualTriggerHandler = nil
+        textView?.signatureHelpChangeHandler = nil
+        textView?.signatureHelpSelectionChangeHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
-        textView?.undoManager?.removeAllActions()
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file
@@ -646,6 +730,20 @@ final class CodeEditorCoordinator {
     private func installHoverObservers(textView: CodeTextView) {
         clearHoverObservers()
         let nc = NotificationCenter.default
+        let projectionToken = nc.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let view = self.textView else { return }
+                self.hover?.notifyProjectionChanged()
+                self.definition?.notifyProjectionChanged()
+                self.completion?.notifyProjectionChanged()
+                self.signatureHelp?.notifyScrolled()
+                if let range = self.revealHighlightRange, self.revealHighlightRevision == self.buffer?.editGeneration {
+                    view.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: NSColor.systemYellow.withAlphaComponent(0.9)], range: range)
+                }
+                self.scheduleSemanticRefresh(visibleRangeChanged: true)
+            }
+        }
+        hoverObservers.append(projectionToken)
 
         if let clipView = textView.enclosingScrollView?.contentView {
             clipView.postsBoundsChangedNotifications = true
@@ -654,8 +752,11 @@ final class CodeEditorCoordinator {
                 object: clipView,
                 queue: .main
             ) { [weak self] _ in
+                guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
+                self?.signatureHelp?.notifyScrolled()
+                Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
             }
             hoverObservers.append(token)
         }
@@ -665,8 +766,10 @@ final class CodeEditorCoordinator {
             object: textView,
             queue: .main
         ) { [weak self] _ in
+            guard self?.textView?.displayAdapter?.isRebuilding != true else { return }
             self?.hover?.notifyCaretChanged()
             self?.definition?.notifyCaretChanged()
+            self?.signatureHelp?.notifyScrolled()
         }
         hoverObservers.append(selectionToken)
 
@@ -684,11 +787,14 @@ final class CodeEditorCoordinator {
                   window === self.textView?.window else { return }
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
+            self.signatureHelp?.notifyWindowResized()
+            Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
         }
         hoverObservers.append(resizeToken)
 
         textView.escapeHandler = { [weak self] in
-            self?.hover?.handleEscape() ?? false
+            if self?.signatureHelp?.handleEscape() == true { return true }
+            return self?.hover?.handleEscape() ?? false
         }
     }
 
@@ -701,9 +807,300 @@ final class CodeEditorCoordinator {
         textView?.escapeHandler = nil
     }
 
+    // MARK: - Editor commands
+
+    private func applyWorkspaceCompletion(_ completion: CompletionEditPlan, snapshot: String, context: EditorRequestContext) async -> Bool {
+        guard isLSPRequestCurrent(context), textView?.sourceString == snapshot, let renameFeature else { return false }
+        let coordinates = TextEditCoordinates.LineIndex(snapshot)
+        var edits: [LSPTextEdit] = []
+        for edit in completion.edits {
+            guard let start = coordinates.lspPosition(utf16Offset: edit.range.location),
+                  let end = coordinates.lspPosition(utf16Offset: NSMaxRange(edit.range)) else { return false }
+            edits.append(LSPTextEdit(range: LSPRange(start: start, end: end), newText: edit.replacementText))
+        }
+        let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
+        do {
+            let plan = try await renameFeature.prepare(.init(changes: [context.document.uri: edits]), context: context, generations: generations)
+            guard !Task.isCancelled, isLSPRequestCurrent(context), textView?.sourceString == snapshot, !plan.requiresPreview else { return false }
+            return await renameFeature.makePreviewModel(plan: plan, context: context).apply()
+        } catch { return false }
+    }
+
+    private func installEditorCommands(on textView: CodeTextView) {
+        renameFeature?.cancel()
+        codeActionsFeature?.cancel()
+        if let root = currentOriginatingWorktreeRoot ?? currentRoot {
+            renameFeature = RenameFeature(textView: textView, tabs: appState.tabs, root: root,
+                                          synchronize: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+                                          isCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) == true })
+            codeActionsFeature = CodeActionsFeature(textView: textView, tabs: appState.tabs, root: root,
+                                                    synchronize: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+                                                    isCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) == true },
+                                                    diagnostics: { [weak self] in self?.diagnosticsFeature.current ?? [] })
+        }
+        let router = EditorCommandRouter()
+        router.register(.toggleInlayHints) { [weak self] _ in
+            guard let self, let language = currentLanguage else { return }
+            appState.config.code.toggleInlayHints(for: language)
+            appState.saveConfig()
+            updateInlaySettings()
+        }
+        router.register(.definition) { [weak self, weak textView] range in
+            self?.navigation?.cancelPendingRequest()
+            textView?.triggerCommandClick(atUTF16Offset: range.location)
+        }
+        router.register(.typeDefinition) { [weak self] range in
+            self?.navigation?.cancelPendingRequest()
+            self?.definition?.goToTypeDefinition(range: range)
+        }
+        router.register(.implementation) { [weak self] range in
+            self?.navigation?.cancelPendingRequest()
+            self?.definition?.goToImplementation(range: range)
+        }
+        router.register(.references) { [weak self] range in
+            self?.navigation?.perform(.references, range: range)
+        }
+        router.register(.back, isAvailable: { [weak self] in
+            self?.currentNavigationStore?.canGoBack == true
+        }) { [weak self] _ in
+            self?.activateHistoryTarget(direction: .back)
+        }
+        router.register(.forward, isAvailable: { [weak self] in
+            self?.currentNavigationStore?.canGoForward == true
+        }) { [weak self] _ in
+            self?.activateHistoryTarget(direction: .forward)
+        }
+        router.register(.nextProblem, isAvailable: { [weak self] in
+            !(self?.diagnosticsFeature.current.isEmpty ?? true)
+        }) { [weak self, weak textView] _ in
+            self?.showProblem(from: textView?.sourceSelectedRange.location, backwards: false)
+        }
+        router.register(.previousProblem, isAvailable: { [weak self] in
+            !(self?.diagnosticsFeature.current.isEmpty ?? true)
+        }) { [weak self, weak textView] _ in
+            self?.showProblem(from: textView?.sourceSelectedRange.location, backwards: true)
+        }
+        router.register(.hover) { [weak textView] range in
+            textView?.triggerHover(atUTF16Offset: range.location)
+        }
+        let canEdit: () -> Bool = { [weak self] in
+            guard let buffer = self?.buffer else { return false }
+            return !buffer.readOnly && (!buffer.isExternal || buffer.externalEditable) && !buffer.undoManager.workspaceActionInFlight
+        }
+        router.register(.signatureHelp, isAvailable: canEdit) { [weak self] _ in
+            self?.signatureHelp?.triggerManual()
+        }
+        router.register(.rename, isAvailable: canEdit) { [weak self] range in
+            self?.renameFeature?.rename(range: range)
+        }
+        router.registerCodeActions(isAvailable: canEdit) { [weak self] range in
+            self?.codeActionsFeature?.show(range: range)
+        }
+        router.register(.formatSelection, isAvailable: { [weak textView] in
+            canEdit() && (textView?.sourceSelectedRange.length ?? 0) > 0
+        }) { [weak self] range in
+            guard range.length > 0 else { return }
+            self?.renameFeature?.format(range: range, selectionOnly: true)
+        }
+        router.register(.formatDocument, isAvailable: canEdit) { [weak self] range in
+            self?.renameFeature?.format(range: range, selectionOnly: false)
+        }
+        editorCommandRouter = router
+        diagnosticsFeature.onChange = { [weak router] in
+            router?.refreshAvailability()
+        }
+        currentNavigationStore?.setHistoryChangeHandler { [weak router] in
+            router?.refreshAvailability()
+        }
+        textView.editorCommandRouter = router
+        if textView.window?.firstResponder === textView {
+            EditorCommandAvailability.shared.activate(router)
+        }
+        refreshEditorCommandCapabilities()
+    }
+
+    private func refreshEditorCommandCapabilities() {
+        guard let router = editorCommandRouter else { return }
+        guard let client = currentLSPClient() else {
+            router.update(capabilities: .empty, isServerReady: false)
+            return
+        }
+        Task { [weak self, weak router] in
+            let capabilities = await client.capabilities
+            let isReady = await client.isReady
+            await MainActor.run {
+                guard let self, let router, self.editorCommandRouter === router else { return }
+                router.update(capabilities: capabilities, isServerReady: isReady)
+            }
+        }
+    }
+
+    private func trackEditorCommandAvailability(for client: LSPClient) {
+        editorCommandStatusTask?.cancel()
+        let router = editorCommandRouter
+        editorCommandStatusTask = Task { [weak self, weak router] in
+            while !Task.isCancelled {
+                let capabilities = await client.capabilities
+                let isReady = await client.isReady
+                await MainActor.run {
+                    guard let self, let router, self.editorCommandRouter === router else { return }
+                    router.update(capabilities: capabilities, isServerReady: isReady)
+                }
+                guard isReady else { return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
     // MARK: - Edit propagation (highlight + didChange debouncer)
 
+    private enum HistoryDirection {
+        case back
+        case forward
+    }
+
+    private var currentNavigationStore: EditorNavigationStore? {
+        currentWorktreeId.map(appState.tabs.navigationStore(forWorktreeId:))
+    }
+
+    private func navigationSource(at position: LSPPosition) -> EditorNavigationTarget? {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot
+        else { return nil }
+        let uri: String
+        if let absolutePath = currentExternalAbsolutePath {
+            uri = URL(fileURLWithPath: absolutePath).lspURI
+        } else {
+            guard let relativePath = currentRelativePath else { return nil }
+            uri = root.appendingPathComponent(relativePath).lspURI
+        }
+        return EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                worktreeID: worktreeID,
+                uri: uri
+            ),
+            position: position
+        )
+    }
+
+    private func activateHistoryTarget(direction: HistoryDirection) {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot
+        else { return }
+        let store = appState.tabs.navigationStore(forWorktreeId: worktreeID)
+        let target: EditorNavigationTarget?
+        switch direction {
+        case .back:
+            target = store.goBack()
+        case .forward:
+            target = store.goForward()
+        }
+        guard let target else { return }
+        if appState.tabs.openNavigationTarget(
+            target,
+            worktreeRoot: root,
+            originatingRelativePath: currentExternalAbsolutePath == nil
+                ? currentRelativePath
+                : currentOriginatingRelativePath,
+            language: currentLanguage
+        ) {
+            store.confirmHistoryActivation()
+        } else {
+            store.recordActivationFailure(for: target)
+            textView?.showCommandStatus("Could not open navigation target")
+        }
+    }
+
+    private func showProblem(from caretOffset: Int?, backwards: Bool) {
+        guard let textView,
+              let caretOffset,
+              let position = TextEditCoordinates.lspPosition(utf16Offset: caretOffset, in: textView.sourceString),
+              let range = diagnosticsFeature.nextRange(after: position, backwards: backwards),
+              let diagnostic = diagnosticsFeature.diagnostics(at: range.start).first(where: { $0.range == range }),
+              let displayRange = DiagnosticsFeature.nsRange(for: range, in: textView.sourceString)
+        else {
+            textView?.showCommandStatus("No visible problem at this location")
+            return
+        }
+
+        textView.setSourceSelectedRange(displayRange)
+        scrollRangeToVisiblePreservingHorizontalOffset(displayRange, in: textView)
+        hover?.showDiagnosticDetails(
+            diagnostic,
+            at: displayRange,
+            openRelatedLocation: { [weak self] location in
+                self?.openDiagnosticRelatedLocation(location, sourcePosition: diagnostic.range.start)
+            },
+            showQuickFixes: { [weak self] in
+                self?.codeActionsFeature?.show(range: displayRange, diagnosticContext: [diagnostic])
+            }
+        )
+    }
+
+    private func openDiagnosticRelatedLocation(_ location: LSPLocation, sourcePosition: LSPPosition) {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot,
+              let source = navigationSource(at: sourcePosition)
+        else { return }
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                worktreeID: worktreeID,
+                uri: location.uri
+            ),
+            position: location.range.start
+        )
+        if appState.tabs.openNavigationTarget(
+            target,
+            worktreeRoot: root,
+            originatingRelativePath: currentExternalAbsolutePath == nil
+                ? currentRelativePath
+                : currentOriginatingRelativePath,
+            language: currentLanguage
+        ) {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordJump(from: source, to: target)
+        } else {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordActivationFailure(for: target)
+            textView?.showCommandStatus("Could not open related diagnostic location")
+        }
+    }
+
+    private func currentLSPClient() -> LSPClient? {
+        guard let language = currentLanguage else { return nil }
+        if let binding = lspBinding {
+            return binding.openedClient(language: language)
+        }
+        guard let absolutePath = currentExternalAbsolutePath,
+              let originatingRoot = currentOriginatingWorktreeRoot else {
+            return nil
+        }
+        return appState.lsp.openedClient(
+            forFile: URL(fileURLWithPath: absolutePath),
+            worktreeRoot: originatingRoot,
+            language: language
+        )
+    }
+
+    private func synchronizeLSPRequest(range: NSRange) async -> (LSPClient, EditorRequestContext)? {
+        guard let binding = lspBinding, let language = currentLanguage else { return nil }
+        return await binding.synchronizeRequest(range: range, language: language)
+    }
+
+    private func isLSPRequestCurrent(_ context: EditorRequestContext) -> Bool {
+        lspBinding?.isCurrent(context) ?? false
+    }
+
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
+        clearRevealHighlight()
+        hover?.notifyCaretChanged()
+        definition?.notifyCaretChanged()
+        codeActionsFeature?.invalidatePicker()
+        inlayFeature?.invalidate()
+        semanticFeature?.invalidate()
+        if let worktreeID = currentWorktreeId {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
+        }
         didChangeTask?.cancel()
         hasPendingDidChange = true
         if let edit {
@@ -720,6 +1117,7 @@ final class CodeEditorCoordinator {
                 applyBaseStyle(theme: theme)
             }
         }
+        scheduleSemanticRefresh()
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled, let theme = self.currentTheme else { return }
@@ -761,6 +1159,10 @@ final class CodeEditorCoordinator {
         pendingTextEdits.removeAll()
         guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
         await sendLSPDidChange(payload, awaitPullDiagnostics: false)
+    }
+
+    private func flushPendingLSPDidChangeForSignatureHelp() async {
+        await flushPendingLSPDidChangeForCompletion()
     }
 
     private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {
@@ -863,6 +1265,7 @@ final class CodeEditorCoordinator {
                 storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
             }
             storage.endEditing()
+            self.semanticLayer?.reapply(theme: editorTheme)
             if !cachedDiagnostics.isEmpty {
                 self.diagnosticsFeature.apply(cachedDiagnostics, to: storage, theme: theme)
             }
@@ -871,6 +1274,263 @@ final class CodeEditorCoordinator {
                 self.onInitialHighlightReady?(tabId)
             }
         }
+    }
+
+    // MARK: - Semantic highlighting
+
+    private func stopSemanticTokens() {
+        stopInlayHints()
+        semanticBindingID = UUID()
+        semanticFeature?.stop()
+        semanticFeature = nil
+        semanticLayer?.clear()
+        semanticLayer = nil
+        semanticSubscription?.cancel()
+        semanticSubscription = nil
+        semanticClient = nil
+    }
+
+    private func configureSemanticTokens(theme: Theme) {
+        configureInlayHints()
+        guard let layoutManager, lspBinding != nil else { return }
+        semanticLayer = EditorSemanticLayer(layoutManager: layoutManager, theme: EditorTheme(theme: theme), textView: textView, isCurrent: { [weak self] context in
+            guard let self, let buffer = self.buffer,
+                  buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI == context.document.uri,
+                  !self.hasPendingDidChange else { return false }
+            return self.isLSPRequestCurrent(context)
+        })
+        semanticFeature = SemanticTokensFeature(request: { [weak self] range in
+            await self?.requestSemanticTokens(range: range)
+        }, apply: { [weak self] spans, context in
+            self?.semanticLayer?.replace(spans, context: context)
+        }, clear: { [weak self] in self?.semanticLayer?.clear() })
+        observeSemanticServer(bindingID: semanticBindingID)
+        updateSemanticClient()
+    }
+
+    private func observeSemanticServer(bindingID: UUID) {
+        withObservationTracking {
+            _ = appState.lsp.stateTick
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.semanticBindingID == bindingID else { return }
+                self.updateSemanticClient()
+                self.updateInlayClient()
+                self.observeSemanticServer(bindingID: bindingID)
+            }
+        }
+    }
+
+    private func updateSemanticClient() {
+        let next: LSPClient?
+        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath),
+                                                  worktreeRoot: buffer.worktreeRoot) == .ready {
+            next = currentLSPClient()
+        } else { next = nil }
+        guard next !== semanticClient else { return }
+        semanticFeature?.stop()
+        semanticSubscription?.cancel()
+        semanticClient = next
+        guard let next else { return }
+        let bindingID = semanticBindingID
+        semanticSubscription = Task { [weak self] in
+            let capabilities = await next.capabilities
+            guard let self, !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next,
+                  let provider = capabilities.semanticTokens, provider.supportsRange || provider.supportsFull else { return }
+            self.semanticSupportsRange = provider.supportsRange
+            let refreshes = await next.subscribeSemanticRefreshes()
+            guard !Task.isCancelled else { return }
+            self.scheduleSemanticRefresh()
+            for await _ in refreshes {
+                guard !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next else { return }
+                self.scheduleSemanticRefresh()
+            }
+            guard !Task.isCancelled, self.semanticBindingID == bindingID, self.semanticClient === next else { return }
+            self.semanticFeature?.stop()
+        }
+    }
+
+    private func scheduleSemanticRefresh(visibleRangeChanged: Bool = false) {
+        scheduleInlayRefresh(visibleRangeChanged: visibleRangeChanged)
+        guard semanticClient != nil, let textView, let storage = buffer?.storage,
+              !visibleRangeChanged || semanticSupportsRange else { return }
+        let range: NSRange
+        if let layout = textView.layoutManager, let container = textView.textContainer {
+            let rect = textView.visibleRect.offsetBy(dx: -textView.textContainerOrigin.x, dy: -textView.textContainerOrigin.y)
+            let glyphs = layout.glyphRange(forBoundingRect: rect, in: container)
+            let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            guard let source = textView.sourceRange(forNative: characters) else { return }
+            range = (storage.string as NSString).lineRange(for: source)
+        } else {
+            range = NSRange(location: 0, length: storage.length)
+        }
+        semanticFeature?.refresh(range: range, debounce: .milliseconds(semanticSupportsRange ? 60 : 250))
+    }
+
+    private func requestSemanticTokens(range: NSRange) async -> SemanticTokensFeature.Result? {
+        guard let buffer else { return nil }
+        let generation = buffer.editGeneration
+        let bindingID = semanticBindingID
+        guard let (client, context) = await synchronizeLSPRequest(range: range),
+              self.buffer === buffer, buffer.editGeneration == generation, semanticBindingID == bindingID,
+              let provider = await client.capabilities.semanticTokens else { return nil }
+        let snapshot = buffer.storage.string
+        do {
+            let data = try await client.semanticTokens(uri: context.document.uri, range: provider.supportsRange ? context.range : nil)
+            let allowedRange = provider.supportsRange ? range : nil
+            let spans = try await Task.detached(priority: .utility) {
+                try SemanticTokensFeature.decode(data, legend: provider.legend.tokenTypes, text: snapshot,
+                                                 modifiers: provider.legend.tokenModifiers, allowedRange: allowedRange)
+            }.value
+            guard !Task.isCancelled, self.buffer === buffer, buffer.editGeneration == generation,
+                  semanticBindingID == bindingID, isLSPRequestCurrent(context), semanticClient === client else { return nil }
+            return .init(spans: spans, context: context)
+        } catch { return nil }
+    }
+
+    // MARK: - Inlay hints
+
+    private func stopInlayHints() {
+        inlayBindingID = UUID()
+        inlayFeature?.stop()
+        inlayFeature = nil
+        inlayLayout?.clear()
+        inlayLayout = nil
+        inlaySubscription?.cancel()
+        inlaySubscription = nil
+        inlayClient = nil
+        inlaySupported = false
+        inlayResponse = nil
+        inlaySettings = nil
+        lastInlayRange = nil
+        textView?.inlayHoverHandler = nil
+        textView?.inlayClickHandler = nil
+        textView?.inlayAccessibilityActions = nil
+    }
+
+    private func configureInlayHints() {
+        guard let textView, lspBinding != nil else { return }
+        inlayLayout = EditorInlayLayout(textView: textView)
+        inlayFeature = InlayHintsFeature(request: { [weak self] range in
+            await self?.requestInlayHints(range: range)
+        }, apply: { [weak self] hints in self?.applyInlayHints(hints) }, clear: { [weak self] in
+            self?.inlayLayout?.clear()
+            self?.inlayResponse = nil
+        })
+        updateInlaySettings()
+        updateInlayClient()
+        observeInlaySettings(bindingID: inlayBindingID)
+    }
+
+    private func observeInlaySettings(bindingID: UUID) {
+        withObservationTracking {
+            _ = appState.config.code.inlayHints
+            _ = appState.config.code.inlayHintsByLanguage
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, inlayBindingID == bindingID else { return }
+                updateInlaySettings()
+                observeInlaySettings(bindingID: bindingID)
+            }
+        }
+    }
+
+    private func updateInlaySettings(force: Bool = false) {
+        guard let language = currentLanguage else { return }
+        let next = appState.config.code.inlayHints(for: language)
+        guard force || next != inlaySettings else { return }
+        inlaySettings = next
+        inlayFeature?.stop()
+        scheduleInlayRefresh()
+    }
+
+    private func updateInlayClient() {
+        let next: LSPClient?
+        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath), worktreeRoot: buffer.worktreeRoot) == .ready {
+            next = currentLSPClient()
+        } else { next = nil }
+        guard next !== inlayClient else { return }
+        inlayFeature?.stop()
+        inlaySubscription?.cancel()
+        inlayClient = next
+        inlaySupported = false
+        guard let next else { return }
+        let binding = inlayBindingID
+        inlaySubscription = Task { [weak self] in
+            guard let self, await next.isReady, await next.capabilities.supports(.toggleInlayHints), inlayBindingID == binding, inlayClient === next else { return }
+            inlaySupported = true
+            let stream = await next.subscribeInlayRefreshes()
+            guard !Task.isCancelled else { return }
+            scheduleInlayRefresh()
+            for await _ in stream {
+                guard !Task.isCancelled, inlayBindingID == binding, inlayClient === next else { return }
+                inlayFeature?.invalidate()
+                scheduleInlayRefresh()
+            }
+            if !Task.isCancelled, inlayBindingID == binding, inlayClient === next { inlayFeature?.stop() }
+        }
+    }
+
+    private var lastInlayRange: (range: NSRange, revision: Int)?
+
+    private func scheduleInlayRefresh(visibleRangeChanged: Bool = false) {
+        guard inlayClient != nil, inlaySupported, inlaySettings?.enabled == true, let view = textView, let adapter = view.displayAdapter,
+              let layout = view.layoutManager, let container = view.textContainer else { return }
+        let visible = view.visibleRect
+        let margin = visible.insetBy(dx: 0, dy: -visible.height).offsetBy(dx: -view.textContainerOrigin.x, dy: -view.textContainerOrigin.y)
+        let glyphs = layout.glyphRange(forBoundingRect: margin, in: container)
+        guard let source = view.sourceRange(forNative: layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)) else { return }
+        let range = (adapter.buffer.storage.string as NSString).lineRange(for: source)
+        // Source edits can publish a provisional projection before the buffer
+        // advances its revision. The same viewport must be requested again
+        // after that revision is committed, even when its range is unchanged.
+        let revision = adapter.buffer.editGeneration
+        guard !visibleRangeChanged || range != lastInlayRange?.range || revision != lastInlayRange?.revision else { return }
+        lastInlayRange = (range, revision)
+        inlayFeature?.refresh(range: range)
+    }
+
+    private func requestInlayHints(range: NSRange) async -> [LSPInlayHint]? {
+        guard let buffer else { return nil }
+        let revision = buffer.editGeneration
+        let binding = inlayBindingID
+        guard let (client, context) = await synchronizeLSPRequest(range: range), buffer === self.buffer,
+              revision == buffer.editGeneration, binding == inlayBindingID, client === inlayClient else { return nil }
+        let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
+        do {
+            let hints = try await client.inlayHints(uri: context.document.uri, range: context.range)
+            guard !Task.isCancelled, buffer === self.buffer, revision == buffer.editGeneration,
+                  binding == inlayBindingID, client === inlayClient, isLSPRequestCurrent(context) else { return nil }
+            inlayResponse = (client, context, revision, generations)
+            return hints.filter { hint in
+                let p = hint.position, start = context.range.start, end = context.range.end
+                return (p.line > start.line || p.line == start.line && p.character >= start.character)
+                    && (p.line < end.line || p.line == end.line && p.character <= end.character)
+            }
+        } catch { return nil }
+    }
+
+    private func applyInlayHints(_ hints: [LSPInlayHint]) {
+        guard let response = inlayResponse, let settings = inlaySettings, let layout = inlayLayout,
+              isLSPRequestCurrent(response.context), buffer?.editGeneration == response.revision else { return }
+        layout.isCurrent = { [weak self] in
+            guard let self else { return false }
+            return inlayClient === response.client && buffer?.editGeneration == response.revision && isLSPRequestCurrent(response.context)
+        }
+        layout.resolve = { hint in try await response.client.resolveInlayHint(hint) }
+        layout.navigate = { [weak self] location, position in self?.openDiagnosticRelatedLocation(location, sourcePosition: position) }
+        layout.perform = { [weak self, weak layout] hint, part, applyEdits in
+            guard let self, layout?.isCurrent() == true else { return }
+            var action: [String: LSPJSONValue] = ["title": .string("Inlay hint")]
+            if applyEdits, let edits = hint.wireValue["textEdits"] {
+                action["edit"] = .object(["changes": .object([response.context.document.uri: edits])])
+            } else if let part, case .array(let parts) = hint.wireValue["label"], parts.indices.contains(part), let command = parts[part]["command"] { action["command"] = command }
+            else { return }
+            guard let chosen = try? LSPCodeAction(wireValue: .object(action)) else { return }
+            codeActionsFeature?.performInlayAction(chosen, client: response.client, context: response.context, generations: response.generations)
+        }
+        do { try layout.replace(hints, revision: response.revision, settings: settings) }
+        catch { layout.clear() }
     }
 
     // MARK: - Diagnostics subscription
@@ -906,6 +1566,11 @@ final class CodeEditorCoordinator {
                   self.currentLanguage == language,
                   let client else { return }
             await self.subscribeDiagnostics(for: client, theme: theme)
+            let capabilities = await client.capabilities
+            let isReady = await client.isReady
+            guard let router = self.editorCommandRouter else { return }
+            router.update(capabilities: capabilities, isServerReady: isReady)
+            self.trackEditorCommandAvailability(for: client)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
             if await client.supportsPullDiagnostics {
                 self.startPullDiagnosticsIfNeeded(for: client, uri: url.lspURI, theme: theme)
@@ -1030,7 +1695,7 @@ final class CodeEditorCoordinator {
         let charIndex = characterIndex(atLine: line, in: nsString) ?? nsString.length
         let target = min(charIndex + character, nsString.length)
         let range = NSRange(location: target, length: 0)
-        textView.setSelectedRange(range)
+        textView.setSourceSelectedRange(range)
         scrollRangeToVisiblePreservingHorizontalOffset(range, in: textView)
         let endTarget = endLine.map { characterIndex(atLine: $0, in: nsString) ?? nsString.length }
         highlightRevealLines(from: target, through: endTarget, in: nsString, textView: textView)
@@ -1065,13 +1730,13 @@ final class CodeEditorCoordinator {
 
     private func scrollRangeToVisiblePreservingHorizontalOffset(_ range: NSRange, in textView: CodeTextView) {
         guard let scrollView = textView.enclosingScrollView else {
-            textView.scrollRangeToVisible(range)
+            textView.scrollSourceRangeToVisible(range)
             return
         }
 
         let clipView = scrollView.contentView
         let originalX = clipView.bounds.origin.x
-        textView.scrollRangeToVisible(range)
+        textView.scrollSourceRangeToVisible(range)
 
         guard clipView.bounds.origin.x != originalX else { return }
         clipView.scroll(to: NSPoint(x: originalX, y: clipView.bounds.origin.y))
@@ -1097,9 +1762,9 @@ final class CodeEditorCoordinator {
         guard lineRange.location != NSNotFound, lineRange.length > 0 else { return }
 
         let color = NSColor.systemYellow.withAlphaComponent(0.9)
-        layoutManager.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.thick.rawValue, forCharacterRange: lineRange)
-        layoutManager.addTemporaryAttribute(.underlineColor, value: color, forCharacterRange: lineRange)
+        textView.addSourceTemporaryAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue, .underlineColor: color], range: lineRange)
         revealHighlightRange = lineRange
+        revealHighlightRevision = buffer?.editGeneration
         revealHighlightTask = Task { [weak self, weak textView] in
             try? await Task.sleep(for: .seconds(7))
             guard !Task.isCancelled else { return }
@@ -1119,15 +1784,15 @@ final class CodeEditorCoordinator {
             revealHighlightRange = nil
             return
         }
-        let textLength = (textView.string as NSString).length
+        let textLength = (textView.sourceString as NSString).length
         if range.location < textLength {
             let clampedRange = NSRange(
                 location: range.location,
                 length: min(range.length, textLength - range.location)
             )
             if clampedRange.length > 0 {
-                layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: clampedRange)
-                layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: clampedRange)
+                textView.removeSourceTemporaryAttribute(.underlineStyle, range: clampedRange)
+                textView.removeSourceTemporaryAttribute(.underlineColor, range: clampedRange)
             }
         }
         revealHighlightRange = nil

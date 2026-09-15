@@ -19,6 +19,7 @@ struct CompletionPopup: View {
     let mermaidCancellation: MermaidRenderCancellation
     let onChoose: (Int) -> Void
     let onWillPresentMermaidViewer: () -> Void
+    var listHeight: CGFloat = popupMaxHeight
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -43,7 +44,7 @@ struct CompletionPopup: View {
                 .onChange(of: selection) { _, nextSelection in
                     scrollSelection(nextSelection, proxy: proxy)
                 }
-                .frame(width: 320, height: popupMaxHeight, alignment: .topLeading)
+                .frame(width: 320, height: listHeight, alignment: .topLeading)
             }
 
             if let documentation, documentation.attributedString.length > 0 {

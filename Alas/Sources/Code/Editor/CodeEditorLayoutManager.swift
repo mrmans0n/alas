@@ -40,16 +40,20 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         guard let configuration, configuration.showWarningCharacters,
               let container = textView.textContainer else { return nil }
         var fraction: CGFloat = 0
-        let index = characterIndex(for: NSPoint(x: point.x - textView.textContainerInset.width, y: point.y - textView.textContainerInset.height), in: container, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        let nativeIndex = characterIndex(for: NSPoint(x: point.x - textView.textContainerInset.width, y: point.y - textView.textContainerInset.height), in: container, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        let codeView = textView as? CodeTextView
+        if codeView?.displayHint(atViewPoint: point) != nil { return nil }
+        guard let index = codeView.map({ $0.sourceRange(forNative: NSRange(location: nativeIndex, length: 0))?.location }) ?? nativeIndex else { return nil }
         let scalars = Dictionary(uniqueKeysWithValues: configuration.warningCharacters.compactMap { warning in
             warning.scalar.map { ($0.value, warning) }
         })
-        let string = textView.string as NSString
+        let string = (codeView?.sourceString ?? textView.string) as NSString
         let containerPoint = NSPoint(x: point.x - textView.textContainerInset.width, y: point.y - textView.textContainerInset.height)
         for location in [index, index - 1] where location >= 0 && location < string.length {
             let composedRange = string.rangeOfComposedCharacterSequence(at: location)
             for (value, range) in Self.warningCharacterRanges(in: string, composedRange: composedRange, warningScalars: Set(scalars.keys)) {
-                guard let warning = scalars[value], let scalar = Unicode.Scalar(value), decorationRect(forCharacterRange: range, scalar: scalar).contains(containerPoint) else { continue }
+                let displayRanges = codeView?.displaySegments(forSource: range) ?? [range]
+                guard let warning = scalars[value], let scalar = Unicode.Scalar(value), displayRanges.contains(where: { decorationRect(forCharacterRange: $0, scalar: scalar).contains(containerPoint) }) else { continue }
                 return warning.note.isEmpty ? warning.code : "\(warning.code) — \(warning.note)"
             }
         }
@@ -57,11 +61,20 @@ final class CodeEditorLayoutManager: NSLayoutManager {
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        guard let configuration, let text = textStorage?.string else {
+        MainActor.assumeIsolated { drawSourceGlyphs(forGlyphRange: glyphsToShow, at: origin) }
+    }
+
+    @MainActor private func drawSourceGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        let codeView = textContainers.first?.textView as? CodeTextView
+        guard let configuration, let text = codeView?.sourceString ?? textStorage?.string else {
             super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
             return
         }
-        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        let nativeCharacters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        guard let characters = codeView.map({ $0.sourceRange(forNative: nativeCharacters) }) ?? nativeCharacters else {
+            super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
         let warnings = Dictionary(uniqueKeysWithValues: configuration.warningCharacters.compactMap { warning in
             warning.scalar.map { ($0.value, warning) }
         })
@@ -74,9 +87,11 @@ final class CodeEditorLayoutManager: NSLayoutManager {
                 let next = text.unicodeScalars.index(after: index)
                 let range = NSRange(index..<next, in: text)
                 if NSIntersectionRange(range, characters).length > 0, warnings[scalar.value] != nil {
-                    let rect = decorationRect(forCharacterRange: range, scalar: scalar).offsetBy(dx: origin.x, dy: origin.y)
-                    NSColor.systemRed.withAlphaComponent(0.28).setFill()
-                    rect.insetBy(dx: 1, dy: 1).fill()
+                    for displayRange in codeView?.displaySegments(forSource: range) ?? [range] {
+                        let rect = decorationRect(forCharacterRange: displayRange, scalar: scalar).offsetBy(dx: origin.x, dy: origin.y)
+                        NSColor.systemRed.withAlphaComponent(0.28).setFill()
+                        rect.insetBy(dx: 1, dy: 1).fill()
+                    }
                 }
                 index = next
             }
@@ -93,13 +108,15 @@ final class CodeEditorLayoutManager: NSLayoutManager {
             if NSIntersectionRange(range, characters).length > 0,
                !(configuration.showWarningCharacters && warnings[scalar.value] != nil)
             {
-                let rect = decorationRect(forCharacterRange: range).offsetBy(dx: origin.x, dy: origin.y)
+                guard let displayRange = (codeView?.displaySegments(forSource: range) ?? [range]).first else { index = next
+                continue }
+                let rect = decorationRect(forCharacterRange: displayRange).offsetBy(dx: origin.x, dy: origin.y)
                     let marker: String?
                     switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"
                     case 0x09 where configuration.showTabs: marker = "→"
                     case 0x0A where configuration.showLineEndings: marker = "↵"
                     default: marker = nil }
-                    if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
+                    if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: displayRange.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
             }
             index = next
         }
