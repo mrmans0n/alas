@@ -101,13 +101,13 @@ final class WorktreeWatcher {
             version: 0,
             info: Unmanaged.passRetained(streamContext).toOpaque(),
             retain: nil,
-            release: { info in
+            release: { @Sendable info in
                 guard let info else { return }
                 Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(info).release()
             },
             copyDescription: nil
         )
-        let cb: FSEventStreamCallback = { _, ctx, numEvents, eventPaths, _, _ in
+        let cb: FSEventStreamCallback = { @Sendable _, ctx, numEvents, eventPaths, _, _ in
             guard let ctx else { return }
             let streamContext = Unmanaged<WorktreeWatcherStreamContext>.fromOpaque(ctx).takeUnretainedValue()
             guard let watcher = streamContext.watcher else { return }
