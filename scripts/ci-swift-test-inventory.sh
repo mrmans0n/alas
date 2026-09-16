@@ -58,14 +58,30 @@ trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
 # types cannot become stale xcodebuild selectors.
 while IFS= read -r source; do
     awk '
-        function strip_attributes(line,    i, c, depth) {
+        function strip_attributes(line,    i, c, depth, in_string, escaped) {
             while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
                 sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                 sub(/^[[:space:]]*/, "", line)
                 if (substr(line, 1, 1) == "(") {
                     depth = 0
+                    in_string = 0
+                    escaped = 0
                     for (i = 1; i <= length(line); i++) {
                         c = substr(line, i, 1)
+                        if (in_string) {
+                            if (escaped) {
+                                escaped = 0
+                            } else if (c == "\\") {
+                                escaped = 1
+                            } else if (c == "\"") {
+                                in_string = 0
+                            }
+                            continue
+                        }
+                        if (c == "\"") {
+                            in_string = 1
+                            continue
+                        }
                         if (c == "(") {
                             depth++
                         } else if (c == ")") {
@@ -137,14 +153,30 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
     while IFS= read -r source; do
         grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture' "${source}" || continue
         awk '
-            function strip_attributes(line,    i, c, depth) {
+            function strip_attributes(line,    i, c, depth, in_string, escaped) {
                 while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
                     sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                     sub(/^[[:space:]]*/, "", line)
                     if (substr(line, 1, 1) == "(") {
                         depth = 0
+                        in_string = 0
+                        escaped = 0
                         for (i = 1; i <= length(line); i++) {
                             c = substr(line, i, 1)
+                            if (in_string) {
+                                if (escaped) {
+                                    escaped = 0
+                                } else if (c == "\\") {
+                                    escaped = 1
+                                } else if (c == "\"") {
+                                    in_string = 0
+                                }
+                                continue
+                            }
+                            if (c == "\"") {
+                                in_string = 1
+                                continue
+                            }
                             if (c == "(") {
                                 depth++
                             } else if (c == ")") {
