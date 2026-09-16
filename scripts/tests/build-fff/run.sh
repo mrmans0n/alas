@@ -81,6 +81,17 @@ grep -qx 'rustup which --toolchain 1.97.1 cargo' "${invocations}"
 grep -q "^cargo RUSTC=${toolchain_bin}/rustc build " "${invocations}"
 test -f "${srcroot}/.build/fff/x86_64/install/lib/libfff_c.dylib"
 
+# Xcode uses undefined_arch for a parent target even when ARCHS contains only
+# one active architecture. That must not trigger a universal build.
+SRCROOT="${srcroot}" \
+    CURRENT_ARCH="undefined_arch" \
+    ARCHS="arm64" \
+    ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+    PATH="${sandbox}/bin:${PATH}" \
+    bash "${srcroot}/scripts/build-fff.sh"
+test -f "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
+test ! -e "${srcroot}/.build/fff/universal/install/lib/libfff_c.dylib"
+
 : > "${invocations}"
 SRCROOT="${srcroot}" \
     ALAS_FFF_TARGET_ARCH="x86_64" \

@@ -18,7 +18,10 @@ rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
 macos_deployment_target="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 
 if [ -z "${ALAS_TS_PACK_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    target_arch="universal"
+    case "${ARCHS:-}" in
+        arm64|x86_64) target_arch="${ARCHS}" ;;
+        *) target_arch="universal" ;;
+    esac
 else
     target_arch="${ALAS_TS_PACK_TARGET_ARCH:-${CURRENT_ARCH:-$(uname -m)}}"
 fi
