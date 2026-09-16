@@ -61,25 +61,26 @@ struct RepoGroupView: View {
             // + inside another button's hit region and clicking the + can also
             // fire the collapse action.
             HStack(spacing: 7) {
-                Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
-                    .frame(width: 12, height: 14)
-                    .contentShape(Rectangle())
-                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .repoHeader)
-                    .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
-                Text(project.name)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(-0.12)
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                if let host = project.host {
-                    HStack(spacing: 3) {
-                        if hostStatus.isOffline(host) {
-                            Image(systemName: "bolt.horizontal.circle")
-                                .font(.system(size: 9))
-                                .foregroundColor(.orange)
+                HStack(spacing: 7) {
+                    Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                        .frame(width: 12, height: 14)
+                        .contentShape(Rectangle())
+                    ProjectIconView(icon: project.icon, fallbackName: project.name, size: .repoHeader)
+                        .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
+                    Text(project.name)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .tracking(-0.12)
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                    if let host = project.host {
+                        HStack(spacing: 3) {
+                            if hostStatus.isOffline(host) {
+                                Image(systemName: "bolt.horizontal.circle")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.orange)
+                            }
+                            Text(host)
                         }
-                        Text(host)
-                    }
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                         .padding(.horizontal, 4)
@@ -89,15 +90,21 @@ struct RepoGroupView: View {
                         .help(hostStatus.isOffline(host)
                             ? "Host \(host) is unreachable"
                             : "Remote project on \(host) (SSH)")
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .contentShape(Rectangle())
+                .onTapGesture { collapsed.toggle() }
+                headerAccessory
             }
             .padding(5)
-            .background(hovering ? theme.color("bg-2") : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
+            }
             .padding(.top, 3)
             .contentShape(Rectangle())
-            .onTapGesture { collapsed.toggle() }
             .nativeContextMenu {
                 Button("Edit Project…", action: onEditProject)
                 if let onOpenGGInbox {
@@ -122,42 +129,6 @@ struct RepoGroupView: View {
                 }
                 Divider()
                 Button("Remove Project…", role: .destructive, action: onRemoveProject)
-            }
-            .overlay(alignment: .trailing) {
-                // The header dot lives OUTSIDE the count/plus swap group so
-                // it stays visible — and its tooltip stays reachable — when
-                // the user hovers the row.
-                HStack(spacing: 6) {
-                    if collapsed, let summary = projectSummary() {
-                        HarnessPill(
-                            summary: summary,
-                            variant: .dotOnly,
-                            tooltip: headerTooltip()
-                        )
-                    }
-                    ZStack {
-                        Text("\(worktrees.count)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(theme.color("fg-faint"))
-                            .monospacedDigit()
-                            .opacity(hovering ? 0 : 1)
-                            .allowsHitTesting(false)
-                        Button(action: onNewWorktree) {
-                            Icon(name: "plus", size: 11,
-                                 color: plusHovering ? theme.color("fg") : theme.color("fg-faint"))
-                                .frame(width: 18, height: 18)
-                                .background(plusHovering ? theme.color("bg-4") : .clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .buttonStyle(.plain)
-                        .onHover { plusHovering = $0 }
-                        .help("New worktree in \(project.name)")
-                        .opacity(hovering ? 1 : 0)
-                        .allowsHitTesting(hovering)
-                    }
-                    .frame(width: 18, height: 18)
-                }
-                .padding(.trailing, 5)
             }
             .onHover { hovering = $0 }
             .draggable(ProjectDragId(id: project.id))
@@ -207,6 +178,42 @@ struct RepoGroupView: View {
                 .padding(.leading, Self.worktreeIndent)
                 .padding(.trailing, 6)
             }
+        }
+    }
+
+    private var headerAccessory: some View {
+        // This lives in the header's HStack rather than a trailing overlay so
+        // the project title always yields space to the count and new-worktree
+        // control at narrow sidebar widths.
+        HStack(spacing: 6) {
+            if collapsed, let summary = projectSummary() {
+                HarnessPill(
+                    summary: summary,
+                    variant: .dotOnly,
+                    tooltip: headerTooltip()
+                )
+            }
+            ZStack {
+                Text("\(worktrees.count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .monospacedDigit()
+                    .opacity(hovering ? 0 : 1)
+                    .allowsHitTesting(false)
+                Button(action: onNewWorktree) {
+                    Icon(name: "plus", size: 11,
+                         color: plusHovering ? theme.color("fg") : theme.color("fg-faint"))
+                        .frame(width: 18, height: 18)
+                        .background(plusHovering ? theme.color("bg-4") : .clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .onHover { plusHovering = $0 }
+                .help("New worktree in \(project.name)")
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
+            }
+            .frame(width: 18, height: 18)
         }
     }
 
