@@ -569,6 +569,16 @@ extension AppState {
         acknowledgeAttentionSurface(worktreeID: worktreeID, target: .runScriptFailure(failureID: runID))
     }
 
+    func openTransientRunReport(_ entry: RunHistoryEntry) {
+        transientRunReports[runReportKey(worktreeID: entry.worktreeID, runID: entry.id)] = entry
+        noteRunHistoryChanged(worktreeID: entry.worktreeID)
+        openRunReport(worktreeID: entry.worktreeID, runID: entry.id)
+    }
+
+    func transientRunReport(worktreeID: String, runID: String) -> RunHistoryEntry? {
+        transientRunReports[runReportKey(worktreeID: worktreeID, runID: runID)]
+    }
+
     func clearRunHistory(worktreeID: String) {
         tabs.closeRunReports(worktreeId: worktreeID)
         guard let runHistoryStore else { return }
@@ -576,11 +586,20 @@ extension AppState {
             await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
                 try await runHistoryStore.clear(worktreeID: worktreeID)
-                self?.runHistoryRevision += 1
+                self?.noteRunHistoryChanged(worktreeID: worktreeID)
             } catch {
                 self?.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func runReportKey(worktreeID: String, runID: String) -> String {
+        "\(worktreeID)\u{0}\(runID)"
+    }
+
+    func noteRunHistoryChanged(worktreeID: String) {
+        runHistoryChangedWorktreeID = worktreeID
+        runHistoryRevision += 1
     }
 
     func waitForRunScriptCompletionTasksForTesting() async {
@@ -622,7 +641,7 @@ extension AppState {
             do {
                 let inserted = try await runHistoryStore.append(entry)
                 if inserted {
-                    self?.runHistoryRevision += 1
+                    self?.noteRunHistoryChanged(worktreeID: record.worktreeID)
                 }
             } catch {
                 self?.runHistoryError = "Could not save run history: \(error.localizedDescription)"
@@ -884,7 +903,7 @@ extension AppState {
                 Task { @MainActor [weak self, runHistoryStore] in
                     do {
                         try await runHistoryStore.purge(worktreeID: worktreeID)
-                        self?.runHistoryRevision += 1
+                        self?.noteRunHistoryChanged(worktreeID: worktreeID)
                     } catch {
                         self?.runHistoryError = "Could not purge run history: \(error.localizedDescription)"
                     }
@@ -908,7 +927,8 @@ extension AppState {
         for key in pendingKeys {
             guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
-            runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
+            let finalized = runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
+            archiveFinalizedRun(finalized, capture: .unavailable)
         }
     }
 

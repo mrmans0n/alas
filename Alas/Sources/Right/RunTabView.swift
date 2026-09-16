@@ -105,6 +105,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             refreshScriptsFromControl()
         }
         .onChange(of: state.runHistoryRevision) {
+            guard state.runHistoryChangedWorktreeID == worktree.id else { return }
             historyPageIndex = 0
             Task { await loadHistory() }
         }

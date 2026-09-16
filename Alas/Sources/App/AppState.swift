@@ -169,6 +169,7 @@ final class AppState {
     /// tab functional when Application Support cannot be opened.
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
     var runHistoryRevision = 0
+    var runHistoryChangedWorktreeID: String?
     var runHistoryError: String?
     @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
