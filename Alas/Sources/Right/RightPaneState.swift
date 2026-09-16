@@ -1404,14 +1404,13 @@ final class RightPaneState: GGSplitCommitServicing {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             bookmarkReconciliationPaths = Set(preservedLazyPaths)
-            let reconciliationBookkeeping = Self.bookkeepingAfterPublishingReconciliationPaths(
+            let refreshedTreeBookkeeping = Self.bookkeepingAfterPublishingRefreshedTree(
                 loaded: loadedFileTreeChildPaths,
-                loading: loadingFileTreeChildPaths,
-                reconciliationPaths: bookmarkReconciliationPaths
+                loading: loadingFileTreeChildPaths
             )
-            loadedFileTreeChildPaths = reconciliationBookkeeping.loaded
-            loadingFileTreeChildPaths = reconciliationBookkeeping.loading
-            fileTreeChildLoadTokens = Self.loadTokensAfterPublishingReconciliationPaths(
+            loadedFileTreeChildPaths = refreshedTreeBookkeeping.loaded
+            loadingFileTreeChildPaths = refreshedTreeBookkeeping.loading
+            fileTreeChildLoadTokens = Self.loadTokensAfterPublishingRefreshedTree(
                 tokens: fileTreeChildLoadTokens,
                 loading: loadingFileTreeChildPaths
             )
@@ -3336,18 +3335,17 @@ final class RightPaneState: GGSplitCommitServicing {
         Set(changes.filter { $0.status == "D" }.map(\.path))
     }
 
-    nonisolated static func bookkeepingAfterPublishingReconciliationPaths(
+    nonisolated static func bookkeepingAfterPublishingRefreshedTree(
         loaded: Set<String>,
-        loading: Set<String>,
-        reconciliationPaths: Set<String>
+        loading _: Set<String>
     ) -> (loaded: Set<String>, loading: Set<String>) {
         (
-            loaded.subtracting(reconciliationPaths),
-            loading.subtracting(reconciliationPaths)
+            loaded.contains("") ? [""] : [],
+            []
         )
     }
 
-    nonisolated static func loadTokensAfterPublishingReconciliationPaths(
+    nonisolated static func loadTokensAfterPublishingRefreshedTree(
         tokens: [String: Int],
         loading: Set<String>
     ) -> [String: Int] {

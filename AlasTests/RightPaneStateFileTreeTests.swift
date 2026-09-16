@@ -233,28 +233,27 @@ struct RightPaneStateFileTreeTests {
         #expect(state.failedFileTreeChildPaths.isEmpty)
     }
 
-    @Test func publishingReconciliationPathsReopensLoadedAndLoadingPaths() {
-        let bookkeeping = RightPaneState.bookkeepingAfterPublishingReconciliationPaths(
+    @Test func publishingRefreshedTreeClearsPrePublicationChildLoadBookkeeping() {
+        let bookkeeping = RightPaneState.bookkeepingAfterPublishingRefreshedTree(
             loaded: ["", "build", "Sources"],
-            loading: ["build/cache", "docs"],
-            reconciliationPaths: ["build", "build/cache"]
+            loading: ["build/cache", "docs"]
         )
 
-        #expect(bookkeeping.loaded == ["", "Sources"])
-        #expect(bookkeeping.loading == ["docs"])
+        #expect(bookkeeping.loaded == [""])
+        #expect(bookkeeping.loading.isEmpty)
     }
 
-    @Test func publishingReconciliationPathsDropsReopenedLoadTokens() {
-        let tokens = RightPaneState.loadTokensAfterPublishingReconciliationPaths(
+    @Test func publishingRefreshedTreeDropsPrePublicationLoadTokens() {
+        let tokens = RightPaneState.loadTokensAfterPublishingRefreshedTree(
             tokens: [
                 "build": 1,
                 "build/cache": 2,
                 "docs": 3
             ],
-            loading: ["docs"]
+            loading: []
         )
 
-        #expect(tokens == ["docs": 3])
+        #expect(tokens.isEmpty)
     }
 
     @Test func staleRefreshRevisionChildLoadsDoNotPublish() {
