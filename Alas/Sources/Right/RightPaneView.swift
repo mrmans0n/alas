@@ -143,6 +143,7 @@ struct RightPaneView: View {
                 FilesTabView(
                     nodes: rps.fileTree,
                     fileTreeGeneration: rps.fileTreeGeneration,
+                    fileTreeRefreshRevision: rps.fileTreeRefreshRevision,
                     worktreePath: worktree.path,
                     openPaths: Binding(
                         get: { rps.openPaths },

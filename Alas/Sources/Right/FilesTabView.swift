@@ -3,6 +3,7 @@ import SwiftUI
 struct FilesTabView: View {
     let nodes: [FileTreeNode]
     let fileTreeGeneration: Int
+    let fileTreeRefreshRevision: Int
     let worktreePath: URL
     @Binding var openPaths: Set<String>
     let onSelectFile: (FileTreeNode) -> Void
@@ -114,6 +115,7 @@ struct FilesTabView: View {
             worktreePath: worktreePath,
             worktreeRoot: worktreeRoot,
             fileTreeGeneration: fileTreeGeneration,
+            fileTreeRefreshRevision: fileTreeRefreshRevision,
             showIgnored: showIgnored,
             bookmarks: bookmarks,
             onSelectFile: onSelectFile,

@@ -64,4 +64,23 @@ struct FilesTabLoadingIndicatorTests {
             ))
         }
     }
+
+    @Test func loadTaskIDIncludesRefreshPublicationRevision() {
+        let beforePublication = FileTreeListView.loadTaskID(
+            fileTreeGeneration: 7,
+            fileTreeRefreshRevision: 2,
+            path: "build/cache",
+            open: true,
+            childrenState: .loaded
+        )
+        let afterPublication = FileTreeListView.loadTaskID(
+            fileTreeGeneration: 7,
+            fileTreeRefreshRevision: 3,
+            path: "build/cache",
+            open: true,
+            childrenState: .loaded
+        )
+
+        #expect(beforePublication != afterPublication)
+    }
 }

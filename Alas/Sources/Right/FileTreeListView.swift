@@ -9,6 +9,7 @@ struct FileTreeContext {
     /// whole tree; payload resolution rejects remote roots on its own.
     let worktreeRoot: URL?
     let fileTreeGeneration: Int
+    let fileTreeRefreshRevision: Int
     let showIgnored: Bool
     /// Repo-level bookmarked paths, for the context menu's add/remove wording.
     let bookmarks: [String]
@@ -289,7 +290,23 @@ struct FileTreeListView: View {
     // MARK: - Helpers
 
     private func loadTaskID(for node: FileTreeNode, open: Bool) -> String {
-        "\(context.fileTreeGeneration):\(node.path):\(open):\(node.childrenState.rawValue)"
+        Self.loadTaskID(
+            fileTreeGeneration: context.fileTreeGeneration,
+            fileTreeRefreshRevision: context.fileTreeRefreshRevision,
+            path: node.path,
+            open: open,
+            childrenState: node.childrenState
+        )
+    }
+
+    nonisolated static func loadTaskID(
+        fileTreeGeneration: Int,
+        fileTreeRefreshRevision: Int,
+        path: String,
+        open: Bool,
+        childrenState: DirectoryChildrenState
+    ) -> String {
+        "\(fileTreeGeneration):\(fileTreeRefreshRevision):\(path):\(open):\(childrenState.rawValue)"
     }
 
     private func shouldAutoLoadChildren(for node: FileTreeNode, open: Bool) -> Bool {
