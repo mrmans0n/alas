@@ -17,7 +17,7 @@ enum RunRowAction: Hashable {
     case restart
     case openTerminal
     case openEndpoint(URL)
-    case showOutput(failureID: String)
+    case showReport(runID: String)
     case edit
 }
 
@@ -28,8 +28,7 @@ struct RunRowInput {
     /// shell is not evidence the command is still running — it only decides
     /// whether "jump to terminal" has anywhere to go.
     let hasTerminal: Bool
-    /// Whether the record's captured failure is still retained and can be opened.
-    let hasCapturedOutput: Bool
+    let hasReport: Bool
     let target: RunExecutionTarget
 }
 
@@ -149,6 +148,21 @@ enum RunTabPresentation {
         return "\(hours / 24)d ago"
     }
 
+    static func historyDetail(_ entry: RunHistorySummary, now: Date) -> String {
+        let outcome = switch entry.outcome {
+        case .succeeded: "Succeeded"
+        case let .failed(exitCode): "Failed · exit \(exitCode)"
+        case .stopped: "Stopped"
+        case .unknown: "Unknown"
+        }
+        return [
+            outcome,
+            format(duration: entry.duration),
+            entry.branch,
+            relative(from: entry.finishedAt, to: now),
+        ].joined(separator: " · ")
+    }
+
     // MARK: - Location
 
     private static func locationLabel(script: RunScript, target: RunExecutionTarget) -> String? {
@@ -190,8 +204,8 @@ enum RunTabPresentation {
         } else {
             let hasOutcome = if case .finished = status { true } else { false }
             actions.append(.start(label: hasOutcome ? "Rerun" : "Run"))
-            if input.hasCapturedOutput, let failureID = input.record?.failureID {
-                actions.append(.showOutput(failureID: failureID))
+            if hasOutcome, input.hasReport, let runID = input.record?.id {
+                actions.append(.showReport(runID: runID))
             }
         }
         if input.hasTerminal {

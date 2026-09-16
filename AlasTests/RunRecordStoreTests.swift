@@ -59,6 +59,38 @@ struct RunRecordStoreTests {
         #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.failureID == "failure-1")
     }
 
+    @Test func finalizationReturnsTheRecordExactlyOnce() {
+        var store = RunRecordStore()
+        store.begin(record())
+        store.markRunning(runID: "run-1", sessionID: "session-1")
+
+        let finalized = store.finish(runID: "run-1", outcome: .succeeded, at: epoch.addingTimeInterval(2))
+
+        #expect(finalized?.id == "run-1")
+        #expect(finalized?.status == .finished(.succeeded))
+        #expect(finalized?.finishedAt == epoch.addingTimeInterval(2))
+        #expect(store.markLostObservation(runID: "run-1", at: epoch.addingTimeInterval(3)) == nil)
+    }
+
+    @Test func stopAndLostObservationReturnTheirFinalizedRecords() {
+        var store = RunRecordStore()
+        store.begin(record())
+
+        let stopped = store.markStopped(
+            worktreeID: "wt-1",
+            scriptKey: "repo:dev.sh",
+            at: epoch.addingTimeInterval(2)
+        )
+
+        #expect(stopped?.status == .finished(.stopped))
+        #expect(store.markStopped(worktreeID: "wt-1", scriptKey: "repo:dev.sh", at: epoch) == nil)
+
+        store.begin(record(id: "run-2"))
+        let unknown = store.markLostObservation(runID: "run-2", at: epoch.addingTimeInterval(4))
+
+        #expect(unknown?.status == .finished(.unknown))
+    }
+
     // MARK: - Launch races
 
     /// A restart replaces the record; the superseded run's monitor may still
@@ -184,6 +216,19 @@ struct RunRecordStoreTests {
 
         #expect(store.records(worktreeID: "wt-1").isEmpty)
         #expect(store.records(worktreeID: "wt-2").count == 1)
+    }
+
+    @Test func purgeFinishedWithCutoffKeepsLaterCompletions() {
+        var store = RunRecordStore()
+        store.begin(record(id: "old", scriptKey: "repo:old.sh"))
+        store.finish(runID: "old", outcome: .succeeded, at: epoch)
+        store.begin(record(id: "later", scriptKey: "repo:later.sh"))
+        store.finish(runID: "later", outcome: .succeeded, at: epoch.addingTimeInterval(1))
+
+        store.purgeFinished(worktreeID: "wt-1", finishedOnOrBefore: epoch)
+
+        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:old.sh") == nil)
+        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:later.sh")?.id == "later")
     }
 
     // MARK: - Endpoint ownership

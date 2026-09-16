@@ -1174,6 +1174,28 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusRunReport(worktreeId: String, runID: String, isTransient: Bool = false) -> Tab {
+        let state = RunReportTabState(worktreeId: worktreeId, runID: runID, isTransient: isTransient)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .runReport(state)
+        }
+        let tab = Tab.runReport(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    func closeRunReports(worktreeId: String) {
+        let reportIDs = tabs(forWorktree: worktreeId).compactMap { tab -> TabID? in
+            guard case .runReport = tab else { return nil }
+            return tab.id
+        }
+        for tabID in reportIDs {
+            close(worktreeId: worktreeId, tabId: tabID)
+        }
+    }
+
+    @discardableResult
     func openOrFocusGGLanding(worktreeId: String, projectId: String, stackName: String) -> Tab {
         let state = GGLandingTabState(projectId: projectId, stackName: stackName)
         for otherWorktreeId in Array(byWorktree.keys) where otherWorktreeId != worktreeId {

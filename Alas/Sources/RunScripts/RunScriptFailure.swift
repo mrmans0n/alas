@@ -1,10 +1,7 @@
 import Foundation
 
-enum RunScriptCapturedOutput: Equatable, Sendable {
-    case available(text: String, truncated: Bool)
-    case unavailable
-}
-
+/// Short-lived metadata for failure banners and attention. Durable output lives
+/// exclusively in `RunHistoryStore`, keyed by `runID`.
 struct RunScriptFailure: Identifiable, Equatable, Sendable {
     let id: String
     let runID: String
@@ -14,7 +11,6 @@ struct RunScriptFailure: Identifiable, Equatable, Sendable {
     let branch: String
     let exitCode: Int32
     let completedAt: Date
-    let capturedOutput: RunScriptCapturedOutput
 }
 
 struct RunScriptFailureQueue: Equatable {

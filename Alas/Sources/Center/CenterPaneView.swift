@@ -672,6 +672,9 @@ struct CenterPaneView: View {
                             .id(s.id + (s.remoteHost ?? ""))
                             .onAppear { completeStartupRecoveryIfActive(s.id) }
                             .task { completeStartupRecoveryIfActive(s.id) }
+                    case .runReport(let s):
+                        RunReportTabView(state: state, tabState: s)
+                            .id(s.id)
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,
@@ -757,7 +760,7 @@ struct CenterPaneView: View {
                         ForEach(runScriptFailures, id: \.id) { failure in
                             RunScriptFailureBanner(
                                 presentation: RunScriptFailureBannerPresentation(failure: failure),
-                                onOpen: { state.presentRunScriptFailure(failure) },
+                                onOpen: { state.openRunReport(worktreeID: worktree.id, runID: failure.runID) },
                                 onDismiss: { state.dismissRunScriptFailure(id: failure.id, worktreeID: worktree.id) }
                             )
                             .frame(width: 360)
@@ -791,9 +794,6 @@ struct CenterPaneView: View {
             completeStartupRecoveryIfPaneIsStable()
         }
         .background(theme.color("bg-1"))
-        .sheet(item: $state.selectedRunScriptFailure) { failure in
-            RunScriptFailureDetailView(failure: failure)
-        }
     }
 
     static func showsLegacyRightSidebarReveal(

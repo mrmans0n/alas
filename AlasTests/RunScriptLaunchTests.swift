@@ -76,6 +76,7 @@ struct RunScriptLaunchTests {
         #expect(suffix.contains("completion_ready=0"))
         #expect(suffix.contains("code=$?"))
         #expect(suffix.contains(".done.status"))
+        #expect(suffix.contains("*.snapshot"))
         #expect(suffix.contains("command -v script"))
         #expect(suffix.contains("find"))
         #expect(suffix.contains("exit_code=$?"))
@@ -456,7 +457,6 @@ struct RunScriptLaunchTests {
         #expect(failures[0].scriptName == "Dev")
         #expect(failures[0].exitCode == 42)
         #expect(failures[0].branch == "main")
-        #expect(failures[0].capturedOutput == .available(text: "bad output\n", truncated: false))
         #expect(notifications.count == 1)
         #expect(notifications[0].content.body == "Failed with exit code 42")
     }

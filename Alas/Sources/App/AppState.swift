@@ -165,9 +165,18 @@ final class AppState {
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
     var runRecords = RunRecordStore()
+    /// Immutable completed-run history. A missing store keeps the live Run
+    /// tab functional when Application Support cannot be opened.
+    @ObservationIgnored let runHistoryStore: RunHistoryStore?
+    var runHistoryRevision = 0
+    var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
+    var runHistoryError: String?
+    @ObservationIgnored var transientRunReports: [String: RunHistoryEntry] = [:]
+    var durableRunReportIDsByWorktreeID: [String: Set<String>] = [:]
+    @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
-    var selectedRunScriptFailure: RunScriptFailure?
     let attentionStore: AttentionStore
     var isAttentionInboxOpen = false {
         didSet {
@@ -901,6 +910,7 @@ final class AppState {
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
+        runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         tabsManager: TabsManager? = nil,
         lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
@@ -942,6 +952,7 @@ final class AppState {
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
+        self.runHistoryStore = runHistoryStore
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
@@ -1030,7 +1041,9 @@ final class AppState {
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
+            self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
+            await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()
         }
         Task.detached {
@@ -5023,7 +5036,7 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        cleanupWorktreeState(worktreeId: worktree.id)
+        cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
 
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
@@ -7818,12 +7831,16 @@ final class AppState {
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
-    /// touching git or persistence. Shared between Close-All, archive, and
-    /// delete so the bookkeeping stays in one place.
-    private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
+    /// touching git. Shared between Close-All, archive, and delete so the
+    /// bookkeeping stays in one place.
+    private func cleanupWorktreeState(
+        worktreeId: String,
+        purgeRunScriptFailures: Bool = true,
+        purgeRunHistory: Bool = true
+    ) {
         inAppNotifications.remove(worktreeID: worktreeId)
         if purgeRunScriptFailures {
-            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
+            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true, purgeHistory: purgeRunHistory)
         } else {
             cancelPendingRunScriptLaunches(worktreeID: worktreeId)
         }

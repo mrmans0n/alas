@@ -53,7 +53,7 @@ struct AttentionProducerTests {
         #expect(signal.title == "Build failed with exit code 23")
         #expect(signal.sourceKey == AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: Fixtures.owner))
         #expect(signal.fingerprint == "failure-1")
-        #expect(signal.jumpTarget == .runScriptFailure(failureID: "failure-1"))
+        #expect(signal.jumpTarget == .runScriptFailure(failureID: "run-1"))
     }
 
     @Test func laterFailureOfSameScriptSupersedesPriorRun() throws {
@@ -69,14 +69,15 @@ struct AttentionProducerTests {
         #expect(first.fingerprint != second.fingerprint)
     }
 
-    @Test func scriptFailureOutputMarksTruncationBeforeUtf8Repair() throws {
-        let output = String(repeating: "a", count: 8_191) + "é"
-        let failure = Fixtures.failure(runID: "run-1", id: "failure-1", exitCode: 23, capturedOutput: .available(text: output, truncated: false))
+    @Test func scriptFailureDoesNotDuplicateDurableOutputInAttention() throws {
+        let failure = Fixtures.failure(runID: "run-1", id: "failure-1", exitCode: 23)
+        let signal = try #require(AttentionProducer.script(
+            failure: failure,
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
 
-        let signal = try #require(AttentionProducer.script(failure: failure, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
-
-        #expect(signal.body?.hasSuffix("\n\n[Output truncated]") == true)
-        #expect(signal.body?.contains("é") == false)
+        #expect(signal.body == nil)
     }
 
     @Test(arguments: [
@@ -298,13 +299,17 @@ struct AttentionProducerTests {
         static let owner = AttentionWorktreeIdentity(projectID: "project", location: .local, lineageID: "lineage", legacyPath: nil)
         static let display = AttentionWorktreeDisplaySnapshot(projectName: "Project", branch: "feature", path: "/repo", host: nil)
 
-        static func failure(
-            runID: String,
-            id: String,
-            exitCode: Int32,
-            capturedOutput: RunScriptCapturedOutput = .unavailable
-        ) -> RunScriptFailure {
-            RunScriptFailure(id: id, runID: runID, scriptKey: "build", scriptName: "Build", worktreeID: "wt", branch: "feature", exitCode: exitCode, completedAt: .distantPast, capturedOutput: capturedOutput)
+        static func failure(runID: String, id: String, exitCode: Int32) -> RunScriptFailure {
+            RunScriptFailure(
+                id: id,
+                runID: runID,
+                scriptKey: "build",
+                scriptName: "Build",
+                worktreeID: "wt",
+                branch: "feature",
+                exitCode: exitCode,
+                completedAt: .distantPast
+            )
         }
 
         static func conflicts(_ paths: [String]) -> [ChangedFile] {

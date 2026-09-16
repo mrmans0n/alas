@@ -26,6 +26,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case ggSplitCommit(GGSplitCommitTabState)
     case ggLanding(GGLandingTabState)
     case webPreview(WebPreviewTabState)
+    case runReport(RunReportTabState)
 
     var id: TabID {
         switch self {
@@ -51,6 +52,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit(let s): return s.id
         case .ggLanding(let s):    return s.id
         case .webPreview(let s):   return s.id
+        case .runReport(let s):    return s.id
         }
     }
 
@@ -78,6 +80,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit:       return "Split Commit"
         case .ggLanding(let s):    return s.title
         case .webPreview(let s):   return s.title
+        case .runReport(let s):    return s.title
         }
     }
 
@@ -105,10 +108,12 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit: return "arrow.trianglehead.branch"
         case .ggLanding:    return "arrow.down.to.line"
         case .webPreview:   return "globe"
+        case .runReport:    return "terminal.fill"
         }
     }
 
     var isRestorable: Bool {
+        if case .runReport(let state) = self { return !state.isTransient }
         if case .ggLanding = self { return false }
         return true
     }
@@ -188,6 +193,37 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
         self.url = url
         self.remoteHost = remoteHost
         self.id = "web-preview:\(ownerKey)"
+    }
+}
+
+struct RunReportTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let runID: String
+    let isTransient: Bool
+
+    var title: String { "Run Report" }
+
+    init(worktreeId: String, runID: String, isTransient: Bool = false) {
+        self.worktreeId = worktreeId
+        self.runID = runID
+        self.isTransient = isTransient
+        id = "run-report:\(runID)"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case runID
+        case isTransient
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        runID = try container.decode(String.self, forKey: .runID)
+        isTransient = try container.decodeIfPresent(Bool.self, forKey: .isTransient) ?? false
     }
 }
 

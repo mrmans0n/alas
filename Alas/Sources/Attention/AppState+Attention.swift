@@ -16,7 +16,7 @@ struct AttentionPendingReviewReveal {
 
 struct AttentionNavigationEnvironment {
     var focusSession: @MainActor (AttentionItem, String) -> Bool
-    var presentScriptFailure: @MainActor (AttentionItem, String) -> Bool
+    var presentScriptFailure: @MainActor (AttentionItem, String) async -> Bool
     var revealRightPane: @MainActor (AttentionItem, AttentionJumpTarget) async -> Bool
     var focusReviewComment: @MainActor (AttentionItem, String, String) -> Bool
     var focusRemoteWorktree: @MainActor (AttentionItem) -> Bool
@@ -48,27 +48,32 @@ struct AttentionNavigationEnvironment {
                 }
                 return true
             },
-            presentScriptFailure: { [weak appState] item, failureID in
+            presentScriptFailure: { [weak appState] item, runID in
                 guard let appState, let worktree = item.worktree else { return false }
-                let failure = appState.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID })
-                    ?? RunScriptFailure(
-                        id: failureID,
-                        runID: "attention:\(item.eventID.uuidString)",
-                        scriptKey: "attention-history",
-                        scriptName: item.title.replacingOccurrences(of: " failed with exit code [0-9]+$", with: "", options: .regularExpression),
-                        worktreeID: worktree.id,
-                        branch: item.display.branch,
-                        exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1,
-                        completedAt: item.occurredAt,
-                        capturedOutput: item.body.map { body in
-                            let marker = "\n\n[Output truncated]"
-                            if body.hasSuffix(marker) {
-                                return .available(text: String(body.dropLast(marker.count)), truncated: true)
-                            }
-                            return .available(text: body, truncated: false)
-                        } ?? .unavailable
-                    )
-                appState.presentRunScriptFailure(failure)
+                let output: RunHistoryOutput
+                if let body = item.body {
+                    let marker = "\n\n[Output truncated]"
+                    output = body.hasSuffix(marker)
+                        ? .available(text: String(body.dropLast(marker.count)), truncated: true)
+                        : .available(text: body, truncated: false)
+                } else if appState.hasRunReport(worktreeID: worktree.id, runID: runID) {
+                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
+                    return true
+                } else if await appState.hasPersistedRunReport(worktreeID: worktree.id, runID: runID) {
+                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
+                    return true
+                } else {
+                    output = .unavailable
+                }
+                let entry = RunHistoryEntry(
+                    id: runID, scriptKey: "attention-history",
+                    scriptName: item.title.replacingOccurrences(of: " failed with exit code [0-9]+$", with: "", options: .regularExpression),
+                    worktreeID: worktree.id, branch: item.display.branch,
+                    target: .init(host: item.display.host, workingDirectory: worktree.display.path), endpoint: nil,
+                    outcome: .failed(exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1),
+                    startedAt: item.occurredAt, finishedAt: item.occurredAt, portConflict: nil, output: output
+                )
+                appState.openTransientRunReport(entry)
                 return true
             },
             revealRightPane: { [weak appState] item, target in
@@ -137,7 +142,7 @@ extension AppState {
             opened = environment.focusSession(resolved, sessionID)
             failure = "The session is no longer available."
         case .runScriptFailure(let failureID):
-            opened = environment.presentScriptFailure(resolved, failureID)
+            opened = await environment.presentScriptFailure(resolved, failureID)
             failure = "The script failure is no longer available."
         case .conflicts, .gitOperation, .reviewRequest:
             opened = await environment.revealRightPane(resolved, item.jumpTarget)

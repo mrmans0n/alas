@@ -74,6 +74,12 @@ extension Paths {
 }
 
 extension Paths {
+    static var runHistoryDB: URL {
+        appSupportRoot.appendingPathComponent("run-history.sqlite")
+    }
+}
+
+extension Paths {
     static var acpAdapterUpdatesFile: URL {
         appSupportRoot.appendingPathComponent("acp-adapter-updates.json")
     }

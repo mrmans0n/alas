@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct RunScriptFailureBannerPresentation: Equatable {
@@ -25,94 +24,19 @@ struct RunScriptFailureBannerPresentation: Equatable {
     }
 }
 
-struct RunScriptFailureDetailPresentation: Equatable {
-    let failure: RunScriptFailure
-
-    var outputText: String {
-        switch failure.capturedOutput {
-        case .available(let text, _):
-            text.isEmpty ? "No output was captured." : text
-        case .unavailable:
-            "Output could not be captured."
-        }
-    }
-
-    var outputFooter: String? {
-        if case .available(_, true) = failure.capturedOutput {
-            "Output truncated"
-        } else {
-            nil
-        }
-    }
-
-    var completedText: String {
-        failure.completedAt.formatted(date: .abbreviated, time: .standard)
-    }
-}
-
 struct RunScriptFailureBanner: View {
     let presentation: RunScriptFailureBannerPresentation
     let onOpen: () -> Void
     let onDismiss: () -> Void
+
     var body: some View {
         InAppNotificationBanner(
             message: presentation.title + (presentation.overflowText.map { " · " + $0 } ?? ""),
             severity: .error,
-            actionTitle: "Show output",
+            actionTitle: "Show Report",
             action: onOpen,
             dismiss: onDismiss
         )
         .accessibilityIdentifier("run-script-failure-banner")
-    }
-}
-
-struct RunScriptFailureDetailView: View {
-    let failure: RunScriptFailure
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        let presentation = RunScriptFailureDetailPresentation(failure: failure)
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(failure.scriptName) failed")
-                        .font(.headline)
-                    Text("Exit code \(failure.exitCode) on \(failure.branch)")
-                        .font(.subheadline)
-                        .foregroundStyle(theme.color("fg-muted"))
-                    Text("Completed \(presentation.completedText)")
-                        .font(.caption)
-                        .foregroundStyle(theme.color("fg-muted"))
-                }
-                Spacer()
-                Button("Copy Output") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(presentation.outputText, forType: .string)
-                }
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-
-            ScrollView {
-                Text(presentation.outputText)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-            }
-            .background(theme.color("bg-2"))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.color("line"), lineWidth: 1))
-            .clipShape(.rect(cornerRadius: 8))
-
-            if let outputFooter = presentation.outputFooter {
-                Text(outputFooter)
-                    .font(.caption)
-                    .foregroundStyle(theme.color("fg-muted"))
-            }
-        }
-        .padding(16)
-        .frame(width: 640, height: 420)
-        .background(theme.color("bg-1"))
     }
 }

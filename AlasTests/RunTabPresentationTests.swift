@@ -50,7 +50,7 @@ struct RunTabPresentationTests {
         script: RunScript? = nil,
         record: RunRecord? = nil,
         hasTerminal: Bool = false,
-        hasCapturedOutput: Bool = false,
+        hasReport: Bool = true,
         host: String? = nil,
         workingDirectory: String = "/wt",
         now: Date? = nil
@@ -60,7 +60,7 @@ struct RunTabPresentationTests {
                 script: script ?? self.script(),
                 record: record,
                 hasTerminal: hasTerminal,
-                hasCapturedOutput: hasCapturedOutput,
+                hasReport: hasReport,
                 target: RunExecutionTarget(host: host, workingDirectory: workingDirectory)
             ),
             now: now ?? epoch
@@ -102,6 +102,64 @@ struct RunTabPresentationTests {
             activeWorktreeID: "wt-1",
             isCancelled: true
         ))
+    }
+
+    @Test func staleHistoryLoadsCannotCommitAfterWorktreeOrPageChanges() {
+        #expect(RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            requestedRevision: 2,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 1,
+            currentRevision: 2,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            requestedRevision: 2,
+            activeWorktreeID: "wt-2",
+            currentPageIndex: 1,
+            currentRevision: 2,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            requestedRevision: 2,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 0,
+            currentRevision: 2,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            requestedRevision: 2,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 1,
+            currentRevision: 3,
+            isCancelled: false
+        ))
+    }
+
+    @Test func historyDetailIncludesBranchAndCompletionTime() {
+        let finishedAt = epoch.addingTimeInterval(-180)
+        let entry = RunHistorySummary(
+            id: "run-1",
+            scriptKey: "repo:dev.sh",
+            scriptName: "Dev Server",
+            worktreeID: "wt-1",
+            branch: "feature/run-history",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/wt"),
+            endpoint: nil,
+            outcome: .succeeded,
+            startedAt: finishedAt.addingTimeInterval(-125),
+            finishedAt: finishedAt,
+            portConflict: nil
+        )
+
+        #expect(RunTabPresentation.historyDetail(entry, now: epoch) == "Succeeded · 2m 5s · feature/run-history · 3m ago")
     }
 
     @Test func neverRunScriptOffersRunOnly() {
@@ -147,23 +205,26 @@ struct RunTabPresentationTests {
         #expect(!row.actions.contains(.openEndpoint(endpoint)))
     }
 
-    @Test func failedRunReportsExitCodeDurationAndOutputLink() {
+    @Test func completedRunOffersItsDurableReport() {
         let row = row(
             record: record(
                 status: .finished(.failed(exitCode: 42)),
-                finishedAt: epoch.addingTimeInterval(75),
-                failureID: "failure-1"),
-            hasCapturedOutput: true,
+                finishedAt: epoch.addingTimeInterval(75)
+            ),
             now: epoch.addingTimeInterval(75 + 3_600)
         )
         #expect(row.statusLabel == "Failed")
         #expect(row.tone == .failure)
         #expect(row.detail == "exit 42 · 1m 15s · 1h ago")
-        #expect(row.actions == [.start(label: "Rerun"), .showOutput(failureID: "failure-1"), .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .edit])
     }
 
-    @Test func failedRunWithoutRetainedOutputDoesNotOfferDeadOutputAction() {
-        let row = row(record: record(status: .finished(.failed(exitCode: 42)), failureID: "gone"))
+    @Test func completedRunHidesUnavailableReport() {
+        let row = row(
+            record: record(status: .finished(.stopped), finishedAt: epoch.addingTimeInterval(30)),
+            hasReport: false,
+            now: epoch.addingTimeInterval(30)
+        )
         #expect(row.actions == [.start(label: "Rerun"), .edit])
     }
 
@@ -175,7 +236,7 @@ struct RunTabPresentationTests {
         #expect(row.statusLabel == "Succeeded")
         #expect(row.tone == .success)
         #expect(row.detail == "9s · just now")
-        #expect(row.actions == [.start(label: "Rerun"), .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .edit])
     }
 
     @Test func stoppedRunSaysSoInsteadOfFailing() {
@@ -207,7 +268,7 @@ struct RunTabPresentationTests {
         let row = row(record: record(status: .finished(.succeeded), finishedAt: epoch), hasTerminal: true)
         #expect(!row.isActive)
         #expect(row.statusLabel == "Succeeded")
-        #expect(row.actions == [.start(label: "Rerun"), .openTerminal, .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .openTerminal, .edit])
     }
 
     // MARK: - Execution host

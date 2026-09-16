@@ -28,13 +28,13 @@ final class SQLiteStatement {
             case let v as Int:          rc = sqlite3_bind_int64(handle, idx, Int64(v))
             case let v as Int64:        rc = sqlite3_bind_int64(handle, idx, v)
             case let v as Double:       rc = sqlite3_bind_double(handle, idx, v)
-            case let v as String:       rc = sqlite3_bind_text(handle, idx, v, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            case let v as String:       rc = bindText(v, at: idx)
             case let v as Data:
                 rc = v.withUnsafeBytes { buf in
                     sqlite3_bind_blob(handle, idx, buf.baseAddress, Int32(buf.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                 }
             default:
-                rc = sqlite3_bind_text(handle, idx, String(describing: v), -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                rc = bindText(String(describing: v), at: idx)
             }
             if rc != SQLITE_OK {
                 throw SQLiteError.bindFailed(code: rc, message: String(cString: sqlite3_errmsg(db)), index: i + 1)
@@ -76,7 +76,11 @@ final class SQLiteStatement {
         case SQLITE_NULL:    return nil
         case SQLITE_INTEGER: return sqlite3_column_int64(handle, i)
         case SQLITE_FLOAT:   return sqlite3_column_double(handle, i)
-        case SQLITE_TEXT:    return String(cString: sqlite3_column_text(handle, i))
+        case SQLITE_TEXT:
+            guard let ptr = sqlite3_column_text(handle, i) else { return "" }
+            let len = Int(sqlite3_column_bytes(handle, i))
+            let bytes = UnsafeRawBufferPointer(start: ptr, count: len)
+            return String(decoding: bytes, as: UTF8.self)
         case SQLITE_BLOB:
             if let ptr = sqlite3_column_blob(handle, i) {
                 let len = Int(sqlite3_column_bytes(handle, i))
@@ -84,6 +88,12 @@ final class SQLiteStatement {
             }
             return Data()
         default: return nil
+        }
+    }
+
+    private func bindText(_ value: String, at index: Int32) -> Int32 {
+        value.withCString {
+            sqlite3_bind_text(handle, index, $0, Int32(value.utf8.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
     }
 }
