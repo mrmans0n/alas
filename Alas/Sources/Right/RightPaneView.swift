@@ -197,8 +197,7 @@ struct RightPaneView: View {
                         AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
                             .id(worktree.id)
                     } else {
-                        ProgressView("Loading sessions…")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        RightPaneLoadingSkeletonView(activeTab: .agent)
                     }
                 }
             case .run:

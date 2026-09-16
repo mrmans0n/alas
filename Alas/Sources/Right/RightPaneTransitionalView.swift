@@ -105,54 +105,6 @@ struct RightPaneTransitionalView: View {
     }
 }
 
-// MARK: - Creating skeleton
-
-struct RightPaneLoadingSkeletonView: View {
-    let activeTab: RightPaneTab
-
-    var body: some View {
-        switch activeTab {
-        case .changes:
-            VStack(alignment: .leading, spacing: 0) {
-                SkeletonSectionHeader(role: .workingTree, title: "Working tree")
-                VStack(alignment: .leading, spacing: 6) {
-                    SkeletonRow(widthFraction: 0.75)
-                    SkeletonRow(widthFraction: 0.55)
-                    SkeletonRow(widthFraction: 0.65)
-                    SkeletonRow(widthFraction: 0.4)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-
-                SkeletonSectionHeader(role: .commits, title: "Commits")
-                VStack(alignment: .leading, spacing: 6) {
-                    SkeletonRow(widthFraction: 0.8)
-                    SkeletonRow(widthFraction: 0.6)
-                    SkeletonRow(widthFraction: 0.7)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-        case .files, .agent, .run:
-            VStack(alignment: .leading, spacing: 6) {
-                SkeletonRow(widthFraction: 0.6,  leadingInset: 0)
-                SkeletonRow(widthFraction: 0.5,  leadingInset: 16)
-                SkeletonRow(widthFraction: 0.55, leadingInset: 16)
-                SkeletonRow(widthFraction: 0.45, leadingInset: 32)
-                SkeletonRow(widthFraction: 0.5,  leadingInset: 16)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-    }
-}
-
 // MARK: - Compact label (deleting / createFailed)
 
 private struct CompactStateLabel: View {
