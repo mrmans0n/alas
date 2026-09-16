@@ -3156,14 +3156,11 @@ final class RightPaneState: GGSplitCommitServicing {
                     return refreshed
                 }
                 // Keep git-authoritative entries the filesystem listing can't
-                // show (e.g. tracked deletions); drop only ignored/excluded
-                // entries with no badge that are actually gone from disk.
+                // show (e.g. tracked deletions with a D badge); drop clean
+                // entries that are absent from both refreshed sources.
                 let keptDeletions = (node.children ?? []).filter { existing in
                     guard !incomingIDs.contains(existing.id) else { return false }
-                    let filesystemAuthoritative =
-                        (existing.visibility == .ignored || existing.visibility == .excluded)
-                        && existing.badge == nil
-                    return !filesystemAuthoritative
+                    return existing.visibility == .tracked && existing.badge != nil
                 }
                 reconciled.append(contentsOf: keptDeletions)
                 updated.children = reconciled.sorted { lhs, rhs in

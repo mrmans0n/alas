@@ -795,6 +795,57 @@ struct RightPaneStateFileTreeTests {
         #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
     }
 
+    @Test func replacingChildrenDropsCleanTrackedEntriesAbsentFromDiskListing() {
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Gone.swift",
+                        path: "build/Gone.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "Kept.swift",
+                        path: "build/Kept.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+        let incoming = [
+            FileTreeNode(
+                name: "Kept.swift",
+                path: "build/Kept.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "build", with: incoming, state: .loaded)
+        let build = result.nodes.first
+
+        #expect(result.didMerge)
+        #expect(build?.children?.contains { $0.path == "build/Gone.swift" } == false)
+        #expect(build?.children?.contains { $0.path == "build/Kept.swift" } == true)
+    }
+
     @Test func replacingChildrenReportsMissingTargetWithoutMutating() {
         let tree = [
             FileTreeNode(
