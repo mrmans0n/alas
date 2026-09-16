@@ -264,6 +264,39 @@ struct RightPaneStateFileTreeTests {
         #expect(state.fileTreeRevision == revision + 1)
     }
 
+    @Test func identifiesPreservedLazyDirectoriesForReconciliation() {
+        let fresh = [
+            FileTreeNode(
+                name: "Ignored",
+                path: "Ignored",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                childrenState: .notLoaded
+            )
+        ]
+        let previous = [
+            FileTreeNode(
+                name: "Ignored",
+                path: "Ignored",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "old.txt",
+                        path: "Ignored/old.txt",
+                        kind: .file,
+                        children: nil,
+                        badge: nil
+                    )
+                ],
+                badge: nil,
+                childrenState: .loaded
+            )
+        ]
+
+        #expect(RightPaneState.preservedLazyChildPaths(fresh: fresh, previous: previous) == ["Ignored"])
+    }
+
     @Test func invalidatingFileTreeChildLoadsResetsLoadingDirectoriesInRetainedTree() {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-filetree-loading-reset-\(UUID().uuidString)")

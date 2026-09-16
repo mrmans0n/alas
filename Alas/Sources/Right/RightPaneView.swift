@@ -123,7 +123,7 @@ struct RightPaneView: View {
     /// bookmark closer to resolving.
     private func bookmarkLoadSignal(rps: RightPaneState) -> String {
         let bookmarks = state.projectsManager.fileBookmarks(projectId: worktree.projectId)
-        return "\(rps.fileTreeGeneration):\(rps.fileTreeRevision):\(rps.loadedFileTreeChildPaths.count):\(bookmarks.joined(separator: "|"))"
+        return "\(rps.fileTreeGeneration):\(rps.fileTreeRevision):\(rps.fileTreeRefreshRevision):\(rps.loadedFileTreeChildPaths.count):\(bookmarks.joined(separator: "|"))"
     }
 
     @ViewBuilder

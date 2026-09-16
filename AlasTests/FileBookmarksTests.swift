@@ -34,9 +34,13 @@ struct FileBookmarksTests {
 
     // MARK: - Normalization
 
-    @Test(arguments: ["Sources/Center", "/Sources/Center", "Sources/Center/", "  Sources/Center  "])
+    @Test(arguments: ["Sources/Center", "/Sources/Center", "Sources/Center/"])
     func normalizesToRepoRelativePath(_ raw: String) {
         #expect(FileBookmarks.normalized(raw) == "Sources/Center")
+    }
+
+    @Test func preservesWhitespaceInPathComponents() {
+        #expect(FileBookmarks.normalized(" folder / document ") == " folder / document ")
     }
 
     @Test(arguments: ["", "   ", "/", "."])

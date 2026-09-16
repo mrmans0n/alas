@@ -208,6 +208,10 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Views that resolve paths against the tree use this to avoid running
     /// against the pre-refresh snapshot.
     private(set) var fileTreeRevision: Int = 0
+    /// Lazy directories carried over during a refresh. They must be relisted
+    /// before bookmarks can trust their retained descendants.
+    private var bookmarkReconciliationPaths: Set<String> = []
+    private(set) var fileTreeRefreshRevision: Int = 0
 
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes {
@@ -1393,8 +1397,12 @@ final class RightPaneState: GGSplitCommitServicing {
                 self.changesGeneration += 1
             }
             if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
-            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
+            let previousFileTree = self.fileTree
+            let preservedLazyPaths = Self.preservedLazyChildPaths(fresh: tree, previous: previousFileTree)
+            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
+            bookmarkReconciliationPaths = Set(preservedLazyPaths)
+            fileTreeRefreshRevision &+= 1
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
@@ -3065,6 +3073,31 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    /// Directories whose old children are retained because a refreshed tree
+    /// leaves them lazy. Their retained descendants need one fresh listing.
+    nonisolated static func preservedLazyChildPaths(
+        fresh: [FileTreeNode],
+        previous: [FileTreeNode]
+    ) -> [String] {
+        let previousByPath = Dictionary(uniqueKeysWithValues: previous.map { ($0.path, $0) })
+        var paths: [String] = []
+        for node in fresh where node.kind == .dir {
+            let prior = previousByPath[node.path]
+            if node.childrenState == .notLoaded,
+               node.children == nil,
+               prior?.childrenState == .loaded,
+               prior?.children != nil {
+                paths.append(node.path)
+                continue
+            }
+            paths += preservedLazyChildPaths(
+                fresh: node.children ?? [],
+                previous: prior?.children ?? []
+            )
+        }
+        return paths
+    }
+
     /// Reconciles the child list of the directory at `path` against a fresh
     /// listing from `GitService.fileTreeChildren`. Used when re-loading an
     /// already-loaded directory on refresh.
@@ -3210,6 +3243,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
                 self.failedFileTreeChildPaths.remove(path)
+                self.bookmarkReconciliationPaths.remove(path)
                 self.fileTree = result.nodes
             } catch {
                 guard self.fileTreeGeneration == generation else { return }
@@ -3239,9 +3273,18 @@ final class RightPaneState: GGSplitCommitServicing {
     /// advances per call; callers re-invoke as the tree changes.
     func ensureBookmarkPathsLoaded(_ paths: [String]) {
         for path in paths {
-            guard let pending = FileBookmarks.pendingLoadPath(for: path, in: fileTree) else { continue }
-            loadFileTreeChildren(path: pending)
+            if let pending = FileBookmarks.pendingLoadPath(for: path, in: fileTree) {
+                loadFileTreeChildren(path: pending)
+            } else if let reconciliationPath = bookmarkReconciliationPath(for: path) {
+                loadFileTreeChildren(path: reconciliationPath)
+            }
         }
+    }
+
+    private func bookmarkReconciliationPath(for bookmarkPath: String) -> String? {
+        bookmarkReconciliationPaths
+            .filter { candidate in bookmarkPath == candidate || bookmarkPath.hasPrefix("\(candidate)/") }
+            .min { $0.split(separator: "/").count < $1.split(separator: "/").count }
     }
 
     func reveal(path: String, opensPane: Bool = false) {

@@ -26,11 +26,12 @@ enum FileBookmarks {
     /// Canonical storage form of a worktree-relative path, or nil when the
     /// path cannot be bookmarked (blank, or the worktree root itself).
     static func normalized(_ path: String) -> String? {
-        var trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        while trimmed.hasPrefix("/") { trimmed.removeFirst() }
-        while trimmed.hasSuffix("/") { trimmed.removeLast() }
-        guard !trimmed.isEmpty, trimmed != ".", trimmed != ".." else { return nil }
-        return trimmed
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        var normalized = path
+        while normalized.hasPrefix("/") { normalized.removeFirst() }
+        while normalized.hasSuffix("/") { normalized.removeLast() }
+        guard !normalized.isEmpty, normalized != ".", normalized != ".." else { return nil }
+        return normalized
     }
 
     static func contains(_ path: String, in bookmarks: [String]) -> Bool {
