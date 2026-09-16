@@ -289,7 +289,8 @@ extension AppState {
     func stopScript(_ script: RunScript, in worktree: Worktree) {
         let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
-            runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            archiveFinalizedRun(finalized, capture: .unavailable)
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
             return
         }
