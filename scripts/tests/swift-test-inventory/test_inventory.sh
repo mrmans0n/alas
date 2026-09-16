@@ -102,15 +102,23 @@ import Testing
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/InlineNestedAttributeTests.swift" <<'SWIFT'
+import Testing
+
+@Suite(.disabled(if: false)) struct InlineNestedAttributeTests {
+    @Test func ordinary() {}
+}
+SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=12 scheduled=11 ordinary=4 subprocess=7 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=13 scheduled=12 ordinary=5 subprocess=7 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'BehaviorFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'QuarantinedTests' "${inventory_cache}/quarantined.txt"
 
@@ -122,6 +130,7 @@ grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/InlineNestedAttributeTests' <<<"${selectors}"
 if grep -q 'QuarantinedTests' <<<"${selectors}"; then
     echo 'quarantined suite was scheduled' >&2
     exit 1
@@ -167,8 +176,13 @@ env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_IN
     bash "${batch_runner}" 0 2
 grep -qx -- '-only-testing' "${ordinary_log}"
 grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
-if grep -q 'AlasTests/InlineSuiteTests' "${ordinary_log}"; then
+grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/UnitTests' "${ordinary_log}"
+if grep -q 'AlasTests/InlineNestedAttributeTests' "${ordinary_log}"; then
+    echo 'cached ordinary batch used the wrong modulo assignment' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/SecondTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi

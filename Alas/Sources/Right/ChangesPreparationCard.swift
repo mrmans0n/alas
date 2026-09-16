@@ -34,6 +34,24 @@ enum ChangesPreparationCardText {
     }
 }
 
+struct ChangesPreparationCardAccessibilityIdentifierPreferenceKey: PreferenceKey {
+    static let defaultValue: Set<String> = []
+
+    static func reduce(value: inout Set<String>, nextValue: () -> Set<String>) {
+        value.formUnion(nextValue())
+    }
+}
+
+private extension View {
+    func changesPreparationAccessibilityIdentifier(_ identifier: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .background(
+                Color.clear
+                    .preference(key: ChangesPreparationCardAccessibilityIdentifierPreferenceKey.self, value: [identifier])
+            )
+    }
+}
+
 struct ChangesPreparationReconciliationPresentation: Equatable {
     let spinnerColorToken: String?
     let accessibilityValue: String?
@@ -149,10 +167,10 @@ struct ChangesPreparationCard: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
             )
-            .accessibilityIdentifier("changes-preparation-open-gg-landing")
+            .changesPreparationAccessibilityIdentifier("changes-preparation-open-gg-landing")
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("changes-preparation-gg-landing")
+        .changesPreparationAccessibilityIdentifier("changes-preparation-gg-landing")
     }
 
     private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {

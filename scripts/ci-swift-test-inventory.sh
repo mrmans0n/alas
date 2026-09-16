@@ -58,8 +58,37 @@ trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
 # types cannot become stale xcodebuild selectors.
 while IFS= read -r source; do
     awk '
-        /^[[:space:]]*(@[A-Za-z_][A-Za-z0-9_]*(\([^)]*\))?[[:space:]]+)*((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
-            name = $0
+        function strip_attributes(line,    i, c, depth) {
+            while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
+                sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
+                sub(/^[[:space:]]*/, "", line)
+                if (substr(line, 1, 1) == "(") {
+                    depth = 0
+                    for (i = 1; i <= length(line); i++) {
+                        c = substr(line, i, 1)
+                        if (c == "(") {
+                            depth++
+                        } else if (c == ")") {
+                            depth--
+                            if (depth == 0) {
+                                line = substr(line, i + 1)
+                                break
+                            }
+                        }
+                    }
+                    if (depth != 0) {
+                        break
+                    }
+                }
+                sub(/^[[:space:]]*/, "", line)
+            }
+            return line
+        }
+        {
+            candidate = strip_attributes($0)
+        }
+        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+            name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
             suite = name
