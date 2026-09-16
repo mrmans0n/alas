@@ -202,6 +202,8 @@ final class RightPaneState: GGSplitCommitServicing {
     private var pendingRevealForPaneMount = false
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
+    private var fileTreeChildLoadTokens: [String: Int] = [:]
+    private var nextFileTreeChildLoadToken: Int = 0
     private(set) var failedFileTreeChildPaths: Set<String> = []
     private(set) var fileTreeGeneration: Int = 0
     /// Advances when a refreshed or lazily loaded tree is actually published.
@@ -1409,6 +1411,10 @@ final class RightPaneState: GGSplitCommitServicing {
             )
             loadedFileTreeChildPaths = reconciliationBookkeeping.loaded
             loadingFileTreeChildPaths = reconciliationBookkeeping.loading
+            fileTreeChildLoadTokens = Self.loadTokensAfterPublishingReconciliationPaths(
+                tokens: fileTreeChildLoadTokens,
+                loading: loadingFileTreeChildPaths
+            )
             fileTreeRefreshRevision &+= 1
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
@@ -2940,6 +2946,7 @@ final class RightPaneState: GGSplitCommitServicing {
         fileTreeGeneration += 1
         loadedFileTreeChildPaths = [""]
         loadingFileTreeChildPaths = []
+        fileTreeChildLoadTokens = [:]
         failedFileTreeChildPaths = []
         fileTree = Self.resetLoadingFileTreeChildren(in: fileTree)
     }
@@ -3221,10 +3228,13 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func loadFileTreeChildren(path: String) {
-        let reconcilesBookmark = bookmarkReconciliationPaths.contains(path)
-        guard (!loadedFileTreeChildPaths.contains(path) || reconcilesBookmark),
+        let reconcilesRetainedChildren = bookmarkReconciliationPaths.contains(path)
+        guard (!loadedFileTreeChildPaths.contains(path) || reconcilesRetainedChildren),
               !loadingFileTreeChildPaths.contains(path) else { return }
         loadingFileTreeChildPaths.insert(path)
+        nextFileTreeChildLoadToken &+= 1
+        let loadToken = nextFileTreeChildLoadToken
+        fileTreeChildLoadTokens[path] = loadToken
         // A directory whose children were carried over from a previous load
         // (e.g. across a refresh) is being reconciled, not loaded for the first
         // time. Flipping it to `.loading` would drop it out of a compacted chain
@@ -3241,6 +3251,7 @@ final class RightPaneState: GGSplitCommitServicing {
             let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
             guard loadingMerge.didMerge else {
                 loadingFileTreeChildPaths.remove(path)
+                fileTreeChildLoadTokens[path] = nil
                 return
             }
             fileTree = loadingMerge.nodes
@@ -3249,7 +3260,9 @@ final class RightPaneState: GGSplitCommitServicing {
         let refreshRevision = fileTreeRefreshRevision
         Task { @MainActor in
             defer {
-                if self.fileTreeGeneration == generation {
+                if self.fileTreeGeneration == generation,
+                   self.fileTreeChildLoadTokens[path] == loadToken {
+                    self.fileTreeChildLoadTokens[path] = nil
                     self.loadingFileTreeChildPaths.remove(path)
                 }
             }
@@ -3332,6 +3345,13 @@ final class RightPaneState: GGSplitCommitServicing {
             loaded.subtracting(reconciliationPaths),
             loading.subtracting(reconciliationPaths)
         )
+    }
+
+    nonisolated static func loadTokensAfterPublishingReconciliationPaths(
+        tokens: [String: Int],
+        loading: Set<String>
+    ) -> [String: Int] {
+        tokens.filter { path, _ in loading.contains(path) }
     }
 
     nonisolated static func shouldPublishFileTreeChildLoad(

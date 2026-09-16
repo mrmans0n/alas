@@ -244,6 +244,19 @@ struct RightPaneStateFileTreeTests {
         #expect(bookkeeping.loading == ["docs"])
     }
 
+    @Test func publishingReconciliationPathsDropsReopenedLoadTokens() {
+        let tokens = RightPaneState.loadTokensAfterPublishingReconciliationPaths(
+            tokens: [
+                "build": 1,
+                "build/cache": 2,
+                "docs": 3
+            ],
+            loading: ["docs"]
+        )
+
+        #expect(tokens == ["docs": 3])
+    }
+
     @Test func staleRefreshRevisionChildLoadsDoNotPublish() {
         #expect(RightPaneState.shouldPublishFileTreeChildLoad(
             startedAtRefreshRevision: 3,
