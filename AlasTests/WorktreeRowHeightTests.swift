@@ -34,17 +34,13 @@ struct NativeContextMenuTests {
 @Suite(.serialized)
 @MainActor
 struct WorktreeRowHeightTests {
-    @Test func projectAttentionCountDoesNotChangeHeaderOrWorktreeHeight() throws {
-        let collapsedWithout = try projectHeight(attentionCount: 0, collapsed: true)
-        let collapsedWith = try projectHeight(attentionCount: 999, collapsed: true)
-        let expandedWithout = try projectHeight(attentionCount: 0, collapsed: false)
-        let expandedWith = try projectHeight(attentionCount: 999, collapsed: false)
-        #expect(collapsedWithout == collapsedWith)
-        #expect(expandedWithout > collapsedWithout)
-        #expect(expandedWithout - collapsedWithout == expandedWith - collapsedWith)
+    @Test func projectHeaderExpandsToRevealWorktrees() throws {
+        let collapsedHeight = try projectHeight(collapsed: true)
+        let expandedHeight = try projectHeight(collapsed: false)
+        #expect(expandedHeight > collapsedHeight)
     }
 
-    private func projectHeight(attentionCount: Int, collapsed: Bool) throws -> Int {
+    private func projectHeight(collapsed: Bool) throws -> Int {
         let project = ProjectConfig(id: "p1", name: "Alas", path: "/tmp/alas", color: "blue", addedAt: Date())
         let worktree = Worktree(id: "wt1", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/tmp/alas"), status: .clean, lastActivity: Date())
@@ -60,7 +56,7 @@ struct WorktreeRowHeightTests {
             onDelete: { _ in }, onDeleteKeepBranch: { _ in }, showKeepBranchOption: false,
             onActivateHarness: { _, _ in }, onCopyError: { _ in }, onRetryCreate: { _ in }, onRetryDelete: { _ in },
             onSetGGWorktreeMode: { _, _ in }, onRemoveFailed: { _ in }, onDropWorktree: { _, _ in },
-            onDropProject: { _, _ in }, attentionCount: attentionCount
+            onDropProject: { _, _ in }
         ).environment(\.theme, try ThemeStore().current)
         let controller = NSHostingController(rootView: view)
         return Int(controller.sizeThatFits(in: NSSize(width: 300, height: CGFloat.greatestFiniteMagnitude)).height)

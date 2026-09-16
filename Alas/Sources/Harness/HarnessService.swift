@@ -26,6 +26,7 @@ final class HarnessService {
     var onClickThrough: ((String, String, String) -> Void)?
     var onContextClickThrough: ((NotificationClickContext) -> Void)?
     var onActivityTransition: ((HarnessActivityTransition) -> Void)?
+    var onWorktreeActivityEvent: ((String) -> Void)?
 
     struct HarnessActivityState: Equatable {
         var agent: AgentKind
@@ -121,6 +122,7 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
+        emitWorktreeActivityEventIfNeeded(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
         let previousState = activityBySession[event.sessionId]?.state
         let previous = activityBySession[event.sessionId]
         // Idle commits separately because Cursor may defer the authoritative change.
@@ -246,6 +248,33 @@ final class HarnessService {
         emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
     }
 
+    private func emitWorktreeActivityEventIfNeeded(
+        event: AgentHookEvent,
+        stateLookup: (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: (String) -> SessionOwnerID?
+    ) {
+        guard Self.shouldRefreshWorktreeStatus(after: event.event) else { return }
+        if case .workspaceCheckout = ownerLookup(event.sessionId) { return }
+        guard let lookup = stateLookup(event.sessionId) else { return }
+        onWorktreeActivityEvent?(lookup.worktreeId)
+    }
+
+    nonisolated static func shouldRefreshWorktreeStatus(after event: ActivityEvent) -> Bool {
+        switch event {
+        case .busy, .idle, .awaitingInput, .permissionRequest, .detached:
+            return true
+        case .attached:
+            return false
+        }
+    }
+
+    nonisolated static func shouldRefreshWorktreeStatus(after state: ActivityState) -> Bool {
+        switch state {
+        case .busy, .idle, .awaitingInput, .permissionRequest:
+            return true
+        }
+    }
+
     func stop() {
         detector.stop()
         socketServer.shutdown()
@@ -274,6 +303,11 @@ final class HarnessService {
             agent: agent, state: state, pid: nil,
             lastBody: body, updatedAt: Date(), requiresUserInput: requiresUserInput || state == .permissionRequest
         )
+        if !isSnapshot,
+           Self.shouldRefreshWorktreeStatus(after: state),
+           case .worktree(let worktreeId) = owner {
+            onWorktreeActivityEvent?(worktreeId)
+        }
         emitActivityTransition(sessionID: sessionId, previous: previous, owner: owner, isSnapshot: isSnapshot)
     }
 

@@ -18,6 +18,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var workspaceDeletionConfirmation: PendingWorkspaceDefinitionDeletion?
     @State private var hoveringWorkspaceID: UUID?
     @State private var plusHoveringWorkspaceID: UUID?
+    @State private var hoveringCheckoutID: UUID?
 
     var body: some View {
         let space = state.spacesManager.space(id: spaceID ?? state.spacesManager.activeSpaceId)
@@ -152,19 +153,30 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
             .frame(width: 18, height: 18)
         }
-        .padding(.leading, 6)
+        // Own leading inset matches RepoGroupView's header `.padding(5)`, so
+        // both header kinds land at the same 13pt from the sidebar edge once
+        // the outer scroll-content padding (SidebarView.swift) is added.
+        .padding(.leading, 5)
         .padding(.trailing, 8)
         .padding(.vertical, 3)
-        .background(selected ? theme.color("bg-4") : .clear, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(alignment: .leading) {
+        // Matches RepoGroupView's header: same radius, same hover fill, and
+        // accent-soft for selection rather than the pre-E1 bg-4 plus an inset
+        // accent bar. A workspace and a repo sitting next to each other should
+        // announce selection the same way.
+        .background(
+            selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
             if selected {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(theme.color("accent"))
-                    .frame(width: 3, height: 14)
-                    .padding(.leading, 2)
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
             }
         }
-        .padding(.horizontal, 6)
+        // Outer margin: trailing only. The leading side is already accounted
+        // for by the outer scroll-content padding, so adding it here would
+        // double-count it against the header's own leading inset above.
+        .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
@@ -177,9 +189,20 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         }
     }
 
-    private func checkoutRows(_ checkout: WorkspaceCheckout, projects: [String: ProjectConfig]) -> some View {
+    /// Full strength at rest, matching a worktree row's branch label; archived
+    /// checkouts stay dimmed because that is a property of the checkout rather
+    /// than of the row's interaction state.
+    private func checkoutBranchColorToken(checkout: WorkspaceCheckout) -> String {
+        checkout.archivedAt != nil ? "fg-dim" : "fg"
+    }
+
+    private func checkoutRows(
+        _ checkout: WorkspaceCheckout,
+        projects: [String: ProjectConfig]
+    ) -> some View {
         let selected = state.workspaceNavigationState.selectedCheckoutID == checkout.id
         let expanded = expandedCheckouts.contains(checkout.id)
+        let hovering = hoveringCheckoutID == checkout.id
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Button {
@@ -199,8 +222,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     HStack(spacing: 7) {
                         Icon(name: checkout.archivedAt == nil ? "branch" : "archivebox", size: 12)
                         Text(checkout.branch)
+                            // Matches WorktreeRowView's branch label.
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundColor(theme.color(checkout.archivedAt == nil ? "fg" : "fg-dim"))
+                            .foregroundColor(theme.color(checkoutBranchColorToken(checkout: checkout)))
                             .lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 0)
                         if checkout.operation != .idle {
@@ -218,15 +242,18 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
             .padding(.leading, 20)
             .padding(.trailing, 4)
-            .background(selected ? theme.color("bg-4") : .clear, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(alignment: .leading) {
+            // Same selection and hover language as a worktree row.
+            .background(
+                selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
+                in: RoundedRectangle(cornerRadius: 9)
+            )
+            .overlay {
                 if selected {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(theme.color("accent"))
-                        .frame(width: 3, height: 14)
-                        .padding(.leading, 2)
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                 }
             }
+            .onHover { hoveringCheckoutID = $0 ? checkout.id : nil }
             .contextMenu {
                 Button("Checkout details...", systemImage: "info.circle") { inspectedCheckout = checkout }
             }
@@ -263,7 +290,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 }
             }
         }
-        .padding(.horizontal, 6)
+        // Outer margin: trailing only, mirroring the workspace header above —
+        // the leading side is already covered by the outer scroll-content
+        // padding.
+        .padding(.trailing, 6)
     }
 
     private func deleteWorkspace(id: UUID) {

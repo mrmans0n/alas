@@ -4,16 +4,10 @@ import AppKit
 struct SidebarAttentionPresentation {
     let showsInbox: Bool
     let count: Int
-    private let countsByProject: [String: Int]
 
     init(enabled: Bool, aggregation: AttentionAggregation) {
         showsInbox = enabled
         count = enabled ? aggregation.unresolvedCount : 0
-        countsByProject = enabled ? aggregation.unresolvedCountByProject : [:]
-    }
-
-    func count(for projectID: String) -> Int {
-        countsByProject[projectID, default: 0]
     }
 }
 
@@ -66,7 +60,7 @@ struct SidebarView: View {
                     onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
-                    ScrollView(.vertical, showsIndicators: true) {
+                    ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 8) {
                             WorkspaceSidebarTree(
                                 state: state,
@@ -209,8 +203,7 @@ struct SidebarView: View {
                                             destinationId: destinationId
                                         )
                                         state.saveSpaces()
-                                    },
-                                    attentionCount: attentionPresentation.count(for: project.id)
+                                    }
                                 )
                             }
                             Color.clear
@@ -223,7 +216,10 @@ struct SidebarView: View {
                                     return true
                                 }
                         }
-                        .padding(.top, 8)
+                        .padding(.top, 6)
+                        .padding(.horizontal, 8)
+                        // Leaves room below the last repo for the drop target.
+                        .padding(.bottom, 20)
                     }
                 }
                 if state.spacesManager.shouldShowSpaceAffordance {

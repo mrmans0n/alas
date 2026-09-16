@@ -4,6 +4,9 @@ import SwiftUI
 struct ProjectIconView: View {
     enum Size {
         case sidebar
+        /// E1's repo-header tile. Separate from `.sidebar` so the five
+        /// non-sidebar callers of that case keep their 16px icons.
+        case repoHeader
         case picker
         case overview
         case dialog
@@ -11,6 +14,7 @@ struct ProjectIconView: View {
         var dimension: CGFloat {
             switch self {
             case .sidebar: 16
+            case .repoHeader: 19
             case .picker: 18
             case .overview: 52
             case .dialog: 72
@@ -20,6 +24,7 @@ struct ProjectIconView: View {
         var cornerRadius: CGFloat {
             switch self {
             case .sidebar: 4
+            case .repoHeader: 5
             case .picker: 5
             case .overview: 13
             case .dialog: 18
@@ -29,6 +34,7 @@ struct ProjectIconView: View {
         var fontSize: CGFloat {
             switch self {
             case .sidebar: 9.5
+            case .repoHeader: 9.5
             case .picker: 10.5
             case .overview: 20
             case .dialog: 26

@@ -64,6 +64,83 @@ struct PendingRunScriptLaunchKey: Hashable {
     let scriptKey: String
 }
 
+struct RemoteWorktreeStatusProjectScanToken: Equatable {
+    let projectID: String
+    let generation: Int
+    private let worktreeGenerationsByID: [String: Int]
+
+    init(projectID: String, generation: Int, worktreeGenerationsByID: [String: Int]) {
+        self.projectID = projectID
+        self.generation = generation
+        self.worktreeGenerationsByID = worktreeGenerationsByID
+    }
+
+    func worktreeGeneration(worktreeID: String) -> Int? {
+        worktreeGenerationsByID[worktreeID]
+    }
+}
+
+struct RemoteWorktreeStatusWorktreeScanToken: Equatable {
+    let projectID: String
+    let worktreeID: String
+    let generation: Int
+}
+
+struct RemoteWorktreeStatusRescanGenerations {
+    private var generations: [String: Int] = [:]
+
+    mutating func beginProjectScan(
+        projectID: String,
+        worktreeIDs: [String]
+    ) -> RemoteWorktreeStatusProjectScanToken {
+        let projectGeneration = bump(projectID)
+        let worktreeGenerations = Dictionary(
+            uniqueKeysWithValues: Set(worktreeIDs).map { worktreeID in
+                (worktreeID, bump(worktreeKey(projectID: projectID, worktreeID: worktreeID)))
+            }
+        )
+        return RemoteWorktreeStatusProjectScanToken(
+            projectID: projectID,
+            generation: projectGeneration,
+            worktreeGenerationsByID: worktreeGenerations
+        )
+    }
+
+    mutating func beginWorktreeScan(
+        projectID: String,
+        worktreeID: String
+    ) -> RemoteWorktreeStatusWorktreeScanToken {
+        let generation = bump(worktreeKey(projectID: projectID, worktreeID: worktreeID))
+        return RemoteWorktreeStatusWorktreeScanToken(
+            projectID: projectID,
+            worktreeID: worktreeID,
+            generation: generation
+        )
+    }
+
+    func isCurrent(_ token: RemoteWorktreeStatusProjectScanToken) -> Bool {
+        generations[token.projectID] == token.generation
+    }
+
+    func isCurrent(_ token: RemoteWorktreeStatusWorktreeScanToken) -> Bool {
+        generations[worktreeKey(projectID: token.projectID, worktreeID: token.worktreeID)] == token.generation
+    }
+
+    func isCurrentWorktree(projectID: String, worktreeID: String, generation: Int) -> Bool {
+        generations[worktreeKey(projectID: projectID, worktreeID: worktreeID)] == generation
+    }
+
+    private mutating func bump(_ key: String) -> Int {
+        let next = (generations[key] ?? 0) + 1
+        generations[key] = next
+        return next
+    }
+
+    private func worktreeKey(projectID: String, worktreeID: String) -> String {
+        "\(projectID)\u{0}\(worktreeID)"
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -128,6 +205,10 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
+    @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingWorktreeStatusRescanPaths: [URL] = []
+    @ObservationIgnored private var remoteWorktreeStatusRescanTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var remoteWorktreeStatusRescanGenerations = RemoteWorktreeStatusRescanGenerations()
     var selectedWorktreeId: String? {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
@@ -267,6 +348,10 @@ final class AppState {
     private let remoteAccelerationPreparer: RemoteAccelerationPreparer?
     @ObservationIgnored
     private let worktreeCleanupLauncher: WorktreeCleanupLauncher
+    typealias WorktreeStatusScan = @Sendable ([URL]) async -> Void
+
+    @ObservationIgnored
+    private let worktreeStatusScan: WorktreeStatusScan
 
     private struct PendingACPDetach {
         let id: UUID
@@ -825,6 +910,9 @@ final class AppState {
         worktreeCleanupLauncher: @escaping WorktreeCleanupLauncher = {
             try WorktreeTrashCleaner.launch($0)
         },
+        worktreeStatusScan: @escaping WorktreeStatusScan = { paths in
+            await WorktreeStatusScanner.shared.scan(paths: paths)
+        },
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5
@@ -850,6 +938,7 @@ final class AppState {
         self.acpDetachRunner = acpDetachRunner
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.worktreeCleanupLauncher = worktreeCleanupLauncher
+        self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -910,11 +999,33 @@ final class AppState {
         rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
             self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
         }
+        rightPaneStore.worktreeDidChange = { [weak self] worktreeID in
+            self?.rescanWorktreeStatus(worktreeId: worktreeID)
+        }
         RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
-            self?.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+            guard let self else { return }
+            self.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+            if !isDisconnected {
+                self.rescanRemoteWorktreeStatuses(host: host)
+            }
         }
         harness.onActivityTransition = { [weak self] transition in
             self?.observeHarnessAttention(transition)
+        }
+        harness.onWorktreeActivityEvent = { [weak self] worktreeID in
+            self?.rescanWorktreeStatus(worktreeId: worktreeID)
+        }
+        // Rescan local worktree status whenever the app regains focus, so a
+        // git operation performed in another app (or a terminal outside
+        // Alas) while backgrounded is reflected as soon as the user looks.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.rescanWorktreeStatuses()
+            }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
@@ -1190,6 +1301,7 @@ final class AppState {
             projectsManager.worktrees(projectId: project.id).map(\.path.path)
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
+        WorktreeStatusStore.shared.prune(keepingPaths: livePaths)
         GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         GGLandingStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
@@ -1253,6 +1365,195 @@ final class AppState {
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
+        }
+    }
+
+    /// Debounce window for status rescans. Activation, selection and topology
+    /// changes often arrive together; this collapses a burst into one pass.
+    private static let worktreeStatusDebounce: Duration = .milliseconds(250)
+
+    /// Recompute working-tree status for every local worktree.
+    ///
+    /// Remote projects are excluded from the local scanner deliberately. Their
+    /// status arrives through `RemoteWorktreeSummary`, which already carries
+    /// `changedFileCount` and `conflictCount`; when requested, remote projects
+    /// refresh through that summary path instead of the local git-status
+    /// scanner.
+    func rescanWorktreeStatuses(includeRemote: Bool = true) {
+        let paths = localWorktreeStatusPaths()
+        if includeRemote {
+            rescanRemoteWorktreeStatuses()
+        }
+        enqueueLocalWorktreeStatusRescan(paths: paths)
+    }
+
+    private func rescanWorktreeStatus(worktreeId: String) {
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        if resolved.project.host != nil {
+            enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
+        } else {
+            scanLocalWorktreeStatus(paths: [resolved.worktree.path])
+        }
+    }
+
+    private func rescanLocalWorktreeStatuses(projectId: String) {
+        guard projectsManager.projects.contains(where: { $0.id == projectId && $0.host == nil }) else { return }
+        let paths = localWorktreeStatusPaths(projectId: projectId)
+        enqueueLocalWorktreeStatusRescan(paths: paths)
+    }
+
+    func localWorktreeStatusPaths(projectId: String? = nil) -> [URL] {
+        projectsManager.projects
+            .filter { project in
+                project.host == nil && (projectId == nil || project.id == projectId)
+            }
+            .flatMap { projectsManager.visibleWorktrees(projectId: $0.id) }
+            .map(\.path)
+    }
+
+    private func enqueueLocalWorktreeStatusRescan(paths: [URL]) {
+        guard !paths.isEmpty else { return }
+        mergePendingWorktreeStatusRescanPaths(paths)
+        worktreeStatusRescanTask?.cancel()
+        worktreeStatusRescanTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard !Task.isCancelled else { return }
+            let paths = self.pendingWorktreeStatusRescanPaths
+            self.pendingWorktreeStatusRescanPaths = []
+            self.scanLocalWorktreeStatus(paths: paths)
+        }
+    }
+
+    private func mergePendingWorktreeStatusRescanPaths(_ paths: [URL]) {
+        var seen = Set(pendingWorktreeStatusRescanPaths.map(\.path))
+        for path in paths where seen.insert(path.path).inserted {
+            pendingWorktreeStatusRescanPaths.append(path)
+        }
+    }
+
+    private func scanLocalWorktreeStatus(paths: [URL]) {
+        guard !paths.isEmpty else { return }
+        // Cancellation bounds only the debounce window above. The scan itself
+        // runs in a fresh unstructured task so a later rescan request cannot
+        // SIGTERM it mid-pass: `Process.run` is cancellation-aware, and killing
+        // an in-flight scan here would still let its drain loop spawn a process
+        // per remaining path that gets immediately terminated.
+        // `WorktreeStatusScanner` already coalesces overlapping requests (a
+        // request arriving mid-scan sets a rescan flag instead of starting a
+        // second pass), so letting this run to completion is correct.
+        Task { await worktreeStatusScan(paths) }
+    }
+
+    private func rescanLocalWorktreeStatus(worktreeId: String) {
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
+              resolved.project.host == nil
+        else { return }
+        scanLocalWorktreeStatus(paths: [resolved.worktree.path])
+    }
+
+    private func rescanRemoteWorktreeStatuses(projectId: String? = nil) {
+        let remoteProjects = projectsManager.projects.filter { project in
+            project.host != nil && (projectId == nil || project.id == projectId)
+        }
+        guard !remoteProjects.isEmpty else { return }
+        for project in remoteProjects {
+            enqueueRemoteWorktreeStatusRescan(project: project)
+        }
+    }
+
+    private func rescanRemoteWorktreeStatuses(host: String) {
+        let remoteProjects = projectsManager.projects.filter { $0.host == host }
+        guard !remoteProjects.isEmpty else { return }
+        for project in remoteProjects {
+            enqueueRemoteWorktreeStatusRescan(project: project)
+        }
+    }
+
+    private func enqueueRemoteWorktreeStatusRescan(project: ProjectConfig) {
+        let projectScanToken = remoteWorktreeStatusRescanGenerations.beginProjectScan(
+            projectID: project.id,
+            worktreeIDs: projectsManager.visibleWorktrees(projectId: project.id).map(\.id)
+        )
+        remoteWorktreeStatusRescanTasks[project.id]?.cancel()
+        remoteWorktreeStatusRescanTasks[project.id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard !Task.isCancelled else { return }
+            defer {
+                if self.remoteWorktreeStatusRescanGenerations.isCurrent(projectScanToken) {
+                    self.remoteWorktreeStatusRescanTasks[project.id] = nil
+                }
+            }
+            var results: [String: WorktreeDirtyState] = [:]
+            var targetedGenerationsByPath: [String: Int] = [:]
+            var targetedWorktreeIDsByPath: [String: String] = [:]
+            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+            guard !isOfflineHost else { return }
+            for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
+                switch projectsManager.operationState(for: worktree.id) {
+                case .creating, .deleting, .createFailed:
+                    continue
+                case nil, .preparingDelete, .deleteFailed:
+                    guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
+                    else { continue }
+                    targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
+                    targetedGenerationsByPath[worktree.path.path] = worktreeGeneration
+                    guard let state = await remoteWorktreeDirtyState(worktree: worktree) else { continue }
+                    results[worktree.path.path] = state
+                }
+            }
+            guard !Task.isCancelled,
+                  self.remoteWorktreeStatusRescanGenerations.isCurrent(projectScanToken)
+            else { return }
+            let currentResults = results.filter { path, _ in
+                guard let worktreeID = targetedWorktreeIDsByPath[path],
+                      let currentGeneration = targetedGenerationsByPath[path]
+                else { return true }
+                return self.remoteWorktreeStatusRescanGenerations.isCurrentWorktree(
+                    projectID: project.id,
+                    worktreeID: worktreeID,
+                    generation: currentGeneration
+                )
+            }
+            WorktreeStatusStore.shared.apply(currentResults)
+        }
+    }
+
+    private func enqueueRemoteWorktreeStatusRescan(project: ProjectConfig, worktree: Worktree) {
+        let worktreeScanToken = remoteWorktreeStatusRescanGenerations.beginWorktreeScan(
+            projectID: project.id,
+            worktreeID: worktree.id
+        )
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard self.remoteWorktreeStatusRescanGenerations.isCurrent(worktreeScanToken)
+            else { return }
+            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+            guard !isOfflineHost else { return }
+            switch self.projectsManager.operationState(for: worktree.id) {
+            case .creating, .deleting, .createFailed:
+                return
+            case nil, .preparingDelete, .deleteFailed:
+                break
+            }
+            guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
+                  self.remoteWorktreeStatusRescanGenerations.isCurrent(worktreeScanToken)
+            else { return }
+            WorktreeStatusStore.shared.apply([worktree.path.path: state])
+        }
+    }
+
+    private func remoteWorktreeDirtyState(worktree: Worktree) async -> WorktreeDirtyState? {
+        do {
+            let changes = try await GitService().statusIdentity(worktreePath: worktree.path)
+            let fileCount = Set(changes.map(\.path)).count
+            guard fileCount > 0 else { return .clean }
+            return .dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count)
+        } catch {
+            return nil
         }
     }
 
@@ -1484,6 +1785,9 @@ final class AppState {
         guard let checkout = workspacesManager.checkout(id: id) else { return }
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+        if let selectedWorktreeId {
+            rescanWorktreeStatus(worktreeId: selectedWorktreeId)
+        }
     }
 
     func focusWorkspaceCheckoutMember(id: UUID) {
@@ -1491,6 +1795,9 @@ final class AppState {
         guard let checkout = selectedWorkspaceCheckout else { return }
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+        if let selectedWorktreeId {
+            rescanWorktreeStatus(worktreeId: selectedWorktreeId)
+        }
     }
 
     func openWorkspaceCheckoutSearchResult(
@@ -1755,12 +2062,13 @@ final class AppState {
         _ = saveSpaces()
     }
 
-    func selectWorktree(id: String?) {
+    func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
         workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
+        rescanWorktreeStatuses(includeRemote: includeRemoteStatus)
         if let id,
            let resolved = projectAndWorktree(withWorktreeId: id),
            resolved.project.host != nil {
@@ -1775,8 +2083,8 @@ final class AppState {
         acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
     }
 
-    func selectInitialWorktree(id: String?) {
-        selectWorktree(id: id)
+    func selectInitialWorktree(id: String?, includeRemoteStatus: Bool = true) {
+        selectWorktree(id: id, includeRemoteStatus: includeRemoteStatus)
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
@@ -3757,24 +4065,40 @@ final class AppState {
             let watcher = RemoteProjectGitWatcher(projectPath: URL(fileURLWithPath: project.path))
             watcher.onHeadChanged = { [weak self] updates in
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
             }
-            watcher.onRevisionChanged = { [weak self] in self?.handleProjectRevisionChange(projectId: project.id) }
+            watcher.onRevisionChanged = { [weak self] in
+                self?.handleProjectRevisionChange(projectId: project.id)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
+            }
             watcher.onTopologyChanged = { [weak self] in
                 self?.handleProjectRevisionChange(projectId: project.id)
                 self?.handleProjectTopologyChange(projectId: project.id)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
             }
             remoteProjectWatchers[project.id] = watcher
             watcher.start()
+            rescanRemoteWorktreeStatuses(projectId: project.id)
             return
         }
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
-        watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
-        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
-        watcher.onStackRevisionChanged = { [weak self] in self?.handleProjectStackRevisionChange(projectId: projectId) }
+        watcher.onHeadChanged = { [weak self] map in
+            self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map)
+            self?.rescanLocalWorktreeStatuses(projectId: projectId)
+        }
+        watcher.onRevisionChanged = { [weak self] in
+            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.rescanLocalWorktreeStatuses(projectId: projectId)
+        }
+        watcher.onStackRevisionChanged = { [weak self] in
+            self?.handleProjectStackRevisionChange(projectId: projectId)
+            self?.rescanLocalWorktreeStatuses(projectId: projectId)
+        }
         watcher.onTopologyChanged = { [weak self] in
             self?.handleProjectRevisionChange(projectId: projectId)
             self?.handleProjectTopologyChange(projectId: projectId)
+            self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.start()
         projectGitWatchers[projectId] = watcher
@@ -4399,6 +4723,7 @@ final class AppState {
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
+        rescanWorktreeStatuses()
         return changed || completedCreateFailure
     }
 
@@ -4660,6 +4985,11 @@ final class AppState {
     func unarchiveWorktree(projectId: String, path: URL) {
         projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
         saveProjects()
+        if let restored = projectsManager.visibleWorktrees(projectId: projectId).first(where: {
+            Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(path.path)
+        }) {
+            rescanWorktreeStatus(worktreeId: restored.id)
+        }
     }
 
     /// Live sessions attached to a worktree's open terminal/ACP tabs, counted

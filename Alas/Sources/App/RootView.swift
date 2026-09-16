@@ -120,7 +120,8 @@ struct RootView: View {
                 state.reloadTabs()
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
-                        id: state.resolvedSelectionForActiveSpaceForStartup()
+                        id: state.resolvedSelectionForActiveSpaceForStartup(),
+                        includeRemoteStatus: !isRecovering
                     )
                 }
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()

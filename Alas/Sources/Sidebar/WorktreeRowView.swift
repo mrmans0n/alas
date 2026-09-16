@@ -91,6 +91,58 @@ struct WorktreeRowView: View {
         !isMain
     }
 
+    /// What line 2's status chip shows for a row. The dot and its label are one
+    /// unit — a presentation always carries a label, so there is no way to
+    /// render a bare, unexplained dot.
+    struct StatusPresentation: Equatable {
+        let note: String
+        /// Theme token for both the dot and the note text.
+        let colorToken: String
+        let pulses: Bool
+    }
+
+    /// Derives the status chip, or `nil` when there is nothing to report.
+    ///
+    /// Harness activity outranks working-tree state: the row has one chip slot
+    /// and an agent mid-flight is the more urgent fact. Within working-tree
+    /// state, conflicts outrank plain modifications because a conflicted
+    /// worktree is blocked rather than merely dirty.
+    ///
+    /// `clean` and `unknown` both yield nil. They are distinct cases so that a
+    /// row before its first scan does not claim to be clean, but neither draws
+    /// a chip — the sidebar speaks up only when something is wrong.
+    nonisolated static func statusPresentation(
+        harnessState: HarnessService.AggregatedState?,
+        worktreeStatus: WorktreeDirtyState
+    ) -> StatusPresentation? {
+        switch harnessState {
+        case .running:
+            return StatusPresentation(note: "running", colorToken: "add", pulses: true)
+        case .awaiting:
+            return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
+        case nil:
+            break
+        }
+
+        switch worktreeStatus {
+        case .unknown, .clean:
+            return nil
+        case .dirty(let fileCount, let conflictCount):
+            if conflictCount > 0 {
+                return StatusPresentation(
+                    note: "\(conflictCount) conflict\(conflictCount == 1 ? "" : "s")",
+                    colorToken: "del",
+                    pulses: false
+                )
+            }
+            return StatusPresentation(
+                note: "\(fileCount) file\(fileCount == 1 ? "" : "s")",
+                colorToken: "mod",
+                pulses: false
+            )
+        }
+    }
+
     private static func stackSummaryText(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
@@ -118,6 +170,7 @@ struct WorktreeRowView: View {
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     @Environment(\.theme) var theme
+    @State private var hovering = false
 
     nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
@@ -162,189 +215,265 @@ struct WorktreeRowView: View {
     }
 
     var body: some View {
+        let status = Self.statusPresentation(
+            harnessState: harnessSummary?.state,
+            worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path)
+        )
         ZStack(alignment: .leading) {
             if isSelected {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(theme.color("bg-4"))
-                Rectangle()
-                    .fill(theme.color("accent"))
-                    .frame(width: 3, height: 14)
-                    .cornerRadius(2)
-                    .offset(x: 2, y: 0)
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(theme.color("accent-soft"))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
+                    )
+            } else if hovering {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(theme.color("bg-2"))
             }
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Icon(
-                        name: isMain ? "home" : "branch",
-                        size: 11,
-                        color: theme.color(isMain ? "fg-muted" : "fg-faint")
-                    )
-                    Text(worktree.branch)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(theme.color(isPending ? "fg-faint" : "fg"))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                firstLine()
                 if operationState != nil {
-                    HStack(spacing: 5) {
-                        if Self.showsProgress(operationState: operationState) {
-                            Spinner(lineWidth: 1.5, duration: 0.7, color: theme.color("warning"))
-                                .frame(width: 10, height: 10)
-                                .accessibilityHidden(true)
-                        }
-                        Text(Self.statusText(for: operationState))
-                            .font(.system(size: 10.5))
-                            .foregroundColor(theme.color("warning"))
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                    }
+                    operationLine
                 } else {
-                    HStack(spacing: 8) {
-                        Text(relative(worktree.lastActivity))
-                            .font(.system(size: 10.5))
-                            .foregroundColor(theme.color("fg-faint"))
-                        if worktree.addedLines > 0 {
-                            Text("+\(worktree.addedLines)")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(theme.color("add"))
-                        }
-                        if worktree.deletedLines > 0 {
-                            Text("−\(worktree.deletedLines)")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(theme.color("del"))
-                        }
-                        if let stack = stackSummary {
-                            let summaryText = Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
-                            HStack(spacing: 3) {
-                                GGStackIcon(
-                                    size: 9,
-                                    color: theme.color("fg-faint")
-                                )
-                                    .accessibilityHidden(true)
-                                Text("\(stack.merged)/\(stack.total)")
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .foregroundColor(theme.color("fg-faint"))
-                            }
-                            .help(summaryText)
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel(Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total))
-                        } else if ggMenuModel.showsStatusIndicator {
-                            GGStackIcon(
-                                size: 9,
-                                color: theme.color(Self.pendingStackIndicatorColorToken())
-                            )
-                                .help("gg is active for this worktree.")
-                                .accessibilityLabel("gg is active for this worktree.")
-                        }
-                        if let summary = harnessSummary {
-                            Spacer()
-                            HStack(spacing: 4) {
-                                ForEach(summary.sessions.prefix(2)) { session in
-                                    HarnessSessionBadge(
-                                        session: session,
-                                        onActivate: { onActivateHarness(session.id) },
-                                        isSelected: isSelected
-                                    )
-                                }
-                                if summary.sessions.count > 2 {
-                                    let hiddenSessions = Array(summary.sessions.dropFirst(2))
-                                    let overflowState: HarnessService.AggregatedState = hiddenSessions.contains { $0.state == .running } ? .running : .awaiting
-                                    Menu {
-                                        ForEach(hiddenSessions) { session in
-                                            Button {
-                                                onActivateHarness(session.id)
-                                            } label: {
-                                                Label {
-                                                    Text("\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")")
-                                                } icon: {
-                                                    Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
-                                                }
-                                            }
-                                        }
-                                    } label: {
-                                        Text("+\(summary.sessions.count - 2)")
-                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                            .foregroundColor(theme.color("fg-dim"))
-                                            .frame(minWidth: 21, minHeight: 21)
-                                            .modifier(HarnessSessionBadgeChrome(state: overflowState, isSelected: isSelected))
-                                    }
-                                    .menuStyle(.borderlessButton)
-                                    .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")
-                                    .accessibilityLabel("\(summary.sessions.count - 2) more active sessions")
-                                }
-                            }
-                            .accessibilityElement(children: .contain)
-                            .accessibilityLabel("Active agent sessions")
-                        }
-                    }
-                    .frame(minHeight: 21)
+                    secondLine(status: status)
                 }
             }
-            .padding(.leading, 32)
-            .padding(.trailing, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
+        .onHover { hovering = $0 }
         .onTapGesture {
             if !isPending {
                 onTap()
             }
         }
         .nativeContextMenu {
-            if case .createFailed = operationState {
-                Button("Retry Create", action: onRetryCreate)
-                Button("Remove from List", role: .destructive, action: onRemoveFailed)
+            contextMenuContent
+        }
+    }
+
+    private func firstLine() -> some View {
+        HStack(spacing: 7) {
+            Icon(
+                name: isMain ? "home" : "branch",
+                size: 12,
+                color: theme.color(iconColorToken(harnessState: harnessSummary?.state))
+            )
+            Text(worktree.branch)
+                // Pre-E1 metrics, restored: E1 shrank this to 11.5pt, muted it
+                // until hover, and tightened it with negative tracking. Those
+                // compounded into a branch name that was harder to read, and a
+                // monospace face at this size suffers most from the tracking.
+                // Selection and hover are carried by the row's fill and outline,
+                // so the label does not need to dim to stay out of their way.
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(theme.color(branchColorToken))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let summary = harnessSummary {
+                agentBadges(summary: summary)
+            }
+        }
+        .frame(minHeight: HarnessSessionBadge.diameter)
+    }
+
+    /// E1 tints the branch glyph green while a session runs, so activity
+    /// reads from line 1 without the row having to be scanned twice.
+    ///
+    /// Keyed off the harness state directly rather than `StatusPresentation.pulses`:
+    /// `pulses` is a presentation detail (whether the dot animates), not the
+    /// state itself, so a future state that also pulses should not turn the
+    /// icon green by accident.
+    private func iconColorToken(harnessState: HarnessService.AggregatedState?) -> String {
+        if harnessState == .running { return "add" }
+        return isMain ? "fg-muted" : "fg-faint"
+    }
+
+    /// Full-strength `fg` at rest. There is no brighter token to move to on
+    /// hover, which is the point — the name stays legible in every state and
+    /// the row's fill and outline carry selection instead.
+    private var branchColorToken: String {
+        isPending ? "fg-faint" : "fg"
+    }
+
+    private func secondLine(status: StatusPresentation?) -> some View {
+        HStack(spacing: 7) {
+            // Dot and label render together or not at all. An idle worktree has
+            // nothing to report until the git status service lands, and a dot on
+            // its own reads as an unexplained decoration.
+            if let status {
+                HStack(spacing: 5) {
+                    StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
+                    Text(status.note)
+                        .foregroundColor(theme.color(status.colorToken))
+                }
+            }
+            if worktree.addedLines > 0 {
+                Text("+\(worktree.addedLines)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color("add"))
+            }
+            if worktree.deletedLines > 0 {
+                Text("−\(worktree.deletedLines)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color("del"))
+            }
+            stackSummaryView
+            Spacer(minLength: 0)
+            Text(relative(worktree.lastActivity))
+                .monospacedDigit()
+        }
+        .font(.system(size: 10))
+        .foregroundColor(theme.color("fg-dim"))
+        // Aligns line 2 under the branch text, not under the row's icon.
+        .padding(.leading, 19)
+    }
+
+    private var operationLine: some View {
+        HStack(spacing: 5) {
+            if Self.showsProgress(operationState: operationState) {
+                Spinner(lineWidth: 1.5, duration: 0.7, color: theme.color("warn"))
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
+            }
+            Text(Self.statusText(for: operationState))
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("warn"))
+                .lineLimit(2)
+                .truncationMode(.tail)
+        }
+        .padding(.leading, 19)
+    }
+
+    @ViewBuilder
+    private var stackSummaryView: some View {
+        if let stack = stackSummary {
+            let summaryText = Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
+            HStack(spacing: 3) {
+                GGStackIcon(size: 9, color: theme.color("fg-faint"))
+                    .accessibilityHidden(true)
+                Text("\(stack.merged)/\(stack.total)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color("fg-faint"))
+            }
+            .help(summaryText)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total)
+            )
+        } else if ggMenuModel.showsStatusIndicator {
+            GGStackIcon(size: 9, color: theme.color(Self.pendingStackIndicatorColorToken()))
+                .help("gg is active for this worktree.")
+                .accessibilityLabel("gg is active for this worktree.")
+        }
+    }
+
+    private func agentBadges(
+        summary: HarnessService.WorktreeHarnessSummary
+    ) -> some View {
+        HStack(spacing: 4) {
+            ForEach(summary.sessions.prefix(2)) { session in
+                HarnessSessionBadge(
+                    session: session,
+                    onActivate: { onActivateHarness(session.id) },
+                    isSelected: isSelected
+                )
+            }
+            if summary.sessions.count > 2 {
+                let hiddenSessions = Array(summary.sessions.dropFirst(2))
+                let overflowState: HarnessService.AggregatedState =
+                    hiddenSessions.contains { $0.state == .running } ? .running : .awaiting
+                Menu {
+                    ForEach(hiddenSessions) { session in
+                        Button {
+                            onActivateHarness(session.id)
+                        } label: {
+                            Label {
+                                Text("\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")")
+                            } icon: {
+                                Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
+                            }
+                        }
+                    }
+                } label: {
+                    Text("+\(summary.sessions.count - 2)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .frame(
+                            width: HarnessSessionBadge.diameter,
+                            height: HarnessSessionBadge.diameter
+                        )
+                        .modifier(HarnessSessionBadgeChrome(state: overflowState, isSelected: isSelected))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")
+                .accessibilityLabel("\(summary.sessions.count - 2) more active sessions")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Active agent sessions")
+    }
+
+    @ViewBuilder
+    private var contextMenuContent: some View {
+        if case .createFailed = operationState {
+            Button("Retry Create", action: onRetryCreate)
+            Button("Remove from List", role: .destructive, action: onRemoveFailed)
+            Divider()
+            if let errorMessage {
+                Button("Copy Error") { onCopyError(errorMessage) }
+            }
+            Button("Copy Path", action: onCopyPath)
+        } else if case .deleteFailed = operationState {
+            if Self.showsRemovalActions(isMain: isMain) {
+                Button("Retry Delete", action: onRetryDelete)
+                Button("Archive", action: onArchive)
+            }
+            Divider()
+            if let errorMessage {
+                Button("Copy Error") { onCopyError(errorMessage) }
+            }
+            Button("Copy Path", action: onCopyPath)
+            Button("Copy Branch Name", action: onCopyBranch)
+        } else if !isPending {
+            Button("Open in Terminal", action: onOpenTerminal)
+            if let onOpenIssue {
+                Button("Open Issue", action: onOpenIssue)
                 Divider()
-                if let errorMessage {
-                    Button("Copy Error") { onCopyError(errorMessage) }
+            }
+            Button("Copy Path", action: onCopyPath)
+            Button("Copy Branch Name", action: onCopyBranch)
+            if !worktree.path.isRemoteAlasPath {
+                Button("Reveal in Finder", action: onRevealInFinder)
+            }
+            Divider()
+            if ggMenuModel.isVisible {
+                Menu(Self.ggModeMenuTitle) {
+                    // Static buttons: a data-driven ForEach inside a hover-revealed
+                    // context-menu submenu renders empty on macOS.
+                    let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
+                    ggModeMenuButton(items[0])
+                    ggModeMenuButton(items[1])
+                    ggModeMenuButton(items[2])
                 }
-                Button("Copy Path", action: onCopyPath)
-            } else if case .deleteFailed = operationState {
-                if Self.showsRemovalActions(isMain: isMain) {
-                    Button("Retry Delete", action: onRetryDelete)
-                    Button("Archive", action: onArchive)
-                }
-                Divider()
-                if let errorMessage {
-                    Button("Copy Error") { onCopyError(errorMessage) }
-                }
-                Button("Copy Path", action: onCopyPath)
-                Button("Copy Branch Name", action: onCopyBranch)
-            } else if !isPending {
-                Button("Open in Terminal", action: onOpenTerminal)
-                if let onOpenIssue {
-                    Button("Open Issue", action: onOpenIssue)
+                if let explanation = ggMenuModel.inactiveExplanation {
                     Divider()
-                }
-                Button("Copy Path", action: onCopyPath)
-                Button("Copy Branch Name", action: onCopyBranch)
-                if !worktree.path.isRemoteAlasPath {
-                    Button("Reveal in Finder", action: onRevealInFinder)
+                    Text(explanation)
                 }
                 Divider()
-                if ggMenuModel.isVisible {
-                    Menu(Self.ggModeMenuTitle) {
-                        // Static buttons: a data-driven ForEach inside a hover-revealed
-                        // context-menu submenu renders empty on macOS.
-                        let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
-                        ggModeMenuButton(items[0])
-                        ggModeMenuButton(items[1])
-                        ggModeMenuButton(items[2])
-                    }
-                    if let explanation = ggMenuModel.inactiveExplanation {
-                        Divider()
-                        Text(explanation)
-                    }
-                    Divider()
-                }
-                if Self.showsRemovalActions(isMain: isMain) {
-                    Button("Archive", action: onArchive)
-                    Button("Delete Worktree…", role: .destructive, action: onDelete)
-                    if showKeepBranchOption {
-                        Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
-                    }
+            }
+            if Self.showsRemovalActions(isMain: isMain) {
+                Button("Archive", action: onArchive)
+                Button("Delete Worktree…", role: .destructive, action: onDelete)
+                if showKeepBranchOption {
+                    Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
                 }
             }
         }
@@ -372,6 +501,36 @@ struct WorktreeRowView: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+}
+
+/// Line 2's status dot. Pulses for a running session, matching E1's
+/// `@keyframes pulse`, and holds still under Reduce Motion — a sidebar full
+/// of running worktrees would otherwise animate continuously.
+private struct StatusDot: View {
+    let color: Color
+    let pulses: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var animating = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+            .overlay {
+                if pulses && !reduceMotion {
+                    Circle()
+                        .stroke(color, lineWidth: 2)
+                        .scaleEffect(animating ? 2.2 : 1)
+                        .opacity(animating ? 0 : 0.5)
+                        .animation(
+                            .easeInOut(duration: 1.9).repeatForever(autoreverses: false),
+                            value: animating
+                        )
+                }
+            }
+            .onAppear { animating = true }
+            .accessibilityHidden(true)
+    }
 }
 
 private extension String {
