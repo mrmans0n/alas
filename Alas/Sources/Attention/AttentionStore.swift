@@ -42,8 +42,10 @@ final class AttentionStore {
     var acknowledgments: [UUID: AttentionAcknowledgment] { document.acknowledgments }
 
     func observe(_ observation: AttentionObservation, at date: Date) {
+        let writtenKey: AttentionSourceKey
         switch observation {
         case .active(let signal):
+            writtenKey = signal.sourceKey
             let previous = document.observations[signal.sourceKey]
             guard previous?.isActive != true || previous?.fingerprint != signal.fingerprint else {
                 retryPersistingUnwrittenDocumentIfNeeded()
@@ -57,7 +59,7 @@ final class AttentionStore {
                     eventID: previous.eventID
                 )
                 updateEvent(for: previous.eventID, with: signal)
-                retain(at: date)
+                retain(at: date, preserving: [writtenKey])
                 persist()
                 return
             }
@@ -69,6 +71,7 @@ final class AttentionStore {
                 eventID: event.id
             )
         case .inactive(let sourceKey):
+            writtenKey = sourceKey
             guard let previous = document.observations[sourceKey],
                   previous.isActive != false
             else {
@@ -81,7 +84,7 @@ final class AttentionStore {
                 eventID: previous.eventID
             )
         }
-        retain(at: date)
+        retain(at: date, preserving: [writtenKey])
         persist()
     }
 
@@ -118,26 +121,31 @@ final class AttentionStore {
     func registerAliases(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)], retryExisting: Bool = true) {
         var changed = false
         var sawExistingAlias = false
+        var migratedKeys: Set<AttentionSourceKey> = []
         for alias in aliases {
             guard alias.from != alias.to else { continue }
             if document.aliases[alias.from] == alias.to {
                 sawExistingAlias = true
-                changed = migrateObservations(from: alias.from, to: alias.to) || changed
+                let result = migrateObservations(from: alias.from, to: alias.to)
+                changed = result.changed || changed
+                migratedKeys.formUnion(result.migratedKeys)
                 continue
             }
             if document.aliases[alias.from] != nil {
-                changed = migrateObservations(from: alias.from, to: alias.to) || changed
+                let result = migrateObservations(from: alias.from, to: alias.to)
+                changed = result.changed || changed
+                migratedKeys.formUnion(result.migratedKeys)
                 continue
             }
             document.aliases[alias.from] = alias.to
-            _ = migrateObservations(from: alias.from, to: alias.to)
+            migratedKeys.formUnion(migrateObservations(from: alias.from, to: alias.to).migratedKeys)
             changed = true
         }
         guard changed else {
             if sawExistingAlias, retryExisting { retryPersistingUnwrittenDocumentIfNeeded() }
             return
         }
-        retain(at: now())
+        retain(at: now(), preserving: migratedKeys)
         persist()
     }
 
@@ -145,7 +153,7 @@ final class AttentionStore {
         document.events.first { $0.id == id }
     }
 
-    private func retain(at date: Date) {
+    private func retain(at date: Date, preserving writtenKeys: Set<AttentionSourceKey> = []) {
         let cutoff = date.addingTimeInterval(-resolvedRetention)
         let acknowledgedIDs = Set(document.acknowledgments.keys)
         let activeEventIDs = Set(document.observations.values.lazy.filter(\.isActive).compactMap(\.eventID))
@@ -174,10 +182,17 @@ final class AttentionStore {
         document.observations = document.observations.filter { _, observation in
             observation.isActive || observation.eventID.map(retainedIDs.contains) ?? false
         }
-        // Keep a bounded set of active tombstones after event pruning so an
-        // unchanged, acknowledged occurrence can remain deduplicated on reload.
+        // Keep a bounded set of tombstones after event pruning so an
+        // unchanged, acknowledged occurrence can remain deduplicated on
+        // reload. Exempt whatever this call just wrote: an event backing a
+        // brand-new observation can be evicted by the pruning above in the
+        // same pass (e.g. maxEvents: 0), and that must not erase the
+        // observation before the caller ever gets to read it back. Older
+        // orphaned observations from previous calls stay subject to the
+        // budget below.
         let orphanKeys = document.observations.keys.filter {
-            document.observations[$0]?.eventID.map(retainedIDs.contains) != true
+            !writtenKeys.contains($0)
+                && document.observations[$0]?.eventID.map(retainedIDs.contains) != true
         }.sorted { $0.rawValue < $1.rawValue }
         for key in orphanKeys.dropLast(maxEvents) { document.observations[key] = nil }
 
@@ -212,9 +227,16 @@ final class AttentionStore {
             }
     }
 
-    @discardableResult
-    private func migrateObservations(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> Bool {
-        var changed = false
+    /// Alongside whether anything changed, returns the destination keys
+    /// actually written, so the caller's `retain()` pass can exempt them — a
+    /// migrated observation's backing event may already be gone (pruned when
+    /// it was first recorded), and without the exemption it would read as
+    /// orphaned the moment it lands under its new key.
+    private func migrateObservations(
+        from legacyOwner: AttentionWorktreeIdentity,
+        to lineageOwner: AttentionWorktreeIdentity
+    ) -> (changed: Bool, migratedKeys: Set<AttentionSourceKey>) {
+        var migratedKeys: Set<AttentionSourceKey> = []
         var migratedSourceKeys: [(from: AttentionSourceKey, to: AttentionSourceKey)] = []
         for (sourceKey, observation) in document.observations {
             guard let migratedKey = migratedSourceKey(sourceKey, from: legacyOwner, to: lineageOwner),
@@ -228,13 +250,14 @@ final class AttentionStore {
                 document.observations[migratedKey] = observation
             }
             document.observations[sourceKey] = nil
-            changed = true
+            migratedKeys.insert(migratedKey)
         }
+        var changed = !migratedKeys.isEmpty
         for sourceKey in migratedSourceKeys {
             changed = migrateEvents(from: sourceKey.from, to: sourceKey.to, legacyOwner: legacyOwner, lineageOwner: lineageOwner) || changed
         }
         changed = rebindOwnerIndependentEvents(from: legacyOwner, to: lineageOwner) || changed
-        return changed
+        return (changed, migratedKeys)
     }
 
     @discardableResult
