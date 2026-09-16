@@ -206,6 +206,7 @@ final class AppState {
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
+    @ObservationIgnored private lazy var ggSidebarRefresh = GGSidebarRefreshController()
     @ObservationIgnored private var pendingWorktreeStatusRescanPaths: [URL] = []
     @ObservationIgnored private var remoteWorktreeStatusRescanTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var remoteWorktreeStatusRescanGenerations = RemoteWorktreeStatusRescanGenerations()
@@ -1303,6 +1304,7 @@ final class AppState {
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
         WorktreeStatusStore.shared.prune(keepingPaths: livePaths)
         GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
+        refreshGGSidebar()
         GGLandingStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
             saveSpaces()
@@ -1380,6 +1382,7 @@ final class AppState {
     /// refresh through that summary path instead of the local git-status
     /// scanner.
     func rescanWorktreeStatuses(includeRemote: Bool = true) {
+        refreshGGSidebar()
         let paths = localWorktreeStatusPaths()
         if includeRemote {
             rescanRemoteWorktreeStatuses()
@@ -1387,7 +1390,52 @@ final class AppState {
         enqueueLocalWorktreeStatusRescan(paths: paths)
     }
 
+    /// Only local, enabled and unambiguous stacks participate. The controller
+    /// shares inbox work with the tab and throttles attention-triggered scans.
+    func refreshGGSidebar() {
+        let availability = GGAvailability.shared
+        guard availability.capabilities.localStackSnapshot,
+              GGInboxSupport.isSupported(version: availability.version),
+              config.changes.stackedDiffsEnabled else {
+            ggSidebarRefresh.refresh(projects: [])
+            return
+        }
+        let targets: [GGSidebarRefreshController.Project] = projects.compactMap { project in
+            guard ggInboxAvailable(projectId: project.id) else { return nil }
+            let repoHasGGConfig = GGStackGate.repoHasGGConfig(repoPath: project.path)
+            let username = GGConfigReader.branchUsername(repoPath: project.path)
+            let allWorktrees = projectsManager.worktrees(projectId: project.id)
+            let branches = allWorktrees.map { (id: $0.id, branch: $0.branch) }
+            let names = branches.compactMap { branch -> String? in
+                guard let slash = branch.branch.firstIndex(of: "/") else { return nil }
+                return String(branch.branch[branch.branch.index(after: slash)...])
+            }
+            let ambiguous = Set(names.filter {
+                GGInboxWorktreeResolver.hasAmbiguousLocalOwners(stackName: $0, worktrees: branches)
+            })
+            let worktrees = projectsManager.visibleWorktrees(projectId: project.id).compactMap { worktree -> GGSidebarRefreshController.Worktree? in
+                let context = Self.resolveGGWorktreeContext(
+                    masterEnabled: true, ggInstalled: availability.isInstalled, project: project,
+                    worktreeOverride: effectiveGGWorktreeMode(projectId: project.id, worktreeId: worktree.id),
+                    isMainWorktree: projectsManager.isMain(worktree, in: project),
+                    repoHasGGConfig: repoHasGGConfig, branchUsername: username, branch: worktree.branch
+                )
+                guard context.permitsCurrentStackQuery else { return nil }
+                if case .active(let name) = context {
+                    guard !ambiguous.contains(name) else { return nil }
+                    return .init(path: worktree.path.path, stackName: name)
+                }
+                // A detached entry needs the CLI to resolve its owning stack.
+                return .init(path: worktree.path.path, stackName: nil)
+            }.sorted { $0.path < $1.path }
+            guard !worktrees.isEmpty else { return nil }
+            return .init(id: project.id, path: project.path, worktrees: worktrees, ambiguousStackNames: ambiguous)
+        }
+        ggSidebarRefresh.refresh(projects: targets)
+    }
+
     private func rescanWorktreeStatus(worktreeId: String) {
+        refreshGGSidebar()
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeId) else { return }
         if resolved.project.host != nil {
             enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
@@ -4143,6 +4191,8 @@ final class AppState {
             projectId: projectId,
             worktreePaths: Array(branchByWorktreePath.keys)
         )
+        refreshGGSidebar()
+        GGInboxStore.shared.invalidate(projectId: projectId)
     }
 
     private func handleProjectRevisionChange(projectId: String) {
@@ -4153,6 +4203,8 @@ final class AppState {
     private func handleProjectStackRevisionChange(projectId: String) {
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
         rightPaneStore.refreshActiveGGPresentationForProjectRevision(projectId: projectId)
+        refreshGGSidebar()
+        GGInboxStore.shared.invalidate(projectId: projectId)
     }
 
     /// Invalidation itself is a fast, in-memory actor call, but it's still
@@ -4835,6 +4887,7 @@ final class AppState {
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
+        refreshGGSidebar()
         return changed || completedCreateFailure
     }
 
@@ -4972,6 +5025,7 @@ final class AppState {
         }
         cleanupWorktreeState(worktreeId: worktree.id)
 
+        refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
@@ -11228,7 +11282,7 @@ final class AppState {
                 worktree: worktree,
                 branch: worktree.branch
             ),
-            hasStackSummary: GGStackSummaryStore.shared.summaries[worktree.path.path] != nil,
+            hasStackSummary: GGStackSummaryStore.shared.summary(forPath: worktree.path.path) != nil,
             isRemoteWorktree: project.host != nil || worktree.path.isRemoteAlasPath
         )
     }
@@ -11245,6 +11299,7 @@ final class AppState {
         )
         saveProjects()
         rightPaneStore.reevaluateGGGate(worktreeId: worktreeId)
+        refreshGGSidebar()
     }
 
     private func discardUnpersistedGGWorktreeMode(

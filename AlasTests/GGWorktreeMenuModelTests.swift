@@ -10,6 +10,7 @@ struct GGWorktreeMenuModelTests {
 
         #expect(model.selectedMode == .inherit)
         #expect(!model.isEffectiveActive)
+        #expect(!model.permitsStackSummary)
         #expect(model.inactiveExplanation == nil)
         #expect(!model.showsStatusIndicator)
         #expect(model.isVisible)
@@ -35,6 +36,7 @@ struct GGWorktreeMenuModelTests {
         )
 
         #expect(model.inactiveExplanation == "Branch must start with nacho/")
+        #expect(model.permitsStackSummary) // A detached entry may resolve via gg ls.
     }
 
     @Test func missingUsernameHasUsefulExplanation() {
@@ -63,6 +65,7 @@ struct GGWorktreeMenuModelTests {
 
         #expect(!model.isVisible)
         #expect(model.inactiveExplanation == "Stacked diffs are disabled in Settings.")
+        #expect(!model.permitsStackSummary)
     }
 
     @Test func remoteContextHidesMenuAndExplanation() {

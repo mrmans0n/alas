@@ -329,4 +329,5 @@ struct GGStackEntry: Decodable, Equatable, Identifiable {
 struct GGStackSummary: Equatable {
     let merged: Int
     let total: Int
+    var isRemoteStateKnown: Bool = true
 }

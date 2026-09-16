@@ -152,7 +152,11 @@ struct WorktreeRowHeightTests {
 
     @Test func rowHeightIsStableWithAndWithoutGGStackMarker() throws {
         let withoutStack = try renderHeight(harnessSummary: nil, stackSummary: nil)
-        let withStack = try renderHeight(harnessSummary: nil, stackSummary: GGStackSummary(merged: 2, total: 3))
+        let withStack = try renderHeight(
+            harnessSummary: nil,
+            ggMenuModel: .init(selectedMode: .on, context: .active(stackName: "feature"), hasStackSummary: true),
+            stackSummary: GGStackSummary(merged: 2, total: 3)
+        )
 
         #expect(withoutStack == withStack)
     }

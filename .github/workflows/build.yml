@@ -308,6 +308,12 @@ jobs:
             -only-testing AlasTests/HookInstallerTests \
             -only-testing AlasTests/TabsManagerTests \
             -only-testing AlasTests/DebounceTimerTests \
+            -only-testing AlasTests/GGInboxStoreTests \
+            -only-testing AlasTests/GGServiceInboxTests \
+            -only-testing AlasTests/GGStackSummaryStoreTests \
+            -only-testing AlasTests/GGSidebarRefreshControllerTests \
+            -only-testing AlasTests/GGWorktreeMenuModelTests \
+            -only-testing AlasTests/WorktreeRowHeightTests \
             -skipMacroValidation \
             -parallel-testing-enabled NO \
             test-without-building
