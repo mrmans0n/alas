@@ -102,7 +102,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 {
     grep -E 'Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx' "${scheduled_file}"
     while IFS= read -r source; do
-        rg -q '\bProcess([.(]|[A-Za-z_]*(Runner|Launcher|Executor))' "${source}" || continue
+        grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))' "${source}" || continue
         awk '
             /^[[:space:]]*(@[A-Za-z_][A-Za-z0-9_]*(\([^)]*\))?[[:space:]]+)*((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = $0
