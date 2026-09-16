@@ -433,8 +433,8 @@ function filterVisibleSections(sections) {
 }
 
 function renderRepoFilterCounts(sections) {
-  const nonOther = sections.filter(s => !s.isOther);
-  const counts = RemoteRepoFilter.sectionCounts(nonOther);
+  sections = sections.filter(s => !s.isOther);
+  const counts = RemoteRepoFilter.sectionCounts(sections);
   $("repo-filters").querySelectorAll(".filter-chip").forEach(chip => {
     const key = chip.dataset.filter;
     chip.querySelector(".filter-chip-n").textContent = String(counts[key] ?? 0);
