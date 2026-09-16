@@ -128,6 +128,7 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
+    @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
     var selectedWorktreeId: String? {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
@@ -916,6 +917,18 @@ final class AppState {
         harness.onActivityTransition = { [weak self] transition in
             self?.observeHarnessAttention(transition)
         }
+        // Rescan local worktree status whenever the app regains focus, so a
+        // git operation performed in another app (or a terminal outside
+        // Alas) while backgrounded is reflected as soon as the user looks.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.rescanWorktreeDirtyStatees()
+            }
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelAllRunScriptCompletionTasks()
@@ -1190,6 +1203,7 @@ final class AppState {
             projectsManager.worktrees(projectId: project.id).map(\.path.path)
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
+        WorktreeStatusStore.shared.prune(keepingPaths: livePaths)
         GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         GGLandingStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
@@ -1253,6 +1267,30 @@ final class AppState {
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
+        }
+    }
+
+    /// Debounce window for status rescans. Activation, selection and topology
+    /// changes often arrive together; this collapses a burst into one pass.
+    private static let worktreeStatusDebounce: Duration = .milliseconds(250)
+
+    /// Recompute working-tree status for every local worktree.
+    ///
+    /// Remote projects are excluded deliberately — their status arrives through
+    /// the remote summary pipeline (see `applyRemoteWorktreeDirtyState`), which
+    /// already fetches the same information without per-worktree SSH round
+    /// trips on every activation.
+    func rescanWorktreeDirtyStatees() {
+        worktreeStatusRescanTask?.cancel()
+        let paths = projectsManager.projects
+            .filter { $0.host == nil }
+            .flatMap { projectsManager.worktrees(projectId: $0.id) }
+            .map(\.path)
+        guard !paths.isEmpty else { return }
+        worktreeStatusRescanTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard !Task.isCancelled else { return }
+            await WorktreeStatusScanner.shared.scan(paths: paths)
         }
     }
 
@@ -1761,6 +1799,7 @@ final class AppState {
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
+        rescanWorktreeDirtyStatees()
         if let id,
            let resolved = projectAndWorktree(withWorktreeId: id),
            resolved.project.host != nil {
@@ -4399,6 +4438,7 @@ final class AppState {
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
+        rescanWorktreeDirtyStatees()
         return changed || completedCreateFailure
     }
 
