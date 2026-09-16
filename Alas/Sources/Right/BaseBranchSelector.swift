@@ -34,6 +34,9 @@ struct BaseBranchSelector: View {
         .pointingHandCursor()
         .onHover { hovering = $0 }
         .help(currentRef ?? baseBranch)
+        // The icon-only fallback has no text for VoiceOver to derive a label
+        // from, so announce the selected ref explicitly.
+        .accessibilityLabel("Base branch: \(currentRef ?? baseBranch)")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             popoverBody
         }
