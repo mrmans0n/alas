@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-16
+
+### ✨ Features
+
+- Redesign sidebar rows and show local and remote worktree dirty or conflict status (#1266).
+- Add content-shaped loading skeletons for the Files, Agent, and Run tabs (#1267).
+
+### 🐛 Fixes
+
+- Avoid unnecessary universal native builds when Xcode provides a single architecture (#1274).
+- Make Alas CLI and Helper cache fingerprints stable across checkout paths while tracking toolchain and target inputs (#1276).
+
+### 🏗️ Internal
+
+- Add the local Lassie skill and update repository agent guidance.
+
 ## [0.18.0] - 2026-09-16
 
 ### ✨ Features
