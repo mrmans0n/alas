@@ -814,6 +814,41 @@ struct RightPaneStateFileTreeTests {
         #expect(result.nodes == tree)
     }
 
+    @Test func reconciliationRetryReplacesChildrenEvenAfterFailedLoad() {
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "stale.o",
+                        path: "build/stale.o",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .failed
+            )
+        ]
+
+        #expect(RightPaneState.shouldReplaceChildrenOnFileTreeLoad(
+            path: "build",
+            in: tree,
+            bookmarkReconciliationPaths: ["build"]
+        ))
+        #expect(!RightPaneState.shouldReplaceChildrenOnFileTreeLoad(
+            path: "build",
+            in: tree,
+            bookmarkReconciliationPaths: []
+        ))
+    }
+
     @Test func fileTreeNodeFindsNestedNodeByPath() {
         let tree = [
             FileTreeNode(

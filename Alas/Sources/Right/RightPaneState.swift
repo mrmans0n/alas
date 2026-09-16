@@ -3228,7 +3228,12 @@ final class RightPaneState: GGSplitCommitServicing {
         // and refresh its contents in the background instead.
         let alreadyLoaded = Self.fileTreeNode(at: path, in: fileTree)
             .map { $0.childrenState == .loaded && $0.children != nil } ?? false
-        if !alreadyLoaded {
+        let replacesChildren = Self.shouldReplaceChildrenOnFileTreeLoad(
+            path: path,
+            in: fileTree,
+            bookmarkReconciliationPaths: bookmarkReconciliationPaths
+        )
+        if !alreadyLoaded && !replacesChildren {
             let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
             guard loadingMerge.didMerge else {
                 loadingFileTreeChildPaths.remove(path)
@@ -3252,13 +3257,15 @@ final class RightPaneState: GGSplitCommitServicing {
                 // list from the fresh filesystem listing so deleted/renamed
                 // entries drop out — `mergingChildren` only overlays and would
                 // leave stale children behind.
-                let result = alreadyLoaded
+                let result = replacesChildren
                     ? Self.replacingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                     : Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
                 self.failedFileTreeChildPaths.remove(path)
-                self.bookmarkReconciliationPaths.remove(path)
+                if replacesChildren {
+                    self.bookmarkReconciliationPaths.remove(path)
+                }
                 self.fileTree = result.nodes
             } catch {
                 guard self.fileTreeGeneration == generation else { return }
@@ -3269,6 +3276,16 @@ final class RightPaneState: GGSplitCommitServicing {
                 logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    nonisolated static func shouldReplaceChildrenOnFileTreeLoad(
+        path: String,
+        in nodes: [FileTreeNode],
+        bookmarkReconciliationPaths: Set<String>
+    ) -> Bool {
+        if bookmarkReconciliationPaths.contains(path) { return true }
+        return fileTreeNode(at: path, in: nodes)
+            .map { $0.childrenState == .loaded && $0.children != nil } ?? false
     }
 
     /// Bookmark roots start expanded. Seeding once (rather than on every
