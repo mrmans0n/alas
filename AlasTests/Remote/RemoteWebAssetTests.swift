@@ -273,6 +273,18 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".sheet-input"))
     }
 
+    @Test func sessionNavBarShowsStreamingStateAndBranch() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="detail-subtitle""#))
+        #expect(js.contains("function setDetailSubtitle(sessionId)"))
+        #expect(js.contains(#"lastStreamingState === "idle" ? "idle" : "streaming""#))
+        #expect(js.contains("setDetailSubtitle(id)"))
+        #expect(css.contains("#detail-subtitle"))
+    }
+
     @Test func configSheetScrollsWhenModelListOverflows() throws {
         let html = try asset("index.html")
         let css = try asset("style.css")

@@ -658,7 +658,7 @@ function openSession(id) {
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
-  $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
+  $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("bottom-tabbar").classList.add("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances();
@@ -1046,7 +1046,7 @@ function showSessions() {
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
-  $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
+  $("detail-title-block").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   $("bottom-tabbar").classList.remove("hidden");
@@ -1092,6 +1092,20 @@ $("fab-new-session").onclick = showCreateSheet;
 
 function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
+}
+
+function setDetailSubtitle(sessionId) {
+  const summary = listedSessions.get(sessionId);
+  const branch = summary && summary.worktree ? summary.worktree.branch : null;
+  const streamState = lastStreamingState === "idle" ? "idle" : "streaming";
+  const el2 = $("detail-subtitle");
+  el2.innerHTML = "";
+  const dot = el("span", `subtitle-dot ${streamState}`);
+  const label = el("span", "", streamState);
+  el2.append(dot, label);
+  if (branch) {
+    el2.append(el("span", "subtitle-sep", "·"), el("span", "subtitle-branch", branch));
+  }
 }
 
 function handlePromptRequest(kind, sessionId, payload) {
@@ -3020,6 +3034,7 @@ function queueBadgeCount() {
 }
 
 function renderDriveBar(streamingState) {
+  if (currentSession) setDetailSubtitle(currentSession);
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
   // we actually own, and an empty bar strip shows before any state arrives.

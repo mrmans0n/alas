@@ -32,7 +32,13 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 #bar { flex: 0 0 auto; z-index: 5; display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); border-bottom: 0.5px solid var(--line-soft); }
 #nav-title { flex: 1 1 auto; min-width: 0; font-size: 16px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#detail-title { min-width: 0; flex: 1; font-size: 15px; font-weight: 650; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail-title-block { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+#detail-title { font-size: 15px; font-weight: 650; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail-subtitle { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-dim); min-width: 0; overflow: hidden; }
+#detail-subtitle .subtitle-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--fg-faint); }
+#detail-subtitle .subtitle-dot.streaming { background: var(--add); }
+#detail-subtitle .subtitle-sep { color: var(--fg-faint); flex: 0 0 auto; }
+#detail-subtitle .subtitle-branch { font-family: ui-monospace, monospace; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Connection chip: dot + label, color driven by [data-state]. */
 #status.chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--fg-muted); background: color-mix(in oklab, var(--bg-3) 70%, transparent); border: 0.5px solid var(--line); white-space: nowrap; }
 #status.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
@@ -389,5 +395,6 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 }
 @media (max-width: 520px) {
   #detail-title { display: none; }
+  #detail-title-block { display: none; }
   #detail-tabs { margin-right: auto; }
 }
