@@ -54,8 +54,10 @@ if [ "${lane}" = "subprocess" ]; then
     invocation=0
     for ((start = 0; start < ${#selectors[@]}; start += chunk_size)); do
         chunk=("${selectors[@]:start:chunk_size}")
-        result_bundle="${result_dir}/swift-subprocess-$((invocation + 1)).xcresult"
-        run_invocation "${result_bundle}" "${chunk[@]}" || exit "$?"
+        if [ "$((invocation % batch_count))" -eq "${batch}" ]; then
+            result_bundle="${result_dir}/swift-subprocess-batch-$((batch + 1))-chunk-$((invocation + 1)).xcresult"
+            run_invocation "${result_bundle}" "${chunk[@]}" || exit "$?"
+        fi
         invocation=$((invocation + 1))
     done
 else
