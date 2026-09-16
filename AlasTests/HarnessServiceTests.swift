@@ -117,6 +117,50 @@ struct HarnessServiceTests {
         #expect(changedWorktrees.isEmpty)
     }
 
+    @Test func externalWorktreeActivityEventFiresForWorktreeOwner() {
+        let (service, _) = makeService()
+        var changedWorktrees: [String] = []
+        service.onWorktreeActivityEvent = { changedWorktrees.append($0) }
+
+        service.setExternalActivity(
+            sessionId: "acp-1",
+            owner: .worktree("w1"),
+            agent: .codex,
+            state: .busy
+        )
+        service.setExternalActivity(
+            sessionId: "acp-1",
+            owner: .worktree("w1"),
+            agent: .codex,
+            state: .idle
+        )
+
+        #expect(changedWorktrees == ["w1", "w1"])
+    }
+
+    @Test func externalWorktreeActivityEventSkipsSnapshotsAndWorkspaceCheckouts() {
+        let (service, _) = makeService()
+        var changedWorktrees: [String] = []
+        service.onWorktreeActivityEvent = { changedWorktrees.append($0) }
+        let checkoutID = UUID()
+
+        service.setExternalActivity(
+            sessionId: "snapshot",
+            owner: .worktree("w1"),
+            agent: .codex,
+            state: .busy,
+            isSnapshot: true
+        )
+        service.setExternalActivity(
+            sessionId: "checkout",
+            owner: .workspaceCheckout(checkoutID, .local),
+            agent: .codex,
+            state: .busy
+        )
+
+        #expect(changedWorktrees.isEmpty)
+    }
+
     private func waitForMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {

@@ -268,6 +268,13 @@ final class HarnessService {
         }
     }
 
+    nonisolated static func shouldRefreshWorktreeStatus(after state: ActivityState) -> Bool {
+        switch state {
+        case .busy, .idle, .awaitingInput, .permissionRequest:
+            return true
+        }
+    }
+
     func stop() {
         detector.stop()
         socketServer.shutdown()
@@ -296,6 +303,11 @@ final class HarnessService {
             agent: agent, state: state, pid: nil,
             lastBody: body, updatedAt: Date(), requiresUserInput: requiresUserInput || state == .permissionRequest
         )
+        if !isSnapshot,
+           Self.shouldRefreshWorktreeStatus(after: state),
+           case .worktree(let worktreeId) = owner {
+            onWorktreeActivityEvent?(worktreeId)
+        }
         emitActivityTransition(sessionID: sessionId, previous: previous, owner: owner, isSnapshot: isSnapshot)
     }
 

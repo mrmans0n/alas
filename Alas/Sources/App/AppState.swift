@@ -1316,7 +1316,7 @@ final class AppState {
     private func rescanWorktreeStatus(worktreeId: String) {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeId) else { return }
         if resolved.project.host != nil {
-            rescanRemoteWorktreeStatuses(projectId: resolved.project.id)
+            enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
         } else {
             scanLocalWorktreeStatus(paths: [resolved.worktree.path])
         }
@@ -1408,17 +1408,57 @@ final class AppState {
                 case .creating, .deleting, .createFailed:
                     continue
                 case nil, .preparingDelete, .deleteFailed:
-                    let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
-                    guard summary.metricsAvailable else { continue }
-                    results[worktree.path.path] = summary.changedFileCount == 0
-                        ? .clean
-                        : .dirty(fileCount: summary.changedFileCount, conflictCount: summary.conflictCount)
+                    guard let state = await remoteWorktreeDirtyState(worktree: worktree) else { continue }
+                    results[worktree.path.path] = state
                 }
             }
             guard !Task.isCancelled,
                   self.remoteWorktreeStatusRescanGenerations[project.id] == generation
             else { return }
             WorktreeStatusStore.shared.apply(results)
+        }
+    }
+
+    private func enqueueRemoteWorktreeStatusRescan(project: ProjectConfig, worktree: Worktree) {
+        let projectGeneration = (remoteWorktreeStatusRescanGenerations[project.id] ?? 0) + 1
+        remoteWorktreeStatusRescanGenerations[project.id] = projectGeneration
+        remoteWorktreeStatusRescanTasks[project.id]?.cancel()
+        remoteWorktreeStatusRescanTasks[project.id] = nil
+
+        let worktreeGenerationKey = "\(project.id)\u{0}\(worktree.id)"
+        let worktreeGeneration = (remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] ?? 0) + 1
+        remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] = worktreeGeneration
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard self.remoteWorktreeStatusRescanGenerations[project.id] == projectGeneration,
+                  self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] == worktreeGeneration
+            else { return }
+            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+            guard !isOfflineHost else { return }
+            switch self.projectsManager.operationState(for: worktree.id) {
+            case .creating, .deleting, .createFailed:
+                return
+            case nil, .preparingDelete, .deleteFailed:
+                break
+            }
+            guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
+                  self.remoteWorktreeStatusRescanGenerations[project.id] == projectGeneration,
+                  self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] == worktreeGeneration
+            else { return }
+            WorktreeStatusStore.shared.apply([worktree.path.path: state])
+        }
+    }
+
+    private func remoteWorktreeDirtyState(worktree: Worktree) async -> WorktreeDirtyState? {
+        do {
+            let changes = try await GitService().status(worktreePath: worktree.path)
+            let fileCount = Set(changes.map(\.path)).count
+            guard fileCount > 0 else { return .clean }
+            return .dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count)
+        } catch {
+            return nil
         }
     }
 
@@ -11374,28 +11414,6 @@ extension AppState: RemoteSessionsProvider {
 
     private func remoteWorktreeOption(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeOption {
         let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
-        // Remote status rides the summary pipeline rather than per-worktree SSH
-        // calls. Hosts currently offline are skipped, leaving the previous
-        // value in place rather than blanking the row. An unavailable metric
-        // is skipped too, rather than written as `.clean`. Local projects are
-        // excluded from this write: they are covered by the dedicated
-        // `WorktreeStatusScanner`, which counts untracked files with
-        // `--untracked-files=normal`, while this pipeline's `GitService.status`
-        // uses `--untracked-files=all`. The two disagree sharply on a worktree
-        // with an untracked directory, so letting both writers touch a local
-        // row makes the chip flip depending on which one ran last.
-        if project.host != nil, summary.metricsAvailable {
-            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
-            if !isOfflineHost {
-                let remoteStatus: WorktreeDirtyState = summary.changedFileCount == 0
-                    ? .clean
-                    : .dirty(
-                        fileCount: summary.changedFileCount,
-                        conflictCount: summary.conflictCount
-                    )
-                WorktreeStatusStore.shared.apply([worktree.path.path: remoteStatus])
-            }
-        }
         return RemoteWorktreeOption(
             id: worktree.id,
             projectName: summary.projectName,
