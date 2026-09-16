@@ -31,6 +31,7 @@ struct ChatPaneTests {
             "While busy, ⏎ queues; ⌥⏎ steers",
             "Confirm before closing chat tabs",
             "⚡ Auto-run",
+            "Dictation language",
         ])
     }
 

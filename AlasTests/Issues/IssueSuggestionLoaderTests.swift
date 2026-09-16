@@ -32,7 +32,7 @@ struct IssueSuggestionLoaderTests {
     @Test func throwsMalformedOutputWhenProjectHasNoSupportedRemote() async {
         let provider = FakeProvider(kind: .github)
         let loader = Self.loader(
-            remotes: [GitRemote(name: "origin", url: "git@example.com:acme/alas.git")],
+            remotes: [GitRemote(name: "origin", url: "not-a-remote")],
             providers: [provider]
         )
 
