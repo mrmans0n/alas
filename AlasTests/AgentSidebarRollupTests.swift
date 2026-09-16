@@ -497,6 +497,16 @@ struct AgentSidebarRollupTests {
                 status: .clean, lastActivity: .distantPast
             )
         }
+        // Give each fixture worktree a resolvable lineage marker. Checkpoint
+        // admission (AppState.checkpointTarget) requires one to unblock
+        // openExistingACPSession; without it every ACP focus/reopen is
+        // silently refused. The checkpoint store validates the marker as a
+        // lowercase UUID, so it can't just be the worktree id.
+        for worktree in worktrees {
+            let gitDirectory = worktree.path.appendingPathComponent(".git")
+            try? FileManager.default.createDirectory(at: gitDirectory, withIntermediateDirectories: true)
+            try? Data("\(UUID().uuidString.lowercased())\n".utf8).write(to: gitDirectory.appendingPathComponent("alas-worktree-lineage"))
+        }
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         for worktree in worktrees { state.projectsManager.insertOptimisticWorktree(worktree) }
         return (state, worktrees[0], worktrees[1])

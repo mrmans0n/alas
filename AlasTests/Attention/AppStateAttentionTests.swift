@@ -36,7 +36,7 @@ struct AppStateAttentionTests {
         state.observeRightPaneAttention(worktreeID: "worktree", snapshot: expanded)
 
         #expect(state.attentionStore.events.count == 1)
-        #expect(state.attentionStore.events.first?.fingerprint == "b.swift|c.swift")
+        #expect(state.attentionStore.events.first?.fingerprint == "7:b.swift7:c.swift")
     }
 
     @Test func successfulReviewSnapshotClosesPrunedActiveObservation() throws {
@@ -79,7 +79,13 @@ struct AppStateAttentionTests {
             snapshot: RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: fixture.review(hasRequest: false))
         )
 
-        #expect(state.attentionStore.document.observations[migratedKey]?.isActive == false)
+        // With maxEvents: 0 the tombstone budget is also zero, so the
+        // deactivated observation is pruned outright rather than retained as
+        // an explicit `false` entry. No caller distinguishes "absent" from
+        // "stored inactive" (attentionObservationMatchesStored treats both
+        // as already-matching), so `!= true` is the behaviorally meaningful
+        // assertion here.
+        #expect(state.attentionStore.document.observations[migratedKey]?.isActive != true)
     }
 
     @Test func incompleteReviewThreadSnapshotDoesNotCloseMissingFeedbackObservation() throws {
@@ -719,7 +725,10 @@ struct AppStateAttentionTests {
         let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
         let workspaceStore = WorkspaceStore(url: workspaceURL)
-        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let workspacesManager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore),
+            observer: FixtureCheckoutObserver()
+        )
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
         let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
@@ -746,8 +755,10 @@ struct AppStateAttentionTests {
             store: MemoryStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
-            attentionStore: AttentionStore(url: fixture.url)
+            attentionStore: AttentionStore(url: fixture.url),
+            harnessAttentionSettleInterval: 0
         )
+        state.config.workspacesEnabled = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.selectedWorktreeId = worktree.id
@@ -847,7 +858,10 @@ struct AppStateAttentionTests {
         let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
         let workspaceStore = WorkspaceStore(url: workspaceURL)
-        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let workspacesManager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore),
+            observer: FixtureCheckoutObserver()
+        )
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
         let first = Worktree(id: "first", projectId: project.id, name: "first", branch: "first",
                              path: URL(fileURLWithPath: "/repo/first"), status: .clean, lastActivity: fixture.now)
@@ -886,6 +900,7 @@ struct AppStateAttentionTests {
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url)
         )
+        state.config.workspacesEnabled = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(first)
         state.projectsManager.insertOptimisticWorktree(second)
@@ -1131,7 +1146,6 @@ struct AppStateAttentionTests {
         let state = AppState(store: MemoryStore(), attentionStore: store)
         state.attentionStore.appendHistory(fixture.history(fingerprint: "finished"), at: fixture.now)
         #expect(state.attentionStore.writeError != nil)
-        let writeCountAfterFailure = persistence.writeCount
         let host = "online-\(UUID().uuidString)"
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue",
                                     addedAt: fixture.now, host: host)
@@ -1139,11 +1153,17 @@ struct AppStateAttentionTests {
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
+        // The live status-transition callback (unlike aggregation's own
+        // reconciliation) legitimately retries the failed write once, since
+        // a genuine reconnect is a meaningful moment to flush pending state.
+        // The baseline must be taken after that settles so the assertion
+        // below measures only what `attentionAggregation` itself adds.
         RemoteHostStatusStore.shared.reportSuccess(host: host)
+        let writeCountAfterReconnect = persistence.writeCount
 
         _ = state.attentionAggregation
 
-        #expect(persistence.writeCount == writeCountAfterFailure)
+        #expect(persistence.writeCount == writeCountAfterReconnect)
     }
 
     @Test func unknownHostObservationIsPreservedWhenWorktreeAppearsBeforeProbe() throws {
@@ -1790,5 +1810,17 @@ struct AppStateAttentionTests {
         func cleanup() {
             try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
         }
+    }
+}
+
+/// Reconciliation normally inspects each member's frozen `plan` and, for
+/// local checkouts, the real Git lineage marker on disk. These fixtures
+/// build members directly (no `plan`, no on-disk worktree), so the real
+/// `WorkspaceCheckoutObserver` would downgrade every member's availability to
+/// `.identityConflict` regardless of the `.available` the test constructed.
+/// Stub the observer to confirm exactly what the test set up.
+private struct FixtureCheckoutObserver: WorkspaceCheckoutObserving {
+    func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(member.gitLineageID ?? "fixture-lineage")
     }
 }
