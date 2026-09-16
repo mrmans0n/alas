@@ -58,7 +58,9 @@ final class CodeEditorCoordinator {
     private var inlaySettings: InlayHintSettings?
     private var inlaySupported = false
     private var inlayBindingID = UUID()
-    private var inlayResponse: (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])?
+    private typealias InlayResponse = (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])
+    private var inlayResponse: InlayResponse?
+    private var inlayResponsesByPosition: [LSPPosition: InlayResponse] = [:]
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -1410,8 +1412,9 @@ final class CodeEditorCoordinator {
         inlayClient = nil
         inlaySupported = false
         inlayResponse = nil
+        inlayResponsesByPosition = [:]
         inlaySettings = nil
-        lastInlayRange = nil
+        lastInlayRevision = nil
         textView?.inlayHoverHandler = nil
         textView?.inlayClickHandler = nil
         textView?.inlayAccessibilityActions = nil
@@ -1425,6 +1428,7 @@ final class CodeEditorCoordinator {
         }, apply: { [weak self] hints in self?.applyInlayHints(hints) }, clear: { [weak self] in
             self?.inlayLayout?.clear()
             self?.inlayResponse = nil
+            self?.inlayResponsesByPosition = [:]
         })
         updateInlaySettings()
         updateInlayClient()
@@ -1480,23 +1484,21 @@ final class CodeEditorCoordinator {
         }
     }
 
-    private var lastInlayRange: (range: NSRange, revision: Int)?
+    private var lastInlayRevision: Int?
 
     private func scheduleInlayRefresh(visibleRangeChanged: Bool = false) {
         guard inlayClient != nil, inlaySupported, inlaySettings?.enabled == true, let view = textView, let adapter = view.displayAdapter,
-              let layout = view.layoutManager, let container = view.textContainer else { return }
-        let visible = view.visibleRect
-        let margin = visible.insetBy(dx: 0, dy: -visible.height).offsetBy(dx: -view.textContainerOrigin.x, dy: -view.textContainerOrigin.y)
-        let glyphs = layout.glyphRange(forBoundingRect: margin, in: container)
-        guard let source = view.sourceRange(forNative: layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)) else { return }
-        let range = (adapter.buffer.storage.string as NSString).lineRange(for: source)
+              let source = view.visibleSourceRange else { return }
         // Source edits can publish a provisional projection before the buffer
         // advances its revision. The same viewport must be requested again
         // after that revision is committed, even when its range is unchanged.
         let revision = adapter.buffer.editGeneration
-        guard !visibleRangeChanged || range != lastInlayRange?.range || revision != lastInlayRange?.revision else { return }
-        lastInlayRange = (range, revision)
-        inlayFeature?.refresh(range: range)
+        if revision != lastInlayRevision {
+            inlayFeature?.invalidate(preservingPresentation: true)
+            lastInlayRevision = revision
+        }
+        let ranges = InlayHintsFeature.requestRanges(visibleRange: source, lineStarts: adapter.sourceLineStarts, sourceLength: adapter.buffer.storage.length)
+        inlayFeature?.refresh(ranges: ranges, debounce: visibleRangeChanged ? .zero : .milliseconds(80))
     }
 
     private func requestInlayHints(range: NSRange) async -> [LSPInlayHint]? {
@@ -1510,12 +1512,18 @@ final class CodeEditorCoordinator {
             let hints = try await client.inlayHints(uri: context.document.uri, range: context.range)
             guard !Task.isCancelled, buffer === self.buffer, revision == buffer.editGeneration,
                   binding == inlayBindingID, client === inlayClient, isLSPRequestCurrent(context) else { return nil }
-            inlayResponse = (client, context, revision, generations)
-            return hints.filter { hint in
+            if inlayResponse?.revision != revision { inlayResponsesByPosition = [:] }
+            let response: InlayResponse = (client, context, revision, generations)
+            inlayResponse = response
+            let accepted = hints.filter { hint in
                 let p = hint.position, start = context.range.start, end = context.range.end
                 return (p.line > start.line || p.line == start.line && p.character >= start.character)
-                    && (p.line < end.line || p.line == end.line && p.character <= end.character)
+                    && (p.line < end.line || p.line == end.line && (p.character < end.character || NSMaxRange(range) == buffer.storage.length && p.character == end.character))
             }
+            // Each cached hint keeps the workspace snapshot from its own
+            // request, including when another buffer changes between chunks.
+            for hint in accepted { inlayResponsesByPosition[hint.position] = response }
+            return accepted
         } catch { return nil }
     }
 
@@ -1528,15 +1536,17 @@ final class CodeEditorCoordinator {
         }
         layout.resolve = { hint in try await response.client.resolveInlayHint(hint) }
         layout.navigate = { [weak self] location, position in self?.openDiagnosticRelatedLocation(location, sourcePosition: position) }
+        let responsesByPosition = inlayResponsesByPosition
         layout.perform = { [weak self, weak layout] hint, part, applyEdits in
-            guard let self, layout?.isCurrent() == true else { return }
+            guard let self, layout?.isCurrent() == true,
+                  let origin = responsesByPosition[hint.position], isLSPRequestCurrent(origin.context) else { return }
             var action: [String: LSPJSONValue] = ["title": .string("Inlay hint")]
             if applyEdits, let edits = hint.wireValue["textEdits"] {
-                action["edit"] = .object(["changes": .object([response.context.document.uri: edits])])
+                action["edit"] = .object(["changes": .object([origin.context.document.uri: edits])])
             } else if let part, case .array(let parts) = hint.wireValue["label"], parts.indices.contains(part), let command = parts[part]["command"] { action["command"] = command }
             else { return }
             guard let chosen = try? LSPCodeAction(wireValue: .object(action)) else { return }
-            codeActionsFeature?.performInlayAction(chosen, client: response.client, context: response.context, generations: response.generations)
+            codeActionsFeature?.performInlayAction(chosen, client: origin.client, context: origin.context, generations: origin.generations)
         }
         do { try layout.replace(hints, revision: response.revision, settings: settings) }
         catch { layout.clear() }

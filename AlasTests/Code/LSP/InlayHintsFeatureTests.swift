@@ -4,6 +4,56 @@ import Testing
 
 @MainActor
 struct InlayHintsFeatureTests {
+    @Test func visitedChunksAndEmptyResponsesAreCachedUntilInvalidation() async throws {
+        let first = NSRange(location: 0, length: 256), second = NSRange(location: 256, length: 256)
+        let hint = try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(#"{"position":{"line":0,"character":1},"label":": Int"}"#.utf8)))
+        var requests: [NSRange] = []
+        var presentations: [[LSPInlayHint]] = []
+        let feature = InlayHintsFeature(request: { range in
+            requests.append(range)
+            return range == first ? [hint] : []
+        }, apply: { presentations.append($0) }, clear: {})
+        defer { feature.stop() }
+        feature.refresh(ranges: [first, second])
+        for _ in 0..<100 where presentations.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(presentations.count == 2)
+        #expect(presentations.last?.map(\.label) == [": Int"])
+        feature.refresh(ranges: [second, first])
+        for _ in 0..<20 { await Task.yield() }
+        #expect(requests == [first, second])
+        feature.invalidate()
+        feature.refresh(ranges: [first])
+        for _ in 0..<100 where requests.count < 3 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(requests == [first, second, first])
+    }
+
+    @Test func chunkRequestsStayStableWithinViewportAndPrefetchNeighbors() {
+        let starts = Array(stride(from: 0, through: 10000, by: 10))
+        let first = InlayHintsFeature.requestRanges(visibleRange: .init(location: 0, length: 200), lineStarts: starts, sourceLength: 10000)
+        #expect(first == [.init(location: 0, length: 2560), .init(location: 2560, length: 2560)])
+        #expect(InlayHintsFeature.requestRanges(visibleRange: .init(location: 100, length: 200), lineStarts: starts, sourceLength: 10000) == first)
+        #expect(InlayHintsFeature.requestRanges(visibleRange: .init(location: 3000, length: 200), lineStarts: starts, sourceLength: 10000) == [
+            .init(location: 2560, length: 2560), .init(location: 5120, length: 2560), .init(location: 0, length: 2560)
+        ])
+        #expect(InlayHintsFeature.requestRanges(visibleRange: .init(location: 10000, length: 0), lineStarts: starts, sourceLength: 10000).first == .init(location: 7680, length: 2320))
+        #expect(InlayHintsFeature.requestRanges(visibleRange: .init(location: 0, length: 0), lineStarts: [0], sourceLength: 0) == [.init(location: 0, length: 0)])
+        #expect(InlayHintsFeature.requestRanges(visibleRange: .init(location: 2560, length: 0), lineStarts: Array(stride(from: 0, through: 2560, by: 10)), sourceLength: 2560) == [.init(location: 0, length: 2560)])
+    }
+
+    @Test func failedPrefetchDoesNotRemoveCachedPresentation() async throws {
+        var requests = 0, applied = 0, cleared = 0
+        let feature = InlayHintsFeature(request: { _ in
+            requests += 1
+            return requests == 1 ? [] : nil
+        }, apply: { _ in applied += 1 }, clear: { cleared += 1 })
+        defer { feature.stop() }
+        feature.refresh(ranges: [.init(location: 0, length: 10), .init(location: 10, length: 10)])
+        for _ in 0..<100 where requests < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(requests == 2)
+        #expect(applied == 1)
+        #expect(cleared == 0)
+    }
+
     @Test func freshResponseCancelsRetainedPresentationExpiry() async throws {
         var cleared = 0
         var applied = 0
@@ -54,9 +104,9 @@ struct InlayHintsFeatureTests {
         let lastA = try #require(repliesA.last), lastB = try #require(repliesB.last)
         lastA.resume(returning: [])
         lastB.resume(returning: [])
-        for _ in 0..<100 where appliedA == 0 || appliedB == 0 { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(appliedA == 1)
-        #expect(appliedB == 1)
+        for _ in 0..<100 where appliedA < 2 || appliedB < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(appliedA == 2)
+        #expect(appliedB == 2)
     }
 
     @Test func labelsPaddingAndOpaqueDataSurviveResolution() throws {
@@ -98,13 +148,13 @@ struct InlayHintsFeatureTests {
         firstCompletion.resume(returning: [])
         for _ in 0..<100 where completions.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
         #expect(requests == [first, last])
-        #expect(applied == 0)
+        #expect(applied == 1) // Scrolling does not stale the active source revision.
         feature.invalidate()
         let lastCompletion = try #require(completions.first)
         completions.removeFirst()
         lastCompletion.resume(returning: [])
         for _ in 0..<50 { await Task.yield() }
-        #expect(applied == 0)
+        #expect(applied == 1)
         #expect(cleared > 0)
         feature.stop()
     }

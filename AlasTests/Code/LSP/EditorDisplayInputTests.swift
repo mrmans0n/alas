@@ -5,6 +5,25 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorDisplayInputTests {
+    @Test func hintResponseEditsOnlyItsDisplayExtentAndPreservesSourceSelection() async throws {
+        let f = try await Fixture("prefix\nvalue\nsuffix\n")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        try adapter.updateHints([], revision: f.buffer.editGeneration)
+        f.view.setSourceSelectedRange(NSRange(location: 8, length: 3))
+        let recorder = DisplayEditRecorder()
+        f.document.storage.delegate = recorder
+        defer { f.document.storage.delegate = nil }
+        try adapter.updateHints([
+            .init(id: "type", sourceOffset: 12, label: ": Int", size: CGSize(width: 35, height: 14))
+        ], revision: f.buffer.editGeneration)
+        #expect(recorder.requestedEdits.count == 1)
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 12, length: 1))
+        #expect(f.view.sourceSelectedRange == NSRange(location: 8, length: 3))
+        #expect(f.buffer.storage.string == "prefix\nvalue\nsuffix\n")
+        #expect(f.document.storage.string == "prefix\nvalue\u{FFFC}\nsuffix\n")
+    }
+
     @Test func typingRetainsHintsOutsideTouchedLinesWithoutReplacingTheirAttachments() async throws {
         let f = try await Fixture("aa\nbb\ncc\n")
         defer { f.remove() }
