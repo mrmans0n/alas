@@ -48,6 +48,10 @@ struct BaseBranchSelector: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+        // Report the ideal width, not the truncation-fitted one, so
+        // ViewThatFits falls back to the icon-only variant when the label
+        // doesn't fit instead of accepting a truncated label.
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var iconOnlyView: some View {
