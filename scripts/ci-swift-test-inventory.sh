@@ -49,7 +49,7 @@ trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
 # types cannot become stale xcodebuild selectors.
 while IFS= read -r source; do
     awk '
-        /^[[:space:]]*((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+        /^[[:space:]]*(@[^[:space:]]+[[:space:]]+)*((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
             name = $0
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
