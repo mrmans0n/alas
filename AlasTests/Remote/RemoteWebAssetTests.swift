@@ -194,6 +194,30 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-closed"))
     }
 
+    @Test func repoFilterModuleExposesPureHelpers() throws {
+        let js = try asset("repo-filter.js")
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(js.contains("function repoTileColor(name)"))
+        #expect(js.contains("function repoInitials(name)"))
+        #expect(js.contains("function worktreeIsPrimaryBranch(name)"))
+        #expect(js.contains("function worktreeIsActive(worktree)"))
+        #expect(js.contains("function worktreeIsDirty(worktree)"))
+        #expect(js.contains("function relativeTimeShort(updatedAtMs, nowMs)"))
+        #expect(js.contains("function diffBarSegments(added, deleted)"))
+        #expect(js.contains("function sectionMatchesFilter(section, filter)"))
+        #expect(js.contains("function sectionMatchesQuery(section, query)"))
+        #expect(js.contains("function sectionCounts(sections)"))
+        #expect(js.contains("globalThis.RemoteRepoFilter ="))
+        // Pure module: no DOM access.
+        #expect(!js.contains("document."))
+        #expect(!js.contains("window."))
+
+        try expectLoadsBeforeApp("/repo-filter.js", in: html)
+        try expectReferencedAndPrecached("/repo-filter.js", html: html, sw: sw)
+    }
+
     @Test func remoteWebExposesSessionRenameControls() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
