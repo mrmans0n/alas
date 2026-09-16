@@ -21,10 +21,10 @@ struct RightPaneLoadingSkeletonLayoutTests {
     }
 
     @Test func filesSkeletonInsetsMatchTheRealTreeRows() {
-        // The skeleton borrows FilesTabView's own indentation function, so
-        // rows land at the same x the real tree will use once it loads.
+        // The skeleton borrows FileTreeListView's own indentation function,
+        // so rows land at the same x the real tree will use once it loads.
         for row in RightPaneSkeletonLayout.files {
-            #expect(FilesTabView.rowLeadingPadding(depth: row.depth) == 12 + CGFloat(row.depth * 14))
+            #expect(FileTreeListView.rowLeadingPadding(depth: row.depth) == 12 + CGFloat(row.depth * 14))
         }
     }
 

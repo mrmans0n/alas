@@ -132,7 +132,7 @@ private struct FileSkeletonRow: View {
         }
         // Same indentation math the real tree rows use, so the skeleton's
         // nesting doesn't shift once the real tree loads in.
-        .padding(.leading, FilesTabView.rowLeadingPadding(depth: row.depth))
+        .padding(.leading, FileTreeListView.rowLeadingPadding(depth: row.depth))
         .padding(.trailing, 12)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
