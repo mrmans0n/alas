@@ -8,6 +8,7 @@ private final class WorktreeCleanupProbe {
     var worktreeID = ""
     var launchedTickets: [WorktreeTrashCleanupTicket] = []
     var tabsWereEmptyAtLaunch = false
+    var appendFinishedAtLaunch = false
 }
 
 @Suite(.serialized)
@@ -910,13 +911,17 @@ struct AppStateCleanupTests {
             try? FileManager.default.removeItem(at: linked)
             try? FileManager.default.removeItem(at: repo)
         }
+        let history = try RunHistoryStore(path: repo.appendingPathComponent("run-history.sqlite").path)
+        var appendFinished = false
         let probe = WorktreeCleanupProbe()
         let state = AppState(
+            runHistoryStore: history,
             worktreeCleanupLauncher: { ticket in
                 probe.launchedTickets.append(ticket)
                 probe.tabsWereEmptyAtLaunch = probe.state?.tabs
                     .tabs(forWorktree: probe.worktreeID)
                     .isEmpty == true
+                probe.appendFinishedAtLaunch = appendFinished
             }
         )
         probe.state = state
@@ -936,17 +941,39 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
         state.selectWorktree(id: worktree.id)
+        let entry = RunHistoryEntry(
+            id: "delayed-delete-run",
+            scriptKey: "repo:dev.sh",
+            scriptName: "Dev",
+            worktreeID: worktree.id,
+            branch: worktree.branch,
+            target: .init(host: nil, workingDirectory: worktree.path.path),
+            endpoint: nil,
+            outcome: .succeeded,
+            startedAt: Date(timeIntervalSince1970: 1),
+            finishedAt: Date(timeIntervalSince1970: 2),
+            portConflict: nil,
+            output: .available(text: "late\n", truncated: false)
+        )
+        state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = worktree.id
+        state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history] in
+            try? await Task.sleep(for: .seconds(1))
+            _ = try? await history.append(entry)
+            appendFinished = true
+        }
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+        try await waitForWorktreeRemoved(state.projectsManager, projectId: project.id, worktreeId: worktree.id)
+        try await waitForSelectedWorktree(state, equals: Worktree.makeId(path: repo))
 
         let ticket = try #require(probe.launchedTickets.first)
         defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
         #expect(probe.launchedTickets.count == 1)
         #expect(probe.tabsWereEmptyAtLaunch)
+        #expect(probe.appendFinishedAtLaunch)
+        #expect(try await history.entry(id: entry.id) == nil)
         #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
-        #expect(!state.projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id })
-        #expect(state.selectedWorktreeId == Worktree.makeId(path: repo))
     }
 
     @Test func cleanupLaunchFailureLeavesWorktreeDeletedForStaleRecovery() async throws {
@@ -1585,5 +1612,32 @@ struct AppStateCleanupTests {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         Issue.record("Timed out waiting for operation state")
+    }
+
+    private func waitForWorktreeRemoved(
+        _ manager: ProjectsManager,
+        projectId: String,
+        worktreeId: String
+    ) async throws {
+        for _ in 0..<80 {
+            if !manager.worktrees(projectId: projectId).contains(where: { $0.id == worktreeId }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        Issue.record("Timed out waiting for worktree removal")
+    }
+
+    private func waitForSelectedWorktree(
+        _ state: AppState,
+        equals expected: String
+    ) async throws {
+        for _ in 0..<80 {
+            if state.selectedWorktreeId == expected {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        Issue.record("Timed out waiting for selected worktree")
     }
 }

@@ -7887,16 +7887,19 @@ final class AppState {
     /// Tear down every tab/terminal/harness reference for a worktree id without
     /// touching git. Shared between Close-All, archive, and delete so the
     /// bookkeeping stays in one place.
+    @discardableResult
     private func cleanupWorktreeState(
         worktreeId: String,
         purgeRunScriptFailures: Bool = true,
         purgeRunHistory: Bool = true
-    ) {
+    ) -> Task<Void, Never>? {
         inAppNotifications.remove(worktreeID: worktreeId)
+        let runHistoryPurgeTask: Task<Void, Never>?
         if purgeRunScriptFailures {
-            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true, purgeHistory: purgeRunHistory)
+            runHistoryPurgeTask = cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true, purgeHistory: purgeRunHistory)
         } else {
             cancelPendingRunScriptLaunches(worktreeID: worktreeId)
+            runHistoryPurgeTask = nil
         }
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
@@ -7906,6 +7909,7 @@ final class AppState {
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
         if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }
+        return runHistoryPurgeTask
     }
 
     func closeAllTabs(worktreeId: String) {
@@ -9351,7 +9355,8 @@ final class AppState {
             return .failed(message: "\(error)")
         }
 
-        cleanupWorktreeState(worktreeId: worktree.id)
+        let runHistoryPurgeTask = cleanupWorktreeState(worktreeId: worktree.id)
+        await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
             do {
                 try worktreeCleanupLauncher(ticket)
