@@ -16,7 +16,7 @@ struct AttentionPendingReviewReveal {
 
 struct AttentionNavigationEnvironment {
     var focusSession: @MainActor (AttentionItem, String) -> Bool
-    var presentScriptFailure: @MainActor (AttentionItem, String) -> Bool
+    var presentScriptFailure: @MainActor (AttentionItem, String) async -> Bool
     var revealRightPane: @MainActor (AttentionItem, AttentionJumpTarget) async -> Bool
     var focusReviewComment: @MainActor (AttentionItem, String, String) -> Bool
     var focusRemoteWorktree: @MainActor (AttentionItem) -> Bool
@@ -142,7 +142,7 @@ extension AppState {
             opened = environment.focusSession(resolved, sessionID)
             failure = "The session is no longer available."
         case .runScriptFailure(let failureID):
-            opened = environment.presentScriptFailure(resolved, failureID)
+            opened = await environment.presentScriptFailure(resolved, failureID)
             failure = "The script failure is no longer available."
         case .conflicts, .gitOperation, .reviewRequest:
             opened = await environment.revealRightPane(resolved, item.jumpTarget)

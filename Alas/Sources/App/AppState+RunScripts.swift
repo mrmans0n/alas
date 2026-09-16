@@ -584,6 +584,15 @@ extension AppState {
             || durableRunReportIDsByWorktreeID[worktreeID, default: []].contains(runID)
     }
 
+    func hasPersistedRunReport(worktreeID: String, runID: String) async -> Bool {
+        await flushRunHistoryPersistence(worktreeID: worktreeID)
+        guard let runHistoryStore,
+              (try? await runHistoryStore.entry(id: runID))?.worktreeID == worktreeID
+        else { return false }
+        durableRunReportIDsByWorktreeID[worktreeID, default: []].insert(runID)
+        return true
+    }
+
     func clearRunHistory(worktreeID: String) {
         let cutoff = Date()
         transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
@@ -838,8 +847,12 @@ extension AppState {
                 } catch {
                     // The waiter failed (dropped SSH, unreadable completion
                     // file). We never saw an exit status, so we can't claim one.
-                    let finalized = runRecords.markLostObservation(runID: runID, at: Date())
-                    archiveFinalizedRun(finalized, capture: runHistoryCapture(for: error, location: location))
+                    let capture = runHistoryCapture(for: error, location: location)
+                    if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
+                        archiveFinalizedRun(finalized, capture: capture)
+                    } else if runHistoryPersistenceTasks[runID] == nil {
+                        releaseRunHistoryCapture(capture)
+                    }
                     runScriptLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
                     )

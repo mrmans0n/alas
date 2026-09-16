@@ -304,6 +304,30 @@ struct AttentionNavigationTests {
         #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:legacy")
     }
 
+    @Test func liveScriptRoutePrefersDurableReportWithoutCachedID() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try await fixture.history.append(RunHistoryEntry(
+            id: "durable",
+            scriptKey: "repo:build",
+            scriptName: "Build",
+            worktreeID: "worktree",
+            branch: "main",
+            target: .init(host: nil, workingDirectory: "/repo"),
+            endpoint: nil,
+            outcome: .failed(exitCode: 7),
+            startedAt: Date(timeIntervalSince1970: 1),
+            finishedAt: Date(timeIntervalSince1970: 2),
+            portConflict: nil,
+            output: .available(text: "saved output\n", truncated: false)
+        ))
+        let item = try fixture.record(.runScriptFailure(failureID: "durable"))
+
+        #expect(await fixture.state.openAttentionItem(item) == .opened)
+        #expect(fixture.state.transientRunReport(worktreeID: "worktree", runID: "durable") == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:durable")
+    }
+
     @Test(arguments: [true, false])
     func liveReviewRouteWaitsForConfirmedCommentReveal(succeeds: Bool) async throws {
         let fixture = try Fixture()
@@ -461,11 +485,18 @@ struct AttentionNavigationTests {
     @MainActor private struct Fixture {
         let state: AppState
         let worktree: Worktree
+        let history: RunHistoryStore
         let directory: URL
         init() throws {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            state = AppState(store: MemoryStore(), tabsManager: TabsManager(store: MemoryStore()), attentionStore: AttentionStore(url: directory.appendingPathComponent("attention.json")))
+            history = try RunHistoryStore(path: directory.appendingPathComponent("run-history.sqlite").path)
+            state = AppState(
+                store: MemoryStore(),
+                runHistoryStore: history,
+                tabsManager: TabsManager(store: MemoryStore()),
+                attentionStore: AttentionStore(url: directory.appendingPathComponent("attention.json"))
+            )
             let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
             worktree = Worktree(id: "worktree", projectId: "project", name: "main", branch: "main", path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: Date())
             state.projectsManager = ProjectsManager(persistedProjects: [project])
