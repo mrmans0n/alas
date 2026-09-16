@@ -191,26 +191,33 @@ struct CodeActionsFeatureTests {
         let before = try await access.snapshot(a)
         let range = LSPRange(start: .init(line: 0, character: 0), end: .init(line: 0, character: 3))
         let edit = LSPWorkspaceEdit(changes: [a.uri: [.init(range: range, newText: "new")]])
-        let after = before.replacing(content: Data("new".utf8))
-        let step = WorkspaceEditPlanStep(kind: .text, document: a, destination: nil, before: before, after: after,
-                                         destinationBefore: nil, annotationID: nil, annotationIDs: [], resourceOptions: nil)
-        let plan = WorkspaceEditPlan(steps: [step], finalSnapshots: [a: after], reviewAnnotations: [:], warnings: [], requiresPreview: true)
-        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
-        let executor = WorkspaceEditExecutor(access: access, journal: journal)
         let action = try LSPCodeAction(wireValue: .object([
             "title": .string("Fix"), "edit": LSPJSONValue.decode(from: JSONEncoder().encode(edit)),
             "command": .object(["title": .string("Run"), "command": .string("run")])
         ]))
+        func snapshot(_ buffer: EditorBuffer, document: EditorDocumentID) throws -> WorkspaceFileSnapshot {
+            WorkspaceFileSnapshot(
+                document: document,
+                content: try WorkspaceEditSnapshotBudget.data(buffer.storage.string),
+                isOpen: true,
+                isDirty: buffer.dirty,
+                isDirectory: before.isDirectory,
+                isSymbolicLink: before.isSymbolicLink,
+                diskContent: before.diskContent,
+                originalContent: before.originalContent,
+                permissions: before.permissions,
+                bufferGeneration: buffer.editGeneration,
+                fileWatchGeneration: buffer.fileWatchGeneration
+            )
+        }
         var commandRan = false
         let result = try await CodeActionsFeature.perform(action, isCurrent: { true }, apply: { _ in
             // The initiating file is unchanged while another open buffer is edited during preview.
             if change == "untouchedBefore" {
                 buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "user text")
             }
-            guard case .applied(let id) = await executor.apply(plan) else { return .cancelled }
-            let record = try! journal.record(id)
-            let observed = record.entries.flatMap { $0.observedAfter ?? [] }
-            let applied = Dictionary(uniqueKeysWithValues: observed.map { ($0.document, $0) })
+            buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "new")
+            let applied = [a: try! snapshot(buffers[0], document: a)]
             if change == "untouchedAfter" {
                 buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "later user text")
             } else if change == "editedAfter" {
@@ -219,7 +226,7 @@ struct CodeActionsFeatureTests {
                 buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 9), with: "new")
             }
             do {
-                let actual = try await access.snapshot(a)
+                let actual = try snapshot(buffers[0], document: a)
                 _ = try CodeActionsFeature.validatedGenerations(captured: captured,
                     current: tabs.workspaceEditGenerations(host: nil, worktreeID: "w"), applied: applied, actual: [a: actual])
                 return .init(applied: true)
