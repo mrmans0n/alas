@@ -7,7 +7,9 @@ struct ACPToolbar: View {
     let state: AppState
     let worktree: Worktree
     var owner: SessionOwnerID? = nil
+    var onOpenPreview: (() -> Void)? = nil
     @Environment(\.theme) private var theme
+    @State private var previewHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -37,6 +39,28 @@ struct ACPToolbar: View {
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
             Spacer(minLength: 0)
+            if let onOpenPreview {
+                Button(action: onOpenPreview) {
+                    HStack(spacing: 5) {
+                        Icon(name: "globe", size: 11)
+                        Text("Preview")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(theme.color(previewHovered ? "fg" : "fg-muted"))
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(
+                        previewHovered ? theme.color("bg-3") : .clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.toolbarControl)
+                .onHover { previewHovered = $0 }
+                .help("Open checkout web preview")
+                .accessibilityLabel("Open checkout web preview")
+                .accessibilityIdentifier("checkout-open-preview")
+            }
             ToolbarBtn(
                 icon: "rectangle.trailingthird.inset.filled",
                 tooltip: state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap",
