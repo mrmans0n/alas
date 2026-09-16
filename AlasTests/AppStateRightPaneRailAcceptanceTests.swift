@@ -4,7 +4,7 @@ import Testing
 /// `AppState.acceptsRightPaneTabShortcut` is the gate the ⌘⌃1-4 rail
 /// shortcuts and the "Right Sidebar: ..." menu items both check before
 /// acting. The rail's pure reducer is covered elsewhere (see
-/// `RightPaneTabShortcutTests`); this pins the available-tabs gate.
+/// `RightPaneTabShortcutTests`); this pins the available-tabs set.
 @MainActor
 struct AppStateRightPaneRailAcceptanceTests {
     @Test func shortcutsAreLiveForBuiltInTabs() {
@@ -15,15 +15,10 @@ struct AppStateRightPaneRailAcceptanceTests {
         #expect(state.acceptsRightPaneTabShortcut(.agent))
     }
 
-    @Test func shortcutsRespectTheRunTabPreviewFlag() {
+    @Test func runTabShortcutIsAlwaysLive() {
         let state = AppState()
-        state.config.runTabEnabled = false
-
-        #expect(state.acceptsRightPaneTabShortcut(.agent))
-        #expect(!state.acceptsRightPaneTabShortcut(.run))
-
-        state.config.runTabEnabled = true
 
         #expect(state.acceptsRightPaneTabShortcut(.run))
+        #expect(state.acceptsRightPaneTabShortcut(.agent))
     }
 }
