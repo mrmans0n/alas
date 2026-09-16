@@ -635,6 +635,33 @@ struct AppStateRunRecordTests {
         #expect(runRecord(fixture)?.status == .finished(.succeeded))
     }
 
+    @Test func archiveWorktreeKeepsDurableRunHistory() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let entry = RunHistoryEntry(
+            id: "archived-run",
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+            endpoint: nil,
+            outcome: .succeeded,
+            startedAt: Date(timeIntervalSince1970: 1),
+            finishedAt: Date(timeIntervalSince1970: 2),
+            portConflict: nil,
+            output: .available(text: "saved\n", truncated: false)
+        )
+        try await fixture.history.append(entry)
+
+        fixture.state.archiveWorktree(fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let archivedEntry = try await fixture.history.entry(id: entry.id)
+        #expect(archivedEntry?.id == entry.id)
+        #expect(archivedEntry?.output == entry.output)
+    }
+
     @Test func terminateAllTerminalSessionsCancelsPendingLaunches() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

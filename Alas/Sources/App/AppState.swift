@@ -5036,7 +5036,7 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        cleanupWorktreeState(worktreeId: worktree.id)
+        cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
 
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
@@ -7831,12 +7831,16 @@ final class AppState {
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
-    /// touching git or persistence. Shared between Close-All, archive, and
-    /// delete so the bookkeeping stays in one place.
-    private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
+    /// touching git. Shared between Close-All, archive, and delete so the
+    /// bookkeeping stays in one place.
+    private func cleanupWorktreeState(
+        worktreeId: String,
+        purgeRunScriptFailures: Bool = true,
+        purgeRunHistory: Bool = true
+    ) {
         inAppNotifications.remove(worktreeID: worktreeId)
         if purgeRunScriptFailures {
-            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
+            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true, purgeHistory: purgeRunHistory)
         } else {
             cancelPendingRunScriptLaunches(worktreeID: worktreeId)
         }
