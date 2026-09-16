@@ -160,6 +160,9 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil(timeoutNanos: 2_000_000_000) {
             client.sent.contains { $0.method == "session/prompt" }
         }
+        try await waitUntil(timeoutNanos: 2_000_000_000) {
+            (try? store.loadQueue(sessionId: "local").isEmpty) == true
+        }
 
         #expect(bootstrapped == ["local"])
         #expect(try store.loadQueue(sessionId: "local").isEmpty)

@@ -339,8 +339,15 @@ struct DiffReviewSurfaceTests {
                 in: controller.view
             ) != nil)
 
-            model.beginEditingPostedDraft()
-            #expect(model.state.draftCommentEditors["new-draft"]?.isEditing == true)
+            #expect(await pressAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-new-draft",
+                in: controller.view,
+                untilSubviewAppears: "diff-review-draft-comment-action-save-new-draft"
+            ))
+            #expect(subview(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-save-new-draft",
+                in: controller.view
+            ) != nil)
         }
     }
 
@@ -4687,6 +4694,37 @@ struct DiffReviewSurfaceTests {
         return false
     }
 
+    private func pressAccessibilityElement(
+        withAccessibilityIdentifier identifier: String,
+        in view: NSView,
+        untilSubviewAppears targetIdentifier: String
+    ) async -> Bool {
+        for match in subviews(withAccessibilityIdentifier: identifier, in: view) {
+            guard match.accessibilityPerformPress() else { continue }
+            if await waitForSubview(withAccessibilityIdentifier: targetIdentifier, in: view) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func waitForSubview(
+        withAccessibilityIdentifier identifier: String,
+        in view: NSView,
+        timeout: TimeInterval = 1.0
+    ) async -> NSView? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            await drainSwiftUI(view)
+            if let match = subview(withAccessibilityIdentifier: identifier, in: view) {
+                return match
+            }
+            pumpMainRunLoop(seconds: 0.01)
+            await Task.yield()
+        } while Date() < deadline
+        return subview(withAccessibilityIdentifier: identifier, in: view)
+    }
+
     private func clickAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
         guard let marker = subviews(withAccessibilityIdentifier: identifier, in: view).first,
               let window = marker.window
@@ -5062,16 +5100,6 @@ private final class AppKitPostedDraftHarnessModel {
         input(theme: theme).savePendingDraft()
     }
 
-    func beginEditingPostedDraft() {
-        guard let comment = comments.first else { return }
-        state.draftCommentEditors = [
-            comment.id: ReviewDraftCommentEditorState(
-                isEditing: true,
-                editingBody: comment.bodyMarkdown
-            )
-        ]
-    }
-
     private func post(anchor: ReviewDraftCommentAnchor, body: String) {
         comments = [ReviewDraftComment(
             id: "new-draft",
@@ -5096,6 +5124,7 @@ private final class AppKitPostedDraftHarnessModel {
 private struct AppKitPostedDraftHarness: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var state: AppKitDiffReviewFileState
+    @State private var structuralGeneration = 0
     let model: AppKitPostedDraftHarnessModel
 
     init(model: AppKitPostedDraftHarnessModel) {
@@ -5113,6 +5142,10 @@ private struct AppKitPostedDraftHarness: View {
             onActiveFileChange: { _ in },
             onProgrammaticScrollCompletion: { _ in }
         )
+        .id(structuralGeneration)
+        .onReceive(state.structuralDidChange) { _ in
+            structuralGeneration &+= 1
+        }
     }
 }
 

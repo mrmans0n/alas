@@ -275,8 +275,11 @@ struct ACPSessionManagerReattachTests {
         session.enqueueScheduled(blocks: [.text("due")], scheduledAt: Date().addingTimeInterval(-1))
 
         mgr.scheduleAutoReconnect(sessionId: session.id)
-        try await Task.sleep(nanoseconds: 100_000_000)
-
+        for _ in 0 ..< 50
+            where mgr.liveSession(for: session.id) != nil || !session.queue.isEmpty
+        {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(mgr.liveSession(for: session.id) == nil)
         #expect(session.queue.isEmpty)
     }
