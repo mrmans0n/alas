@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-16
+
+### ✨ Features
+
+- Add repository-shared file and folder bookmarks with a resizable Files drawer (#1256).
+- Show an in-app notification after a run completes successfully (#1265).
+
+### 🚀 Performance
+
+- Improve editor scrolling and preserve stable inlay hints with chunked caching and targeted layout updates (#1258).
+
+### 🐛 Fixes
+
+- Keep newly written attention observations from being pruned in the same operation (#1259).
+- Add press feedback to the Sparkles and Run toolbar menus (#1260).
+- Prevent AppKit from showing a text-view description dump as an editor tooltip (#1262).
+- Move the workspace checkout preview launcher into the ACP toolbar (#1263).
+
+### 🎨 Changed
+
+- Make the worktree Run tab always available (#1261).
+- Replace thick pane dividers with thin hairlines while preserving their drag targets (#1264).
+
+### 🏗️ Internal
+
+- Isolate worktree cleanup test fixtures from production persistence (#1257).
+- Refresh the README to match the current product (#1255).
+
 ## [0.17.8] - 2026-09-16
 
 ### 🐛 Fixes
