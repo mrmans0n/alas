@@ -315,6 +315,7 @@ jobs:
         with:
           name: swift-test-results
           path: .build/xcode/results
+          include-hidden-files: true
           if-no-files-found: warn
 
   ci-workflow-contract:
