@@ -161,6 +161,11 @@ enum RunScriptCompletionMonitor {
         }
     }
 
+    static func localSnapshot(for location: RunScriptCaptureLocation) -> RunScriptTranscriptSnapshot? {
+        guard case let .local(paths) = location else { return nil }
+        return localTranscript(paths: paths)
+    }
+
     /// Removes remote capture files after an interruption. Completed runs are
     /// cleaned by `remoteWaitCommand`; local cleanup stays synchronous at its
     /// call site because it only touches temporary files.

@@ -640,12 +640,20 @@ extension AppState {
     private enum RunHistoryCapture {
         case completion(RunScriptCompletion)
         case location(RunScriptCaptureLocation)
+        case snapshot(RunScriptTranscriptSnapshot, cleanup: RunScriptCaptureLocation)
         case unavailable
     }
 
     private func runHistoryCapture(for runID: String?) -> RunHistoryCapture {
         guard let runID, let location = runScriptCompletionTasks[runID]?.location else {
             return .unavailable
+        }
+        return .location(location)
+    }
+
+    private func runHistoryCaptureBeforeCancelling(_ location: RunScriptCaptureLocation) -> RunHistoryCapture {
+        if let snapshot = RunScriptCompletionMonitor.localSnapshot(for: location) {
+            return .snapshot(snapshot, cleanup: location)
         }
         return .location(location)
     }
@@ -708,6 +716,8 @@ extension AppState {
             snapshot = .init(transcript: completion.transcript, truncated: completion.truncated)
         case let .location(location):
             snapshot = await RunScriptCompletionMonitor.snapshot(for: location)
+        case let .snapshot(captured, _):
+            snapshot = captured
         case .unavailable:
             snapshot = .init(transcript: nil, truncated: false)
         }
@@ -721,7 +731,13 @@ extension AppState {
     }
 
     private func releaseRunHistoryCapture(_ capture: RunHistoryCapture) {
-        guard case let .location(location) = capture else { return }
+        let location: RunScriptCaptureLocation
+        switch capture {
+        case let .location(captured), let .snapshot(_, cleanup: captured):
+            location = captured
+        case .completion, .unavailable:
+            return
+        }
         cleanupCaptureLocation(location)
         Task {
             await RunScriptCompletionMonitor.cleanupRemoteCapture(for: location)
@@ -823,9 +839,10 @@ extension AppState {
         )
     }
     private func cancelRunScriptCompletionTask(runID: String, location: RunScriptCaptureLocation) {
+        let capture = runHistoryCaptureBeforeCancelling(location)
         runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
-            archiveFinalizedRun(finalized, capture: .location(location))
+            archiveFinalizedRun(finalized, capture: capture)
         } else if runHistoryPersistenceTasks[runID] == nil {
             releaseRunHistoryCapture(.location(location))
         }
@@ -836,9 +853,10 @@ extension AppState {
     /// record settles on `unknown` — never on success.
     private func cancelRunScriptCompletionTask(runID: String) {
         guard let entry = runScriptCompletionTasks.removeValue(forKey: runID) else { return }
+        let capture = runHistoryCaptureBeforeCancelling(entry.location)
         entry.task.cancel()
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
-            archiveFinalizedRun(finalized, capture: .location(entry.location))
+            archiveFinalizedRun(finalized, capture: capture)
         } else if runHistoryPersistenceTasks[runID] == nil {
             releaseRunHistoryCapture(.location(entry.location))
         }
@@ -962,9 +980,10 @@ extension AppState {
     func cancelAllRunScriptCompletionTasks() {
         let now = Date()
         for (runID, entry) in runScriptCompletionTasks {
+            let capture = runHistoryCaptureBeforeCancelling(entry.location)
             entry.task.cancel()
             let finalized = runRecords.markLostObservation(runID: runID, at: now)
-            archiveFinalizedRun(finalized, capture: .location(entry.location))
+            archiveFinalizedRun(finalized, capture: capture)
         }
         runScriptCompletionTasks.removeAll()
     }
