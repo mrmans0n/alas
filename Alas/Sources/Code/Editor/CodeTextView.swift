@@ -139,6 +139,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var indentationMode: IndentationMode = .plain
     var warningToolTipProvider: ((NSPoint) -> String?)? { didSet { refreshWarningToolTip() } }
     private var warningToolTipTag: NSView.ToolTipTag?
+    private var warningToolTipOwner: WarningToolTipOwner?
 
     var autoPairDisabled: Bool = false
 
@@ -390,11 +391,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private func refreshWarningToolTip() {
         if let warningToolTipTag { removeToolTip(warningToolTipTag) }
-        warningToolTipTag = warningToolTipProvider == nil ? nil : addToolTip(bounds, owner: self, userData: nil)
-    }
-
-    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
-        warningToolTipProvider?(point) ?? ""
+        guard let warningToolTipProvider else {
+            warningToolTipOwner = nil
+            warningToolTipTag = nil
+            return
+        }
+        let owner = WarningToolTipOwner(provider: warningToolTipProvider)
+        warningToolTipOwner = owner
+        warningToolTipTag = addToolTip(bounds, owner: owner, userData: nil)
     }
 
     // MARK: - Multi-cursor editing
@@ -1896,5 +1900,21 @@ extension NSString {
         var end = index
         while end < length && isWordChar(character(at: end)) { end += 1 }
         return NSRange(location: start, length: end - start)
+    }
+}
+
+/// Tooltip owner for warning-glyph hints. Kept separate from `CodeTextView`
+/// so AppKit's view-description fallback never shows the view dump when the
+/// provider returns an empty string.
+@MainActor
+private final class WarningToolTipOwner: NSObject {
+    private let provider: (NSPoint) -> String?
+
+    init(provider: @escaping (NSPoint) -> String?) {
+        self.provider = provider
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        provider(point) ?? ""
     }
 }
