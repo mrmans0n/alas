@@ -105,21 +105,37 @@ struct FilesBookmarksPane: View {
                 Spinner(lineWidth: 1.5, duration: 0.7)
                     .frame(width: 12, height: 12)
                     .accessibilityLabel("Loading \(FilesBookmarksPane.leafName(of: path))")
+            } trailing: { EmptyView() }
+        case .failed(let ancestorPath):
+            placeholderRow(for: path) {
+                Icon(name: "alert", size: 12, color: theme.color("warn"))
+                    .frame(width: 14, height: 14)
+            } trailing: {
+                Button { context.onLoadChildren(ancestorPath) } label: {
+                    Icon(name: "arrow.clockwise", size: 10, color: theme.color("fg-faint"))
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Retry loading \(FilesBookmarksPane.leafName(of: ancestorPath))")
+                .help("Retry loading \(FilesBookmarksPane.leafName(of: ancestorPath))")
             }
+            .help("Could not load \(ancestorPath)")
         case .missing:
             placeholderRow(for: path) {
                 Icon(name: "folder", size: 12, color: theme.color("fg-faint"))
                     .frame(width: 14, height: 14)
-            }
+            } trailing: { EmptyView() }
             .help("Not present in this worktree")
         }
     }
 
     /// A bookmark that has no node to render yet (or at all). Matches the tree
     /// row's metrics so the drawer doesn't jump when the real row arrives.
-    private func placeholderRow<Leading: View>(
+    private func placeholderRow<Leading: View, Trailing: View>(
         for path: String,
-        @ViewBuilder leading: () -> Leading
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 6) {
             leading()
@@ -136,6 +152,7 @@ struct FilesBookmarksPane: View {
                     .truncationMode(.head)
             }
             Spacer()
+            trailing()
             Button {
                 context.onToggleBookmark(path)
             } label: {

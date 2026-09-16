@@ -94,9 +94,9 @@ struct FileBookmarksTests {
         #expect(FileBookmarks.resolve(path: "vendor/thing", in: loadedTree) == .missing)
     }
 
-    @Test func reportsMissingWhenAnAncestorFailedToLoad() {
+    @Test func reportsFailedWhenAnAncestorFailedToLoad() {
         let tree = [dir("Sources", "Sources", children: nil, childrenState: .failed)]
-        #expect(FileBookmarks.resolve(path: "Sources/Center", in: tree) == .missing)
+        #expect(FileBookmarks.resolve(path: "Sources/Center", in: tree) == .failed("Sources"))
     }
 
     @Test func reportsMissingWhenAnAncestorIsAFile() {
@@ -124,6 +124,11 @@ struct FileBookmarksTests {
 
     @Test func pendingLoadPathIsNilWhileAnAncestorIsAlreadyLoading() {
         let tree = [dir("Sources", "Sources", children: nil, childrenState: .loading)]
+        #expect(FileBookmarks.pendingLoadPath(for: "Sources/Center", in: tree) == nil)
+    }
+
+    @Test func pendingLoadPathIsNilWhileAnAncestorHasFailed() {
+        let tree = [dir("Sources", "Sources", children: nil, childrenState: .failed)]
         #expect(FileBookmarks.pendingLoadPath(for: "Sources/Center", in: tree) == nil)
     }
 

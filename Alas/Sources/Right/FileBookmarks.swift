@@ -15,6 +15,9 @@ enum FileBookmarks {
         /// An ancestor has not listed its children yet. Ask again once the
         /// tree changes; `pendingLoadPath(for:in:)` names what to load.
         case loading
+        /// An ancestor directory could not be listed. The UI keeps this
+        /// distinct from a missing path and offers an explicit retry.
+        case failed(String)
         /// A loaded ancestor does not contain the path — it is not in this
         /// worktree.
         case missing
@@ -53,8 +56,8 @@ enum FileBookmarks {
     }
 
     /// The ancestor directory whose children must load next before `path` can
-    /// resolve. Nil when the walk is already settled — resolved, missing, or
-    /// waiting on a load that is in flight.
+    /// resolve. Nil when the walk is already settled — resolved, missing,
+    /// failed, or waiting on a load that is in flight.
     static func pendingLoadPath(for path: String, in nodes: [FileTreeNode]) -> String? {
         walk(path: path, in: nodes).pendingLoad
     }
@@ -86,7 +89,7 @@ enum FileBookmarks {
             case .loading:
                 return (.loading, nil)
             case .failed:
-                return (.missing, nil)
+                return (.failed(node.path), nil)
             }
         }
         return (.missing, nil)

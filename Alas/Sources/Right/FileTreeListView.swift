@@ -68,8 +68,10 @@ struct FileTreeListView: View {
             let terminal = chain.terminal
             let open = openPaths.contains(terminal.path)
             let canExpand = !terminal.isSubmodule
+            let isBookmarkRoot = bookmarkRootPaths.contains(node.path)
             return AnyView(
                 Group {
+                    HStack(spacing: 0) {
                     Button {
                         guard canExpand else { return }
                         if open {
@@ -109,10 +111,9 @@ struct FileTreeListView: View {
                                     .frame(width: 12, height: 12)
                                     .accessibilityLabel("Loading \(terminal.name)")
                             }
-                            removeBookmarkButton(for: node)
                         }
                         .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                        .padding(.trailing, 12)
+                        .padding(.trailing, isBookmarkRoot ? 4 : 12)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .opacity(isOffGit(terminal) ? 0.72 : 1.0)
@@ -137,6 +138,11 @@ struct FileTreeListView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    if isBookmarkRoot {
+                        removeBookmarkButton(for: node)
+                            .padding(.trailing, 12)
+                    }
+                    }
                     .contextMenu { contextMenu(for: terminal) }
                     .dragOut {
                         context.worktreeRoot.map {
@@ -165,7 +171,9 @@ struct FileTreeListView: View {
                 }
             )
         } else {
+            let isBookmarkRoot = bookmarkRootPaths.contains(node.path)
             return AnyView(
+                HStack(spacing: 0) {
                 Button { context.onSelectFile(node) } label: {
                     HStack(spacing: 6) {
                         FileTypeIconView(filename: node.name, size: 18)
@@ -182,10 +190,9 @@ struct FileTreeListView: View {
                         if let badge = node.badge {
                             StatusBadge(status: badge)
                         }
-                        removeBookmarkButton(for: node)
                     }
                     .padding(.leading, Self.rowLeadingPadding(depth: depth))
-                    .padding(.trailing, 12)
+                    .padding(.trailing, isBookmarkRoot ? 4 : 12)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(isOffGit(node) ? 0.72 : 1.0)
@@ -199,6 +206,11 @@ struct FileTreeListView: View {
                     .id("\(idPrefix)\(node.id)")
                 }
                 .buttonStyle(.plain)
+                if isBookmarkRoot {
+                    removeBookmarkButton(for: node)
+                        .padding(.trailing, 12)
+                }
+                }
                 .contextMenu { contextMenu(for: node) }
                 .dragOut {
                     context.worktreeRoot.map {
@@ -229,19 +241,17 @@ struct FileTreeListView: View {
         }
     }
 
-    @ViewBuilder private func removeBookmarkButton(for node: FileTreeNode) -> some View {
-        if bookmarkRootPaths.contains(node.path) {
-            Button {
-                context.onToggleBookmark(node.path)
-            } label: {
-                Icon(name: "x", size: 9, color: theme.color("fg-faint"))
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Remove \(node.name) from bookmarks")
-            .help("Remove from Bookmarks")
+    private func removeBookmarkButton(for node: FileTreeNode) -> some View {
+        Button {
+            context.onToggleBookmark(node.path)
+        } label: {
+            Icon(name: "x", size: 9, color: theme.color("fg-faint"))
+                .frame(width: 16, height: 16)
         }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Remove \(node.name) from bookmarks")
+        .help("Remove from Bookmarks")
     }
 
     // MARK: - Context menu
