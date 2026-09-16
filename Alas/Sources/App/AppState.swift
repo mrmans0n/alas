@@ -1467,7 +1467,7 @@ final class AppState {
 
     private func remoteWorktreeDirtyState(worktree: Worktree) async -> WorktreeDirtyState? {
         do {
-            let changes = try await GitService().status(worktreePath: worktree.path)
+            let changes = try await GitService().statusIdentity(worktreePath: worktree.path)
             let fileCount = Set(changes.map(\.path)).count
             guard fileCount > 0 else { return .clean }
             return .dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count)
