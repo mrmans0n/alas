@@ -4139,7 +4139,7 @@ final class AppState {
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onRevisionChanged = { [weak self] in
-            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.handleProjectRevisionChange(projectId: projectId)
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onStackRevisionChanged = { [weak self] in

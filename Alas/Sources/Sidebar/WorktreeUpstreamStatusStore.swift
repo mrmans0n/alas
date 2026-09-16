@@ -7,7 +7,7 @@ final class WorktreeUpstreamStatusStore {
     private(set) var statuses: [String: WorktreeUpstreamStatus] = [:]
 
     @ObservationIgnored private let git = GitService()
-    @ObservationIgnored private var refreshGeneration = 0
+    @ObservationIgnored private var refreshGenerationByWorktreeID: [String: Int] = [:]
     @ObservationIgnored private var lastFetchAtByTarget: [String: Date] = [:]
 
     func status(for worktreeID: String) -> WorktreeUpstreamStatus? {
@@ -15,26 +15,31 @@ final class WorktreeUpstreamStatusStore {
     }
 
     func refresh(worktrees: [Worktree]) async {
-        refreshGeneration += 1
-        let generation = refreshGeneration
+        var generations: [String: Int] = [:]
         for worktree in worktrees {
+            let generation = (refreshGenerationByWorktreeID[worktree.id] ?? 0) + 1
+            refreshGenerationByWorktreeID[worktree.id] = generation
+            generations[worktree.id] = generation
+        }
+        for worktree in worktrees {
+            guard let generation = generations[worktree.id] else { continue }
             do {
                 if let upstream = try await git.resolveUpstreamRef(worktreePath: worktree.path) {
                     await fetchUpstreamIfNeeded(upstream, for: worktree)
                 }
                 guard let divergence = try await git.upstreamDivergence(worktreePath: worktree.path) else {
-                    guard generation == refreshGeneration else { return }
+                    guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
                     statuses[worktree.id] = nil
                     continue
                 }
-                guard generation == refreshGeneration else { return }
+                guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
                 statuses[worktree.id] = WorktreeUpstreamStatus(
                     ahead: divergence.ahead,
                     behind: divergence.behind,
                     upstreamRef: divergence.upstreamRef
                 )
             } catch {
-                guard generation == refreshGeneration else { return }
+                guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
                 statuses[worktree.id] = nil
             }
         }
