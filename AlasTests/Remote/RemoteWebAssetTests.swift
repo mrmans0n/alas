@@ -194,6 +194,19 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-closed"))
     }
 
+    @Test func sessionCardsShowDiffBarAndRelativeTime() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())"))
+        #expect(js.contains("RemoteRepoFilter.diffBarSegments("))
+        #expect(js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch("))
+        #expect(js.contains("function sessionRecencyMs(session)"))
+        #expect(css.contains(".card-diffbar"))
+        #expect(css.contains(".card-when"))
+        #expect(css.contains(".card-branch"))
+    }
+
     @Test func repoFilterModuleExposesPureHelpers() throws {
         let js = try asset("repo-filter.js")
         let html = try asset("index.html")

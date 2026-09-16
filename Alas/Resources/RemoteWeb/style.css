@@ -100,6 +100,14 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .session-state-inactive::before { background: var(--fg-faint); }
 .session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
 .session-row-inactive .status { color: var(--fg-dim); }
+.session-row-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 11.5px; color: var(--fg-dim); }
+.card-branch-icon { flex: 0 0 auto; color: var(--fg-faint); font-size: 12px; }
+.card-branch { font-family: ui-monospace, monospace; letter-spacing: -0.02em; }
+.card-when { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.card-diffbar { display: inline-flex; gap: 2px; align-items: center; flex: 0 0 auto; }
+.card-diffbar .seg { display: block; width: 2.5px; height: 9px; border-radius: 1px; background: color-mix(in oklab, var(--fg) 14%, transparent); }
+.card-diffbar .seg-add { background: var(--add); }
+.card-diffbar .seg-del { background: var(--del); }
 .meta-lines { display: inline-flex; gap: 5px; }
 .meta-add { color: var(--add); }
 .meta-del { color: var(--del); }

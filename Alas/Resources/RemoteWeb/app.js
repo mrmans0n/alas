@@ -563,6 +563,11 @@ function renderWorktreeGroup(section, worktree) {
   return group;
 }
 
+function sessionRecencyMs(session) {
+  const updatedAt = Number(session.updatedAt);
+  return Number.isFinite(updatedAt) ? updatedAt : Date.now();
+}
+
 function renderSessionRow(s) {
   const row = document.createElement("div");
   row.dataset.sessionId = s.id;
@@ -576,11 +581,26 @@ function renderSessionRow(s) {
   open.onclick = () => openSession(s.id);
 
   const head = el("div", "session-head");
-  const title = el("span", "session-title", s.title);
+  const worktree = s.worktree;
+  const branchIcon = el("span", "card-branch-icon", worktree && RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.worktreeName) ? "⌂" : "⑂");
+  const title = el("span", "session-title card-branch", s.title);
   const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
-  const status = el("span", "status", s.status);
-  head.append(title, state, status);
+  head.append(branchIcon, title, state);
   open.append(head);
+
+  const meta = el("div", "session-row-meta");
+  meta.append(el("span", "card-when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())));
+  if (worktree && (worktree.addedLines > 0 || worktree.deletedLines > 0)) {
+    const bar = el("span", "card-diffbar");
+    RemoteRepoFilter.diffBarSegments(worktree.addedLines, worktree.deletedLines).forEach(isAdd => {
+      bar.append(el("i", isAdd ? "seg seg-add" : "seg seg-del"));
+    });
+    const counts = el("span", "meta-lines");
+    counts.append(el("span", "meta-add", "+" + worktree.addedLines), el("span", "meta-del", "-" + worktree.deletedLines));
+    meta.append(bar, counts);
+  }
+  meta.append(el("span", "status", s.status));
+  open.append(meta);
 
   const rename = el("button", "rename-btn", "✎");
   rename.type = "button";
