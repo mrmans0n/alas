@@ -232,7 +232,9 @@ struct WorktreeRowView: View {
                     )
             } else if hovering {
                 RoundedRectangle(cornerRadius: 9)
-                    .fill(theme.color("bg-2"))
+                    .fill(theme.color("bg-3").opacity(0.55))
+                RoundedRectangle(cornerRadius: 9)
+                    .strokeBorder(theme.color("line").opacity(0.75), lineWidth: 0.75)
             }
             VStack(alignment: .leading, spacing: 2) {
                 firstLine()
