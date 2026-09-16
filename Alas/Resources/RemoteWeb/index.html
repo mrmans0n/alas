@@ -28,7 +28,15 @@
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
   <main>
-    <section id="sessions" class="view"><h1>Sessions</h1><div id="session-list"></div></section>
+    <section id="sessions" class="view">
+      <div id="repo-search"><span class="repo-search-icon">⌕</span><input id="repo-search-input" type="search" autocomplete="off" placeholder="Search repos and worktrees" aria-label="Search repos and worktrees" /></div>
+      <div id="repo-filters" role="group" aria-label="Filter repos">
+        <button type="button" class="filter-chip is-active" data-filter="all">All<span class="filter-chip-n"></span></button>
+        <button type="button" class="filter-chip" data-filter="active">Active<span class="filter-chip-n"></span></button>
+        <button type="button" class="filter-chip" data-filter="dirty">Dirty<span class="filter-chip-n"></span></button>
+      </div>
+      <div id="session-list"></div>
+    </section>
     <section id="transcript" class="view hidden">
       <div id="messages"></div>
       <div id="queued" class="hidden"></div>

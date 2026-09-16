@@ -819,4 +819,29 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"RemoteChangesView.truncationNotice(linesTruncated, "lines")"#))
         #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
     }
+
+    @Test func repoListHasSearchAndFilterChips() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="repo-search""#))
+        #expect(html.contains(#"id="repo-filters""#))
+        #expect(html.contains(#"data-filter="all""#))
+        #expect(html.contains(#"data-filter="active""#))
+        #expect(html.contains(#"data-filter="dirty""#))
+
+        #expect(js.contains(#"let repoSearchQuery = "";"#))
+        #expect(js.contains(#"let repoActiveFilter = "all";"#))
+        #expect(js.contains("function filterVisibleSections(sections)"))
+        #expect(js.contains("RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)"))
+        #expect(js.contains("RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery)"))
+        #expect(js.contains("function renderRepoFilterCounts(sections)"))
+        #expect(js.contains("RemoteRepoFilter.sectionCounts(sections)"))
+        #expect(js.contains(#"$("repo-search").addEventListener("input""#))
+
+        #expect(css.contains("#repo-search"))
+        #expect(css.contains("#repo-filters"))
+        #expect(css.contains(".filter-chip"))
+    }
 }

@@ -421,6 +421,48 @@ function handle(msg) {
 
 let collapsedProjects = new Set();
 
+let repoSearchQuery = "";
+let repoActiveFilter = "all";
+
+function filterVisibleSections(sections) {
+  return sections.filter(section => {
+    if (section.isOther) return true;
+    return RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
+      && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery);
+  });
+}
+
+function renderRepoFilterCounts(sections) {
+  const nonOther = sections.filter(s => !s.isOther);
+  const counts = RemoteRepoFilter.sectionCounts(nonOther);
+  $("repo-filters").querySelectorAll(".filter-chip").forEach(chip => {
+    const key = chip.dataset.filter;
+    chip.querySelector(".filter-chip-n").textContent = String(counts[key] ?? 0);
+  });
+}
+
+function sectionSearchOrFilterActive() {
+  return repoSearchQuery.trim() !== "" || repoActiveFilter !== "all";
+}
+
+function sectionMatchesActiveSearchAndFilter(section) {
+  return RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
+    && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery);
+}
+
+$("repo-search").addEventListener("input", (event) => {
+  repoSearchQuery = event.target.value;
+  renderSessions([...listedSessions.values()]);
+});
+
+$("repo-filters").addEventListener("click", (event) => {
+  const chip = event.target.closest(".filter-chip");
+  if (!chip) return;
+  repoActiveFilter = chip.dataset.filter;
+  $("repo-filters").querySelectorAll(".filter-chip").forEach(c => c.classList.toggle("is-active", c === chip));
+  renderSessions([...listedSessions.values()]);
+});
+
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
   listedSessions.clear();
@@ -483,12 +525,6 @@ function renderRepoHeader(section, expanded) {
 
   return header;
 }
-
-// Task 3 replaces these with real search/filter-aware implementations.
-function filterVisibleSections(sections) { return sections; }
-function renderRepoFilterCounts(_sections) {}
-function sectionSearchOrFilterActive() { return false; }
-function sectionMatchesActiveSearchAndFilter(_section) { return false; }
 
 function renderWorktreeGroup(section, worktree) {
   const group = el("div", "session-worktree-group");
