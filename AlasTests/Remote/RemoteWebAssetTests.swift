@@ -218,6 +218,23 @@ struct RemoteWebAssetTests {
         try expectReferencedAndPrecached("/repo-filter.js", html: html, sw: sw)
     }
 
+    @Test func repoHeadersAreCollapsibleWithColorTiles() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("let collapsedProjects = new Set();"))
+        #expect(js.contains("function renderRepoHeader(section, expanded)"))
+        #expect(js.contains("RemoteRepoFilter.repoTileColor(section.title)"))
+        #expect(js.contains("RemoteRepoFilter.repoInitials(section.title)"))
+        #expect(js.contains("collapsedProjects.has(section.id)"))
+        #expect(js.contains("collapsedProjects.delete(section.id)"))
+        #expect(js.contains("collapsedProjects.add(section.id)"))
+        #expect(css.contains(".repo-header"))
+        #expect(css.contains(".repo-chev"))
+        #expect(css.contains(".repo-tile"))
+        #expect(css.contains(".repo-count"))
+    }
+
     @Test func remoteWebExposesSessionRenameControls() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")

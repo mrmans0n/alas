@@ -419,19 +419,76 @@ function handle(msg) {
   }
 }
 
+let collapsedProjects = new Set();
+
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
   listedSessions.clear();
   sessions.forEach(s => listedSessions.set(s.id, s));
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  RemoteSessionOrdering.groupSessions(sessions).forEach(section => {
-    const element = el("section", "session-section");
-    element.append(el("h2", "session-section-title", section.title));
-    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
-    list.appendChild(element);
-  });
+  const allSections = RemoteSessionOrdering.groupSessions(sessions);
+  const sections = filterVisibleSections(allSections);
+  renderRepoFilterCounts(allSections);
+  sections.forEach(section => list.appendChild(renderSection(section)));
   if (currentSession) setDetailTitle(currentSession);
 }
+
+function renderSection(section) {
+  const element = el("section", "session-section");
+  if (section.isOther) {
+    element.append(el("h2", "session-section-title", section.title));
+    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
+    return element;
+  }
+
+  const forceExpanded = sectionSearchOrFilterActive() && sectionMatchesActiveSearchAndFilter(section);
+  const expanded = forceExpanded || !collapsedProjects.has(section.id);
+  element.append(renderRepoHeader(section, expanded));
+  if (expanded) {
+    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
+  }
+  return element;
+}
+
+function renderRepoHeader(section, expanded) {
+  const header = el("div", "repo-header");
+  header.tabIndex = 0;
+  header.setAttribute("role", "button");
+  header.setAttribute("aria-expanded", String(expanded));
+
+  const chev = el("span", "repo-chev", expanded ? "▾" : "▸");
+  const tile = el("span", "repo-tile", RemoteRepoFilter.repoInitials(section.title));
+  tile.style.background = RemoteRepoFilter.repoTileColor(section.title);
+  const name = el("span", "repo-name", section.title);
+
+  header.append(chev, tile, name);
+  if (!expanded) {
+    header.append(el("span", "repo-count", String(section.worktrees.length)));
+  }
+
+  header.addEventListener("click", () => {
+    if (collapsedProjects.has(section.id)) {
+      collapsedProjects.delete(section.id);
+    } else {
+      collapsedProjects.add(section.id);
+    }
+    renderSessions([...listedSessions.values()]);
+  });
+  header.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      header.click();
+    }
+  });
+
+  return header;
+}
+
+// Task 3 replaces these with real search/filter-aware implementations.
+function filterVisibleSections(sections) { return sections; }
+function renderRepoFilterCounts(_sections) {}
+function sectionSearchOrFilterActive() { return false; }
+function sectionMatchesActiveSearchAndFilter(_section) { return false; }
 
 function renderWorktreeGroup(section, worktree) {
   const group = el("div", "session-worktree-group");
