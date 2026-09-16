@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'EOF'
-Usage: ci-swift-test-inventory.sh [--root PATH] --quarantine PATH (--validate | --batch N --batch-count N)
+Usage: ci-swift-test-inventory.sh [--root PATH] [--quarantine PATH] (--validate | --batch N --batch-count N) [--lane ordinary|subprocess]
 
 Discovers Swift Testing suites that contain @Test declarations. Every suite must
 be scheduled or listed in the quarantine file as: suite<TAB>reason.
@@ -17,6 +17,7 @@ quarantine="${repo_root}/scripts/ci-swift-test-quarantine.tsv"
 mode=""
 batch=""
 batch_count=""
+lane="ordinary"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -25,6 +26,7 @@ while [ "$#" -gt 0 ]; do
         --validate) mode="validate"; shift ;;
         --batch) batch="$2"; shift 2 ;;
         --batch-count) batch_count="$2"; shift 2 ;;
+        --lane) lane="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -39,6 +41,11 @@ else
     [[ "${batch}" =~ ^[0-9]+$ ]] && [[ "${batch_count}" =~ ^[1-9][0-9]*$ ]] || usage
     [ "${batch}" -lt "${batch_count}" ] || usage
 fi
+
+case "${lane}" in
+    ordinary|subprocess) ;;
+    *) usage ;;
+esac
 
 suite_file="$(mktemp)"
 quarantine_file="$(mktemp)"
@@ -81,18 +88,38 @@ while IFS= read -r suite; do
 done < "${quarantine_file}"
 
 scheduled_file="$(mktemp)"
-trap 'rm -f "${suite_file}" "${quarantine_file}" "${scheduled_file}"' EXIT
+ordinary_file="$(mktemp)"
+subprocess_file="$(mktemp)"
+trap 'rm -f "${suite_file}" "${quarantine_file}" "${scheduled_file}" "${ordinary_file}" "${subprocess_file}"' EXIT
 comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
+
+# macos-26 has hung when four or more subprocess-heavy suites share one
+# xcodebuild invocation. Keep these suites out of the ordinary batches; the
+# runner executes this lane in groups of at most three. The naming convention
+# also puts newly added subprocess-facing suites in the protected lane without
+# a workflow edit.
+awk '
+    /Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx/ { print > subprocess }
+    !/Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx/ { print > ordinary }
+' ordinary="${ordinary_file}" subprocess="${subprocess_file}" "${scheduled_file}"
 
 discovered="$(wc -l < "${suite_file}" | tr -d ' ')"
 quarantined="$(wc -l < "${quarantine_file}" | tr -d ' ')"
 scheduled="$(wc -l < "${scheduled_file}" | tr -d ' ')"
+ordinary="$(wc -l < "${ordinary_file}" | tr -d ' ')"
+subprocess="$(wc -l < "${subprocess_file}" | tr -d ' ')"
 
 if [ "${mode}" = "validate" ]; then
-    printf 'discovered=%s scheduled=%s quarantined=%s\n' "${discovered}" "${scheduled}" "${quarantined}"
+    printf 'discovered=%s scheduled=%s ordinary=%s subprocess=%s quarantined=%s\n' \
+        "${discovered}" "${scheduled}" "${ordinary}" "${subprocess}" "${quarantined}"
+    exit 0
+fi
+
+if [ "${lane}" = "subprocess" ]; then
+    sed 's|^|-only-testing AlasTests/|' "${subprocess_file}"
     exit 0
 fi
 
 awk -v batch="${batch}" -v count="${batch_count}" '
     (NR - 1) % count == batch { print "-only-testing AlasTests/" $0 }
-' "${scheduled_file}"
+' "${ordinary_file}"

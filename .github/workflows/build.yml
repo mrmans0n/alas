@@ -309,6 +309,14 @@ jobs:
         timeout-minutes: 8
         run: bash scripts/ci-run-swift-test-batch.sh 5 6
 
+      # Keep ordinary batches free of suites that spawn child processes.
+      # macos-26 can hang when four subprocess-heavy
+      # suites share an xcodebuild teardown cycle; the runner keeps this lane
+      # to at most three suites per invocation.
+      - name: Test — subprocess-sensitive Swift suites
+        timeout-minutes: 8
+        run: bash scripts/ci-run-swift-test-batch.sh 0 1 subprocess
+
       - name: Upload Swift test result bundles
         if: always()
         uses: actions/upload-artifact@v7
