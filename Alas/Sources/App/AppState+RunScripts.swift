@@ -951,8 +951,14 @@ extension AppState {
         cancelPendingRunScriptLaunches(worktreeID: worktreeID)
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             if purgeFailures {
+                let capture = purgeHistory ? .location(entry.location) : runHistoryCaptureBeforeCancelling(entry.location)
                 runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
-                releaseRunHistoryCapture(.location(entry.location))
+                if purgeHistory {
+                    releaseRunHistoryCapture(capture)
+                } else {
+                    let finalized = runRecords.markLostObservation(runID: runID, at: Date())
+                    archiveFinalizedRun(finalized, capture: capture)
+                }
             } else {
                 cancelRunScriptCompletionTask(runID: runID)
             }

@@ -16,6 +16,18 @@ enum RunTabLoadingPresentation {
     ) -> Bool {
         !isCancelled && activeWorktreeID == startedWorktreeID
     }
+
+    static func acceptsHistoryLoadCompletion(
+        requestedWorktreeID: String,
+        requestedPageIndex: Int,
+        activeWorktreeID: String?,
+        currentPageIndex: Int,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled
+            && activeWorktreeID == requestedWorktreeID
+            && currentPageIndex == requestedPageIndex
+    }
 }
 
 /// Commands, their observed state, and their endpoints for one worktree.
@@ -416,17 +428,33 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     }
 
     private func loadHistory() async {
+        let requestedWorktreeID = worktree.id
+        let requestedPageIndex = historyPageIndex
         guard let history = state.runHistoryStore else {
             historyError = "Run history storage is unavailable."
             historyPage = .init(entries: [], totalCount: 0)
             return
         }
         do {
-            let page = try await history.page(worktreeID: worktree.id, offset: historyPageIndex * 20, limit: 20)
-            await state.reloadDurableRunReportIDs(worktreeID: worktree.id)
+            let page = try await history.page(worktreeID: requestedWorktreeID, offset: requestedPageIndex * 20, limit: 20)
+            await state.reloadDurableRunReportIDs(worktreeID: requestedWorktreeID)
+            guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+                requestedWorktreeID: requestedWorktreeID,
+                requestedPageIndex: requestedPageIndex,
+                activeWorktreeID: activeWorktreeID,
+                currentPageIndex: historyPageIndex,
+                isCancelled: Task.isCancelled
+            ) else { return }
             historyError = nil
             historyPage = page
         } catch {
+            guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+                requestedWorktreeID: requestedWorktreeID,
+                requestedPageIndex: requestedPageIndex,
+                activeWorktreeID: activeWorktreeID,
+                currentPageIndex: historyPageIndex,
+                isCancelled: Task.isCancelled
+            ) else { return }
             historyError = error.localizedDescription
         }
     }

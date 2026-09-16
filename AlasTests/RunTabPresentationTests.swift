@@ -104,6 +104,30 @@ struct RunTabPresentationTests {
         ))
     }
 
+    @Test func staleHistoryLoadsCannotCommitAfterWorktreeOrPageChanges() {
+        #expect(RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 1,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            activeWorktreeID: "wt-2",
+            currentPageIndex: 1,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 0,
+            isCancelled: false
+        ))
+    }
+
     @Test func historyDetailIncludesBranchAndCompletionTime() {
         let finishedAt = epoch.addingTimeInterval(-180)
         let entry = RunHistorySummary(

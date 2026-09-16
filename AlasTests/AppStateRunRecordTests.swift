@@ -662,6 +662,25 @@ struct AppStateRunRecordTests {
         #expect(archivedEntry?.output == entry.output)
     }
 
+    @Test func archiveWorktreeArchivesActiveRunBeforeCleanup() async throws {
+        let fixture = try makeFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let runID = try #require(runRecord(fixture)?.id)
+
+        fixture.state.archiveWorktree(fixture.worktree)
+        await fixture.state.flushRunHistoryPersistence()
+
+        let archivedEntry = try await fixture.history.entry(id: runID)
+        #expect(archivedEntry?.outcome == .unknown)
+        #expect(archivedEntry?.worktreeID == fixture.worktree.id)
+    }
+
     @Test func terminateAllTerminalSessionsCancelsPendingLaunches() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
