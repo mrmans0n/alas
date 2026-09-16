@@ -33,9 +33,6 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #bar { flex: 0 0 auto; z-index: 5; display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); border-bottom: 0.5px solid var(--line-soft); }
 #nav-title { flex: 1 1 auto; min-width: 0; font-size: 16px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #detail-title { min-width: 0; flex: 1; font-size: 15px; font-weight: 650; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#new-session { margin-left: auto; flex: 0 0 auto; padding: 6px 11px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 999px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-#new-session:active { background: color-mix(in oklab, var(--accent) 24%, transparent); }
-#new-session + #status.chip { margin-left: 0; }
 /* Connection chip: dot + label, color driven by [data-state]. */
 #status.chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--fg-muted); background: color-mix(in oklab, var(--bg-3) 70%, transparent); border: 0.5px solid var(--line); white-space: nowrap; }
 #status.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
@@ -44,14 +41,22 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #status[data-state="connecting"]::before { background: oklch(0.82 0.13 90); }
 @media (max-width: 360px) {
   #bar { gap: 7px; padding-left: 9px; padding-right: 9px; }
-  #new-session { font-size: 0; width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-  #new-session::before { content: "+"; font-size: 18px; line-height: 1; }
   #status.chip { font-size: 0; gap: 0; padding: 7px; }
   #status.chip::before { width: 8px; height: 8px; }
 }
 /* The active view fills the shell; long content scrolls inside it, not the page. */
 .view { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 12px calc(28px + env(safe-area-inset-bottom)); }
 .hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */
+
+/* Bottom tab bar: Repos / FAB / Settings. Docks to the bottom because it's a
+   sibling of <main> (flex: 1 1 auto) in the column-flex body. */
+#bottom-tabbar { flex: 0 0 auto; display: flex; align-items: flex-start; padding: 6px 8px calc(4px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1) 92%, transparent); backdrop-filter: blur(18px); box-shadow: inset 0 0.5px 0 var(--line-soft); }
+.bt-tab { flex: 1; height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: none; background: none; font-size: 10.5px; font-weight: 600; color: var(--fg-faint); border-radius: 12px; -webkit-tap-highlight-color: transparent; }
+.bt-tab.is-active { color: var(--accent); }
+.bt-tab:disabled { opacity: 0.45; }
+.bt-fabwrap { flex: 1; display: flex; align-items: center; justify-content: center; }
+#fab-new-session { width: 50px; height: 50px; border: none; border-radius: 16px; display: flex; align-items: center; justify-content: center; color: var(--bg-0); background: var(--accent); box-shadow: 0 4px 14px color-mix(in oklab, var(--accent) 35%, transparent); -webkit-tap-highlight-color: transparent; }
+#fab-new-session:active { transform: scale(0.94); }
 
 /* Sessions list */
 h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }

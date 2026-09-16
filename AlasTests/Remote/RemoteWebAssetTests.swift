@@ -297,9 +297,32 @@ struct RemoteWebAssetTests {
 
     @Test func remoteWebIncludesNewSessionControls() throws {
         let html = try asset("index.html")
-        #expect(html.contains(#"id="new-session""#))
+        #expect(html.contains(#"id="fab-new-session""#))
         #expect(html.contains(#"id="new-session-sheet""#))
         #expect(html.contains(#"id="worktree-search""#))
+    }
+
+    @Test func bottomTabBarSwitchesRepoAndSettingsWithFAB() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="bottom-tabbar""#))
+        #expect(html.contains(#"id="tab-repos""#))
+        #expect(html.contains(#"id="tab-settings""#))
+        #expect(html.contains(#"id="fab-new-session""#))
+        #expect(html.contains(#"<section id="settings" class="view hidden">"#))
+        #expect(!html.contains(#"id="new-session" aria-label"#))
+
+        #expect(js.contains(#"let topLevelTab = "repos";"#))
+        #expect(js.contains("function showRepos()"))
+        #expect(js.contains("function showSettings()"))
+        #expect(js.contains(#"$("fab-new-session").onclick = showCreateSheet;"#))
+        #expect(js.contains(#"$("tab-repos").addEventListener("click", showRepos);"#))
+        #expect(js.contains(#"$("tab-settings").addEventListener("click", showSettings);"#))
+
+        #expect(css.contains("#bottom-tabbar"))
+        #expect(css.contains("#fab-new-session"))
     }
 
     @Test func remoteWebIncludesNewSessionMessageTypes() throws {
@@ -435,8 +458,6 @@ struct RemoteWebAssetTests {
         let css = try asset("style.css")
 
         #expect(css.contains("@media (max-width: 360px)"))
-        #expect(css.contains(#"#new-session { font-size: 0;"#))
-        #expect(css.contains(#"#new-session::before { content: "+";"#))
         #expect(css.contains("#status.chip { font-size: 0;"))
         #expect(css.contains("#status.chip::before"))
     }

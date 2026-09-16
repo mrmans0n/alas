@@ -660,6 +660,7 @@ function openSession(id) {
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
+  $("bottom-tabbar").classList.add("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
@@ -1048,6 +1049,7 @@ function showSessions() {
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  $("bottom-tabbar").classList.remove("hidden");
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
   fileTreeTruncatedPaths = new Set();
@@ -1063,6 +1065,30 @@ function showSessions() {
   $("files").classList.add("hidden");
   send({ type: "listSessions" });
 }
+
+let topLevelTab = "repos";
+
+function showRepos() {
+  topLevelTab = "repos";
+  $("tab-repos").classList.add("is-active");
+  $("tab-settings").classList.remove("is-active");
+  $("sessions").classList.remove("hidden");
+  $("settings").classList.add("hidden");
+  $("bottom-tabbar").classList.remove("hidden");
+}
+
+function showSettings() {
+  if (currentSession) return;   // tab bar is hidden during session detail; guard anyway
+  topLevelTab = "settings";
+  $("tab-settings").classList.add("is-active");
+  $("tab-repos").classList.remove("is-active");
+  $("sessions").classList.add("hidden");
+  $("settings").classList.remove("hidden");
+}
+
+$("tab-repos").addEventListener("click", showRepos);
+$("tab-settings").addEventListener("click", showSettings);
+$("fab-new-session").onclick = showCreateSheet;
 
 function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
@@ -3191,7 +3217,6 @@ async function onFilesPicked(files) {
   }
 }
 
-$("new-session").onclick = showCreateSheet;
 $("create-cancel").onclick = hideCreateSheet;
 $("create-next").onclick = advanceCreateSheet;
 $("create-back").onclick = backCreateSheet;
