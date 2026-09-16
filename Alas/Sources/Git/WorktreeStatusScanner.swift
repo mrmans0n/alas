@@ -2,10 +2,83 @@ import Foundation
 
 /// Computes `WorktreeDirtyState` by running `git status` across worktrees.
 ///
+/// An actor so the in-flight coalescing flags are protected without a lock.
 /// The parsing half is a pure static function so the porcelain format — which
 /// is where the bugs live — is testable without git, a filesystem, or a
 /// subprocess.
-enum WorktreeStatusScanner {
+actor WorktreeStatusScanner {
+    static let shared = WorktreeStatusScanner()
+
+    /// Cap on concurrent git subprocesses. `git status` stats the working
+    /// tree, so an unbounded fan-out would spawn one process per worktree —
+    /// around 34 for a typical setup — on every app activation.
+    static let maxConcurrentScans = 4
+
+    /// Per-worktree ceiling. A pathological repo should not stall the pass.
+    static let perScanTimeout: TimeInterval = 10
+
+    private var isScanning = false
+    private var rescanRequested = false
+
+    /// Scans `paths` and publishes the results.
+    ///
+    /// Coalesces overlapping triggers: a request arriving mid-scan sets a flag
+    /// and returns rather than starting a second concurrent pass, then the
+    /// running pass repeats once when it finishes.
+    func scan(paths: [URL]) async {
+        guard !isScanning else {
+            rescanRequested = true
+            return
+        }
+        isScanning = true
+        defer { isScanning = false }
+
+        repeat {
+            rescanRequested = false
+            let results = await Self.statuses(for: paths)
+            await MainActor.run { WorktreeStatusStore.shared.apply(results) }
+        } while rescanRequested
+    }
+
+    /// Runs at most `maxConcurrentScans` git processes at a time.
+    ///
+    /// Worktrees whose scan fails are omitted from the result rather than
+    /// reported as `.unknown`, so the store keeps its previous value and a row
+    /// showing dirt does not blank on a transient git error.
+    nonisolated static func statuses(for paths: [URL]) async -> [String: WorktreeDirtyState] {
+        var results: [String: WorktreeDirtyState] = [:]
+        await withTaskGroup(of: (String, WorktreeDirtyState?).self) { group in
+            var iterator = paths.makeIterator()
+
+            func addNext() {
+                guard let path = iterator.next() else { return }
+                group.addTask { (path.path, await status(at: path)) }
+            }
+
+            for _ in 0..<maxConcurrentScans { addNext() }
+            while let (path, status) = await group.next() {
+                if let status { results[path] = status }
+                addNext()
+            }
+        }
+        return results
+    }
+
+    /// Returns nil when the worktree is gone or git fails, so the caller can
+    /// leave the previous value alone.
+    nonisolated static func status(at path: URL) async -> WorktreeDirtyState? {
+        guard FileManager.default.fileExists(atPath: path.path) else { return nil }
+        // usesRemoteHostRegistry: false keeps this scanner strictly local —
+        // remote worktrees are fed from the remote summary pipeline instead.
+        guard let result = try? await Process.git(
+            ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            cwd: path,
+            usesRemoteHostRegistry: false,
+            timeout: perScanTimeout
+        ), result.exitCode == 0 else { return nil }
+        return parse(porcelainZ: result.stdout)
+    }
+
     /// Parses `git status --porcelain=v1 -z` output.
     ///
     /// Each record is `XY <path>` terminated by NUL. Rename and copy records
