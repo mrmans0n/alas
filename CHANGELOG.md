@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-09-16
+
+### ✨ Features
+
+- Add durable run history with report tabs (#1275).
+- Show gg stack counts from the shared inbox stream (#1279).
+- Collapse the base branch selector to an icon when the branch name does not fit (#1281).
+- Show the main worktree's upstream status in the sidebar (#1283).
+
+### 🐛 Fixes
+
+- Correct review-feedback workspace routing (#1278).
+- Restore toolbar menu hover feedback (#1280).
+- Fix the repository header accessory layout (#1282).
+
 ## [0.18.1] - 2026-09-16
 
 ### ✨ Features
