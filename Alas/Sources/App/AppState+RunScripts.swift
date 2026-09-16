@@ -660,6 +660,13 @@ extension AppState {
         return .location(location)
     }
 
+    private func runHistoryCapture(for error: Error, location: RunScriptCaptureLocation) -> RunHistoryCapture {
+        if case let RunScriptCompletionMonitor.MonitorError.malformedStatus(snapshot) = error {
+            return .snapshot(snapshot, cleanup: location)
+        }
+        return .location(location)
+    }
+
     private func archiveFinalizedRun(_ record: RunRecord?, capture: RunHistoryCapture) {
         guard let record,
               let entry = Self.runHistoryEntry(for: record, output: .unavailable),
@@ -832,7 +839,7 @@ extension AppState {
                     // The waiter failed (dropped SSH, unreadable completion
                     // file). We never saw an exit status, so we can't claim one.
                     let finalized = runRecords.markLostObservation(runID: runID, at: Date())
-                    archiveFinalizedRun(finalized, capture: .location(location))
+                    archiveFinalizedRun(finalized, capture: runHistoryCapture(for: error, location: location))
                     runScriptLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
                     )

@@ -375,7 +375,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Open report for \(entry.scriptName)")
+                    .accessibilityLabel("Open report for \(entry.scriptName): \(RunTabPresentation.historyDetail(entry, now: now))")
                 }
                 HStack {
                     Button("Previous") {

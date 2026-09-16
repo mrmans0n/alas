@@ -134,9 +134,31 @@ struct RunScriptCompletionMonitorTests {
         )
         try "nope\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
 
-        await #expect(throws: Error.self) {
+        await #expect(throws: RunScriptCompletionMonitor.MonitorError.malformedStatus(.init(transcript: nil, truncated: false))) {
             try await RunScriptCompletionMonitor.wait(for: location)
         }
+        #expect(!FileManager.default.fileExists(atPath: paths.completion))
+    }
+
+    @Test func localMalformedStatusCarriesTranscriptBeforeCleanup() async throws {
+        let runID = UUID().uuidString
+        let location = try RunScriptCompletionMonitor.paths(runID: runID, host: nil)
+        guard case let .local(paths) = location else {
+            Issue.record("Expected local paths")
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: paths.completion).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let transcript = Data("partial output\n".utf8)
+        try transcript.write(to: URL(fileURLWithPath: paths.transcript))
+        try "nope\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
+
+        await #expect(throws: RunScriptCompletionMonitor.MonitorError.malformedStatus(.init(transcript: transcript, truncated: false))) {
+            try await RunScriptCompletionMonitor.wait(for: location)
+        }
+        #expect(!FileManager.default.fileExists(atPath: paths.transcript))
         #expect(!FileManager.default.fileExists(atPath: paths.completion))
     }
 

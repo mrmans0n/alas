@@ -213,14 +213,14 @@ enum RunScriptCompletionMonitor {
         }
         let statusText = try String(contentsOfFile: paths.completion, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapshot = localTranscript(paths: paths)
         let parts = statusText.split(whereSeparator: \.isWhitespace)
         guard let exitCodeText = parts.first,
               let exitCode = Int32(exitCodeText)
-        else { throw MonitorError.malformedStatus }
+        else { throw MonitorError.malformedStatus(snapshot) }
         let completedAt = parts.dropFirst().first
             .flatMap { TimeInterval(String($0)) }
             .map { Date(timeIntervalSince1970: $0) } ?? Date()
-        let snapshot = localTranscript(paths: paths)
         return RunScriptCompletion(
             exitCode: exitCode,
             completedAt: completedAt,
@@ -274,7 +274,7 @@ enum RunScriptCompletionMonitor {
 
     enum MonitorError: Error, Equatable {
         case invalidRunID
-        case malformedStatus
+        case malformedStatus(RunScriptTranscriptSnapshot)
         case malformedRemotePayload
         case remoteConnectionFailed
         case remoteWaitFailed(Int32)
