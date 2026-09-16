@@ -15,7 +15,10 @@ rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
 rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
 
 if [ -z "${ALAS_FFF_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    target_arch="universal"
+    case "${ARCHS:-}" in
+        arm64|x86_64) target_arch="${ARCHS}" ;;
+        *) target_arch="universal" ;;
+    esac
 else
     target_arch="${ALAS_FFF_TARGET_ARCH:-${CURRENT_ARCH:-$(uname -m)}}"
 fi

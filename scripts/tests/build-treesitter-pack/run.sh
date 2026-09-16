@@ -148,6 +148,7 @@ run_script_arch() {
 run_universal() {
     SRCROOT="${srcroot}" \
         CURRENT_ARCH="undefined_arch" \
+        ARCHS="arm64 x86_64" \
         ALAS_RUSTUP_BIN="${sandbox}/rustup" \
         PATH="${sandbox}/bin:${PATH}" \
         bash "${srcroot}/scripts/build-treesitter-pack.sh"
@@ -158,6 +159,15 @@ run_script_deployment_target() {
         ALAS_TS_PACK_TARGET_ARCH="x86_64" \
         ALAS_RUSTUP_BIN="${sandbox}/rustup" \
         MACOSX_DEPLOYMENT_TARGET="$1" \
+        PATH="${sandbox}/bin:${PATH}" \
+        bash "${srcroot}/scripts/build-treesitter-pack.sh"
+}
+
+run_single_archs_parent() {
+    SRCROOT="${srcroot}" \
+        CURRENT_ARCH="undefined_arch" \
+        ARCHS="arm64" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
         PATH="${sandbox}/bin:${PATH}" \
         bash "${srcroot}/scripts/build-treesitter-pack.sh"
 }
@@ -177,6 +187,11 @@ grep -q 'link "alas_treesitter_pack"' "${srcroot}/.build/treesitter-pack/include
 : > "${invocations}"
 run_script
 test ! -s "${invocations}"
+
+# --- 2a. Xcode's undefined parent architecture uses its sole ARCHS value.
+run_single_archs_parent
+test -f "${srcroot}/.build/treesitter-pack/arm64/install/lib/libalas_treesitter_pack.a"
+test ! -e "${srcroot}/.build/treesitter-pack/universal/install/lib/libalas_treesitter_pack.a"
 
 # --- 3. editing a crate source invalidates the fingerprint and rebuilds
 printf 'fn main() { /* changed */ }\n' > "${pack_src}/src/lib.rs"

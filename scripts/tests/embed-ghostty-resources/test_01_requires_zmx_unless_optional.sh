@@ -81,9 +81,33 @@ test -x "${resources}/alas-cli/macos-x86_64/alas"
 test -x "${resources}/alas-cli/macos-aarch64/alas"
 cmp "${srcroot}/AlasCLI/manifest.json" "${resources}/alas-cli/manifest.json"
 
+# Xcode can report undefined_arch for the parent target while ARCHS still
+# names the single requested slice. Resource embedding must select that same
+# arm64 output, rather than expecting a universal build.
+for zmx in \
+    "${srcroot}/.build/zmx/arm64/install/bin/zmx" \
+    "${srcroot}/.build/zmx/linux-x86_64/install/bin/zmx" \
+    "${srcroot}/.build/zmx/linux-aarch64/install/bin/zmx"; do
+    mkdir -p "$(dirname "${zmx}")"
+    printf '#!/bin/sh\n' > "${zmx}"
+    chmod +x "${zmx}"
+done
+
+TARGET_BUILD_DIR="${tmp}/build" \
+    UNLOCALIZED_RESOURCES_FOLDER_PATH="Resources" \
+    FRAMEWORKS_FOLDER_PATH="Frameworks" \
+    SRCROOT="${srcroot}" \
+    CURRENT_ARCH="undefined_arch" \
+    ARCHS="arm64" \
+    PATH="${tmp}/bin:${PATH}" \
+    bash "${repo_root}/scripts/embed-ghostty-resources.sh"
+test -x "${resources}/zmx/zmx"
+test -f "${tmp}/build/Frameworks/libfff_c.dylib"
+
 # Stale-bundle cleanup: a previously bundled zmx in TARGET_BUILD_DIR must be
 # removed on an optional skip so the app does not silently ship a stale
 # helper after a developer toggles ALAS_ZMX_OPTIONAL=1.
+rm -rf "${srcroot}/.build/zmx/arm64"
 mkdir -p "${resources}/zmx"
 printf '#!/bin/sh\necho stale\n' > "${resources}/zmx/zmx"
 chmod +x "${resources}/zmx/zmx"

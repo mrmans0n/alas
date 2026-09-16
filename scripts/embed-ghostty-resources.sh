@@ -16,13 +16,16 @@ rsync -a --delete "${terminfo_source}/" "${terminfo_destination}/"
 
 # zmx (new). Selection mirrors build-zmx.sh:
 #   - ALAS_ZMX_TARGET_ARCH (CI/release per-slice override) wins.
-#   - CURRENT_ARCH=undefined_arch (multi-arch parent in Xcode) means a
-#     universal slice — pick the lipo'd binary build-zmx.sh produced.
+#   - CURRENT_ARCH=undefined_arch uses a sole ARCHS value, or universal for
+#     multi-arch parents.
 #   - Otherwise use CURRENT_ARCH, or uname -m for local-dev fallback.
 if [ -n "${ALAS_ZMX_TARGET_ARCH:-}" ]; then
     zmx_arch="${ALAS_ZMX_TARGET_ARCH}"
 elif [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    zmx_arch="universal"
+    case "${ARCHS:-}" in
+        arm64|x86_64) zmx_arch="${ARCHS}" ;;
+        *) zmx_arch="universal" ;;
+    esac
 else
     zmx_arch="${CURRENT_ARCH:-$(uname -m)}"
 fi
@@ -109,7 +112,10 @@ rsync -a "${SRCROOT}/AlasCLI/manifest.json" "${cli_destination_root}/manifest.js
 if [ -n "${ALAS_FFF_TARGET_ARCH:-}" ]; then
     fff_arch="${ALAS_FFF_TARGET_ARCH}"
 elif [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    fff_arch="universal"
+    case "${ARCHS:-}" in
+        arm64|x86_64) fff_arch="${ARCHS}" ;;
+        *) fff_arch="universal" ;;
+    esac
 else
     fff_arch="${CURRENT_ARCH:-$(uname -m)}"
 fi

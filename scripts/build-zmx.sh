@@ -12,13 +12,15 @@ zmx_src="${srcroot}/ThirdParty/zmx"
 #   1. ALAS_ZMX_TARGET_ARCH — explicit CI/release override
 #   2. CURRENT_ARCH — Xcode's per-slice arch (must match embed-ghostty-resources.sh)
 #   3. uname -m — local-dev fallback for host-native builds
-# When CURRENT_ARCH is the placeholder Xcode emits for multi-arch parents
-# (`undefined_arch`) — typically a Release archive without ONLY_ACTIVE_ARCH —
-# we build a universal binary by lipo'ing both slices so the embedded
-# zmx works on either arch the parent app might run on.
+# `CURRENT_ARCH=undefined_arch` is Xcode's parent-target placeholder. Use its
+# ARCHS value when there is one active architecture; only a multi-arch ARCHS
+# needs a universal binary.
 _xcode_arch="${CURRENT_ARCH:-}"
 if [ -z "${ALAS_ZMX_TARGET_ARCH:-}" ] && [ "${_xcode_arch}" = "undefined_arch" ]; then
-    target_arch="universal"
+    case "${ARCHS:-}" in
+        arm64|x86_64) target_arch="${ARCHS}" ;;
+        *) target_arch="universal" ;;
+    esac
 else
     if [ "${_xcode_arch}" = "undefined_arch" ]; then
         _xcode_arch=""
