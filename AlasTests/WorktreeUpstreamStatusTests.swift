@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import Alas
 
 struct WorktreeUpstreamStatusTests {
@@ -29,5 +30,42 @@ struct WorktreeUpstreamStatusTests {
         let status = WorktreeUpstreamStatus(ahead: 1, behind: 1, upstreamRef: "origin/feature")
 
         #expect(WorktreeRowView.upstreamStatusItems(status, isMain: false).isEmpty)
+    }
+
+    @Test func fetchPolicyHonorsAutoFetchSetting() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        #expect(WorktreeUpstreamStatusStore.shouldFetchUpstream(
+            autoFetch: false,
+            lastFetchAt: nil,
+            now: now,
+            minFetchInterval: 60
+        ) == false)
+
+        #expect(WorktreeUpstreamStatusStore.shouldFetchUpstream(
+            autoFetch: true,
+            lastFetchAt: nil,
+            now: now,
+            minFetchInterval: 60
+        ))
+    }
+
+    @Test func fetchPolicyUsesConfiguredInterval() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        #expect(WorktreeUpstreamStatusStore.fetchInterval(fetchIntervalMinutes: 7) == 420)
+        #expect(WorktreeUpstreamStatusStore.fetchInterval(fetchIntervalMinutes: 0) == 60)
+        #expect(WorktreeUpstreamStatusStore.shouldFetchUpstream(
+            autoFetch: true,
+            lastFetchAt: now.addingTimeInterval(-59),
+            now: now,
+            minFetchInterval: 60
+        ) == false)
+        #expect(WorktreeUpstreamStatusStore.shouldFetchUpstream(
+            autoFetch: true,
+            lastFetchAt: now.addingTimeInterval(-60),
+            now: now,
+            minFetchInterval: 60
+        ))
     }
 }

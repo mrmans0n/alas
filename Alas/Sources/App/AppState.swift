@@ -4182,11 +4182,19 @@ final class AppState {
         worktreeUpstreamStatusRefreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
+                let worktreeConfig = self.config.worktrees
+                let refreshInterval = WorktreeUpstreamStatusStore.fetchInterval(
+                    fetchIntervalMinutes: worktreeConfig.fetchIntervalMinutes
+                )
                 for project in self.projectsManager.projects {
                     if !includeRemoteProjects, project.host != nil { continue }
-                    await self.refreshMainWorktreeUpstreamStatuses(projectId: project.id)
+                    await self.refreshMainWorktreeUpstreamStatuses(
+                        projectId: project.id,
+                        allowFetch: worktreeConfig.autoFetch,
+                        minFetchInterval: refreshInterval
+                    )
                 }
-                try? await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(refreshInterval * 1_000_000_000))
             }
         }
     }
@@ -4806,12 +4814,20 @@ final class AppState {
         return changed || completedCreateFailure
     }
 
-    private func refreshMainWorktreeUpstreamStatuses(projectId: String) async {
+    private func refreshMainWorktreeUpstreamStatuses(
+        projectId: String,
+        allowFetch: Bool = false,
+        minFetchInterval: TimeInterval = WorktreeUpstreamStatusStore.defaultFetchInterval
+    ) async {
         guard let project = projectsManager.projects.first(where: { $0.id == projectId }) else { return }
         let mainWorktrees = projectsManager.worktrees(projectId: projectId).filter {
             projectsManager.isMain($0, in: project)
         }
-        await worktreeUpstreamStatusStore.refresh(worktrees: mainWorktrees)
+        await worktreeUpstreamStatusStore.refresh(
+            worktrees: mainWorktrees,
+            allowFetch: allowFetch,
+            minFetchInterval: minFetchInterval
+        )
     }
 
     private func completeReconciledCreateFailures(
