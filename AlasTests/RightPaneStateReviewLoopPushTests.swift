@@ -99,15 +99,20 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(state.pendingMerge == nil)
     }
 
-    @Test func performMergeRevalidatesAgainstCurrentSnapshot() {
+    @Test func performMergeRevalidatesAgainstCurrentSnapshot() async {
         let worktreeId = "wt-merge-revalidate"
-        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let repositoryRoot = "/tmp/repo"
+        RemoteHostRegistry.shared.register(root: repositoryRoot, host: "devbox")
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repositoryRoot)
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
+        }
         let worktree = Worktree(
             id: worktreeId,
             projectId: "p1",
             name: "feature/review-loop",
             branch: "feature/review-loop",
-            path: URL(fileURLWithPath: "/tmp/repo"),
+            path: URL(fileURLWithPath: repositoryRoot),
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
         )
@@ -116,6 +121,7 @@ struct RightPaneStateReviewLoopPushTests {
         // qualifies (default snapshot is unpushed / has no mergeable request).
         state.pendingMerge = Self.makeSnapshot()
         state.reviewLoop.setSnapshotForTests(Self.makeSnapshot())
+        #expect(!(await state.checkpointMutationsDisabledAfterJournalRevalidation()))
 
         state.performMerge()
 

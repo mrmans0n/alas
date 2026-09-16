@@ -72,6 +72,13 @@ struct BeautifulMermaidFixtureTests {
     @Test func rendersNativeDiagram() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/WorkspaceEditExecutorFixtureTests.swift" <<'SWIFT'
+import Testing
+
+struct WorkspaceEditExecutorFixtureTests {
+    @Test func isolatesBufferMutationRace() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/InlineSuiteTests.swift" <<'SWIFT'
 import Testing
 
@@ -89,7 +96,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=10 scheduled=9 ordinary=4 subprocess=5 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=11 scheduled=10 ordinary=4 subprocess=6 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -136,6 +143,7 @@ grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_sele
 grep -qx -- '-only-testing AlasTests/BeautifulMermaidFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/RunScriptFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/WorkspaceEditExecutorFixtureTests' <<<"${subprocess_selectors}"
 
 mkdir -p "${sandbox}/bin"
 cat > "${sandbox}/bin/xcodebuild" <<'SH'
@@ -163,6 +171,7 @@ grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/WorkspaceEditExecutorFixtureTests' "${subprocess_log}"
 
 printf 'MissingTests\tno longer exists; #23\n' >> "${sandbox}/quarantine.tsv"
 if bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate > /dev/null 2>&1; then
