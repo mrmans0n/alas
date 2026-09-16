@@ -101,22 +101,19 @@ struct WorktreeRowView: View {
         let pulses: Bool
     }
 
-    /// Derives the status chip from harness activity alone, or `nil` when there
-    /// is nothing to report.
+    /// Derives the status chip, or `nil` when there is nothing to report.
     ///
-    /// Deliberately never reports "clean". `Worktree.status` is written as
-    /// `.clean` at construction (`WorktreeService.swift:329`, `:1886`) and no
-    /// code path ever sets it otherwise, so surfacing it would state that a
-    /// worktree has no uncommitted work without anything having checked. Real
-    /// clean/dirty reporting arrives with the per-worktree git status service.
+    /// Harness activity outranks working-tree state: the row has one chip slot
+    /// and an agent mid-flight is the more urgent fact. Within working-tree
+    /// state, conflicts outrank plain modifications because a conflicted
+    /// worktree is blocked rather than merely dirty.
     ///
-    /// Until then an idle row gets no chip at all. Returning `nil` rather than a
-    /// label-less presentation is what makes that safe: an earlier version
-    /// handed back an empty note with a colour, and the view drew the dot
-    /// unconditionally while gating only the label, so every idle row carried a
-    /// meaningless grey circle.
+    /// `clean` and `unknown` both yield nil. They are distinct cases so that a
+    /// row before its first scan does not claim to be clean, but neither draws
+    /// a chip — the sidebar speaks up only when something is wrong.
     nonisolated static func statusPresentation(
-        harnessState: HarnessService.AggregatedState?
+        harnessState: HarnessService.AggregatedState?,
+        worktreeStatus: WorktreeDirtyState
     ) -> StatusPresentation? {
         switch harnessState {
         case .running:
@@ -124,7 +121,25 @@ struct WorktreeRowView: View {
         case .awaiting:
             return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
         case nil:
+            break
+        }
+
+        switch worktreeStatus {
+        case .unknown, .clean:
             return nil
+        case .dirty(let fileCount, let conflictCount):
+            if conflictCount > 0 {
+                return StatusPresentation(
+                    note: "\(conflictCount) conflict\(conflictCount == 1 ? "" : "s")",
+                    colorToken: "del",
+                    pulses: false
+                )
+            }
+            return StatusPresentation(
+                note: "\(fileCount) file\(fileCount == 1 ? "" : "s")",
+                colorToken: "mod",
+                pulses: false
+            )
         }
     }
 
@@ -200,7 +215,10 @@ struct WorktreeRowView: View {
     }
 
     var body: some View {
-        let status = Self.statusPresentation(harnessState: harnessSummary?.state)
+        let status = Self.statusPresentation(
+            harnessState: harnessSummary?.state,
+            worktreeStatus: .unknown
+        )
         ZStack(alignment: .leading) {
             if isSelected {
                 RoundedRectangle(cornerRadius: 9)
