@@ -510,7 +510,7 @@ extension AppState {
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(30))
                     }
                 } catch {
-                    releaseRunHistoryCapture(.location(captureLocation))
+                    releaseRunHistoryCaptureInBackground(.location(captureLocation))
                     throw error
                 }
             } catch {
@@ -687,7 +687,7 @@ extension AppState {
               let entry = Self.runHistoryEntry(for: record, output: .unavailable),
               let runHistoryStore
         else {
-            releaseRunHistoryCapture(capture)
+            releaseRunHistoryCaptureInBackground(capture)
             return
         }
         runHistoryPersistenceTaskWorktreeIDs[record.id] = record.worktreeID
@@ -707,7 +707,7 @@ extension AppState {
                     "Could not persist run \(record.id, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
             }
-            self?.releaseRunHistoryCapture(capture)
+            await self?.releaseRunHistoryCapture(capture)
             self?.runHistoryPersistenceTasks.removeValue(forKey: record.id)
             self?.runHistoryPersistenceTaskWorktreeIDs.removeValue(forKey: record.id)
         }
@@ -754,18 +754,29 @@ extension AppState {
         return .available(text: tail.text, truncated: snapshot.truncated || tail.truncated)
     }
 
-    private func releaseRunHistoryCapture(_ capture: RunHistoryCapture) {
+    private func releaseRunHistoryCaptureInBackground(_ capture: RunHistoryCapture) {
+        guard let location = cleanupLocation(for: capture) else { return }
+        cleanupCaptureLocation(location)
+        Task {
+            await RunScriptCompletionMonitor.cleanupRemoteCapture(for: location)
+        }
+    }
+
+    private func releaseRunHistoryCapture(_ capture: RunHistoryCapture) async {
+        guard let location = cleanupLocation(for: capture) else { return }
+        cleanupCaptureLocation(location)
+        await RunScriptCompletionMonitor.cleanupRemoteCapture(for: location)
+    }
+
+    private func cleanupLocation(for capture: RunHistoryCapture) -> RunScriptCaptureLocation? {
         let location: RunScriptCaptureLocation
         switch capture {
         case let .location(captured), let .snapshot(_, cleanup: captured):
             location = captured
         case .completion, .unavailable:
-            return
+            return nil
         }
-        cleanupCaptureLocation(location)
-        Task {
-            await RunScriptCompletionMonitor.cleanupRemoteCapture(for: location)
-        }
+        return location
     }
 
     func flushRunHistoryPersistence(worktreeID: String? = nil) async {
@@ -857,7 +868,7 @@ extension AppState {
                     if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
                         archiveFinalizedRun(finalized, capture: capture)
                     } else if runHistoryPersistenceTasks[runID] == nil {
-                        releaseRunHistoryCapture(capture)
+                        releaseRunHistoryCaptureInBackground(capture)
                     }
                     runScriptLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
@@ -872,7 +883,7 @@ extension AppState {
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
             archiveFinalizedRun(finalized, capture: capture)
         } else if runHistoryPersistenceTasks[runID] == nil {
-            releaseRunHistoryCapture(.location(location))
+            releaseRunHistoryCaptureInBackground(.location(location))
         }
     }
 
@@ -886,7 +897,7 @@ extension AppState {
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
             archiveFinalizedRun(finalized, capture: capture)
         } else if runHistoryPersistenceTasks[runID] == nil {
-            releaseRunHistoryCapture(.location(entry.location))
+            releaseRunHistoryCaptureInBackground(.location(entry.location))
         }
     }
 
@@ -954,7 +965,7 @@ extension AppState {
                 let capture = purgeHistory ? .location(entry.location) : runHistoryCaptureBeforeCancelling(entry.location)
                 runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
                 if purgeHistory {
-                    releaseRunHistoryCapture(capture)
+                    releaseRunHistoryCaptureInBackground(capture)
                 } else {
                     let finalized = runRecords.markLostObservation(runID: runID, at: Date())
                     archiveFinalizedRun(finalized, capture: capture)
