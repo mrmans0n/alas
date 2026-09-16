@@ -1276,10 +1276,12 @@ final class AppState {
 
     /// Recompute working-tree status for every local worktree.
     ///
-    /// Remote projects are excluded deliberately — their status arrives through
-    /// the remote summary pipeline (see `applyRemoteWorktreeDirtyState`), which
-    /// already fetches the same information without per-worktree SSH round
-    /// trips on every activation.
+    /// Remote projects are excluded deliberately. Their status arrives with the
+    /// `RemoteWorktreeSummary` built in `remoteWorktreeOption(project:worktree:)`,
+    /// which already carries `changedFileCount` and `conflictCount` and is
+    /// fetched on the remote layer's own schedule — so scanning them here would
+    /// add per-worktree SSH round trips on every activation for information we
+    /// already have.
     func rescanWorktreeDirtyStatees() {
         worktreeStatusRescanTask?.cancel()
         let paths = projectsManager.projects
