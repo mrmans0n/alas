@@ -2,12 +2,11 @@ import Testing
 @testable import Alas
 
 struct RightPaneTabTests {
-    @Test func agentTabIsAlwaysAvailable() {
-        #expect(RightPaneTab.available(runTabEnabled: false) == [.changes, .files, .agent])
-        #expect(RightPaneTab.visible(.agent, runTabEnabled: false) == .agent)
+    @Test func allFourTabsAreAlwaysAvailable() {
+        #expect(RightPaneTab.available() == [.changes, .files, .agent, .run])
     }
 
-    @Test func disablingRunOnlyFallsBackFromRun() {
-        #expect(RightPaneTab.visible(.run, runTabEnabled: false) == .changes)
+    @Test func runTabIsAvailable() {
+        #expect(RightPaneTab.available().contains(.run))
     }
 }
