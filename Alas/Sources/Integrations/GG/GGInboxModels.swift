@@ -95,6 +95,15 @@ struct GGInboxBuckets: Equatable, Decodable {
     }
 }
 
+/// Scoped to a project by GGInboxStore. Position is deliberately excluded:
+/// rebasing/reordering changes positions, while a different commit must not
+/// inherit another commit's refreshed review state.
+struct GGInboxEntryIdentity: Hashable {
+    let stackName: String
+    let sha: String
+    let prNumber: Int
+}
+
 struct GGInboxEntry: Equatable, Decodable {
     let stackName: String
     let position: Int
@@ -105,6 +114,10 @@ struct GGInboxEntry: Equatable, Decodable {
     let ciStatus: String?
     let behindBase: Int?
     let refreshError: String?
+
+    var identity: GGInboxEntryIdentity {
+        GGInboxEntryIdentity(stackName: stackName, sha: sha, prNumber: prNumber)
+    }
 
     init(
         stackName: String,

@@ -3,6 +3,7 @@ import SwiftUI
 struct GGWorktreeMenuModel: Equatable {
     let selectedMode: GGWorktreeMode
     let isEffectiveActive: Bool
+    let permitsStackSummary: Bool
     let inactiveExplanation: String?
     let showsStatusIndicator: Bool
     let isVisible: Bool
@@ -15,6 +16,7 @@ struct GGWorktreeMenuModel: Equatable {
     ) {
         self.selectedMode = selectedMode
         isEffectiveActive = context.isActive
+        permitsStackSummary = !isRemoteWorktree && context.permitsCurrentStackQuery
         showsStatusIndicator = context.isActive && !hasStackSummary
         let contextIsRemote = context == .inactive(reason: .remoteProject)
         let isGloballyDisabled = context == .inactive(reason: .masterDisabled)
@@ -211,7 +213,8 @@ struct WorktreeRowView: View {
     }
 
     private var stackSummary: GGStackSummary? {
-        GGStackSummaryStore.shared.summaries[worktree.path.path]
+        guard ggMenuModel.permitsStackSummary else { return nil }
+        return GGStackSummaryStore.shared.summary(forPath: worktree.path.path)
     }
 
     var body: some View {
@@ -354,19 +357,19 @@ struct WorktreeRowView: View {
     @ViewBuilder
     private var stackSummaryView: some View {
         if let stack = stackSummary {
-            let summaryText = Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
+            let summaryText = stack.isRemoteStateKnown
+                ? Self.stackSummaryTooltip(merged: stack.merged, total: stack.total)
+                : "gg stack · \(stack.total) commits · merge status pending"
             HStack(spacing: 3) {
                 GGStackIcon(size: 9, color: theme.color("fg-faint"))
                     .accessibilityHidden(true)
-                Text("\(stack.merged)/\(stack.total)")
+                Text(stack.isRemoteStateKnown ? "\(stack.merged)/\(stack.total)" : "\(stack.total)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
             }
             .help(summaryText)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(
-                Self.stackSummaryAccessibilityLabel(merged: stack.merged, total: stack.total)
-            )
+            .accessibilityLabel(summaryText)
         } else if ggMenuModel.showsStatusIndicator {
             GGStackIcon(size: 9, color: theme.color(Self.pendingStackIndicatorColorToken()))
                 .help("gg is active for this worktree.")

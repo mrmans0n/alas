@@ -533,11 +533,11 @@ struct GGService {
     }
 
     /// Streams cross-stack triage events from `gg inbox --jsonl`. Runs at the
-    /// project root — one forge round-trip per project, never per worktree.
+    /// project root, sharing bounded per-PR forge requests across worktrees.
     /// Per-stack failures arrive in-band as `stackErrors`, not as thrown errors.
     func inboxStream(repoPath: String) -> AsyncThrowingStream<GGInboxEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 var sawStart = false
                 var sawSummary = false
                 var fatalMessage: String?
@@ -617,6 +617,7 @@ struct GGService {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

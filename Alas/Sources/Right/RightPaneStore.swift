@@ -367,6 +367,7 @@ final class RightPaneStore {
     /// watcher-driven refresh.
     func reevaluateGGGates() {
         for state in states.values { state.reevaluateGGGate() }
+        appState?.refreshGGSidebar()
     }
 
     /// Branch-ref rewrites can change commits above the checked-out GG entry

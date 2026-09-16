@@ -78,6 +78,127 @@ struct GGInboxStoreTests {
         #expect(state.isRefreshing == false)
     }
 
+    @Test func excludedMergedStateStreamsBeforeSummaryAndSurvivesItsOmission() async throws {
+        let store = GGInboxStore()
+        let runner = ControlledInboxRunner()
+        let task = Task { await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: runner)) }
+        try await waitUntil { runner.lastArgs == ["inbox", "--jsonl"] }
+        runner.yield(Self.start(total: 1))
+        runner.yield(Self.excludedEntryEvent(completed: 1, total: 1).replacingOccurrences(of: "closed", with: "merged"))
+        let key = GGInboxEntryIdentity(stackName: "auth", sha: "abc123", prNumber: 42)
+        try await waitUntil { store.states["p"]?.reviewStates[key] == "merged" }
+        #expect(store.states["p"]?.isRefreshing == true)
+        #expect(store.states["p"]?.snapshot?.totalItems == 0)
+        runner.yield(Self.emptySummary)
+        runner.finish()
+        await task.value
+        #expect(store.states["p"]?.reviewStates[key] == "merged")
+    }
+
+    @Test func failedRefreshRetainsKnownReviewStatesAndEmptySuccessPrunesThem() async {
+        let store = GGInboxStore()
+        let key = GGInboxEntryIdentity(stackName: "auth", sha: "abc123", prNumber: 42)
+        store.states["p"] = .init(reviewStates: [key: "merged"])
+        let failed = FakeGGRunner(result: ProcessResult(exitCode: 1, stdout: "", stderr: "offline"))
+        await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: failed))
+        #expect(store.states["p"]?.reviewStates[key] == "merged")
+        let success = FakeGGRunner(result: ProcessResult(exitCode: 0, stdout: Self.emptyJSONL, stderr: ""))
+        await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: success))
+        #expect(store.states["p"]?.reviewStates.isEmpty == true)
+    }
+
+    @Test func pruningProjectFencesInFlightStream() async throws {
+        let store = GGInboxStore()
+        let runner = ControlledInboxRunner()
+        let task = Task { await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: runner)) }
+        try await waitUntil { runner.lastArgs == ["inbox", "--jsonl"] }
+        store.prune(keepingProjectIds: [])
+        runner.yield(Self.start(total: 1))
+        runner.yield(Self.excludedEntryEvent(completed: 1, total: 1))
+        runner.yield(Self.emptySummary)
+        runner.finish()
+        await task.value
+        #expect(store.states["p"] == nil)
+    }
+
+    @Test func removedOldRefreshCannotFinishReplacementRefresh() async throws {
+        let store = GGInboxStore()
+        let oldRunner = ControlledInboxRunner()
+        let old = Task { await store.refresh(projectId: "p", repoPath: "/old", service: GGService(runner: oldRunner)) }
+        try await waitUntil { oldRunner.lastArgs == ["inbox", "--jsonl"] }
+        store.remove(projectId: "p")
+        let newRunner = ControlledInboxRunner()
+        let new = Task { await store.refresh(projectId: "p", repoPath: "/new", service: GGService(runner: newRunner)) }
+        try await waitUntil { newRunner.lastArgs == ["inbox", "--jsonl"] }
+        oldRunner.yield(Self.start(total: 0))
+        oldRunner.yield(Self.emptySummary)
+        oldRunner.finish()
+        await old.value
+        #expect(store.states["p"]?.isRefreshing == true)
+        newRunner.yield(Self.start(total: 0))
+        newRunner.yield(Self.emptySummary)
+        newRunner.finish()
+        await new.value
+        #expect(store.states["p"]?.isRefreshing == false)
+    }
+
+    @Test func entryFailureRetainsPreviousMergedState() async {
+        let store = GGInboxStore()
+        let key = GGInboxEntryIdentity(stackName: "auth", sha: "abc123", prNumber: 42)
+        store.states["p"] = .init(reviewStates: [key: "merged"])
+        let output = [Self.start(total: 1), Self.entryErrorEvent(completed: 1, total: 1), Self.emptySummary].joined(separator: "\n")
+        let runner = FakeGGRunner(result: ProcessResult(exitCode: 0, stdout: output, stderr: ""))
+        await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: runner))
+        #expect(store.states["p"]?.reviewStates[key] == "merged")
+    }
+
+    @Test func backgroundRefreshJoinsTabOwnedStream() async throws {
+        let store = GGInboxStore()
+        let runner = ControlledInboxRunner()
+        let tab = Task { await store.refresh(projectId: "p", repoPath: "/repo", service: GGService(runner: runner)) }
+        try await waitUntil { runner.lastArgs == ["inbox", "--jsonl"] }
+        // A fallback runner returning invalid output would replace the good
+        // result with an error if the waiter unnecessarily starts a second run.
+        let fallback = FakeGGRunner(result: ProcessResult(exitCode: 1, stdout: "", stderr: "duplicate"))
+        let background = Task { await store.refreshIfStale(projectId: "p", repoPath: "/repo", service: GGService(runner: fallback)) }
+        runner.yield(Self.start(total: 0))
+        runner.yield(Self.emptySummary)
+        runner.finish()
+        await tab.value
+        await background.value
+        #expect(store.states["p"]?.lastError == nil)
+    }
+
+    @Test func repositoryReplacementCancelsWaiterForOldInbox() async throws {
+        let store = GGInboxStore()
+        let summaries = GGStackSummaryStore()
+        let tabRunner = ControlledInboxRunner()
+        let tab = Task { await store.refresh(projectId: "p", repoPath: "/old", service: GGService(runner: tabRunner)) }
+        try await waitUntil { tabRunner.lastArgs == ["inbox", "--jsonl"] }
+        let oldWaiterRunner = ControlledInboxRunner()
+        let newRunner = ControlledInboxRunner()
+        var waiting = false
+        let controller = GGSidebarRefreshController(summaries: summaries, inbox: store, debounce: .zero, load: { _ in nil }, refreshInbox: { id, path in
+            if path == "/old" { waiting = true }
+            await store.refreshIfStale(projectId: id, repoPath: path, service: GGService(runner: path == "/old" ? oldWaiterRunner : newRunner))
+        })
+        let worktrees = [GGSidebarRefreshController.Worktree(path: "/wt", stackName: "auth")]
+        controller.refresh(projects: [.init(id: "p", path: "/old", worktrees: worktrees)])
+        try await waitUntil { waiting }
+        controller.refresh(projects: [.init(id: "p", path: "/new", worktrees: worktrees)])
+        try await waitUntil { newRunner.lastArgs == ["inbox", "--jsonl"] }
+        #expect(oldWaiterRunner.lastArgs.isEmpty)
+        tabRunner.yield(Self.start(total: 0))
+        tabRunner.yield(Self.emptySummary)
+        tabRunner.finish()
+        await tab.value
+        #expect(store.states["p"]?.isRefreshing == true)
+        newRunner.yield(Self.start(total: 0))
+        newRunner.yield(Self.emptySummary)
+        newRunner.finish()
+        try await waitUntil { store.states["p"]?.isRefreshing == false }
+    }
+
     @Test func refreshFailureKeepsStaleSnapshotAndSetsError() async throws {
         let store = GGInboxStore()
         let okRunner = FakeGGRunner(result: ProcessResult(exitCode: 0, stdout: Self.emptyJSONL, stderr: ""))
