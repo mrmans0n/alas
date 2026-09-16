@@ -106,11 +106,11 @@ extension AppState {
         fi
         if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
           transcript_ready=1
-          find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+          find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' -o -name '*.snapshot' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         fi
         if mkdir -p \(completionDir) 2>/dev/null && chmod 700 \(completionDir) 2>/dev/null; then
           completion_ready=1
-          find \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+          find \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' -o -name '*.snapshot' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         fi
         __alas_prepare_run_transcript() {
           private_umask=$(umask)

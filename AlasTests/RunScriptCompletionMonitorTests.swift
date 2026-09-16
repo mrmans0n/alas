@@ -36,6 +36,23 @@ struct RunScriptCompletionMonitorTests {
         #expect(!command.contains("/tmp/a'b.log"))
     }
 
+    @Test func staleLocalCleanupIncludesInterruptedRemoteSnapshots() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Alas", isDirectory: true)
+            .appendingPathComponent("run-transcripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let snapshot = directory.appendingPathComponent("\(UUID().uuidString).log.snapshot")
+        FileManager.default.createFile(atPath: snapshot.path, contents: Data("x".utf8))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 0)],
+            ofItemAtPath: snapshot.path
+        )
+
+        RunScriptCompletionMonitor.cleanupStaleLocalFiles(now: Date(timeIntervalSince1970: 8 * 24 * 60 * 60))
+
+        #expect(!FileManager.default.fileExists(atPath: snapshot.path))
+    }
+
     @Test func remoteCommandExpandsHomeRelativePathsAtRuntime() throws {
         let location = try RunScriptCompletionMonitor.paths(runID: UUID().uuidString, host: "devbox")
         guard case let .remote(_, paths) = location else {

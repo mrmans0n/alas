@@ -176,7 +176,7 @@ enum RunScriptCompletionMonitor {
         _ = try? await RemoteExec.runData(
             host: host,
             cwd: nil,
-            command: "rm -f \(transcript) \(completion) \(completion).tmp \(completion).status \(completion).body || true",
+            command: "rm -f \(transcript) \(transcript).snapshot \(completion) \(completion).tmp \(completion).status \(completion).body || true",
             timeout: 10,
             pathPolicy: .inherited
         )
@@ -192,7 +192,7 @@ enum RunScriptCompletionMonitor {
             options: [.skipsHiddenFiles]
         ) else { return }
         let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
-        for entry in entries where ["log", "done", "tmp", "body", "status"].contains(entry.pathExtension) {
+        for entry in entries where ["log", "done", "tmp", "body", "status", "snapshot"].contains(entry.pathExtension) {
             let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
             if modified < cutoff {
                 try? FileManager.default.removeItem(at: entry)

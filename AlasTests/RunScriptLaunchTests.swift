@@ -76,6 +76,7 @@ struct RunScriptLaunchTests {
         #expect(suffix.contains("completion_ready=0"))
         #expect(suffix.contains("code=$?"))
         #expect(suffix.contains(".done.status"))
+        #expect(suffix.contains("*.snapshot"))
         #expect(suffix.contains("command -v script"))
         #expect(suffix.contains("find"))
         #expect(suffix.contains("exit_code=$?"))
