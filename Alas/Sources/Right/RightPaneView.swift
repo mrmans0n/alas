@@ -40,12 +40,7 @@ struct RightPaneView: View {
         // Resolve without activating: the cached state (if any) gives us
         // something to render immediately, and `.task` handles the mutating
         // activation + refresh off the view-update path.
-        let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
-        initialState?.activeTab = RightPaneTab.visible(
-            initialState?.activeTab ?? .changes,
-            runTabEnabled: state.config.runTabEnabled
-        )
-        _rps = State(initialValue: initialState)
+        _rps = State(initialValue: state.rightPaneStore.activeState(worktreeId: worktree.id))
     }
 
     var body: some View {
@@ -71,12 +66,6 @@ struct RightPaneView: View {
                             agentSidebarRevision &+= 1
                         }
                     }
-                }
-                .onChange(of: state.config.runTabEnabled) {
-                    rps.activeTab = RightPaneTab.visible(
-                        rps.activeTab,
-                        runTabEnabled: state.config.runTabEnabled
-                    )
                 }
                 .modifier(RightPaneDialogs(rps: rps))
             } else {
@@ -211,7 +200,6 @@ struct RightPaneView: View {
                 changesCount: rps.displayChanges.count,
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
-                showRunTab: state.config.runTabEnabled,
                 onAction: { action in handle(action, rps: rps) }
             )
         }

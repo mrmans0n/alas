@@ -30,18 +30,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Run tab preview",
-                        desc: "Shows the worktree Run tab for preview testing."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.runTabEnabled },
-                            set: { enabled in
-                                state.config.runTabEnabled = enabled
-                                state.saveConfig()
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Needs attention",
                         desc: "Shows the attention inbox and repository attention counts."
                     ) {
