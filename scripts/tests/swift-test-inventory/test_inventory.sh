@@ -38,6 +38,25 @@ struct ProcessFixtureTests {
     @Test func runsChildProcess() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/BehaviorFixtureTests.swift" <<'SWIFT'
+import Foundation
+import Testing
+
+struct BehaviorFixtureTests {
+    @Test func runsChildProcess() {
+        _ = Process()
+    }
+}
+SWIFT
+cat > "${sandbox}/AlasTests/WrapperFixtureTests.swift" <<'SWIFT'
+import Testing
+
+struct WrapperFixtureTests {
+    @Test func runsChildProcess() {
+        _ = ProcessFixtureRunner.launch()
+    }
+}
+SWIFT
 cat > "${sandbox}/AlasTests/InlineSuiteTests.swift" <<'SWIFT'
 import Testing
 
@@ -55,7 +74,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=6 scheduled=5 ordinary=4 subprocess=1 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=8 scheduled=7 ordinary=4 subprocess=3 quarantined=1' <<<"${summary}"
 
 selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
@@ -73,12 +92,22 @@ if grep -q 'ProcessFixtureTests' <<<"${selectors}"; then
     echo 'subprocess suite was scheduled with ordinary suites' >&2
     exit 1
 fi
+if grep -q 'BehaviorFixtureTests' <<<"${selectors}"; then
+    echo 'behavior-detected subprocess suite was scheduled with ordinary suites' >&2
+    exit 1
+fi
+if grep -q 'WrapperFixtureTests' <<<"${selectors}"; then
+    echo 'process-wrapper suite was scheduled with ordinary suites' >&2
+    exit 1
+fi
 
 subprocess_selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
         --batch 0 --batch-count 1 --lane subprocess
 )"
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
 
 printf 'MissingTests\tno longer exists; #23\n' >> "${sandbox}/quarantine.tsv"
 if bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate > /dev/null 2>&1; then

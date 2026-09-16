@@ -90,18 +90,31 @@ done < "${quarantine_file}"
 scheduled_file="$(mktemp)"
 ordinary_file="$(mktemp)"
 subprocess_file="$(mktemp)"
-trap 'rm -f "${suite_file}" "${quarantine_file}" "${scheduled_file}" "${ordinary_file}" "${subprocess_file}"' EXIT
+subprocess_candidates_file="$(mktemp)"
+trap 'rm -f "${suite_file}" "${quarantine_file}" "${scheduled_file}" "${ordinary_file}" "${subprocess_file}" "${subprocess_candidates_file}"' EXIT
 comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 
 # macos-26 has hung when four or more subprocess-heavy suites share one
 # xcodebuild invocation. Keep these suites out of the ordinary batches; the
-# runner executes this lane in groups of at most three. The naming convention
-# also puts newly added subprocess-facing suites in the protected lane without
-# a workflow edit.
-awk '
-    /Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx/ { print > subprocess }
-    !/Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx/ { print > ordinary }
-' ordinary="${ordinary_file}" subprocess="${subprocess_file}" "${scheduled_file}"
+# runner executes this lane in groups of at most three. Source references to
+# Process are behavior evidence; the name pattern is a fallback so a newly
+# added process-facing suite joins the protected lane without a workflow edit.
+{
+    grep -E 'Git|Process|Terminal|SSH|Shell|CLI|Hook|Zmx' "${scheduled_file}"
+    while IFS= read -r source; do
+        rg -q '\bProcess([.(]|[A-Za-z_]*(Runner|Launcher|Executor))' "${source}" || continue
+        awk '
+            /^[[:space:]]*(@[A-Za-z_][A-Za-z0-9_]*(\([^)]*\))?[[:space:]]+)*((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+                name = $0
+                sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
+                sub(/[^A-Za-z0-9_].*/, "", name)
+                print name
+            }
+        ' "${source}"
+    done < <(find "${tests_root}" -type f -name '*.swift' -print | sort)
+} | sort -u > "${subprocess_candidates_file}"
+comm -12 "${scheduled_file}" "${subprocess_candidates_file}" > "${subprocess_file}"
+comm -23 "${scheduled_file}" "${subprocess_file}" > "${ordinary_file}"
 
 discovered="$(wc -l < "${suite_file}" | tr -d ' ')"
 quarantined="$(wc -l < "${quarantine_file}" | tr -d ' ')"
