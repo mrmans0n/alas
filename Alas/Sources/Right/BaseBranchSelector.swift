@@ -17,26 +17,45 @@ struct BaseBranchSelector: View {
     @State private var search = ""
     @State private var hovering = false
 
+    /// `ViewThatFits` collapses to the icon when the branch name doesn't fit
+    /// in the header; the tooltip (hover) and popover (click) still surface
+    /// the full name.
     var body: some View {
         Button(action: {
             onOpen()
             open.toggle()
         }) {
-            HStack(spacing: 4) {
-                Icon(name: "branch", size: 10, color: hovering ? theme.color("accent") : theme.color("fg-faint"))
-                Text(currentRef ?? baseBranch)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-faint"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            ViewThatFits(in: .horizontal) {
+                labelView
+                iconOnlyView
             }
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
         .onHover { hovering = $0 }
+        .help(currentRef ?? baseBranch)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             popoverBody
         }
+    }
+
+    private var labelView: some View {
+        HStack(spacing: 4) {
+            icon
+            Text(currentRef ?? baseBranch)
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-faint"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var iconOnlyView: some View {
+        icon
+    }
+
+    private var icon: some View {
+        Icon(name: "branch", size: 10, color: hovering ? theme.color("accent") : theme.color("fg-faint"))
     }
 
     private var filteredBranches: [String] {
