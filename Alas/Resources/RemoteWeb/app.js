@@ -3034,7 +3034,6 @@ function queueBadgeCount() {
 }
 
 function renderDriveBar(streamingState) {
-  if (currentSession) setDetailSubtitle(currentSession);
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
   // we actually own, and an empty bar strip shows before any state arrives.
@@ -3052,6 +3051,7 @@ function renderDriveBar(streamingState) {
   // the awaiting states, dismissing a prompt sheet would strand the user on
   // Send with no way to cancel the running turn.
   lastStreamingState = streamingState;
+  if (currentSession) setDetailSubtitle(currentSession);
   const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
   const action = composerAction(streamingState, hasText);
   $("send").classList.toggle("hidden", action !== "send");
