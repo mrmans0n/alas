@@ -124,7 +124,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                 state.clearRunHistory(worktreeID: worktree.id)
             }
         } message: {
-            Text("This clears completed runs for \(worktree.branch). Active runs keep running.")
+            Text("This clears completed runs for this worktree across all branches. Active runs keep running.")
         }
     }
 

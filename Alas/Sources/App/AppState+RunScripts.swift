@@ -595,18 +595,24 @@ extension AppState {
 
     func clearRunHistory(worktreeID: String) {
         let cutoff = Date()
-        transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
-        tabs.closeRunReports(worktreeId: worktreeID)
-        guard let runHistoryStore else { return }
+        guard let runHistoryStore else {
+            transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
+            tabs.closeRunReports(worktreeId: worktreeID)
+            return
+        }
         Task { @MainActor [weak self, runHistoryStore] in
-            await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
+            guard let self else { return }
+            await self.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
                 try await runHistoryStore.clear(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
-                self?.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
-                self?.durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
-                self?.noteRunHistoryChanged(worktreeID: worktreeID)
+                self.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                self.durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
+                self.transientRunReports = self.transientRunReports.filter { $0.value.worktreeID != worktreeID }
+                self.tabs.closeRunReports(worktreeId: worktreeID)
+                self.noteRunHistoryChanged(worktreeID: worktreeID)
             } catch {
-                self?.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
+                self.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
+                self.showFileActionError(title: "Run History Failed", message: "Could not clear run history: \(error.localizedDescription)")
             }
         }
     }
