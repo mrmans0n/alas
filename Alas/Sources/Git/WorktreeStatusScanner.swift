@@ -1,6 +1,6 @@
 import Foundation
 
-/// Computes `WorktreeStatus` by running `git status` across worktrees.
+/// Computes `WorktreeDirtyState` by running `git status` across worktrees.
 ///
 /// The parsing half is a pure static function so the porcelain format — which
 /// is where the bugs live — is testable without git, a filesystem, or a
@@ -11,7 +11,7 @@ enum WorktreeStatusScanner {
     /// Each record is `XY <path>` terminated by NUL. Rename and copy records
     /// carry the original path in a following NUL-terminated field, which is
     /// consumed without being counted as another changed file.
-    nonisolated static func parse(porcelainZ output: String) -> WorktreeStatus {
+    nonisolated static func parse(porcelainZ output: String) -> WorktreeDirtyState {
         var fields = output.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
         // git terminates the final record too, leaving a trailing empty field.
         if fields.last?.isEmpty == true { fields.removeLast() }

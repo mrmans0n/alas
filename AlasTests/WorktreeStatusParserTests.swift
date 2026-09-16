@@ -2,7 +2,7 @@ import Testing
 @testable import Alas
 
 struct WorktreeStatusParserTests {
-    private func parse(_ entries: [String]) -> WorktreeStatus {
+    private func parse(_ entries: [String]) -> WorktreeDirtyState {
         // git terminates every record with NUL, including the last.
         WorktreeStatusScanner.parse(porcelainZ: entries.map { $0 + "\0" }.joined())
     }

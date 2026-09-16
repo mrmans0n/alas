@@ -6,7 +6,9 @@ import Foundation
 /// field that was written once at construction and never updated, which is why
 /// the sidebar cannot trust it; this type exists so that mistake is not
 /// repeated. Recompute it — do not store it.
-enum WorktreeStatus: Equatable, Sendable {
+///
+/// Named to avoid colliding with the legacy `WorktreeStatus` in `GitTypes.swift`, the persisted-and-never-updated enum this type replaces in practice.
+enum WorktreeDirtyState: Equatable, Sendable {
     /// No scan has completed for this worktree yet.
     ///
     /// Renders identically to `clean` (nothing at all), but must stay a

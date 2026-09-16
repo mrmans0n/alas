@@ -13,9 +13,9 @@ import Observation
 final class WorktreeStatusStore {
     static let shared = WorktreeStatusStore()
 
-    private(set) var statuses: [String: WorktreeStatus] = [:]
+    private(set) var statuses: [String: WorktreeDirtyState] = [:]
 
-    func status(forPath path: String) -> WorktreeStatus {
+    func status(forPath path: String) -> WorktreeDirtyState {
         statuses[path] ?? .unknown
     }
 
@@ -24,7 +24,7 @@ final class WorktreeStatusStore {
     /// Merging rather than replacing keeps a partial scan — one project
     /// finished while another is still running, or a remote host skipped
     /// because it is offline — from blanking rows it never covered.
-    func apply(_ scanned: [String: WorktreeStatus]) {
+    func apply(_ scanned: [String: WorktreeDirtyState]) {
         guard !scanned.isEmpty else { return }
         var merged = statuses
         for (path, status) in scanned { merged[path] = status }
