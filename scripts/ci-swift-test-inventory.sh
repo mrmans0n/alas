@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'EOF'
-Usage: ci-swift-test-inventory.sh [--root PATH] [--quarantine PATH] (--validate | --batch N --batch-count N) [--lane ordinary|subprocess]
+Usage: ci-swift-test-inventory.sh [--root PATH] [--quarantine PATH] [--write-dir PATH] (--validate | --batch N --batch-count N) [--lane ordinary|subprocess]
 
 Discovers Swift Testing suites that contain @Test declarations. Every suite must
 be scheduled or listed in the quarantine file as: suite<TAB>reason.
@@ -14,6 +14,7 @@ EOF
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tests_root="${repo_root}/AlasTests"
 quarantine="${repo_root}/scripts/ci-swift-test-quarantine.tsv"
+write_dir=""
 mode=""
 batch=""
 batch_count=""
@@ -23,6 +24,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --root) tests_root="$2"; shift 2 ;;
         --quarantine) quarantine="$2"; shift 2 ;;
+        --write-dir) write_dir="$2"; shift 2 ;;
         --validate) mode="validate"; shift ;;
         --batch) batch="$2"; shift 2 ;;
         --batch-count) batch_count="$2"; shift 2 ;;
@@ -123,6 +125,13 @@ ordinary="$(wc -l < "${ordinary_file}" | tr -d ' ')"
 subprocess="$(wc -l < "${subprocess_file}" | tr -d ' ')"
 
 if [ "${mode}" = "validate" ]; then
+    if [ -n "${write_dir}" ]; then
+        mkdir -p "${write_dir}"
+        cp "${ordinary_file}" "${write_dir}/ordinary.txt"
+        cp "${subprocess_file}" "${write_dir}/subprocess.txt"
+        cp "${scheduled_file}" "${write_dir}/scheduled.txt"
+        cp "${quarantine_file}" "${write_dir}/quarantined.txt"
+    fi
     printf 'discovered=%s scheduled=%s ordinary=%s subprocess=%s quarantined=%s\n' \
         "${discovered}" "${scheduled}" "${ordinary}" "${subprocess}" "${quarantined}"
     exit 0

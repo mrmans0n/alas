@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 inventory="${repo_root}/scripts/ci-swift-test-inventory.sh"
+batch_runner="${repo_root}/scripts/ci-run-swift-test-batch.sh"
 sandbox="$(mktemp -d)"
 trap 'rm -rf "${sandbox}"' EXIT
 
@@ -76,6 +77,13 @@ printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/qu
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
 grep -qx 'discovered=8 scheduled=7 ordinary=4 subprocess=3 quarantined=1' <<<"${summary}"
 
+inventory_cache="${sandbox}/inventory-cache"
+cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
+grep -qx "${summary}" <<<"${cached_summary}"
+grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'BehaviorFixtureTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'QuarantinedTests' "${inventory_cache}/quarantined.txt"
+
 selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
         --batch 0 --batch-count 1
@@ -108,6 +116,31 @@ subprocess_selectors="$(
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
+
+mkdir -p "${sandbox}/bin"
+cat > "${sandbox}/bin/xcodebuild" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "${XCODEBUILD_LOG:?}"
+SH
+chmod +x "${sandbox}/bin/xcodebuild"
+
+ordinary_log="${sandbox}/ordinary-xcodebuild.log"
+env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
+    bash "${batch_runner}" 0 2
+grep -qx -- '-only-testing' "${ordinary_log}"
+grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
+if grep -q 'AlasTests/InlineSuiteTests' "${ordinary_log}"; then
+    echo 'cached ordinary batch used the wrong modulo assignment' >&2
+    exit 1
+fi
+
+subprocess_log="${sandbox}/subprocess-xcodebuild.log"
+env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${subprocess_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
+    bash "${batch_runner}" 0 2 subprocess
+grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"
 
 printf 'MissingTests\tno longer exists; #23\n' >> "${sandbox}/quarantine.tsv"
 if bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate > /dev/null 2>&1; then

@@ -9,9 +9,37 @@ result_dir="${repo_root}/.build/xcode/results"
 mkdir -p "${result_dir}"
 
 selectors=()
-while IFS= read -r selector; do
-    selectors+=("${selector}")
-done < <(bash "${repo_root}/scripts/ci-swift-test-inventory.sh" --batch "${batch}" --batch-count "${batch_count}" --lane "${lane}")
+inventory_dir="${SWIFT_TEST_INVENTORY_DIR:-}"
+if [ -n "${inventory_dir}" ]; then
+    case "${inventory_dir}" in
+        /*) ;;
+        *) inventory_dir="${repo_root}/${inventory_dir}" ;;
+    esac
+    inventory_file="${inventory_dir}/${lane}.txt"
+    [ -f "${inventory_file}" ] || {
+        echo "cached Swift test inventory does not exist: ${inventory_file}" >&2
+        exit 1
+    }
+    if [ "${lane}" = "subprocess" ]; then
+        while IFS= read -r suite; do
+            [ -n "${suite}" ] || continue
+            selectors+=( "-only-testing AlasTests/${suite}" )
+        done < "${inventory_file}"
+    else
+        selector_index=0
+        while IFS= read -r suite; do
+            [ -n "${suite}" ] || continue
+            if [ "$((selector_index % batch_count))" -eq "${batch}" ]; then
+                selectors+=( "-only-testing AlasTests/${suite}" )
+            fi
+            selector_index=$((selector_index + 1))
+        done < "${inventory_file}"
+    fi
+else
+    while IFS= read -r selector; do
+        selectors+=("${selector}")
+    done < <(bash "${repo_root}/scripts/ci-swift-test-inventory.sh" --batch "${batch}" --batch-count "${batch_count}" --lane "${lane}")
+fi
 
 [ "${#selectors[@]}" -gt 0 ] || {
     echo "batch ${batch} has no assigned suites" >&2

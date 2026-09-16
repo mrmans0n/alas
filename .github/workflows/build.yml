@@ -35,6 +35,7 @@ jobs:
       # forever waiting for stdin. Observed hanging WorktreeServiceTests'
       # `git branch --list` after `git branch -d`.
       GIT_PAGER: "cat"
+      SWIFT_TEST_INVENTORY_DIR: ".build/ci-swift-test-inventory"
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
@@ -283,7 +284,7 @@ jobs:
       # bounded batches. New ordinary suites therefore join PR CI without a
       # workflow edit; quarantines live beside their current rationale.
       - name: Validate Swift test inventory
-        run: bash scripts/ci-swift-test-inventory.sh --validate
+        run: bash scripts/ci-swift-test-inventory.sh --validate --write-dir "$SWIFT_TEST_INVENTORY_DIR"
 
       - name: Test — ordinary Swift batch 1/6
         timeout-minutes: 8
