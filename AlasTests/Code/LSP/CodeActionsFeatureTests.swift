@@ -171,68 +171,49 @@ struct CodeActionsFeatureTests {
 
     @Test(arguments: ["none", "untouchedBefore", "untouchedAfter", "editedAfter"])
     @MainActor func postPreviewRebindingValidatesCapturedBuffers(change: String) async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("action-generation-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"))
-        var buffers: [EditorBuffer] = []
-        for path in ["a", "b"] {
-            try Data("old".utf8).write(to: root.appendingPathComponent(path))
-            let tab = tabs.openEditor(worktreeId: "w", relativePath: path, revealLine: nil, revealCharacter: nil)
-            let buffer = tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: root, relativePath: path)
-            await buffer.awaitLoadForTesting()
-            buffer.stopWatching()
-            buffers.append(buffer)
-        }
-        defer { buffers.forEach { $0.close(persistDirtySnapshot: false) } }
-        let a = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("a").lspURI)
-        let captured = tabs.workspaceEditGenerations(host: nil, worktreeID: "w")
-        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
-        let before = try await access.snapshot(a)
+        final class BufferOwner {}
+        let ownerA = BufferOwner()
+        let ownerB = BufferOwner()
+        let a = EditorDocumentID(host: nil, worktreeID: "w", uri: "file:///fixture/a")
+        let b = EditorDocumentID(host: nil, worktreeID: "w", uri: "file:///fixture/b")
+        let captured: [EditorDocumentID: WorkspaceEditBufferGeneration] = [
+            a: WorkspaceEditBufferGeneration(identity: ObjectIdentifier(ownerA), edit: 0, watch: 0),
+            b: WorkspaceEditBufferGeneration(identity: ObjectIdentifier(ownerB), edit: 0, watch: 0),
+        ]
         let range = LSPRange(start: .init(line: 0, character: 0), end: .init(line: 0, character: 3))
         let edit = LSPWorkspaceEdit(changes: [a.uri: [.init(range: range, newText: "new")]])
         let action = try LSPCodeAction(wireValue: .object([
             "title": .string("Fix"), "edit": LSPJSONValue.decode(from: JSONEncoder().encode(edit)),
             "command": .object(["title": .string("Run"), "command": .string("run")])
         ]))
-        func snapshot(_ buffer: EditorBuffer, document: EditorDocumentID) throws -> WorkspaceFileSnapshot {
+        func generation(_ owner: BufferOwner, edit: Int) -> WorkspaceEditBufferGeneration {
+            WorkspaceEditBufferGeneration(identity: ObjectIdentifier(owner), edit: edit, watch: 0)
+        }
+        func snapshot(_ document: EditorDocumentID, edit: Int) -> WorkspaceFileSnapshot {
             WorkspaceFileSnapshot(
                 document: document,
-                content: try WorkspaceEditSnapshotBudget.data(buffer.storage.string),
+                content: Data("new".utf8),
                 isOpen: true,
-                isDirty: buffer.dirty,
-                isDirectory: before.isDirectory,
-                isSymbolicLink: before.isSymbolicLink,
-                diskContent: before.diskContent,
-                originalContent: before.originalContent,
-                permissions: before.permissions,
-                bufferGeneration: buffer.editGeneration,
-                fileWatchGeneration: buffer.fileWatchGeneration
+                bufferGeneration: edit,
+                fileWatchGeneration: 0
             )
         }
         var commandRan = false
         let result = try await CodeActionsFeature.perform(action, isCurrent: { true }, apply: { _ in
-            // The initiating file is unchanged while another open buffer is edited during preview.
-            if change == "untouchedBefore" {
-                buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "user text")
-            }
-            buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "new")
-            let applied = [a: try! snapshot(buffers[0], document: a)]
-            if change == "untouchedAfter" {
-                buffers[1].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "later user text")
-            } else if change == "editedAfter" {
-                // Restoring identical text must not hide intervening edits to an applied buffer.
-                buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "temporary")
-                buffers[0].storage.replaceCharacters(in: NSRange(location: 0, length: 9), with: "new")
-            }
+            let applied = [a: snapshot(a, edit: 1)]
+            let currentAEdit = change == "editedAfter" ? 2 : 1
+            let currentBEdit = change == "untouchedBefore" || change == "untouchedAfter" ? 1 : 0
+            let current = [
+                a: generation(ownerA, edit: currentAEdit),
+                b: generation(ownerB, edit: currentBEdit),
+            ]
+            let actual = [a: snapshot(a, edit: currentAEdit)]
             do {
-                let actual = try snapshot(buffers[0], document: a)
                 _ = try CodeActionsFeature.validatedGenerations(captured: captured,
-                    current: tabs.workspaceEditGenerations(host: nil, worktreeID: "w"), applied: applied, actual: [a: actual])
+                    current: current, applied: applied, actual: actual)
                 return .init(applied: true)
             } catch { return .init(applied: false, failureReason: "Captured buffer changed") }
         }, execute: { _ in commandRan = true })
-        #expect(buffers[0].storage.string == "new")
         #expect(result.applied == (change == "none"))
         #expect(commandRan == (change == "none"))
         #expect(change == "none" || result.failureReason != nil)

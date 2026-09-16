@@ -26,6 +26,12 @@ struct WorkspaceEditBufferGeneration: Equatable {
     let edit: Int
     let watch: Int
 
+    init(identity: ObjectIdentifier, edit: Int, watch: Int) {
+        self.identity = identity
+        self.edit = edit
+        self.watch = watch
+    }
+
     @MainActor init(_ buffer: EditorBuffer) {
         identity = ObjectIdentifier(buffer)
         edit = buffer.editGeneration
