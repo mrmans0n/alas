@@ -53,6 +53,10 @@ struct SidebarHeaderView: View {
     @Environment(\.theme) private var theme
     @State private var hovering = false
     @State private var addMenuHovered = false
+    /// `Menu` does not expose press state to its label, so both menu-backed
+    /// header controls track it with a simultaneous gesture, as the tab bar does.
+    @GestureState private var addMenuPressed = false
+    @GestureState private var compactMenuPressed = false
 
     static func showsAttentionBadge(count: Int) -> Bool { count > 0 }
 
@@ -107,14 +111,22 @@ struct SidebarHeaderView: View {
                         Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
                     } label: {
                         Icon(name: "folder-plus", size: 13, color: theme.color(addMenuHovered ? "fg" : "fg-muted"))
-                            .frame(width: 23, height: 23)
-                            .contentShape(Rectangle())
-                            .background(addMenuHovered ? theme.color("bg-3") : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .toolbarControlSurface(
+                                isLit: ToolbarMenuControlPresentation.isLit(
+                                    hovering: addMenuHovered,
+                                    isPressed: addMenuPressed
+                                ),
+                                metrics: .sidebarHeader
+                            )
+                            .toolbarMenuControlPressFeedback(isPressed: addMenuPressed)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .updating($addMenuPressed) { _, state, _ in state = true }
+                    )
                     .onHover { addMenuHovered = $0 }
                     .help("Add repository or workspace")
                     .accessibilityLabel("Add repository or workspace")
@@ -159,14 +171,23 @@ struct SidebarHeaderView: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(theme.color(addMenuHovered ? "fg" : "fg-muted"))
-                        .frame(width: 26, height: 22)
-                        .contentShape(Rectangle())
-                        .background(addMenuHovered ? theme.color("bg-3") : .clear)
-                        .clipShape(.rect(cornerRadius: 5))
+                        // Compact keeps `.standard` metrics: this row's controls
+                        // are sized for narrow sidebars, not E1's header band.
+                        .toolbarControlSurface(
+                            isLit: ToolbarMenuControlPresentation.isLit(
+                                hovering: addMenuHovered,
+                                isPressed: compactMenuPressed
+                            )
+                        )
+                        .toolbarMenuControlPressFeedback(isPressed: compactMenuPressed)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($compactMenuPressed) { _, state, _ in state = true }
+                )
                 .onHover { addMenuHovered = $0 }
                 .help("More sidebar actions")
                 .accessibilityLabel("More sidebar actions")

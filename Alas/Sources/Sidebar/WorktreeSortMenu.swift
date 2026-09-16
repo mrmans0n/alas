@@ -31,6 +31,9 @@ struct WorktreeSortMenu: View {
     @Environment(\.theme) private var theme
     @State private var hovering = false
     @State private var menuTracking = false
+    /// `Menu` does not expose press state to its label, so it is tracked by a
+    /// simultaneous gesture — the same approach the tab bar's menus use.
+    @GestureState private var isPressed = false
 
     nonisolated static func isVisible(
         headerHovered: Bool,
@@ -65,13 +68,20 @@ struct WorktreeSortMenu: View {
                 size: 13,
                 color: hovering ? theme.color("fg") : theme.color("fg-muted")
             )
-            .toolbarControlSurface(isLit: hovering, metrics: .sidebarHeader)
+            .toolbarControlSurface(
+                isLit: ToolbarMenuControlPresentation.isLit(hovering: hovering, isPressed: isPressed),
+                metrics: .sidebarHeader
+            )
+            .toolbarMenuControlPressFeedback(isPressed: isPressed)
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
         .onHover { hovering = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0).updating($isPressed) { _, state, _ in state = true }
+        )
         .simultaneousGesture(TapGesture().onEnded { menuTracking = true })
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
             menuTracking = false
