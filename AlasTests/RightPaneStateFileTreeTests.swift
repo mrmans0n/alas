@@ -672,7 +672,7 @@ struct RightPaneStateFileTreeTests {
         #expect(gen?.children?.map(\.path) == ["build/gen/keep.o"])
     }
 
-    @Test func replacingChildrenPreservesStatusMetadataForSurvivingChildren() {
+    @Test func replacingChildrenAppliesIncomingStatusMetadataForSurvivingChildren() {
         // An open, loaded tracked directory with a modified and an untracked
         // file — the badges/visibility come from the full-tree git status.
         let tree = [
@@ -713,7 +713,7 @@ struct RightPaneStateFileTreeTests {
                 path: "Sources/App.swift",
                 kind: .file,
                 children: nil,
-                badge: nil,
+                badge: "M",
                 visibility: .tracked,
                 childrenState: .loaded
             ),
@@ -722,8 +722,8 @@ struct RightPaneStateFileTreeTests {
                 path: "Sources/New.swift",
                 kind: .file,
                 children: nil,
-                badge: nil,
-                visibility: .tracked,
+                badge: "A",
+                visibility: .untracked,
                 childrenState: .loaded
             )
         ]
@@ -737,6 +737,48 @@ struct RightPaneStateFileTreeTests {
         #expect(app?.badge == "M")
         #expect(new?.badge == "A")
         #expect(new?.visibility == .untracked)
+    }
+
+    @Test func replacingChildrenClearsStaleStatusMetadataForSurvivingChildren() {
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated.swift",
+                        path: "build/Generated.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "M",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+        let incoming = [
+            FileTreeNode(
+                name: "Generated.swift",
+                path: "build/Generated.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "build", with: incoming, state: .loaded)
+        let file = result.nodes.first?.children?.first
+
+        #expect(result.didMerge)
+        #expect(file?.badge == nil)
+        #expect(file?.visibility == .ignored)
     }
 
     @Test func replacingChildrenDropsTrackedDeletionAbsentFromDiskListing() {
@@ -897,6 +939,17 @@ struct RightPaneStateFileTreeTests {
             in: tree,
             bookmarkReconciliationPaths: []
         ))
+    }
+
+    @Test func fileTreeBadgesUseLatestChangeStatusByPath() {
+        let badges = RightPaneState.fileTreeBadges(from: [
+            ChangedFile(path: "Sources/App.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil),
+            ChangedFile(path: "Sources/App.swift", status: "A", stage: .staged, add: 1, del: 0, renameFrom: nil),
+            ChangedFile(path: "README.md", status: "D", stage: .unstaged, add: 0, del: 1, renameFrom: nil)
+        ])
+
+        #expect(badges["Sources/App.swift"] == "A")
+        #expect(badges["README.md"] == "D")
     }
 
     @Test func fileTreeNodeFindsNestedNodeByPath() {

@@ -3139,7 +3139,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 let reconciled = children.map { incoming -> FileTreeNode in
                     guard let existing = existingByID[incoming.id] else { return incoming }
                     var refreshed = incoming
-                    refreshed.badge = incoming.badge ?? existing.badge
+                    refreshed.badge = incoming.badge
                     refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: incoming.visibility)
                     refreshed.isSubmodule = incoming.isSubmodule || existing.isSubmodule
                     refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: incoming.childrenState)
@@ -3231,7 +3231,11 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
             }
             do {
-                let children = try await git.fileTreeChildren(worktreePath: worktree.path, path: path)
+                let children = try await git.fileTreeChildren(
+                    worktreePath: worktree.path,
+                    path: path,
+                    badges: Self.fileTreeBadges(from: self.changes)
+                )
                 guard self.fileTreeGeneration == generation else { return }
                 // On the first load, merge so concurrent per-level loads (e.g. the
                 // reveal flow expanding several ancestors at once) accumulate.
@@ -3268,6 +3272,14 @@ final class RightPaneState: GGSplitCommitServicing {
         if bookmarkReconciliationPaths.contains(path) { return true }
         return fileTreeNode(at: path, in: nodes)
             .map { $0.childrenState == .loaded && $0.children != nil } ?? false
+    }
+
+    nonisolated static func fileTreeBadges(from changes: [ChangedFile]) -> [String: String] {
+        var badges: [String: String] = [:]
+        for change in changes {
+            badges[change.path] = change.status
+        }
+        return badges
     }
 
     /// Bookmark roots start expanded. Seeding once (rather than on every
