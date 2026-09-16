@@ -20,13 +20,16 @@ enum RunTabLoadingPresentation {
     static func acceptsHistoryLoadCompletion(
         requestedWorktreeID: String,
         requestedPageIndex: Int,
+        requestedRevision: Int,
         activeWorktreeID: String?,
         currentPageIndex: Int,
+        currentRevision: Int,
         isCancelled: Bool
     ) -> Bool {
         !isCancelled
             && activeWorktreeID == requestedWorktreeID
             && currentPageIndex == requestedPageIndex
+            && currentRevision == requestedRevision
     }
 }
 
@@ -356,10 +359,14 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             .padding(.horizontal, 12)
 
             if let historyError {
-                Text(historyError)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("warn"))
-                    .padding(.horizontal, 12)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(historyError)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                    Button("Retry") { Task { await loadHistory() } }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 12)
             } else if historyPage.entries.isEmpty {
                 Text("No completed runs yet")
                     .font(.system(size: 11))
@@ -430,6 +437,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     private func loadHistory() async {
         let requestedWorktreeID = worktree.id
         let requestedPageIndex = historyPageIndex
+        let requestedRevision = state.runHistoryRevision(worktreeID: requestedWorktreeID)
         guard let history = state.runHistoryStore else {
             historyError = "Run history storage is unavailable."
             historyPage = .init(entries: [], totalCount: 0)
@@ -441,8 +449,10 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
                 requestedWorktreeID: requestedWorktreeID,
                 requestedPageIndex: requestedPageIndex,
+                requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
+                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = nil
@@ -451,8 +461,10 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
                 requestedWorktreeID: requestedWorktreeID,
                 requestedPageIndex: requestedPageIndex,
+                requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
+                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = error.localizedDescription

@@ -108,22 +108,37 @@ struct RunTabPresentationTests {
         #expect(RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
             requestedWorktreeID: "wt-1",
             requestedPageIndex: 1,
+            requestedRevision: 2,
             activeWorktreeID: "wt-1",
             currentPageIndex: 1,
+            currentRevision: 2,
             isCancelled: false
         ))
         #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
             requestedWorktreeID: "wt-1",
             requestedPageIndex: 1,
+            requestedRevision: 2,
             activeWorktreeID: "wt-2",
             currentPageIndex: 1,
+            currentRevision: 2,
             isCancelled: false
         ))
         #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
             requestedWorktreeID: "wt-1",
             requestedPageIndex: 1,
+            requestedRevision: 2,
             activeWorktreeID: "wt-1",
             currentPageIndex: 0,
+            currentRevision: 2,
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            requestedWorktreeID: "wt-1",
+            requestedPageIndex: 1,
+            requestedRevision: 2,
+            activeWorktreeID: "wt-1",
+            currentPageIndex: 1,
+            currentRevision: 3,
             isCancelled: false
         ))
     }
