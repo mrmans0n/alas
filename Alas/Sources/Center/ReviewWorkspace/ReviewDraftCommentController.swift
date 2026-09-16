@@ -90,6 +90,7 @@ final class ReviewDraftCommentController {
             try store.save(comment)
             comments = ReviewDraftCommentPlacement.sorted(comments + [comment])
             errorMessage = nil
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -139,6 +140,7 @@ final class ReviewDraftCommentController {
             try store.delete(commentID: commentID, sessionID: sessionID)
             comments = updated
             errorMessage = nil
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
         } catch {
             comments = previous
             errorMessage = error.localizedDescription
@@ -155,6 +157,7 @@ final class ReviewDraftCommentController {
             try store.save(comment)
             comments = updated
             errorMessage = nil
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
         } catch {
             comments = previous
             errorMessage = error.localizedDescription

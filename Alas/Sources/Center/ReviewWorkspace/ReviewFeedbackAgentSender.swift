@@ -44,7 +44,11 @@ struct ReviewFeedbackAgentSender {
             availableTargets: {
                 var targets: [ReviewFeedbackAgentTarget] = []
 
-                let sessionTargets = appState.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ReviewFeedbackAgentTarget? in
+                var sessionTabs = appState.tabs.tabs(forWorktree: worktreeID)
+                if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
+                    sessionTabs += appState.tabs.tabs(for: .workspaceCheckout(checkout.id, checkout.executionLocation))
+                }
+                let sessionTargets = sessionTabs.compactMap { tab -> ReviewFeedbackAgentTarget? in
                     guard case .acpSession(let state) = tab,
                           let session = appState.session(for: state.sessionId),
                           appState.isWriter(for: state.sessionId)
@@ -66,13 +70,24 @@ struct ReviewFeedbackAgentSender {
             send: { prompt, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
+                    if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
+                        Task { @MainActor in
+                            let tab = await appState.openWorkspaceCheckoutACPSession(
+                                checkout: checkout, agentID: agentID, initialPrompt: prompt
+                            )
+                            completion(tab == nil ? .failure(ReviewFeedbackAgentSendError.rejected) : .success(()))
+                        }
+                        return
+                    }
                     if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: worktreeID) {
                         appState.focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
                     }
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
                     completion(.success(()))
                 case .existingSession(let targetWorktreeID, let sessionID, _):
-                    if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: targetWorktreeID) {
+                    if let owner = appState.session(for: sessionID)?.owner, case .workspaceCheckout = owner {
+                        appState.activateHarnessSession(owner: owner, sessionId: sessionID)
+                    } else if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: targetWorktreeID) {
                         appState.activateHarnessSession(
                             projectId: resolved.project.id,
                             worktreeId: targetWorktreeID,
@@ -96,6 +111,11 @@ struct ReviewFeedbackAgentSender {
                 }
             }
         )
+    }
+
+    private static func selectedCheckout(appState: AppState, worktreeID: String) -> WorkspaceCheckout? {
+        guard appState.checkoutFocusedWorktreeScope?.worktreeID == worktreeID else { return nil }
+        return appState.selectedWorkspaceCheckout
     }
 
     private static func projectAndWorktree(
