@@ -12,6 +12,7 @@ struct ACPTabView: View {
     let state: AppState
     let worktree: Worktree
     var owner: SessionOwnerID? = nil
+    var onOpenPreview: (() -> Void)? = nil
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
@@ -21,6 +22,7 @@ struct ACPTabView: View {
                 state: state,
                 worktree: worktree,
                 owner: owner,
+                onOpenPreview: onOpenPreview,
                 onStartupRecoveryReady: onStartupRecoveryReady,
                 manager: manager
             )
@@ -51,6 +53,7 @@ private struct ACPManagedTabView: View {
     let state: AppState
     let worktree: Worktree
     let owner: SessionOwnerID?
+    let onOpenPreview: (() -> Void)?
     let onStartupRecoveryReady: () -> Void
     @ObservedObject var manager: ACPSessionManager
 
@@ -61,6 +64,7 @@ private struct ACPManagedTabView: View {
                 state: state,
                 worktree: worktree,
                 owner: owner,
+                onOpenPreview: onOpenPreview,
                 manager: manager,
                 session: session,
                 onStartupRecoveryReady: onStartupRecoveryReady,
@@ -110,6 +114,7 @@ private struct ACPSessionView: View {
     let state: AppState
     let worktree: Worktree
     let owner: SessionOwnerID?
+    let onOpenPreview: (() -> Void)?
     let manager: ACPSessionManager
     @ObservedObject var session: ACPSession
     let onStartupRecoveryReady: () -> Void
@@ -151,7 +156,8 @@ private struct ACPSessionView: View {
                     agentLookup: { state.agent(id: $0) },
                     state: state,
                     worktree: worktree,
-                    owner: owner
+                    owner: owner,
+                    onOpenPreview: onOpenPreview
                 )
                 adapterBanner()
                 contextRestoreBanner()

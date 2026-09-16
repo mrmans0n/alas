@@ -660,6 +660,7 @@ struct CenterPaneView: View {
                             state: state,
                             worktree: worktree,
                             owner: activeSharedOwner,
+                            onOpenPreview: selectedCheckoutForSharedOwner == nil ? nil : { openWebPreview() },
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                             .id(s.id)
@@ -766,11 +767,6 @@ struct CenterPaneView: View {
                 }
                 .padding(12)
                 .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if selectedCheckoutForSharedOwner != nil {
-                    checkoutPreviewHeader
-                }
             }
         }
         .onAppear {
@@ -918,51 +914,15 @@ struct CenterPaneView: View {
         }
     }
 
-    private var checkoutPreviewHeader: some View {
-        HStack(spacing: 0) {
-            Button {
-                openWebPreview()
-            } label: {
-                HStack(spacing: 5) {
-                    Icon(name: "globe", size: 11)
-                    Text("Preview")
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                }
-                .frame(height: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .controlSize(.small)
-            .help("Open checkout web preview")
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.color("bg-2"))
-        .overlay(Divider().opacity(0.45), alignment: .bottom)
-    }
-
     private func openWebPreview() {
-        if let checkout = selectedCheckoutForSharedOwner {
-            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-            let tab = state.tabs.openWebPreview(owner: owner)
-            state.activateComposedCenterTab(
-                worktreeID: worktree.id,
-                sharedSessionOwner: owner,
-                tabID: tab.id
-            )
-        } else {
-            let tab = state.tabs.openWebPreview(
-                worktreeId: worktree.id,
-                remoteHost: state.webPreviewRemoteHost(for: worktree)
-            )
-            state.activateComposedCenterTab(
-                worktreeID: worktree.id,
-                sharedSessionOwner: sharedSessionOwner,
-                tabID: tab.id
-            )
-        }
+        guard let checkout = selectedCheckoutForSharedOwner else { return }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let tab = state.tabs.openWebPreview(owner: owner)
+        state.activateComposedCenterTab(
+            worktreeID: worktree.id,
+            sharedSessionOwner: owner,
+            tabID: tab.id
+        )
     }
 
     private var selectedCheckoutForSharedOwner: WorkspaceCheckout? {
