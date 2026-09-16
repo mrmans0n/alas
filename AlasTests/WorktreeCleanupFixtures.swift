@@ -10,6 +10,29 @@ struct WorktreeCleanupFixture {
     let project: ProjectConfig
     let worktrees: [Worktree]
     let repoPath: URL
+    let temporaryRoot: URL
+    let registeredWorktreePaths: [URL]
+    let attentionStoreURL: URL
+    let persistence: WorktreeCleanupMemoryStore
+
+    var persistenceReadPaths: Set<String> {
+        persistence.readPaths
+    }
+
+    func removeFiles() throws {
+        for path in registeredWorktreePaths {
+            WorktreeRegistrationLookup.shared.unregister(worktreePath: path)
+        }
+        try FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    func cleanUpAfterTest() {
+        do {
+            try removeFiles()
+        } catch {
+            Issue.record("Failed to remove cleanup fixture at \(temporaryRoot.path): \(error.localizedDescription)")
+        }
+    }
 }
 
 /// Builds a real temporary git repository with `worktreeCount` worktrees and
@@ -24,31 +47,69 @@ struct WorktreeCleanupFixture {
 func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixture {
     precondition(worktreeCount >= 1, "a fixture needs at least the main worktree")
 
-    let repoPath = FileManager.default.temporaryDirectory
+    let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("alas-cleanup-fixture-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: repoPath, withIntermediateDirectories: true)
-    _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoPath)
-    _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoPath)
+    let repoPath = temporaryRoot.appendingPathComponent("repo")
+    var registeredWorktreePaths: [URL] = []
+    let persistence = WorktreeCleanupMemoryStore()
+    let attentionStoreURL = temporaryRoot.appendingPathComponent("attention-events.json")
+    do {
+        try FileManager.default.createDirectory(at: repoPath, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoPath)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoPath)
 
-    let root = repoPath.deletingLastPathComponent()
-    for index in 1..<worktreeCount {
-        let branch = "feature-\(index)"
-        _ = try await Process.git(["branch", branch, "main"], cwd: repoPath)
-        let destination = root.appendingPathComponent("\(repoPath.lastPathComponent)-wt\(index)")
-        _ = try await Process.git(["worktree", "add", "-q", destination.path, branch], cwd: repoPath)
-        WorktreeRegistrationLookup.shared.register(worktreePath: destination, repoPath: repoPath)
+        for index in 1..<worktreeCount {
+            let branch = "feature-\(index)"
+            _ = try await Process.git(["branch", branch, "main"], cwd: repoPath)
+            let destination = temporaryRoot.appendingPathComponent("worktree-\(index)")
+            _ = try await Process.git(["worktree", "add", "-q", destination.path, branch], cwd: repoPath)
+            WorktreeRegistrationLookup.shared.register(worktreePath: destination, repoPath: repoPath)
+            registeredWorktreePaths.append(destination)
+        }
+
+        let state = AppState(
+            store: persistence,
+            attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence)
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repoPath,
+            displayName: "cleanup-fixture",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktrees = state.projectsManager.worktrees(projectId: project.id)
+
+        return WorktreeCleanupFixture(
+            state: state,
+            project: project,
+            worktrees: worktrees,
+            repoPath: repoPath,
+            temporaryRoot: temporaryRoot,
+            registeredWorktreePaths: registeredWorktreePaths,
+            attentionStoreURL: attentionStoreURL,
+            persistence: persistence
+        )
+    } catch {
+        for path in registeredWorktreePaths {
+            WorktreeRegistrationLookup.shared.unregister(worktreePath: path)
+        }
+        try? FileManager.default.removeItem(at: temporaryRoot)
+        throw error
     }
+}
 
-    let state = AppState()
-    let project = try await state.projectsManager.addProject(
-        path: repoPath,
-        displayName: "cleanup-fixture",
-        color: "#5fb7c4"
-    )
-    try await state.projectsManager.refreshWorktrees(projectId: project.id)
-    let worktrees = state.projectsManager.worktrees(projectId: project.id)
+final class WorktreeCleanupMemoryStore: PersistenceStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    fileprivate(set) var readPaths: Set<String> = []
 
-    return WorktreeCleanupFixture(state: state, project: project, worktrees: worktrees, repoPath: repoPath)
+    func write<T: Encodable>(_: T, to _: URL) throws {}
+
+    func readIfExists<T: Decodable>(_: T.Type, from url: URL) throws -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        readPaths.insert(url.path)
+        nil
+    }
 }
 
 /// Thread-safe lookup from a worktree's on-disk path to the repository that
@@ -87,6 +148,12 @@ private final class WorktreeRegistrationLookup: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return repoPathsByWorktreePath[normalizedKey(for: worktreePath)]
+    }
+
+    func unregister(worktreePath: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        repoPathsByWorktreePath.removeValue(forKey: normalizedKey(for: worktreePath))
     }
 }
 

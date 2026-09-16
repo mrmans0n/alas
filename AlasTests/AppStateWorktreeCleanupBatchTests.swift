@@ -7,6 +7,7 @@ import Foundation
 struct AppStateWorktreeCleanupBatchTests {
     @Test func mainWorktreeIsSkippedAndNeverDeleted() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let main = fixture.worktrees[0]   // fixture marks index 0 as main
 
         let results = await fixture.state.batchDeleteWorktrees(
@@ -23,6 +24,7 @@ struct AppStateWorktreeCleanupBatchTests {
 
     @Test func oneFailingItemDoesNotAbortTheBatch() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())   // skip main
 
         // Remove the second target's directory out from under git so its
@@ -42,6 +44,7 @@ struct AppStateWorktreeCleanupBatchTests {
 
     @Test func everySelectedItemGetsItsOwnResult() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())
 
         let results = await fixture.state.batchDeleteWorktrees(
@@ -58,6 +61,7 @@ struct AppStateWorktreeCleanupBatchTests {
     /// force-delete alert.
     @Test func dirtyWorktreeReportsNeedsForceWithoutRaisingTheForceAlert() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
         try "scratch".write(
             to: target.path.appendingPathComponent("untracked.txt"),
@@ -76,6 +80,7 @@ struct AppStateWorktreeCleanupBatchTests {
 
     @Test func batchDeleteFailsWhenCheckpointRecoveryIsPending() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
         let lineageID = try #require(target.lineageID)
         let store = WorktreeCheckpointStore()
@@ -103,6 +108,7 @@ struct AppStateWorktreeCleanupBatchTests {
     /// the selection stays pinned to a worktree that no longer exists.
     @Test func selectionIsReconciledAfterBatchDeletesTheSelectedWorktree() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())
         fixture.state.selectWorktree(id: targets[0].id)
         #expect(fixture.state.selectedWorktreeId == targets[0].id)
@@ -126,6 +132,7 @@ struct AppStateWorktreeCleanupBatchTests {
     /// must re-read the current branch immediately before removal.
     @Test func batchSkipsAWorktreeWhoseBranchChangedSinceTheScan() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
 
         // Simulate an external actor detaching HEAD in this worktree after
@@ -141,6 +148,7 @@ struct AppStateWorktreeCleanupBatchTests {
 
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let before = fixture.state.projectsManager
             .worktrees(projectId: fixture.project.id).count
 
