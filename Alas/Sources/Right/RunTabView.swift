@@ -47,7 +47,7 @@ struct RunTabView: View {
                 scannedWorktreeID: scannedWorktreeID,
                 worktreeID: worktree.id
             ) {
-                RunTabLoadingView()
+                RightPaneLoadingSkeletonView(activeTab: .run)
             } else if displayedScripts.isEmpty, let scriptCatalogError {
                 errorState(scriptCatalogError)
             } else if displayedScripts.isEmpty {
@@ -307,57 +307,6 @@ struct RunTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-error-state")
-    }
-}
-
-private struct RunTabLoadingView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RunLoadingSection(rowWidths: [0.58, 0.72, 0.46])
-            RunLoadingSection(rowWidths: [0.64, 0.50])
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading run scripts")
-    }
-}
-
-private struct RunLoadingSection: View {
-    let rowWidths: [CGFloat]
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                RunLoadingBar(width: 66, height: 9)
-                RunLoadingBar(width: 16, height: 12)
-                Spacer(minLength: 8)
-            }
-            .paneBand(fill: theme.color("section-head-bg"))
-
-            ForEach(rowWidths.indices, id: \.self) { index in
-                HStack(spacing: 6) {
-                    Circle().fill(theme.color("fg-faint").opacity(0.3)).frame(width: 8, height: 8)
-                    RunLoadingBar(width: 140 * rowWidths[index], height: 8)
-                    Spacer(minLength: 8)
-                    RunLoadingBar(width: 36, height: 8)
-                }
-            }
-        }
-        .padding(.bottom, 10)
-    }
-}
-
-private struct RunLoadingBar: View {
-    let width: CGFloat
-    let height: CGFloat
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        Capsule()
-            .fill(theme.color("fg-faint").opacity(0.3))
-            .frame(width: width, height: height)
     }
 }
 
