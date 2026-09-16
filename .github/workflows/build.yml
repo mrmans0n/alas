@@ -76,6 +76,9 @@ jobs:
       - name: Check formatting
         run: swiftformat Alas AlasTests --lint --reporter github-actions-log
 
+      - name: Test Swift test inventory harness
+        run: bash scripts/tests/swift-test-inventory/run.sh
+
       - name: Test build-ghostty.sh harness
         run: bash scripts/tests/build-ghostty/run.sh
 

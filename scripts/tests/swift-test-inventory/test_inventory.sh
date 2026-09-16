@@ -38,10 +38,17 @@ import Testing
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/InlineNamedSuiteTests.swift" <<'SWIFT'
+import Testing
+
+@Suite("Inline suite") struct InlineNamedSuiteTests {
+    @Test func ordinary() {}
+}
+SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=4 scheduled=3 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=5 scheduled=4 quarantined=1' <<<"${summary}"
 
 selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
@@ -50,6 +57,7 @@ selectors="$(
 grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
 if grep -q 'QuarantinedTests' <<<"${selectors}"; then
     echo 'quarantined suite was scheduled' >&2
     exit 1
