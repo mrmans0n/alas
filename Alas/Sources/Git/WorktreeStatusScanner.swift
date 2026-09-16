@@ -35,7 +35,7 @@ actor WorktreeStatusScanner {
     /// running pass repeats once when it finishes.
     func scan(paths: [URL]) async {
         guard !isScanning else {
-            pendingPaths = paths
+            pendingPaths = mergedPaths(pendingPaths, with: paths)
             rescanRequested = true
             return
         }
@@ -52,6 +52,15 @@ actor WorktreeStatusScanner {
                 self.pendingPaths = nil
             }
         } while rescanRequested
+    }
+
+    private func mergedPaths(_ current: [URL]?, with incoming: [URL]) -> [URL] {
+        guard var merged = current else { return incoming }
+        var seen = Set(merged.map(\.path))
+        for path in incoming where seen.insert(path.path).inserted {
+            merged.append(path)
+        }
+        return merged
     }
 
     /// Runs at most `maxConcurrentScans` git processes at a time.

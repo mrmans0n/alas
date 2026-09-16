@@ -603,7 +603,10 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         }
         remoteEventDebouncer.onFire = { [weak self] in
-            Task { @MainActor in await self?.refresh() }
+            Task { @MainActor in
+                self?.worktreeDidChange?()
+                await self?.refresh()
+            }
         }
     }
 

@@ -100,4 +100,29 @@ struct WorktreeStatusStoreTests {
 
         #expect(await probe.recordedCalls() == [["/old"], ["/new"]])
     }
+
+    @Test func coalescedScanMergesPendingPathSets() async {
+        let probe = ScanProbe()
+        let scanner = WorktreeStatusScanner { paths in
+            await probe.record(paths: paths)
+        }
+
+        let firstPath = URL(fileURLWithPath: "/old")
+        let broadPath = URL(fileURLWithPath: "/new-worktree")
+        let activePath = URL(fileURLWithPath: "/active-worktree")
+        let scanTask = Task {
+            await scanner.scan(paths: [firstPath])
+        }
+
+        await probe.waitUntilFirstScanStarts()
+        await scanner.scan(paths: [broadPath, activePath])
+        await scanner.scan(paths: [activePath])
+        await probe.releaseFirstScan()
+        await scanTask.value
+
+        #expect(await probe.recordedCalls() == [
+            ["/old"],
+            ["/new-worktree", "/active-worktree"],
+        ])
+    }
 }
