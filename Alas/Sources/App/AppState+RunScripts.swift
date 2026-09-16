@@ -574,7 +574,9 @@ extension AppState {
     func openTransientRunReport(_ entry: RunHistoryEntry) {
         transientRunReports[runReportKey(worktreeID: entry.worktreeID, runID: entry.id)] = entry
         noteRunHistoryChanged(worktreeID: entry.worktreeID)
-        openRunReport(worktreeID: entry.worktreeID, runID: entry.id)
+        let tab = tabs.openOrFocusRunReport(worktreeId: entry.worktreeID, runID: entry.id, isTransient: true)
+        activateWorktreeCenterTab(worktreeId: entry.worktreeID, tabId: tab.id)
+        acknowledgeAttentionSurface(worktreeID: entry.worktreeID, target: .runScriptFailure(failureID: entry.id))
     }
 
     func transientRunReport(worktreeID: String, runID: String) -> RunHistoryEntry? {

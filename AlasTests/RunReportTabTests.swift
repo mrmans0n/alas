@@ -16,6 +16,35 @@ struct RunReportTabTests {
         #expect(tab.isRestorable)
     }
 
+    @Test func transientReportTabsDoNotRestore() throws {
+        let state = RunReportTabState(worktreeId: "wt-1", runID: "legacy", isTransient: true)
+        let tab = Tab.runReport(state)
+
+        let restored = try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(tab))
+
+        #expect(restored == tab)
+        #expect(!tab.isRestorable)
+    }
+
+    @Test func savedReportTabsWithoutTransientFlagDecodeAsRestorable() throws {
+        let data = Data("""
+        {
+          "runReport": {
+            "_0": {
+              "id": "run-report:run-1",
+              "worktreeId": "wt-1",
+              "runID": "run-1"
+            }
+          }
+        }
+        """.utf8)
+
+        let restored = try JSONDecoder().decode(Tab.self, from: data)
+
+        #expect(restored == .runReport(RunReportTabState(worktreeId: "wt-1", runID: "run-1")))
+        #expect(restored.isRestorable)
+    }
+
     @Test func openingSameReportFocusesOneTab() {
         let worktreeID = "run-report-focus-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID)) }

@@ -113,6 +113,7 @@ enum Tab: Codable, Equatable, Identifiable {
     }
 
     var isRestorable: Bool {
+        if case .runReport(let state) = self { return !state.isTransient }
         if case .ggLanding = self { return false }
         return true
     }
@@ -199,13 +200,30 @@ struct RunReportTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
     let runID: String
+    let isTransient: Bool
 
     var title: String { "Run Report" }
 
-    init(worktreeId: String, runID: String) {
+    init(worktreeId: String, runID: String, isTransient: Bool = false) {
         self.worktreeId = worktreeId
         self.runID = runID
+        self.isTransient = isTransient
         id = "run-report:\(runID)"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case runID
+        case isTransient
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        runID = try container.decode(String.self, forKey: .runID)
+        isTransient = try container.decodeIfPresent(Bool.self, forKey: .isTransient) ?? false
     }
 }
 

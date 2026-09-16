@@ -1174,8 +1174,8 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusRunReport(worktreeId: String, runID: String) -> Tab {
-        let state = RunReportTabState(worktreeId: worktreeId, runID: runID)
+    func openOrFocusRunReport(worktreeId: String, runID: String, isTransient: Bool = false) -> Tab {
+        let state = RunReportTabState(worktreeId: worktreeId, runID: runID, isTransient: isTransient)
         if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
             activate(worktreeId: worktreeId, tabId: state.id)
             return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .runReport(state)
