@@ -217,7 +217,7 @@ struct WorktreeRowView: View {
     var body: some View {
         let status = Self.statusPresentation(
             harnessState: harnessSummary?.state,
-            worktreeStatus: .unknown
+            worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path)
         )
         ZStack(alignment: .leading) {
             if isSelected {

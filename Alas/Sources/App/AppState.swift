@@ -11230,6 +11230,22 @@ extension AppState: RemoteSessionsProvider {
 
     private func remoteWorktreeOption(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeOption {
         let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
+        // Remote status rides the summary pipeline rather than per-worktree SSH
+        // calls. Hosts currently offline are skipped, leaving the previous
+        // value in place rather than blanking the row. An unavailable metric
+        // is skipped too, rather than written as `.clean`.
+        if summary.metricsAvailable {
+            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+            if !isOfflineHost {
+                let remoteStatus: WorktreeDirtyState = summary.changedFileCount == 0
+                    ? .clean
+                    : .dirty(
+                        fileCount: summary.changedFileCount,
+                        conflictCount: summary.conflictCount
+                    )
+                WorktreeStatusStore.shared.apply([worktree.path.path: remoteStatus])
+            }
+        }
         return RemoteWorktreeOption(
             id: worktree.id,
             projectName: summary.projectName,
