@@ -650,6 +650,7 @@ function resetChangesAndFilesDOM() {
   $("file-error").textContent = ""; $("file-error").classList.add("hidden");
   $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
   $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
+  $("tab-changes-count").classList.add("hidden");
 }
 
 function openSession(id) {
@@ -743,6 +744,7 @@ $("tab-files").addEventListener("click", () => showTab("files"));
 $("changes-refresh").addEventListener("click", requestChanges);
 
 function renderChanges() {
+  updateChangesTabBadge();
   const list = $("changes-list");
   list.innerHTML = "";
   $("changes-summary").textContent = changesState.loaded
@@ -794,7 +796,6 @@ function renderChanges() {
   const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
   if (notice) list.append(el("p", "placeholder-card", notice));
   if (changesState.commitsTruncated) list.append(el("p", "placeholder-card", "Commit list truncated — showing the first 100 commits."));
-  updateChangesTabBadge();
 }
 
 function updateChangesTabBadge() {
