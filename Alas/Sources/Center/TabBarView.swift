@@ -396,10 +396,6 @@ private struct AgentSparkleMenu: View {
     let acpAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
-    @Environment(\.theme) var theme
-    @State private var hovering = false
-    @GestureState private var isPressed = false
-
     var body: some View {
         Menu {
             if agents.isEmpty && acpAgents.isEmpty {
@@ -437,22 +433,11 @@ private struct AgentSparkleMenu: View {
                 }
             }
         } label: {
-            Icon(name: "sparkle", size: 13,
-                 color: hovering ? theme.color("fg") : theme.color("fg-faint"))
-                .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
-                    hovering: hovering,
-                    isPressed: isPressed
-                ))
-                .toolbarMenuControlPressFeedback(isPressed: isPressed)
+            ToolbarMenuIconLabel(iconName: "sparkle")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .updating($isPressed) { _, state, _ in state = true }
-        )
-        .onHover { hovering = $0 }
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
     }
 }
@@ -464,10 +449,6 @@ private struct RunScriptMenu: View {
     let onRestart: (RunScript) -> Void
     let onNew: (RunScriptScope) -> Void
     let onEdit: () -> Void
-    @Environment(\.theme) var theme
-    @State private var hovering = false
-    @GestureState private var isPressed = false
-
     var body: some View {
         Menu {
             // Menu content closures are evaluated when the menu opens, so
@@ -503,23 +484,40 @@ private struct RunScriptMenu: View {
             Button("New Global Script…") { onNew(.global) }
             Button("Edit Scripts…") { onEdit() }
         } label: {
-            Icon(name: "play", size: 13,
-                 color: hovering ? theme.color("fg") : theme.color("fg-faint"))
-                .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
-                    hovering: hovering,
-                    isPressed: isPressed
-                ))
-                .toolbarMenuControlPressFeedback(isPressed: isPressed)
+            ToolbarMenuIconLabel(iconName: "play")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .help("Run script (⌘R)")
+    }
+}
+
+/// `Menu` owns an AppKit control, so interaction modifiers on the menu itself
+/// do not reliably receive pointer state. Keep the visual surface in its
+/// SwiftUI label, alongside the hover and press tracking that drive it.
+private struct ToolbarMenuIconLabel: View {
+    let iconName: String
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+    @GestureState private var isPressed = false
+
+    var body: some View {
+        Icon(
+            name: iconName,
+            size: 13,
+            color: hovering ? theme.color("fg") : theme.color("fg-faint")
+        )
+        .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
+            hovering: hovering,
+            isPressed: isPressed
+        ))
+        .toolbarMenuControlPressFeedback(isPressed: isPressed)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .updating($isPressed) { _, state, _ in state = true }
         )
         .onHover { hovering = $0 }
-        .help("Run script (⌘R)")
     }
 }
 

@@ -39,8 +39,19 @@ extension ButtonStyle where Self == ToolbarControlPressStyle {
 /// Presentation state shared by menu-backed toolbar controls. Unlike buttons,
 /// `Menu` does not expose `ButtonStyleConfiguration.isPressed` to its label.
 enum ToolbarMenuControlPresentation {
+    enum InteractionState: Equatable {
+        case idle
+        case hovering
+        case pressed
+    }
+
+    static func interactionState(hovering: Bool, isPressed: Bool) -> InteractionState {
+        if isPressed { return .pressed }
+        return hovering ? .hovering : .idle
+    }
+
     static func isLit(hovering: Bool, isPressed: Bool) -> Bool {
-        hovering || isPressed
+        interactionState(hovering: hovering, isPressed: isPressed) != .idle
     }
 }
 
