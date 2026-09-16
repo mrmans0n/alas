@@ -16,11 +16,27 @@
 
 ## Before finishing a change
 
-```bash
-xcodegen
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -quiet build
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
-```
+- For documentation-only changes, do not build or run tests.
+- If `project.yml` changed, run `xcodegen` and commit both `project.yml` and the generated Xcode project.
+- For code changes, run only the affected test suites or individual tests locally whenever possible:
+
+  ```bash
+  xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
+    -only-testing AlasTests/<SuiteName> test
+  ```
+
+- If no focused test covers the change, run the build locally:
+
+  ```bash
+  xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -quiet build
+  ```
+
+- Do not run the entire test plan locally by default. CI owns repository-wide configured validation. Run broader local tests only when CI does not cover the affected behavior, the change is too cross-cutting for a reliable targeted selection, or the user requests it.
+- Report exactly which local checks ran. Do not claim CI is green unless its current run completed successfully.
+
+## Pull request shepherding
+
+- Use the repo-scoped `lassie` skill when asked to babysit, shepherd, finish, or land a pull request.
 
 ## Shared GhosttyKit cache
 
