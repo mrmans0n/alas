@@ -1402,6 +1402,13 @@ final class RightPaneState: GGSplitCommitServicing {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             bookmarkReconciliationPaths = Set(preservedLazyPaths)
+            let reconciliationBookkeeping = Self.bookkeepingAfterPublishingReconciliationPaths(
+                loaded: loadedFileTreeChildPaths,
+                loading: loadingFileTreeChildPaths,
+                reconciliationPaths: bookmarkReconciliationPaths
+            )
+            loadedFileTreeChildPaths = reconciliationBookkeeping.loaded
+            loadingFileTreeChildPaths = reconciliationBookkeeping.loading
             fileTreeRefreshRevision &+= 1
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
@@ -3214,7 +3221,8 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func loadFileTreeChildren(path: String) {
-        guard !loadedFileTreeChildPaths.contains(path),
+        let reconcilesBookmark = bookmarkReconciliationPaths.contains(path)
+        guard (!loadedFileTreeChildPaths.contains(path) || reconcilesBookmark),
               !loadingFileTreeChildPaths.contains(path) else { return }
         loadingFileTreeChildPaths.insert(path)
         // A directory whose children were carried over from a previous load
@@ -3238,6 +3246,7 @@ final class RightPaneState: GGSplitCommitServicing {
             fileTree = loadingMerge.nodes
         }
         let generation = fileTreeGeneration
+        let refreshRevision = fileTreeRefreshRevision
         Task { @MainActor in
             defer {
                 if self.fileTreeGeneration == generation {
@@ -3251,6 +3260,10 @@ final class RightPaneState: GGSplitCommitServicing {
                     badges: Self.fileTreeBadges(from: self.changes)
                 )
                 guard self.fileTreeGeneration == generation else { return }
+                guard Self.shouldPublishFileTreeChildLoad(
+                    startedAtRefreshRevision: refreshRevision,
+                    currentRefreshRevision: self.fileTreeRefreshRevision
+                ) else { return }
                 // On the first load, merge so concurrent per-level loads (e.g. the
                 // reveal flow expanding several ancestors at once) accumulate.
                 // When reconciling an already-loaded directory, rebuild its child
@@ -3275,6 +3288,10 @@ final class RightPaneState: GGSplitCommitServicing {
                 self.fileTree = result.nodes
             } catch {
                 guard self.fileTreeGeneration == generation else { return }
+                guard Self.shouldPublishFileTreeChildLoad(
+                    startedAtRefreshRevision: refreshRevision,
+                    currentRefreshRevision: self.fileTreeRefreshRevision
+                ) else { return }
                 let result = Self.mergingChildren(in: self.fileTree, for: path, with: [], state: .failed)
                 guard result.didMerge else { return }
                 self.failedFileTreeChildPaths.insert(path)
@@ -3304,6 +3321,24 @@ final class RightPaneState: GGSplitCommitServicing {
 
     nonisolated static func fileTreeDeletedPaths(from changes: [ChangedFile]) -> Set<String> {
         Set(changes.filter { $0.status == "D" }.map(\.path))
+    }
+
+    nonisolated static func bookkeepingAfterPublishingReconciliationPaths(
+        loaded: Set<String>,
+        loading: Set<String>,
+        reconciliationPaths: Set<String>
+    ) -> (loaded: Set<String>, loading: Set<String>) {
+        (
+            loaded.subtracting(reconciliationPaths),
+            loading.subtracting(reconciliationPaths)
+        )
+    }
+
+    nonisolated static func shouldPublishFileTreeChildLoad(
+        startedAtRefreshRevision: Int,
+        currentRefreshRevision: Int
+    ) -> Bool {
+        startedAtRefreshRevision == currentRefreshRevision
     }
 
     /// Bookmark roots start expanded. Seeding once (rather than on every

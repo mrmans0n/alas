@@ -233,6 +233,28 @@ struct RightPaneStateFileTreeTests {
         #expect(state.failedFileTreeChildPaths.isEmpty)
     }
 
+    @Test func publishingReconciliationPathsReopensLoadedAndLoadingPaths() {
+        let bookkeeping = RightPaneState.bookkeepingAfterPublishingReconciliationPaths(
+            loaded: ["", "build", "Sources"],
+            loading: ["build/cache", "docs"],
+            reconciliationPaths: ["build", "build/cache"]
+        )
+
+        #expect(bookkeeping.loaded == ["", "Sources"])
+        #expect(bookkeeping.loading == ["docs"])
+    }
+
+    @Test func staleRefreshRevisionChildLoadsDoNotPublish() {
+        #expect(RightPaneState.shouldPublishFileTreeChildLoad(
+            startedAtRefreshRevision: 3,
+            currentRefreshRevision: 3
+        ))
+        #expect(!RightPaneState.shouldPublishFileTreeChildLoad(
+            startedAtRefreshRevision: 3,
+            currentRefreshRevision: 4
+        ))
+    }
+
     @Test func publishingAFileTreeAdvancesItsRevision() {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-filetree-revision-\(UUID().uuidString)")
