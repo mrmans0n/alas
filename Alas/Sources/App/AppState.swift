@@ -1975,13 +1975,13 @@ final class AppState {
         _ = saveSpaces()
     }
 
-    func selectWorktree(id: String?) {
+    func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
         workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
-        rescanWorktreeStatuses()
+        rescanWorktreeStatuses(includeRemote: includeRemoteStatus)
         if let id,
            let resolved = projectAndWorktree(withWorktreeId: id),
            resolved.project.host != nil {
@@ -1996,8 +1996,8 @@ final class AppState {
         acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
     }
 
-    func selectInitialWorktree(id: String?) {
-        selectWorktree(id: id)
+    func selectInitialWorktree(id: String?, includeRemoteStatus: Bool = true) {
+        selectWorktree(id: id, includeRemoteStatus: includeRemoteStatus)
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
@@ -4898,6 +4898,11 @@ final class AppState {
     func unarchiveWorktree(projectId: String, path: URL) {
         projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
         saveProjects()
+        if let restored = projectsManager.visibleWorktrees(projectId: projectId).first(where: {
+            Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(path.path)
+        }) {
+            rescanWorktreeStatus(worktreeId: restored.id)
+        }
     }
 
     /// Live sessions attached to a worktree's open terminal/ACP tabs, counted
