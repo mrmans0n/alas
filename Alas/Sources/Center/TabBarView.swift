@@ -398,7 +398,7 @@ private struct AgentSparkleMenu: View {
     let onLaunchACPSession: (String) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
-    @State private var isPressed = false
+    @GestureState private var isPressed = false
 
     var body: some View {
         Menu {
@@ -450,8 +450,7 @@ private struct AgentSparkleMenu: View {
         .fixedSize()
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
+                .updating($isPressed) { _, state, _ in state = true }
         )
         .onHover { hovering = $0 }
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
@@ -467,7 +466,7 @@ private struct RunScriptMenu: View {
     let onEdit: () -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
-    @State private var isPressed = false
+    @GestureState private var isPressed = false
 
     var body: some View {
         Menu {
@@ -517,8 +516,7 @@ private struct RunScriptMenu: View {
         .fixedSize()
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
+                .updating($isPressed) { _, state, _ in state = true }
         )
         .onHover { hovering = $0 }
         .help("Run script (⌘R)")
