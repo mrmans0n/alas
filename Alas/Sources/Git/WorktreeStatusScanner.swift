@@ -16,6 +16,7 @@ actor WorktreeStatusScanner {
 
     /// Per-worktree ceiling. A pathological repo should not stall the pass.
     static let perScanTimeout: TimeInterval = 10
+    static let statusArguments = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
 
     private var isScanning = false
     private var rescanRequested = false
@@ -94,7 +95,7 @@ actor WorktreeStatusScanner {
         // usesRemoteHostRegistry: false keeps this scanner strictly local —
         // remote worktrees are fed from the remote summary pipeline instead.
         guard let result = try? await Process.git(
-            ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            statusArguments,
             cwd: path,
             usesRemoteHostRegistry: false,
             timeout: perScanTimeout

@@ -11,6 +11,10 @@ struct WorktreeStatusParserTests {
         #expect(WorktreeStatusScanner.parse(porcelainZ: "") == .clean)
     }
 
+    @Test func scannerRequestsIndividualUntrackedFiles() {
+        #expect(WorktreeStatusScanner.statusArguments.contains("--untracked-files=all"))
+    }
+
     @Test func countsOneEntryPerChangedPath() {
         #expect(parse([" M a.swift", "?? b.swift", "A  c.swift"])
             == .dirty(fileCount: 3, conflictCount: 0))

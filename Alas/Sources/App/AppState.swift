@@ -1401,6 +1401,8 @@ final class AppState {
                 }
             }
             var results: [String: WorktreeDirtyState] = [:]
+            var targetedGenerationsByPath: [String: Int] = [:]
+            var targetedGenerationKeysByPath: [String: String] = [:]
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
@@ -1408,6 +1410,13 @@ final class AppState {
                 case .creating, .deleting, .createFailed:
                     continue
                 case nil, .preparingDelete, .deleteFailed:
+                    let worktreeGenerationKey = remoteWorktreeStatusRescanKey(
+                        projectID: project.id,
+                        worktreeID: worktree.id
+                    )
+                    targetedGenerationKeysByPath[worktree.path.path] = worktreeGenerationKey
+                    targetedGenerationsByPath[worktree.path.path] =
+                        remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] ?? 0
                     guard let state = await remoteWorktreeDirtyState(worktree: worktree) else { continue }
                     results[worktree.path.path] = state
                 }
@@ -1415,25 +1424,27 @@ final class AppState {
             guard !Task.isCancelled,
                   self.remoteWorktreeStatusRescanGenerations[project.id] == generation
             else { return }
-            WorktreeStatusStore.shared.apply(results)
+            let currentResults = results.filter { path, _ in
+                let currentGeneration = targetedGenerationsByPath[path] ?? 0
+                guard let worktreeGenerationKey = targetedGenerationKeysByPath[path] else { return true }
+                return self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] ?? 0 == currentGeneration
+            }
+            WorktreeStatusStore.shared.apply(currentResults)
         }
     }
 
     private func enqueueRemoteWorktreeStatusRescan(project: ProjectConfig, worktree: Worktree) {
-        let projectGeneration = (remoteWorktreeStatusRescanGenerations[project.id] ?? 0) + 1
-        remoteWorktreeStatusRescanGenerations[project.id] = projectGeneration
-        remoteWorktreeStatusRescanTasks[project.id]?.cancel()
-        remoteWorktreeStatusRescanTasks[project.id] = nil
-
-        let worktreeGenerationKey = "\(project.id)\u{0}\(worktree.id)"
+        let worktreeGenerationKey = remoteWorktreeStatusRescanKey(
+            projectID: project.id,
+            worktreeID: worktree.id
+        )
         let worktreeGeneration = (remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] ?? 0) + 1
         remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] = worktreeGeneration
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: Self.worktreeStatusDebounce)
-            guard self.remoteWorktreeStatusRescanGenerations[project.id] == projectGeneration,
-                  self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] == worktreeGeneration
+            guard self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] == worktreeGeneration
             else { return }
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
@@ -1444,11 +1455,14 @@ final class AppState {
                 break
             }
             guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
-                  self.remoteWorktreeStatusRescanGenerations[project.id] == projectGeneration,
                   self.remoteWorktreeStatusRescanGenerations[worktreeGenerationKey] == worktreeGeneration
             else { return }
             WorktreeStatusStore.shared.apply([worktree.path.path: state])
         }
+    }
+
+    private func remoteWorktreeStatusRescanKey(projectID: String, worktreeID: String) -> String {
+        "\(projectID)\u{0}\(worktreeID)"
     }
 
     private func remoteWorktreeDirtyState(worktree: Worktree) async -> WorktreeDirtyState? {
