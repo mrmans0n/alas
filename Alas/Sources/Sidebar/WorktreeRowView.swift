@@ -149,9 +149,18 @@ struct WorktreeRowView: View {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
 
+    static func upstreamStatusItems(
+        _ status: WorktreeUpstreamStatus?,
+        isMain: Bool
+    ) -> [WorktreeUpstreamStatus.SubtitleItem] {
+        guard isMain, let status else { return [] }
+        return status.subtitleItems
+    }
+
     let worktree: Worktree
     let isSelected: Bool
     let isMain: Bool
+    let upstreamStatus: WorktreeUpstreamStatus?
     let operationState: WorktreeOperationState?
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: GGWorktreeMenuModel
@@ -318,6 +327,13 @@ struct WorktreeRowView: View {
                     Text(status.note)
                         .foregroundColor(theme.color(status.colorToken))
                 }
+            }
+            ForEach(Self.upstreamStatusItems(upstreamStatus, isMain: isMain), id: \.text) { item in
+                Text(item.text)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color(item.text.hasPrefix("↓") ? "caution" : "accent"))
+                    .help(item.accessibilityLabel)
+                    .accessibilityLabel(item.accessibilityLabel)
             }
             if worktree.addedLines > 0 {
                 Text("+\(worktree.addedLines)")

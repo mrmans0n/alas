@@ -158,6 +158,7 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
+    let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
     let inAppNotifications = InAppNotificationStore()
@@ -892,6 +893,8 @@ final class AppState {
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
     @ObservationIgnored
     private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
+    @ObservationIgnored
+    private var worktreeUpstreamStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
     private(set) var revisionChangeGenerations: [String: Int] = [:]
@@ -4149,7 +4152,7 @@ final class AppState {
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onRevisionChanged = { [weak self] in
-            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.handleProjectRevisionChange(projectId: projectId)
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onStackRevisionChanged = { [weak self] in
@@ -4175,6 +4178,7 @@ final class AppState {
             if !includeRemoteProjects, project.host != nil { continue }
             startProjectGitWatcher(for: project)
         }
+        startWorktreeUpstreamStatusRefreshes(includeRemoteProjects: includeRemoteProjects)
     }
 
     func stopAllProjectGitWatchers() {
@@ -4182,6 +4186,30 @@ final class AppState {
         projectGitWatchers.removeAll()
         for (_, watcher) in remoteProjectWatchers { watcher.stop() }
         remoteProjectWatchers.removeAll()
+        worktreeUpstreamStatusRefreshTask?.cancel()
+        worktreeUpstreamStatusRefreshTask = nil
+    }
+
+    private func startWorktreeUpstreamStatusRefreshes(includeRemoteProjects: Bool) {
+        guard worktreeUpstreamStatusRefreshTask == nil else { return }
+        worktreeUpstreamStatusRefreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let worktreeConfig = self.config.worktrees
+                let refreshInterval = WorktreeUpstreamStatusStore.fetchInterval(
+                    fetchIntervalMinutes: worktreeConfig.fetchIntervalMinutes
+                )
+                for project in self.projectsManager.projects {
+                    if !includeRemoteProjects, project.host != nil { continue }
+                    await self.refreshMainWorktreeUpstreamStatuses(
+                        projectId: project.id,
+                        allowFetch: worktreeConfig.autoFetch,
+                        minFetchInterval: refreshInterval
+                    )
+                }
+                try? await Task.sleep(nanoseconds: UInt64(refreshInterval * 1_000_000_000))
+            }
+        }
     }
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
@@ -4206,11 +4234,17 @@ final class AppState {
         )
         refreshGGSidebar()
         GGInboxStore.shared.invalidate(projectId: projectId)
+        Task { @MainActor [weak self] in
+            await self?.refreshMainWorktreeUpstreamStatuses(projectId: projectId)
+        }
     }
 
     private func handleProjectRevisionChange(projectId: String) {
         bumpRevisionGenerationForProject(projectId: projectId)
         handleProjectStackRevisionChange(projectId: projectId)
+        Task { @MainActor [weak self] in
+            await self?.refreshMainWorktreeUpstreamStatuses(projectId: projectId)
+        }
     }
 
     private func handleProjectStackRevisionChange(projectId: String) {
@@ -4789,7 +4823,24 @@ final class AppState {
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
         rescanWorktreeStatuses()
+        await refreshMainWorktreeUpstreamStatuses(projectId: projectId)
         return changed || completedCreateFailure
+    }
+
+    private func refreshMainWorktreeUpstreamStatuses(
+        projectId: String,
+        allowFetch: Bool = false,
+        minFetchInterval: TimeInterval = WorktreeUpstreamStatusStore.defaultFetchInterval
+    ) async {
+        guard let project = projectsManager.projects.first(where: { $0.id == projectId }) else { return }
+        let mainWorktrees = projectsManager.worktrees(projectId: projectId).filter {
+            projectsManager.isMain($0, in: project)
+        }
+        await worktreeUpstreamStatusStore.refresh(
+            worktrees: mainWorktrees,
+            allowFetch: allowFetch,
+            minFetchInterval: minFetchInterval
+        )
     }
 
     private func completeReconciledCreateFailures(
@@ -4901,6 +4952,9 @@ final class AppState {
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
         refreshGGSidebar()
+        for project in projectsManager.projects {
+            await refreshMainWorktreeUpstreamStatuses(projectId: project.id)
+        }
         return changed || completedCreateFailure
     }
 

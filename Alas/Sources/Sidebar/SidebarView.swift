@@ -79,6 +79,7 @@ struct SidebarView: View {
                                     ),
                                     selectedWorktreeId: state.selectedWorktreeId,
                                     isMain: { wt in state.projectsManager.isMain(wt, in: project) },
+                                    upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
                                     operationState: { wt in
                                         state.projectsManager.operationState(for: wt.id)
                                     },

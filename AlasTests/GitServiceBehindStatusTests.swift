@@ -167,6 +167,30 @@ struct GitServiceBehindStatusTests {
         #expect(resolved == nil)
     }
 
+    @Test func upstreamDivergenceCountsAheadAndBehindAgainstTrackingRef() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        let peer = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-divergence-peer-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+            try? FileManager.default.removeItem(at: peer)
+        }
+
+        _ = try await Process.git(["clone", "-q", remote.path, peer.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "peer@example.com"], cwd: peer)
+        _ = try await Process.git(["config", "user.name", "Peer"], cwd: peer)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "remote"], cwd: peer)
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: peer)
+        _ = try await Process.git(["fetch", "-q", "origin", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local"], cwd: repo)
+
+        let status = try await GitService().upstreamDivergence(worktreePath: repo)
+        #expect(status?.upstreamRef == "origin/main")
+        #expect(status?.ahead == 1)
+        #expect(status?.behind == 1)
+    }
+
     @Test func behindStatusReturnsCount() async throws {
         let (repo, remote) = try await makeRepoWithRemote()
         defer {
