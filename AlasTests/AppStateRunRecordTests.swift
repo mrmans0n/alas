@@ -719,6 +719,35 @@ struct AppStateRunRecordTests {
         #expect(archivedEntry?.worktreeID == fixture.worktree.id)
     }
 
+    @Test func deletingWorktreePurgesAfterPendingHistoryWritesFinish() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let entry = RunHistoryEntry(
+            id: "delayed-run",
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+            endpoint: nil,
+            outcome: .succeeded,
+            startedAt: Date(timeIntervalSince1970: 1),
+            finishedAt: Date(timeIntervalSince1970: 2),
+            portConflict: nil,
+            output: .available(text: "late\n", truncated: false)
+        )
+        fixture.state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = fixture.worktree.id
+        fixture.state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history = fixture.history] in
+            try? await Task.sleep(for: .milliseconds(50))
+            _ = try? await history.append(entry)
+        }
+
+        fixture.state.cleanupRunScriptState(worktreeID: fixture.worktree.id)
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(try await fixture.history.entry(id: entry.id) == nil)
+    }
+
     @Test func terminateAllTerminalSessionsCancelsPendingLaunches() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
