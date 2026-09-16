@@ -3127,7 +3127,8 @@ final class RightPaneState: GGSplitCommitServicing {
         in nodes: [FileTreeNode],
         for path: String,
         with children: [FileTreeNode],
-        state: DirectoryChildrenState
+        state: DirectoryChildrenState,
+        currentDeletedPaths: Set<String> = []
     ) -> (nodes: [FileTreeNode], didMerge: Bool) {
         var didMerge = false
         let updatedNodes = nodes.map { node -> FileTreeNode in
@@ -3148,7 +3149,14 @@ final class RightPaneState: GGSplitCommitServicing {
                     }
                     return refreshed
                 }
-                updated.children = reconciled.sorted { lhs, rhs in
+                let incomingIDs = Set(children.map(\.id))
+                let currentDeletions = (node.children ?? []).filter { existing in
+                    !incomingIDs.contains(existing.id)
+                        && existing.visibility == .tracked
+                        && currentDeletedPaths.contains(existing.path)
+                }
+                let nextChildren = reconciled + currentDeletions
+                updated.children = nextChildren.sorted { lhs, rhs in
                     if lhs.kind != rhs.kind { return lhs.kind == .dir }
                     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
                 }
@@ -3157,7 +3165,13 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             guard let existing = node.children else { return node }
             var updated = node
-            let result = replacingChildren(in: existing, for: path, with: children, state: state)
+            let result = replacingChildren(
+                in: existing,
+                for: path,
+                with: children,
+                state: state,
+                currentDeletedPaths: currentDeletedPaths
+            )
             didMerge = didMerge || result.didMerge
             updated.children = result.nodes
             return updated
@@ -3244,7 +3258,13 @@ final class RightPaneState: GGSplitCommitServicing {
                 // entries drop out — `mergingChildren` only overlays and would
                 // leave stale children behind.
                 let result = replacesChildren
-                    ? Self.replacingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                    ? Self.replacingChildren(
+                        in: self.fileTree,
+                        for: path,
+                        with: children,
+                        state: .loaded,
+                        currentDeletedPaths: Self.fileTreeDeletedPaths(from: self.changes)
+                    )
                     : Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
@@ -3280,6 +3300,10 @@ final class RightPaneState: GGSplitCommitServicing {
             badges[change.path] = change.status
         }
         return badges
+    }
+
+    nonisolated static func fileTreeDeletedPaths(from changes: [ChangedFile]) -> Set<String> {
+        Set(changes.filter { $0.status == "D" }.map(\.path))
     }
 
     /// Bookmark roots start expanded. Seeding once (rather than on every

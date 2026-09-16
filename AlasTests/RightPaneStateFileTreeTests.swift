@@ -836,6 +836,73 @@ struct RightPaneStateFileTreeTests {
         #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
     }
 
+    @Test func replacingChildrenKeepsCurrentlyDeletedTrackedEntryAbsentFromDiskListing() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Gone.swift",
+                        path: "Sources/Gone.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "D",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "Kept.swift",
+                        path: "Sources/Kept.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        let incoming = [
+            FileTreeNode(
+                name: "Kept.swift",
+                path: "Sources/Kept.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(
+            in: tree,
+            for: "Sources",
+            with: incoming,
+            state: .loaded,
+            currentDeletedPaths: ["Sources/Gone.swift"]
+        )
+        let sources = result.nodes.first
+        let gone = sources?.children?.first { $0.path == "Sources/Gone.swift" }
+
+        #expect(result.didMerge)
+        #expect(gone?.badge == "D")
+        #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
+    }
+
+    @Test func fileTreeDeletedPathsIncludeOnlyCurrentDeletionStatuses() {
+        let paths = RightPaneState.fileTreeDeletedPaths(from: [
+            ChangedFile(path: "Gone.swift", status: "D", stage: .unstaged, add: 0, del: 1, renameFrom: nil),
+            ChangedFile(path: "Changed.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)
+        ])
+
+        #expect(paths == ["Gone.swift"])
+    }
+
     @Test func replacingChildrenDropsCleanTrackedEntriesAbsentFromDiskListing() {
         let tree = [
             FileTreeNode(
