@@ -29,10 +29,15 @@ command -v "${rustup_bin}" >/dev/null 2>&1 || die "rustup not found"
 [ -f "${cli_root}/Cargo.lock" ] || die "missing ${cli_root}/Cargo.lock"
 
 fingerprint="$({
-    find "${cli_root}" -path "${cli_root}/target" -prune -o -type f -print0 \
-        | LC_ALL=C sort -z \
-        | xargs -0 shasum -a 256
-    shasum -a 256 "${BASH_SOURCE[0]}"
+    (
+        cd "${cli_root}"
+        find . -path ./target -prune -o -type f -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 shasum -a 256
+    )
+    shasum -a 256 < "${script_dir}/build-alas-cli.sh"
+    printf 'rust_toolchain=%s\n' "${rust_toolchain}"
+    printf 'target=%s\n' "${targets[@]}"
 } | shasum -a 256 | awk '{print $1}')"
 
 outputs_present=1

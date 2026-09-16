@@ -31,10 +31,15 @@ command -v "${rustup_bin}" >/dev/null 2>&1 || die "rustup not found"
 [ -f "${helper_root}/Cargo.lock" ] || die "missing ${helper_root}/Cargo.lock"
 
 fingerprint="$({
-    find "${helper_root}" -path "${helper_root}/target" -prune -o -type f -print0 \
-        | LC_ALL=C sort -z \
-        | xargs -0 shasum -a 256
-    shasum -a 256 "${BASH_SOURCE[0]}"
+    (
+        cd "${helper_root}"
+        find . -path ./target -prune -o -type f -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 shasum -a 256
+    )
+    shasum -a 256 < "${script_dir}/build-alas-helper.sh"
+    printf 'rust_toolchain=%s\n' "${rust_toolchain}"
+    printf 'target=%s\n' "${targets[@]}"
 } | shasum -a 256 | awk '{print $1}')"
 
 outputs_present=1

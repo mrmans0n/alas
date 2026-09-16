@@ -96,4 +96,45 @@ invocation_count="$(wc -l < "${invocations}" | tr -d ' ')"
 run_build
 test "$(wc -l < "${invocations}" | tr -d ' ')" = "${invocation_count}"
 
+# Xcode passes an absolute script path while CI prebuild invokes it relatively.
+(
+    cd "${srcroot}"
+    SRCROOT="${srcroot}" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+        ALAS_CARGO_BIN="${sandbox}/cargo" \
+        bash scripts/build-alas-cli.sh
+)
+test "$(wc -l < "${invocations}" | tr -d ' ')" = "${invocation_count}"
+
+# A checkout at a different path with the same content reuses its artifacts.
+srcroot2="${sandbox}/identical-cli-checkout"
+cp -R "${srcroot}" "${srcroot2}"
+(
+    cd "${srcroot2}"
+    SRCROOT="${srcroot2}" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+        ALAS_CARGO_BIN="${sandbox}/cargo" \
+        bash scripts/build-alas-cli.sh
+)
+test "$(wc -l < "${invocations}" | tr -d ' ')" = "${invocation_count}"
+test "$(cat "${srcroot2}/.build/alas-cli/fingerprint")" = "$(cat "${srcroot}/.build/alas-cli/fingerprint")"
+
+# The selected toolchain changes the compiled output and invalidates the cache.
+invocation_count="$(wc -l < "${invocations}" | tr -d ' ')"
+ALAS_RUST_TOOLCHAIN="test-toolchain" run_build
+test "$(wc -l < "${invocations}" | tr -d ' ')" -gt "${invocation_count}"
+
+# Relevant source changes must invalidate a matching artifact cache.
+run_build
+invocation_count="$(wc -l < "${invocations}" | tr -d ' ')"
+printf '\n// fingerprint regression input\n' >> "${srcroot}/AlasCLI/crates/alas/src/main.rs"
+run_build
+test "$(wc -l < "${invocations}" | tr -d ' ')" -gt "${invocation_count}"
+
+# A matching fingerprint is insufficient when an expected output is absent.
+invocation_count="$(wc -l < "${invocations}" | tr -d ' ')"
+rm "${srcroot}/.build/alas-cli/aarch64-apple-darwin/release/alas"
+run_build
+test "$(wc -l < "${invocations}" | tr -d ' ')" -gt "${invocation_count}"
+
 echo "build-alas-cli tests passed"
