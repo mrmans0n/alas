@@ -398,6 +398,7 @@ private struct AgentSparkleMenu: View {
     let onLaunchACPSession: (String) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
+    @State private var isPressed = false
 
     var body: some View {
         Menu {
@@ -438,11 +439,20 @@ private struct AgentSparkleMenu: View {
         } label: {
             Icon(name: "sparkle", size: 13,
                  color: hovering ? theme.color("fg") : theme.color("fg-faint"))
-                .toolbarControlSurface(isLit: hovering)
+                .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
+                    hovering: hovering,
+                    isPressed: isPressed
+                ))
+                .toolbarMenuControlPressFeedback(isPressed: isPressed)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
         .onHover { hovering = $0 }
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
     }
@@ -457,6 +467,7 @@ private struct RunScriptMenu: View {
     let onEdit: () -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
+    @State private var isPressed = false
 
     var body: some View {
         Menu {
@@ -495,11 +506,20 @@ private struct RunScriptMenu: View {
         } label: {
             Icon(name: "play", size: 13,
                  color: hovering ? theme.color("fg") : theme.color("fg-faint"))
-                .toolbarControlSurface(isLit: hovering)
+                .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
+                    hovering: hovering,
+                    isPressed: isPressed
+                ))
+                .toolbarMenuControlPressFeedback(isPressed: isPressed)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
         .onHover { hovering = $0 }
         .help("Run script (⌘R)")
     }
