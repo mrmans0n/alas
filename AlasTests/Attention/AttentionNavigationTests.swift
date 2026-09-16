@@ -31,13 +31,13 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[other.eventID] == nil)
     }
 
-    @Test func ordinaryFailureDetailsAcknowledgeMatchingFailure() throws {
+    @Test func openingFailureReportAcknowledgesMatchingFailure() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let failure = RunScriptFailure(id: "failure", runID: "run", scriptKey: "test", scriptName: "Tests", worktreeID: "worktree", branch: "main", exitCode: 1, completedAt: Date(), capturedOutput: .unavailable)
-        fixture.state.runScriptFailureQueue.append(failure)
-        let item = try fixture.record(.runScriptFailure(failureID: failure.id))
-        fixture.state.presentRunScriptFailure(failure)
+        let item = try fixture.record(.runScriptFailure(failureID: "run"))
+
+        fixture.state.openRunReport(worktreeID: "worktree", runID: "run")
+
         #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
     }
 
@@ -281,17 +281,16 @@ struct AttentionNavigationTests {
         #expect(pane.revealAttentionTarget(refreshed))
     }
 
-    @Test func liveScriptRouteRestoresPersistedFailureWhenQueueNoLongerContainsIt() async throws {
+    @Test func liveScriptRouteOpensDurableReportWhenQueueNoLongerContainsIt() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let failure = RunScriptFailure(id: "failure2", runID: "run2", scriptKey: "test", scriptName: "Tests", worktreeID: "worktree", branch: "main", exitCode: 1, completedAt: Date(), capturedOutput: .unavailable)
-        fixture.state.runScriptFailureQueue.append(failure)
-        let item = try fixture.record(.runScriptFailure(failureID: "failure2"))
+        let item = try fixture.record(.runScriptFailure(failureID: "run2"))
+
         #expect(await fixture.state.openAttentionItem(item) == .opened)
-        #expect(fixture.state.selectedRunScriptFailure?.id == "failure2")
+        #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:run2")
         let missing = try fixture.record(.runScriptFailure(failureID: "missing"))
         #expect(await fixture.state.openAttentionItem(missing) == .opened)
-        #expect(fixture.state.selectedRunScriptFailure?.id == "missing")
+        #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:missing")
         #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] != nil)
     }
 

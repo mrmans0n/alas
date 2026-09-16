@@ -26,6 +26,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case ggSplitCommit(GGSplitCommitTabState)
     case ggLanding(GGLandingTabState)
     case webPreview(WebPreviewTabState)
+    case runReport(RunReportTabState)
 
     var id: TabID {
         switch self {
@@ -51,6 +52,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit(let s): return s.id
         case .ggLanding(let s):    return s.id
         case .webPreview(let s):   return s.id
+        case .runReport(let s):    return s.id
         }
     }
 
@@ -78,6 +80,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit:       return "Split Commit"
         case .ggLanding(let s):    return s.title
         case .webPreview(let s):   return s.title
+        case .runReport(let s):    return s.title
         }
     }
 
@@ -105,6 +108,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit: return "arrow.trianglehead.branch"
         case .ggLanding:    return "arrow.down.to.line"
         case .webPreview:   return "globe"
+        case .runReport:    return "terminal.fill"
         }
     }
 
@@ -188,6 +192,20 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
         self.url = url
         self.remoteHost = remoteHost
         self.id = "web-preview:\(ownerKey)"
+    }
+}
+
+struct RunReportTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let runID: String
+
+    var title: String { "Run Report" }
+
+    init(worktreeId: String, runID: String) {
+        self.worktreeId = worktreeId
+        self.runID = runID
+        id = "run-report:\(runID)"
     }
 }
 

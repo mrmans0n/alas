@@ -7,9 +7,10 @@ struct RunScriptFailureTests {
         RunScriptFailure(
             id: "failure-\(index)", runID: "run-\(index)",
             scriptKey: "repo:script-\(index).sh", scriptName: "Script \(index)",
-            worktreeID: worktreeID, branch: "main", exitCode: Int32(index),
-            completedAt: Date(timeIntervalSince1970: TimeInterval(index)),
-            capturedOutput: .available(text: "output \(index)", truncated: false)
+            worktreeID: worktreeID,
+            branch: "main",
+            exitCode: Int32(index),
+            completedAt: Date(timeIntervalSince1970: TimeInterval(index))
         )
     }
 

@@ -140,6 +140,7 @@ struct AppStateRunRecordTests {
 
     private struct Fixture {
         let state: AppState
+        let history: RunHistoryStore
         let script: RunScript
         let worktree: Worktree
         let directory: URL
@@ -156,6 +157,7 @@ struct AppStateRunRecordTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("run-record-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let history = try RunHistoryStore(path: directory.appendingPathComponent("run-history.sqlite").path)
         let scriptURL = directory.appendingPathComponent("dev.sh")
         try "echo hi\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         let script = RunScript(
@@ -197,6 +199,7 @@ struct AppStateRunRecordTests {
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
             },
             runScriptCompletionWaiter: waiter,
+            runHistoryStore: history,
             attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json"))
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
@@ -204,6 +207,7 @@ struct AppStateRunRecordTests {
         state.projectsManager.insertOptimisticWorktree(primaryWorktree)
         return Fixture(
             state: state,
+            history: history,
             script: script,
             worktree: primaryWorktree,
             directory: directory,
@@ -256,6 +260,43 @@ struct AppStateRunRecordTests {
         // An `on-exit: keep` script leaves its shell at a prompt; the command
         // is finished all the same.
         #expect(scriptTabCount(fixture) == 1)
+    }
+
+    @Test func completedRunArchivesOneDurableEntryWithOutput() async throws {
+        let fixture = try makeFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: Data("done\n".utf8), truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.flushRunHistoryPersistence()
+
+        let record = try #require(runRecord(fixture))
+        let archived = try await fixture.history.entry(id: record.id)
+
+        #expect(archived?.outcome == .succeeded)
+        #expect(archived?.output == .available(text: "done\n", truncated: false))
+        let page = try await fixture.history.page(worktreeID: fixture.worktree.id, offset: 0, limit: 20)
+        #expect(page.totalCount == 1)
+    }
+
+    @Test func failedRunArchivesItsObservedExitAndOutput() async throws {
+        let fixture = try makeFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 7, transcript: Data("failure\n".utf8), truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.flushRunHistoryPersistence()
+
+        let record = try #require(runRecord(fixture))
+        let archived = try await fixture.history.entry(id: record.id)
+        #expect(archived?.outcome == .failed(exitCode: 7))
+        #expect(archived?.output == .available(text: "failure\n", truncated: false))
     }
 
     @Test func completionUsesLocalObservationTimeForRunRecord() async throws {
@@ -527,6 +568,11 @@ struct AppStateRunRecordTests {
         // deliberate stop as a lost process.
         fixture.state.cancelRunScriptCompletionTasks(sessionID: "session-1")
         #expect(runRecord(fixture)?.status == .finished(.stopped))
+
+        await fixture.state.flushRunHistoryPersistence()
+        let runID = try #require(runRecord(fixture)?.id)
+        let stopped = try await fixture.history.entry(id: runID)
+        #expect(stopped?.outcome == .stopped)
     }
 
     @Test func closeAllTabsCancelsPendingLaunchesWithoutPurgingRunHistory() throws {
@@ -739,6 +785,11 @@ struct AppStateRunRecordTests {
         fixture.state.cancelRunScriptCompletionTasks(sessionID: "session-1")
 
         #expect(runRecord(fixture)?.status == .finished(.unknown))
+
+        await fixture.state.flushRunHistoryPersistence()
+        let runID = try #require(runRecord(fixture)?.id)
+        let unknown = try await fixture.history.entry(id: runID)
+        #expect(unknown?.outcome == .unknown)
     }
 
     @Test func waiterFailureBecomesUnknownRatherThanSucceeded() async throws {

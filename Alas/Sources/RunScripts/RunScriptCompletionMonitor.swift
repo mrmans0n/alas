@@ -26,6 +26,11 @@ struct RunScriptCompletion: Equatable, Sendable {
     }
 }
 
+struct RunScriptTranscriptSnapshot: Equatable, Sendable {
+    let transcript: Data?
+    let truncated: Bool
+}
+
 enum RunScriptCompletionMonitor {
     static let outputByteLimit = 1_048_576
     private static let outputBoundaryLookbehind = 4_096
@@ -121,7 +126,7 @@ enum RunScriptCompletionMonitor {
         completed_at=${2:-$(date +%s)}
         captured=0
         truncated=0
-        if [ "$exit_code" != 0 ] && [ -f "$transcript" ]; then
+        if [ -f "$transcript" ]; then
           if size=$(wc -c < "$transcript" | tr -d ' ') && tail -c \(byteLimit + outputBoundaryLookbehind) "$transcript" > "$body"; then
             captured=1
             if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
@@ -131,6 +136,45 @@ enum RunScriptCompletionMonitor {
         if [ "$captured" = 1 ]; then cat "$body"; fi
         rm -f "$transcript" "$completion" "$completion.tmp" "$body" "$completion.status" || true
         """
+    }
+
+    /// Reads the current bounded transcript without waiting for a completion
+    /// file. Used when Alas has to settle an interrupted run as stopped or
+    /// unknown before its capture files are discarded.
+    static func snapshot(for location: RunScriptCaptureLocation) async -> RunScriptTranscriptSnapshot {
+        switch location {
+        case let .local(paths):
+            return localTranscript(paths: paths)
+        case let .remote(host, paths):
+            guard let result = try? await RemoteExec.runData(
+                host: host,
+                cwd: nil,
+                command: remoteSnapshotCommand(paths: paths, byteLimit: outputByteLimit),
+                timeout: 10,
+                pathPolicy: .inherited
+            ), !RemoteExec.isConnectionFailure(exitCode: result.exitCode), result.exitCode == 0,
+              let completion = try? parseRemotePayload(result.stdout)
+            else {
+                return .init(transcript: nil, truncated: false)
+            }
+            return .init(transcript: completion.transcript, truncated: completion.truncated)
+        }
+    }
+
+    /// Removes remote capture files after an interruption. Completed runs are
+    /// cleaned by `remoteWaitCommand`; local cleanup stays synchronous at its
+    /// call site because it only touches temporary files.
+    static func cleanupRemoteCapture(for location: RunScriptCaptureLocation) async {
+        guard case let .remote(host, paths) = location else { return }
+        let transcript = remotePathShellLiteral(paths.transcript)
+        let completion = remotePathShellLiteral(paths.completion)
+        _ = try? await RemoteExec.runData(
+            host: host,
+            cwd: nil,
+            command: "rm -f \(transcript) \(completion) \(completion).tmp \(completion).status \(completion).body || true",
+            timeout: 10,
+            pathPolicy: .inherited
+        )
     }
 
     static func cleanupStaleLocalFiles(now: Date = Date()) {
@@ -171,11 +215,18 @@ enum RunScriptCompletionMonitor {
         let completedAt = parts.dropFirst().first
             .flatMap { TimeInterval(String($0)) }
             .map { Date(timeIntervalSince1970: $0) } ?? Date()
-        guard exitCode != 0 else {
-            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
-        }
+        let snapshot = localTranscript(paths: paths)
+        return RunScriptCompletion(
+            exitCode: exitCode,
+            completedAt: completedAt,
+            transcript: snapshot.transcript,
+            truncated: snapshot.truncated
+        )
+    }
+
+    private static func localTranscript(paths: RunScriptCapturePaths) -> RunScriptTranscriptSnapshot {
         guard FileManager.default.fileExists(atPath: paths.transcript) else {
-            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
+            return .init(transcript: nil, truncated: false)
         }
         let url = URL(fileURLWithPath: paths.transcript)
         do {
@@ -186,15 +237,29 @@ enum RunScriptCompletionMonitor {
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
             try handle.seek(toOffset: offset)
-            return RunScriptCompletion(
-                exitCode: exitCode,
-                completedAt: completedAt,
-                transcript: try handle.readToEnd() ?? Data(),
-                truncated: offset > 0
-            )
+            return .init(transcript: try handle.readToEnd() ?? Data(), truncated: offset > 0)
         } catch {
-            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
+            return .init(transcript: nil, truncated: false)
         }
+    }
+
+    private static func remoteSnapshotCommand(paths: RunScriptCapturePaths, byteLimit: Int) -> String {
+        let transcript = remotePathShellLiteral(paths.transcript)
+        return """
+        transcript=\(transcript)
+        body="$transcript.snapshot"
+        captured=0
+        truncated=0
+        if [ -f "$transcript" ]; then
+          if size=$(wc -c < "$transcript" | tr -d ' ') && tail -c \(byteLimit + outputBoundaryLookbehind) "$transcript" > "$body"; then
+            captured=1
+            if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
+          fi
+        fi
+        printf 'ALAS_RUN_V1\\t0\\t%s\\t%s\\n' "$captured" "$truncated"
+        if [ "$captured" = 1 ]; then cat "$body"; fi
+        rm -f "$body" || true
+        """
     }
 
     private static func remotePathShellLiteral(_ path: String) -> String {

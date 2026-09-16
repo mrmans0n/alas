@@ -456,7 +456,6 @@ struct RunScriptLaunchTests {
         #expect(failures[0].scriptName == "Dev")
         #expect(failures[0].exitCode == 42)
         #expect(failures[0].branch == "main")
-        #expect(failures[0].capturedOutput == .available(text: "bad output\n", truncated: false))
         #expect(notifications.count == 1)
         #expect(notifications[0].content.body == "Failed with exit code 42")
     }

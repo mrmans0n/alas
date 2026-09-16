@@ -50,7 +50,6 @@ struct RunTabPresentationTests {
         script: RunScript? = nil,
         record: RunRecord? = nil,
         hasTerminal: Bool = false,
-        hasCapturedOutput: Bool = false,
         host: String? = nil,
         workingDirectory: String = "/wt",
         now: Date? = nil
@@ -60,7 +59,6 @@ struct RunTabPresentationTests {
                 script: script ?? self.script(),
                 record: record,
                 hasTerminal: hasTerminal,
-                hasCapturedOutput: hasCapturedOutput,
                 target: RunExecutionTarget(host: host, workingDirectory: workingDirectory)
             ),
             now: now ?? epoch
@@ -147,24 +145,18 @@ struct RunTabPresentationTests {
         #expect(!row.actions.contains(.openEndpoint(endpoint)))
     }
 
-    @Test func failedRunReportsExitCodeDurationAndOutputLink() {
+    @Test func completedRunOffersItsDurableReport() {
         let row = row(
             record: record(
                 status: .finished(.failed(exitCode: 42)),
-                finishedAt: epoch.addingTimeInterval(75),
-                failureID: "failure-1"),
-            hasCapturedOutput: true,
+                finishedAt: epoch.addingTimeInterval(75)
+            ),
             now: epoch.addingTimeInterval(75 + 3_600)
         )
         #expect(row.statusLabel == "Failed")
         #expect(row.tone == .failure)
         #expect(row.detail == "exit 42 · 1m 15s · 1h ago")
-        #expect(row.actions == [.start(label: "Rerun"), .showOutput(failureID: "failure-1"), .edit])
-    }
-
-    @Test func failedRunWithoutRetainedOutputDoesNotOfferDeadOutputAction() {
-        let row = row(record: record(status: .finished(.failed(exitCode: 42)), failureID: "gone"))
-        #expect(row.actions == [.start(label: "Rerun"), .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .edit])
     }
 
     @Test func succeededRunReportsDurationWithoutClaimingVerification() {
@@ -175,7 +167,7 @@ struct RunTabPresentationTests {
         #expect(row.statusLabel == "Succeeded")
         #expect(row.tone == .success)
         #expect(row.detail == "9s · just now")
-        #expect(row.actions == [.start(label: "Rerun"), .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .edit])
     }
 
     @Test func stoppedRunSaysSoInsteadOfFailing() {
@@ -207,7 +199,7 @@ struct RunTabPresentationTests {
         let row = row(record: record(status: .finished(.succeeded), finishedAt: epoch), hasTerminal: true)
         #expect(!row.isActive)
         #expect(row.statusLabel == "Succeeded")
-        #expect(row.actions == [.start(label: "Rerun"), .openTerminal, .edit])
+        #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .openTerminal, .edit])
     }
 
     // MARK: - Execution host

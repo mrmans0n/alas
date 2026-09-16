@@ -61,7 +61,7 @@ enum AttentionProducer {
             sourceKey: sourceKey, fingerprint: failure.id, owner: owner,
             kind: .runScriptFailure,
             title: "\(failure.scriptName) failed with exit code \(failure.exitCode)",
-            body: output(for: failure), jumpTarget: .runScriptFailure(failureID: failure.id), display: display
+            body: nil, jumpTarget: .runScriptFailure(failureID: failure.runID), display: display
         ))]
     }
 
@@ -217,13 +217,6 @@ enum AttentionProducer {
                         title: title, body: body, jumpTarget: jumpTarget, display: display)
     }
 
-    private static func output(for failure: RunScriptFailure) -> String? {
-        guard case .available(let text, let capturedTruncated) = failure.capturedOutput else { return nil }
-        let cappedBytes = text.utf8.prefix(8_192)
-        let isTruncated = capturedTruncated || text.utf8.count > cappedBytes.count
-        let preview = String(decoding: cappedBytes, as: UTF8.self)
-        return isTruncated ? "\(preview)\n\n[Output truncated]" : preview
-    }
 
     private static func pathSetFingerprint(_ paths: [String]) -> String {
         paths.map { "\($0.count):\($0)" }.joined()

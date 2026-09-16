@@ -152,14 +152,15 @@ struct RunRecordStore: Equatable {
     }
 
     mutating func markRunning(runID: String, sessionID: String) {
-        mutateActive(runID: runID) {
+        _ = mutateActive(runID: runID) {
             $0.status = .running
             $0.sessionID = sessionID
         }
     }
 
-    mutating func finish(runID: String, outcome: RunOutcome, at date: Date, failureID: String? = nil) {
-        mutateActive(runID: runID) {
+    @discardableResult
+    mutating func finish(runID: String, outcome: RunOutcome, at date: Date, failureID: String? = nil) -> RunRecord? {
+        return mutateActive(runID: runID) {
             $0.status = .finished(outcome)
             $0.finishedAt = date
             $0.failureID = failureID
@@ -169,9 +170,10 @@ struct RunRecordStore: Equatable {
     /// User-initiated stop. Only an in-flight run can be stopped: a command
     /// that already reported an exit status keeps that outcome even when its
     /// shell is closed afterwards.
-    mutating func markStopped(worktreeID: String, scriptKey: String, at date: Date) {
-        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey), record.status.isActive else { return }
-        mutateActive(runID: record.id) {
+    @discardableResult
+    mutating func markStopped(worktreeID: String, scriptKey: String, at date: Date) -> RunRecord? {
+        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey), record.status.isActive else { return nil }
+        return mutateActive(runID: record.id) {
             $0.status = .finished(.stopped)
             $0.finishedAt = date
         }
@@ -179,20 +181,22 @@ struct RunRecordStore: Equatable {
 
     /// Observation ended without an exit status (terminal killed, SSH dropped,
     /// monitor cancelled). Never resolves to success.
-    mutating func markLostObservation(runID: String, at date: Date) {
-        mutateActive(runID: runID) {
+    @discardableResult
+    mutating func markLostObservation(runID: String, at date: Date) -> RunRecord? {
+        return mutateActive(runID: runID) {
             $0.status = .finished(.unknown)
             $0.finishedAt = date
         }
     }
 
-    mutating func markLostObservation(worktreeID: String, scriptKey: String, at date: Date) {
-        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey) else { return }
-        markLostObservation(runID: record.id, at: date)
+    @discardableResult
+    mutating func markLostObservation(worktreeID: String, scriptKey: String, at date: Date) -> RunRecord? {
+        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey) else { return nil }
+        return markLostObservation(runID: record.id, at: date)
     }
 
     mutating func setPortConflict(_ conflict: RunPortConflict?, runID: String) {
-        mutateActive(runID: runID) { $0.portConflict = conflict }
+        _ = mutateActive(runID: runID) { $0.portConflict = conflict }
     }
 
     mutating func purge(worktreeID: String) {
@@ -218,13 +222,14 @@ struct RunRecordStore: Equatable {
         return nil
     }
 
-    private mutating func mutateActive(runID: String, _ body: (inout RunRecord) -> Void) {
+    private mutating func mutateActive(runID: String, _ body: (inout RunRecord) -> Void) -> RunRecord? {
         guard let location = locate(runID: runID),
               var record = byWorktree[location.worktreeID]?[location.scriptKey],
               record.status.isActive
-        else { return }
+        else { return nil }
         body(&record)
         byWorktree[location.worktreeID]?[location.scriptKey] = record
+        return record
     }
 }
 

@@ -29,7 +29,7 @@ struct RunScriptCompletionMonitorTests {
         #expect(command.contains("cat \"$body\""))
         #expect(command.contains("\"$body\" \"$completion.status\""))
         #expect(command.contains("completed_at=${2:-$(date +%s)}"))
-        #expect(command.contains("[ \"$exit_code\" != 0 ]"))
+        #expect(!command.contains("[ \"$exit_code\" != 0 ]"))
         #expect(command.contains("ALAS_RUN_V1"))
         #expect(command.contains("rm -f"))
         #expect(command.contains("|| true"))
@@ -99,7 +99,7 @@ struct RunScriptCompletionMonitorTests {
         #expect(result.truncated)
     }
 
-    @Test func localSuccessCleansUpWithoutTranscript() async throws {
+    @Test func localSuccessRetainsTranscriptAndCleansUp() async throws {
         let runID = UUID().uuidString
         let location = try RunScriptCompletionMonitor.paths(runID: runID, host: nil)
         guard case let .local(paths) = location else {
@@ -110,11 +110,14 @@ struct RunScriptCompletionMonitorTests {
             at: URL(fileURLWithPath: paths.completion).deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try Data("completed output\n".utf8).write(to: URL(fileURLWithPath: paths.transcript))
         try "0\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
 
         let result = try await RunScriptCompletionMonitor.wait(for: location)
+
         #expect(result.exitCode == 0)
-        #expect(result.transcript == nil)
+        #expect(result.transcript == Data("completed output\n".utf8))
+        #expect(!FileManager.default.fileExists(atPath: paths.transcript))
         #expect(!FileManager.default.fileExists(atPath: paths.completion))
     }
 

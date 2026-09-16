@@ -14,25 +14,11 @@ struct RunScriptFailurePresentationTests {
         #expect(banner?.overflowText == "1 more")
     }
 
-    @Test func detailPrefersCapturedOutputAndFallsBackWhenUnavailable() {
-        let withOutput = RunScriptFailureDetailPresentation(failure: failure(
-            capturedOutput: .available(text: "stderr\n", truncated: true)
-        ))
-        let withoutOutput = RunScriptFailureDetailPresentation(failure: failure(capturedOutput: .unavailable))
-
-        #expect(withOutput.outputText == "stderr\n")
-        #expect(withOutput.outputFooter == "Output truncated")
-        #expect(!withOutput.completedText.isEmpty)
-        #expect(withoutOutput.outputText == "Output could not be captured.")
-        #expect(withoutOutput.outputFooter == nil)
-    }
-
     private func failure(
         id: String = "failure",
         scriptName: String = "Dev",
         exitCode: Int32 = 1,
-        completedAt: Date = Date(),
-        capturedOutput: RunScriptCapturedOutput = .available(text: "oops\n", truncated: false)
+        completedAt: Date = Date()
     ) -> RunScriptFailure {
         RunScriptFailure(
             id: id,
@@ -42,8 +28,7 @@ struct RunScriptFailurePresentationTests {
             worktreeID: "wt",
             branch: "main",
             exitCode: exitCode,
-            completedAt: completedAt,
-            capturedOutput: capturedOutput
+            completedAt: completedAt
         )
     }
 }

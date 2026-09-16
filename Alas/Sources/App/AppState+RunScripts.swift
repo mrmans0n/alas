@@ -276,7 +276,8 @@ extension AppState {
             return
         }
         if let existing = scriptTab(for: script, in: worktree) {
-            runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            archiveFinalizedRun(finalized, capture: runHistoryCapture(for: finalized?.id))
             closeTab(worktreeId: worktree.id, tabId: existing.id)
         }
         launchScript(script, in: worktree)
@@ -295,10 +296,12 @@ extension AppState {
         guard let existing = scriptTab(for: script, in: worktree) else {
             // Nothing left to stop: whatever we thought was running is gone,
             // and we never saw it exit.
-            runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            archiveFinalizedRun(finalized, capture: .unavailable)
             return
         }
-        runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+        let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+        archiveFinalizedRun(finalized, capture: runHistoryCapture(for: finalized?.id))
         closeTab(worktreeId: worktree.id, tabId: existing.id)
     }
 
@@ -320,7 +323,8 @@ extension AppState {
             // A monitor may still be waiting on a completion file that outlives
             // the shell; only give up once nothing is observing the run.
             guard !runScriptCompletionTasks.values.contains(where: { $0.sessionID == sessionID }) else { continue }
-            runRecords.markLostObservation(runID: record.id, at: now)
+            let finalized = runRecords.markLostObservation(runID: record.id, at: now)
+            archiveFinalizedRun(finalized, capture: .unavailable)
         }
     }
 
@@ -490,7 +494,6 @@ extension AppState {
                         // A terminal with no run leaf gives us nothing to
                         // observe; say so instead of leaving the row starting.
                         cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
-                        runRecords.markLostObservation(runID: runID, at: Date())
                         return
                     }
                     startRunScriptCompletionMonitor(
@@ -544,9 +547,6 @@ extension AppState {
             observeAttention(.inactive(sourceKey: event.sourceKey))
         }
         runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
-        if selectedRunScriptFailure?.id == id, selectedRunScriptFailure?.worktreeID == worktreeID {
-            selectedRunScriptFailure = nil
-        }
     }
 
     private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {
@@ -559,15 +559,26 @@ extension AppState {
         for failure in runScriptFailureQueue.failures(for: worktree.id) where failure.scriptKey == scriptKey {
             observeAttention(.inactive(sourceKey: .init(rawValue: "script:\(failure.runID):failure")), at: date)
             runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id)
-            if selectedRunScriptFailure?.id == failure.id {
-                selectedRunScriptFailure = nil
-            }
         }
     }
 
-    func presentRunScriptFailure(_ failure: RunScriptFailure) {
-        selectedRunScriptFailure = failure
-        acknowledgeAttentionSurface(worktreeID: failure.worktreeID, target: .runScriptFailure(failureID: failure.id))
+    func openRunReport(worktreeID: String, runID: String) {
+        let tab = tabs.openOrFocusRunReport(worktreeId: worktreeID, runID: runID)
+        activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+        acknowledgeAttentionSurface(worktreeID: worktreeID, target: .runScriptFailure(failureID: runID))
+    }
+
+    func clearRunHistory(worktreeID: String) {
+        tabs.closeRunReports(worktreeId: worktreeID)
+        guard let runHistoryStore else { return }
+        Task { @MainActor [weak self, runHistoryStore] in
+            do {
+                try await runHistoryStore.clear(worktreeID: worktreeID)
+                self?.runHistoryRevision += 1
+            } catch {
+                self?.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
+            }
+        }
     }
 
     func waitForRunScriptCompletionTasksForTesting() async {
@@ -579,6 +590,100 @@ extension AppState {
 
     var runScriptCompletionTaskCountForTesting: Int {
         runScriptCompletionTasks.count
+    }
+
+    private enum RunHistoryCapture {
+        case completion(RunScriptCompletion)
+        case location(RunScriptCaptureLocation)
+        case unavailable
+    }
+
+    private func runHistoryCapture(for runID: String?) -> RunHistoryCapture {
+        guard let runID, let location = runScriptCompletionTasks[runID]?.location else {
+            return .unavailable
+        }
+        return .location(location)
+    }
+
+    private func archiveFinalizedRun(_ record: RunRecord?, capture: RunHistoryCapture) {
+        guard let record,
+              let entry = Self.runHistoryEntry(for: record, output: .unavailable),
+              let runHistoryStore
+        else {
+            releaseRunHistoryCapture(capture)
+            return
+        }
+        runHistoryPersistenceTasks[record.id] = Task { @MainActor [weak self, runHistoryStore] in
+            let output = await Self.runHistoryOutput(for: capture)
+            let entry = Self.runHistoryEntry(for: record, output: output) ?? entry
+            do {
+                let inserted = try await runHistoryStore.append(entry)
+                if inserted {
+                    self?.runHistoryRevision += 1
+                }
+            } catch {
+                self?.runHistoryError = "Could not save run history: \(error.localizedDescription)"
+                runScriptLogger.error(
+                    "Could not persist run \(record.id, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+            }
+            self?.releaseRunHistoryCapture(capture)
+            self?.runHistoryPersistenceTasks.removeValue(forKey: record.id)
+        }
+    }
+
+    private static func runHistoryEntry(for record: RunRecord, output: RunHistoryOutput) -> RunHistoryEntry? {
+        guard let finishedAt = record.finishedAt,
+              case let .finished(outcome) = record.status
+        else { return nil }
+        return RunHistoryEntry(
+            id: record.id,
+            scriptKey: record.scriptKey,
+            scriptName: record.scriptName,
+            worktreeID: record.worktreeID,
+            branch: record.branch,
+            target: record.target,
+            endpoint: record.endpoint,
+            outcome: outcome,
+            startedAt: record.startedAt,
+            finishedAt: finishedAt,
+            portConflict: record.portConflict,
+            output: output
+        )
+    }
+
+    private static func runHistoryOutput(for capture: RunHistoryCapture) async -> RunHistoryOutput {
+        let snapshot: RunScriptTranscriptSnapshot
+        switch capture {
+        case let .completion(completion):
+            snapshot = .init(transcript: completion.transcript, truncated: completion.truncated)
+        case let .location(location):
+            snapshot = await RunScriptCompletionMonitor.snapshot(for: location)
+        case .unavailable:
+            snapshot = .init(transcript: nil, truncated: false)
+        }
+        guard let transcript = snapshot.transcript else { return .unavailable }
+        let tail = ANSIPlainTextSnapshot.tail(
+            from: transcript,
+            byteLimit: RunScriptCompletionMonitor.outputByteLimit,
+            normalizesCRLF: true
+        )
+        return .available(text: tail.text, truncated: snapshot.truncated || tail.truncated)
+    }
+
+    private func releaseRunHistoryCapture(_ capture: RunHistoryCapture) {
+        guard case let .location(location) = capture else { return }
+        cleanupCaptureLocation(location)
+        Task {
+            await RunScriptCompletionMonitor.cleanupRemoteCapture(for: location)
+        }
+    }
+
+    func flushRunHistoryPersistence() async {
+        let tasks = runHistoryPersistenceTasks.values
+        for task in tasks {
+            await task.value
+        }
     }
 
     private func startRunScriptCompletionMonitor(
@@ -612,7 +717,8 @@ extension AppState {
                         runID: runID
                     )
                     guard completion.exitCode != 0 else {
-                        runRecords.finish(runID: runID, outcome: .succeeded, at: observedAt)
+                        let finalized = runRecords.finish(runID: runID, outcome: .succeeded, at: observedAt)
+                        archiveFinalizedRun(finalized, capture: .completion(completion))
                         retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                         inAppNotifications.post(
                             "\(script.displayName) succeeded",
@@ -621,27 +727,14 @@ extension AppState {
                         )
                         return
                     }
-                    let capturedOutput: RunScriptCapturedOutput
-                    if let transcript = completion.transcript {
-                        let snapshot = ANSIPlainTextSnapshot.tail(
-                            from: transcript,
-                            byteLimit: RunScriptCompletionMonitor.outputByteLimit,
-                            normalizesCRLF: true
-                        )
-                        capturedOutput = .available(
-                            text: snapshot.text,
-                            truncated: completion.truncated || snapshot.truncated
-                        )
-                    } else {
-                        capturedOutput = .unavailable
-                    }
-                    let failureID = UUID().uuidString
-                    runRecords.finish(
+                    let failureID = runID
+                    let finalized = runRecords.finish(
                         runID: runID,
                         outcome: .failed(exitCode: completion.exitCode),
                         at: observedAt,
                         failureID: failureID
                     )
+                    archiveFinalizedRun(finalized, capture: .completion(completion))
                     let failure = RunScriptFailure(
                         id: failureID,
                         runID: runID,
@@ -650,8 +743,7 @@ extension AppState {
                         worktreeID: worktree.id,
                         branch: worktree.branch,
                         exitCode: completion.exitCode,
-                        completedAt: observedAt,
-                        capturedOutput: capturedOutput
+                        completedAt: observedAt
                     )
                     retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                     runScriptFailureQueue.append(failure)
@@ -668,7 +760,8 @@ extension AppState {
                 } catch {
                     // The waiter failed (dropped SSH, unreadable completion
                     // file). We never saw an exit status, so we can't claim one.
-                    runRecords.markLostObservation(runID: runID, at: Date())
+                    let finalized = runRecords.markLostObservation(runID: runID, at: Date())
+                    archiveFinalizedRun(finalized, capture: .location(location))
                     runScriptLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
                     )
@@ -676,10 +769,13 @@ extension AppState {
             }
         )
     }
-
     private func cancelRunScriptCompletionTask(runID: String, location: RunScriptCaptureLocation) {
         runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
-        cleanupCaptureLocation(location)
+        if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
+            archiveFinalizedRun(finalized, capture: .location(location))
+        } else if runHistoryPersistenceTasks[runID] == nil {
+            releaseRunHistoryCapture(.location(location))
+        }
     }
 
     /// Gives up on observing a run. Every caller reaches here because the run's
@@ -688,8 +784,11 @@ extension AppState {
     private func cancelRunScriptCompletionTask(runID: String) {
         guard let entry = runScriptCompletionTasks.removeValue(forKey: runID) else { return }
         entry.task.cancel()
-        cleanupCaptureLocation(entry.location)
-        runRecords.markLostObservation(runID: runID, at: Date())
+        if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
+            archiveFinalizedRun(finalized, capture: .location(entry.location))
+        } else if runHistoryPersistenceTasks[runID] == nil {
+            releaseRunHistoryCapture(.location(entry.location))
+        }
     }
 
     func cancelRunScriptCompletionTasks(
@@ -748,8 +847,12 @@ extension AppState {
     func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {
         cancelPendingRunScriptLaunches(worktreeID: worktreeID)
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
-            runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
-            cleanupCaptureLocation(entry.location)
+            if purgeFailures {
+                runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+                releaseRunHistoryCapture(.location(entry.location))
+            } else {
+                cancelRunScriptCompletionTask(runID: runID)
+            }
         }
         if purgeFailures {
             // The worktree itself is going away, so its run history goes with
@@ -767,14 +870,23 @@ extension AppState {
             }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
+            tabs.closeRunReports(worktreeId: worktreeID)
+            if let runHistoryStore {
+                Task { @MainActor [weak self, runHistoryStore] in
+                    do {
+                        try await runHistoryStore.purge(worktreeID: worktreeID)
+                        self?.runHistoryRevision += 1
+                    } catch {
+                        self?.runHistoryError = "Could not purge run history: \(error.localizedDescription)"
+                    }
+                }
+            }
         } else {
             let now = Date()
             for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
-                runRecords.markLostObservation(runID: record.id, at: now)
+                let finalized = runRecords.markLostObservation(runID: record.id, at: now)
+                archiveFinalizedRun(finalized, capture: .unavailable)
             }
-        }
-        if purgeFailures, selectedRunScriptFailure?.worktreeID == worktreeID {
-            selectedRunScriptFailure = nil
         }
     }
 
@@ -795,8 +907,8 @@ extension AppState {
         let now = Date()
         for (runID, entry) in runScriptCompletionTasks {
             entry.task.cancel()
-            cleanupCaptureLocation(entry.location)
-            runRecords.markLostObservation(runID: runID, at: now)
+            let finalized = runRecords.markLostObservation(runID: runID, at: now)
+            archiveFinalizedRun(finalized, capture: .location(entry.location))
         }
         runScriptCompletionTasks.removeAll()
     }

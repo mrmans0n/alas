@@ -147,13 +147,7 @@ struct AgentSidebarRowView: View {
             }
         }
         .padding(10)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 11))
-        .overlay(
-            RoundedRectangle(cornerRadius: 11)
-                .strokeBorder(cardBorderColor, lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(isHovering ? 0.18 : 0.10), radius: isHovering ? 5 : 3, y: 2)
-        .contentShape(RoundedRectangle(cornerRadius: 11))
+        .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
         .onHover { isHovering = $0 }
         .onChange(of: delivery) {
             if delivery == .sent {
@@ -408,20 +402,6 @@ struct AgentSidebarRowView: View {
         )
     }
 
-    private var cardBackground: some ShapeStyle {
-        LinearGradient(
-            colors: [
-                stateColor.opacity(isHovering ? 0.12 : 0.07),
-                theme.color("bg-1").opacity(isHovering ? 0.82 : 0.66)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var cardBorderColor: Color {
-        isHovering ? stateColor.opacity(0.38) : theme.color("line").opacity(0.78)
-    }
 
     private var agentName: String {
         agent?.displayName ?? row.agentID

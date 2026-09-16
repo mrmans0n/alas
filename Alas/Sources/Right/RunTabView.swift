@@ -40,6 +40,10 @@ struct RunTabView: View {
     /// of restarting the interval on every body pass.
     @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
+    @State private var historyPage = RunHistoryPage(entries: [], totalCount: 0)
+    @State private var historyPageIndex = 0
+    @State private var historyError: String?
+    @State private var isClearingHistory = false
     var body: some View {
         Group {
             let displayedScripts = activeOrAllScripts
@@ -47,11 +51,7 @@ struct RunTabView: View {
                 scannedWorktreeID: scannedWorktreeID,
                 worktreeID: worktree.id
             ) {
-                RightPaneLoadingSkeletonView(activeTab: .run)
-            } else if displayedScripts.isEmpty, let scriptCatalogError {
-                errorState(scriptCatalogError)
-            } else if displayedScripts.isEmpty {
-                emptyState
+RightPaneLoadingSkeletonView(activeTab: .run)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -70,6 +70,7 @@ struct RunTabView: View {
                                 }
                             }
                         }
+                        historySection
                     }
                     .padding(.top, PaneBandLayout.outerVertical)
                 }
@@ -92,6 +93,7 @@ struct RunTabView: View {
                 isCancelled: Task.isCancelled
             ) else { return }
             scannedWorktreeID = startedWorktreeID
+            await loadHistory()
             // Reconnecting to a worktree is the moment to settle runs whose
             // terminal disappeared while nothing was watching them.
             state.reconcileRunRecords(worktreeID: worktree.id)
@@ -100,6 +102,20 @@ struct RunTabView: View {
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScriptCatalogGeneration) {
             refreshScriptsFromControl()
+        }
+        .onChange(of: state.runHistoryRevision) {
+            Task { await loadHistory() }
+        }
+        .confirmationDialog(
+            "Clear run history?",
+            isPresented: $isClearingHistory,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                state.clearRunHistory(worktreeID: worktree.id)
+            }
+        } message: {
+            Text("This clears completed runs for \(worktree.branch). Active runs keep running.")
         }
     }
 
@@ -150,12 +166,6 @@ struct RunTabView: View {
                 script: script,
                 record: record,
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
-                hasCapturedOutput: record
-                    .flatMap { current in
-                        current.failureID.map { failureID in
-                            state.runScriptFailures(in: worktree.id).contains { $0.id == failureID }
-                        }
-                    } ?? false,
                 target: record?.target ?? state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
@@ -199,10 +209,8 @@ struct RunTabView: View {
         case .openEndpoint:
             guard let script = await freshScript(matching: staleScript) else { return }
             state.openRunEndpoint(script, in: worktree)
-        case .showOutput(let failureID):
-            guard let failure = state.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID })
-            else { return }
-            state.presentRunScriptFailure(failure)
+        case .showReport(let runID):
+            state.openRunReport(worktreeID: worktree.id, runID: runID)
         case .edit:
             state.editScript(staleScript, in: worktree)
         }
@@ -308,6 +316,119 @@ struct RunTabView: View {
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-error-state")
     }
+
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("HISTORY")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .tracking(0.5)
+                    .foregroundColor(theme.color("fg-muted"))
+                Spacer()
+                if historyPage.totalCount > 0 {
+                    Button("Clear") { isClearingHistory = true }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12)
+
+            if let historyError {
+                Text(historyError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("warn"))
+                    .padding(.horizontal, 12)
+            } else if historyPage.entries.isEmpty {
+                Text("No completed runs yet")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(historyPage.entries) { entry in
+                    Button {
+                        state.openRunReport(worktreeID: worktree.id, runID: entry.id)
+                    } label: {
+                        HStack(spacing: 8) {
+                            RunStatusDot(tone: historyTone(entry.outcome), isActive: false)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.scriptName)
+                                    .font(.system(size: 12, weight: .medium))
+                                Text(historyDetail(entry))
+                                    .font(.system(size: 10))
+                                    .foregroundColor(theme.color("fg-faint"))
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open report for \(entry.scriptName)")
+                }
+                HStack {
+                    Button("Previous") {
+                        historyPageIndex -= 1
+                        Task { await loadHistory() }
+                    }
+                    .disabled(historyPageIndex == 0)
+                    Spacer()
+                    Text(historyRange)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+                    Spacer()
+                    Button("Next") {
+                        historyPageIndex += 1
+                        Task { await loadHistory() }
+                    }
+                    .disabled((historyPageIndex + 1) * 20 >= historyPage.totalCount)
+                }
+                .padding(.horizontal, 12)
+            }
+        }
+        .padding(.top, 12)
+    }
+
+    private var historyRange: String {
+        guard historyPage.totalCount > 0 else { return "0 of 0" }
+        let first = historyPageIndex * 20 + 1
+        let last = min(first + historyPage.entries.count - 1, historyPage.totalCount)
+        return "\(first)–\(last) of \(historyPage.totalCount)"
+    }
+
+    private func historyTone(_ outcome: RunOutcome) -> RunStatusTone {
+        switch outcome {
+        case .succeeded: .success
+        case .failed: .failure
+        case .stopped, .unknown: .warning
+        }
+    }
+
+    private func historyDetail(_ entry: RunHistorySummary) -> String {
+        let outcome = switch entry.outcome {
+        case .succeeded: "Succeeded"
+        case let .failed(exitCode): "Failed · exit \(exitCode)"
+        case .stopped: "Stopped"
+        case .unknown: "Unknown"
+        }
+        return "\(outcome) · \(RunTabPresentation.format(duration: entry.duration))"
+    }
+
+    private func loadHistory() async {
+        guard let history = state.runHistoryStore else {
+            historyError = "Run history storage is unavailable."
+            historyPage = .init(entries: [], totalCount: 0)
+            return
+        }
+        do {
+            let page = try await history.page(worktreeID: worktree.id, offset: historyPageIndex * 20, limit: 20)
+            historyError = nil
+            historyPage = page
+        } catch {
+            historyError = error.localizedDescription
+        }
+    }
 }
 
 private struct RunScopeHeader: View {
@@ -391,7 +512,7 @@ private struct RunRowView: View {
                 HStack(spacing: 6) {
                     ForEach(presentation.actions, id: \.self) { action in
                         switch action {
-                        case .openTerminal, .showOutput:
+                        case .openTerminal, .showReport:
                             actionButton(action)
                         default:
                             EmptyView()
@@ -408,11 +529,10 @@ private struct RunRowView: View {
                 .padding(.top, 2)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(hovering ? theme.color("bg-3") : .clear)
-        .overlay(Divider().opacity(0.4), alignment: .bottom)
-        .contentShape(Rectangle())
+        .padding(10)
+        .rightPaneCardChrome(accent: toneColor, isHovering: hovering)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
         .onHover { hovering = $0 }
         .help(presentation.locationDetail)
         .accessibilityElement(children: .contain)
@@ -431,7 +551,7 @@ private struct RunRowView: View {
     private var hasSecondaryActions: Bool {
         presentation.actions.contains {
             switch $0 {
-            case .openTerminal, .openEndpoint, .showOutput: true
+            case .openTerminal, .openEndpoint, .showReport: true
             default: false
             }
         }
@@ -505,7 +625,7 @@ private struct RunRowView: View {
         case .restart: "arrow.clockwise"
         case .openTerminal: "terminal"
         case .openEndpoint: "arrow.up.right"
-        case .showOutput: "doc.text"
+        case .showReport: "doc.text"
         case .edit: "pencil"
         }
     }
@@ -528,7 +648,7 @@ private struct RunRowView: View {
         case .openTerminal:     "Terminal"
         case .openEndpoint(let url):
             url.formatted(.url.scheme(.never).user(.never).password(.never).port(.always).path(.never).query(.never).fragment(.never))
-        case .showOutput:       "Output"
+        case .showReport:       "Report"
         case .edit:             "Edit"
         }
     }
