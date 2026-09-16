@@ -102,7 +102,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 # Process are behavior evidence; the name pattern is a fallback so a newly
 # added process-facing suite joins the protected lane without a workflow edit.
 {
-    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx' "${scheduled_file}"
+    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid' "${scheduled_file}"
     while IFS= read -r source; do
         grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))' "${source}" || continue
         awk '

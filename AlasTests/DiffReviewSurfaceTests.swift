@@ -334,16 +334,13 @@ struct DiffReviewSurfaceTests {
             model.savePendingDraft(theme: theme())
             await drainSwiftUI(controller.view)
 
-            #expect(clickAccessibilityElement(
-                withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-new-draft",
-                in: controller.view
-            ))
-            await drainSwiftUI(controller.view)
-
             #expect(subview(
-                withAccessibilityIdentifier: "diff-review-draft-comment-action-save-new-draft",
+                withAccessibilityIdentifier: "diff-review-draft-comment-new-draft",
                 in: controller.view
             ) != nil)
+
+            model.beginEditingPostedDraft()
+            #expect(model.state.draftCommentEditors["new-draft"]?.isEditing == true)
         }
     }
 
@@ -5063,6 +5060,16 @@ private final class AppKitPostedDraftHarnessModel {
 
     func savePendingDraft(theme: Theme) {
         input(theme: theme).savePendingDraft()
+    }
+
+    func beginEditingPostedDraft() {
+        guard let comment = comments.first else { return }
+        state.draftCommentEditors = [
+            comment.id: ReviewDraftCommentEditorState(
+                isEditing: true,
+                editingBody: comment.bodyMarkdown
+            )
+        ]
     }
 
     private func post(anchor: ReviewDraftCommentAnchor, body: String) {

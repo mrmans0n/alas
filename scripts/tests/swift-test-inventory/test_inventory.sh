@@ -65,6 +65,13 @@ struct RunScriptFixtureTests {
     @Test func detectsRuntimeMarkers() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/BeautifulMermaidFixtureTests.swift" <<'SWIFT'
+import Testing
+
+struct BeautifulMermaidFixtureTests {
+    @Test func rendersNativeDiagram() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/InlineSuiteTests.swift" <<'SWIFT'
 import Testing
 
@@ -82,7 +89,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=9 scheduled=8 ordinary=4 subprocess=4 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=10 scheduled=9 ordinary=4 subprocess=5 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -115,6 +122,10 @@ if grep -q 'WrapperFixtureTests' <<<"${selectors}"; then
     echo 'process-wrapper suite was scheduled with ordinary suites' >&2
     exit 1
 fi
+if grep -q 'BeautifulMermaidFixtureTests' <<<"${selectors}"; then
+    echo 'native Mermaid suite was scheduled with ordinary suites' >&2
+    exit 1
+fi
 
 subprocess_selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
@@ -122,6 +133,7 @@ subprocess_selectors="$(
 )"
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/BeautifulMermaidFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/RunScriptFixtureTests' <<<"${subprocess_selectors}"
 
@@ -147,6 +159,7 @@ subprocess_log="${sandbox}/subprocess-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${subprocess_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
     bash "${batch_runner}" 0 1 subprocess
 grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"
