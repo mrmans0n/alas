@@ -48,6 +48,18 @@ struct ProjectsManagerHeadUpdatesTests {
         )
     }
 
+    private actor StatusScanRecorder {
+        private var calls: [[String]] = []
+
+        func record(paths: [URL]) {
+            calls.append(paths.map(\.path))
+        }
+
+        func recordedCalls() -> [[String]] {
+            calls
+        }
+    }
+
     @Test func updatesBranchForMatchingPath() {
         let (mgr, project) = makeManager()
         seed(mgr, projectId: project.id, [
@@ -347,6 +359,58 @@ struct ProjectsManagerHeadUpdatesTests {
         }
         #expect(state.revisionChangeGeneration(worktreeID: main.id) == 1)
         #expect(await loads.count == 1)
+        state.stopProjectGitWatcher(projectId: project.id)
+    }
+
+    @Test func localGitWatcherStatusRescanIsScopedToProject() async throws {
+        let project = ProjectConfig(
+            id: "p1",
+            name: "p1",
+            path: "/repo-one",
+            color: "blue",
+            addedAt: Date()
+        )
+        let otherProject = ProjectConfig(
+            id: "p2",
+            name: "p2",
+            path: "/repo-two",
+            color: "green",
+            addedAt: Date()
+        )
+        let main = wt(path: "/repo-one", branch: "main")
+        let feature = wt(path: "/wts/one-feature", branch: "feature")
+        let otherMain = wt(path: "/repo-two", branch: "main", projectId: "p2")
+        let gitDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-app-state-scoped-status-\(UUID().uuidString)/.git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
+
+        let watcher = ProjectGitWatcher(
+            repoPath: URL(fileURLWithPath: project.path),
+            resolvedGitDir: gitDir,
+            resolvedWorktreeRoot: main.path,
+            headDebounceInterval: 0.05,
+            headDebounceMaxWait: 0.2,
+            topologyDebounceInterval: 0.05,
+            topologyDebounceMaxWait: 0.2,
+            startStreamOverride: { _, _ in }
+        )
+        let recorder = StatusScanRecorder()
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project, otherProject])),
+            projectGitWatcherFactory: { _ in watcher },
+            worktreeStatusScan: { paths in
+                await recorder.record(paths: paths)
+            }
+        )
+        seed(state.projectsManager, projectId: project.id, [main, feature])
+        seed(state.projectsManager, projectId: otherProject.id, [otherMain])
+
+        state.startProjectGitWatcher(for: project)
+        watcher.processEvents([gitDir.appendingPathComponent("refs/heads/main").path])
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        #expect(await recorder.recordedCalls() == [["/repo-one", "/wts/one-feature"]])
         state.stopProjectGitWatcher(projectId: project.id)
     }
 }

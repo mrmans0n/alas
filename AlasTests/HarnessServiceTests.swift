@@ -82,6 +82,41 @@ struct HarnessServiceTests {
         return (service, collector)
     }
 
+    @Test func worktreeActivityEventFiresForRepeatedBusyEvents() {
+        let (service, _) = makeService()
+        var changedWorktrees: [String] = []
+        service.onWorktreeActivityEvent = { changedWorktrees.append($0) }
+
+        service.handleSocketEvent(
+            makeEvent(event: .busy),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .busy),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(changedWorktrees == ["w1", "w1"])
+    }
+
+    @Test func worktreeActivityEventSkipsWorkspaceCheckoutOwner() {
+        let (service, _) = makeService()
+        var changedWorktrees: [String] = []
+        service.onWorktreeActivityEvent = { changedWorktrees.append($0) }
+        let checkoutID = UUID()
+
+        service.handleSocketEvent(
+            makeEvent(event: .busy),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "checkout-storage") },
+            ownerLookup: { _ in .workspaceCheckout(checkoutID, .local) },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(changedWorktrees.isEmpty)
+    }
+
     private func waitForMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
