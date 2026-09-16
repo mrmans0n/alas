@@ -1001,6 +1001,7 @@ extension AppState {
             tabs.closeRunReports(worktreeId: worktreeID)
             if purgeHistory, let runHistoryStore {
                 Task { @MainActor [weak self, runHistoryStore] in
+                    await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
                     do {
                         try await runHistoryStore.purge(worktreeID: worktreeID)
                         self?.noteRunHistoryChanged(worktreeID: worktreeID)
