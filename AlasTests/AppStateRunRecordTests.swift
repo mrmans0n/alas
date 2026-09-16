@@ -736,14 +736,22 @@ struct AppStateRunRecordTests {
             portConflict: nil,
             output: .available(text: "late\n", truncated: false)
         )
+        var appendFinished = false
         fixture.state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = fixture.worktree.id
         fixture.state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history = fixture.history] in
             try? await Task.sleep(for: .milliseconds(50))
             _ = try? await history.append(entry)
+            appendFinished = true
         }
 
         fixture.state.cleanupRunScriptState(worktreeID: fixture.worktree.id)
-        try await Task.sleep(for: .milliseconds(150))
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if appendFinished, try await fixture.history.entry(id: entry.id) == nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(try await fixture.history.entry(id: entry.id) == nil)
     }
