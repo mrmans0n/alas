@@ -439,9 +439,10 @@ struct AppConfig: Codable, Equatable {
         /// the user drags the divider; the drawer then picks its default
         /// from the pane height.
         var bookmarksPaneHeight: Double?
+        var bookmarksCollapsed: Bool = false
 
         enum CodingKeys: String, CodingKey {
-            case showIgnored, bookmarksPaneHeight
+            case showIgnored, bookmarksPaneHeight, bookmarksCollapsed
         }
     }
 
@@ -859,7 +860,8 @@ extension AppConfig {
             let showIgnored = (try? filesContainer.decode(Bool.self, forKey: .showIgnored)) ?? true
             files = Files(
                 showIgnored: showIgnored,
-                bookmarksPaneHeight: try? filesContainer.decode(Double.self, forKey: .bookmarksPaneHeight)
+                bookmarksPaneHeight: try? filesContainer.decode(Double.self, forKey: .bookmarksPaneHeight),
+                bookmarksCollapsed: (try? filesContainer.decode(Bool.self, forKey: .bookmarksCollapsed)) ?? false
             )
         } else {
             files = Files(showIgnored: true, bookmarksPaneHeight: nil)

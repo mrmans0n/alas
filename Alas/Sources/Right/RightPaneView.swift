@@ -183,7 +183,12 @@ struct RightPaneView: View {
                     onSetBookmarksPaneHeight: { height in
                         state.config.files.bookmarksPaneHeight = Double(height)
                     },
-                    onCommitBookmarksPaneHeight: { state.saveConfig() }
+                    onCommitBookmarksPaneHeight: { state.saveConfig() },
+                    bookmarksCollapsed: state.config.files.bookmarksCollapsed,
+                    onToggleBookmarksCollapsed: {
+                        state.config.files.bookmarksCollapsed.toggle()
+                        state.saveConfig()
+                    }
                 )
                 // The tree loads children lazily and the bookmarks drawer
                 // renders no ancestor rows, so each completed load has to

@@ -32,43 +32,61 @@ struct FilesBookmarksPane: View {
     let nodes: [FileTreeNode]
     let context: FileTreeContext
     @Binding var openPaths: Set<String>
+    let collapsed: Bool
+    let onToggleCollapsed: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var rootPaths: Set<String> { Set(bookmarks) }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(bookmarks, id: \.self) { path in
-                        row(for: path)
+            if !collapsed {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(bookmarks, id: \.self) { path in
+                            row(for: path)
+                        }
                     }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
             }
         }
         .background(theme.color("bg-2"))
     }
 
     private var header: some View {
-        HStack(spacing: 5) {
-            Icon(name: "star.fill", size: 9, color: theme.color("fg-faint"))
-                .frame(width: 12, height: 12)
-            Text("BOOKMARKS")
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
-            Text("\(bookmarks.count)")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(theme.color("seg-pill-bg"))
-                .clipShape(Capsule())
-                .foregroundColor(theme.color("fg-muted"))
-            Spacer(minLength: 8)
+        Button {
+            withAnimation(PaneDrawerLayout.animation(reduceMotion: reduceMotion)) {
+                onToggleCollapsed()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Icon(name: "star.fill", size: 9, color: theme.color("fg-faint"))
+                    .frame(width: 12, height: 12)
+                Text("BOOKMARKS")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .tracking(0.5)
+                    .foregroundColor(theme.color("fg-muted"))
+                Text("\(bookmarks.count)")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(theme.color("seg-pill-bg"))
+                    .clipShape(Capsule())
+                    .foregroundColor(theme.color("fg-muted"))
+                Spacer(minLength: 8)
+                Icon(name: "chev-right", size: 10, color: theme.color("fg-muted"))
+                    .rotationEffect(PaneDrawerLayout(expanded: !collapsed).chevronAngle)
+            }
+            .paneBand(fill: theme.color("section-head-bg"))
+            .contentShape(Rectangle())
         }
-        .paneBand(fill: theme.color("section-head-bg"))
+        .buttonStyle(.plain)
+        .accessibilityLabel("Bookmarks, \(bookmarks.count)")
+        .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+        .help(collapsed ? "Expand Bookmarks" : "Collapse Bookmarks")
     }
 
     @ViewBuilder private func row(for path: String) -> some View {

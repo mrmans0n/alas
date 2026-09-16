@@ -32,6 +32,8 @@ struct FilesTabView: View {
     /// Called once the divider is released, so the height is persisted once
     /// rather than on every drag frame.
     var onCommitBookmarksPaneHeight: () -> Void = {}
+    var bookmarksCollapsed: Bool = false
+    var onToggleBookmarksCollapsed: () -> Void = {}
 
     @Environment(\.theme) private var theme
     @State private var dragStartHeight: CGFloat?
@@ -41,37 +43,41 @@ struct FilesTabView: View {
             VStack(spacing: 0) {
                 treePane
                 if !bookmarks.isEmpty {
-                    DragHandle(
-                        axis: .vertical,
-                        onDragChanged: { translation in
-                            let containerHeight = geometry.size.height
-                            let start = dragStartHeight ?? resolvedPaneHeight(containerHeight: containerHeight)
-                            if dragStartHeight == nil { dragStartHeight = start }
-                            // Dragging up (negative translation) grows the drawer.
-                            onSetBookmarksPaneHeight(
-                                FilesBookmarksPaneMetrics.clamp(
-                                    start - translation,
-                                    containerHeight: containerHeight
+                    if !bookmarksCollapsed {
+                        DragHandle(
+                            axis: .vertical,
+                            onDragChanged: { translation in
+                                let containerHeight = geometry.size.height
+                                let start = dragStartHeight ?? resolvedPaneHeight(containerHeight: containerHeight)
+                                if dragStartHeight == nil { dragStartHeight = start }
+                                // Dragging up (negative translation) grows the drawer.
+                                onSetBookmarksPaneHeight(
+                                    FilesBookmarksPaneMetrics.clamp(
+                                        start - translation,
+                                        containerHeight: containerHeight
+                                    )
                                 )
-                            )
-                        },
-                        onDragEnded: {
-                            dragStartHeight = nil
-                            onCommitBookmarksPaneHeight()
+                            },
+                            onDragEnded: {
+                                dragStartHeight = nil
+                                onCommitBookmarksPaneHeight()
+                            }
+                        )
+                        .overlay(alignment: .top) {
+                            Rectangle()
+                                .fill(theme.color("line").opacity(0.7))
+                                .frame(height: 1)
                         }
-                    )
-                    .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(theme.color("line").opacity(0.7))
-                            .frame(height: 1)
                     }
                     FilesBookmarksPane(
                         bookmarks: bookmarks,
                         nodes: nodes,
                         context: treeContext,
-                        openPaths: $bookmarkOpenPaths
+                        openPaths: $bookmarkOpenPaths,
+                        collapsed: bookmarksCollapsed,
+                        onToggleCollapsed: onToggleBookmarksCollapsed
                     )
-                    .frame(height: resolvedPaneHeight(containerHeight: geometry.size.height))
+                    .frame(height: bookmarksCollapsed ? nil : resolvedPaneHeight(containerHeight: geometry.size.height))
                 }
             }
         }
