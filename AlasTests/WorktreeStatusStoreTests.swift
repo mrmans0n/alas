@@ -125,4 +125,44 @@ struct WorktreeStatusStoreTests {
             ["/new-worktree", "/active-worktree"],
         ])
     }
+
+    @Test func projectScanInvalidatesOlderTargetedRemoteScanForCoveredWorktree() {
+        var generations = RemoteWorktreeStatusRescanGenerations()
+
+        let targeted = generations.beginWorktreeScan(projectID: "p1", worktreeID: "w1")
+        let project = generations.beginProjectScan(projectID: "p1", worktreeIDs: ["w1", "w2"])
+
+        #expect(generations.isCurrent(project))
+        #expect(generations.isCurrent(targeted) == false)
+        #expect(generations.isCurrentWorktree(
+            projectID: "p1",
+            worktreeID: "w1",
+            generation: project.worktreeGeneration(worktreeID: "w1") ?? -1
+        ))
+        #expect(generations.isCurrentWorktree(
+            projectID: "p1",
+            worktreeID: "w2",
+            generation: project.worktreeGeneration(worktreeID: "w2") ?? -1
+        ))
+    }
+
+    @Test func targetedRemoteScanInvalidatesOnlyItsPathFromOlderProjectScan() {
+        var generations = RemoteWorktreeStatusRescanGenerations()
+
+        let project = generations.beginProjectScan(projectID: "p1", worktreeIDs: ["w1", "w2"])
+        let targeted = generations.beginWorktreeScan(projectID: "p1", worktreeID: "w1")
+
+        #expect(generations.isCurrent(project))
+        #expect(generations.isCurrent(targeted))
+        #expect(generations.isCurrentWorktree(
+            projectID: "p1",
+            worktreeID: "w1",
+            generation: project.worktreeGeneration(worktreeID: "w1") ?? -1
+        ) == false)
+        #expect(generations.isCurrentWorktree(
+            projectID: "p1",
+            worktreeID: "w2",
+            generation: project.worktreeGeneration(worktreeID: "w2") ?? -1
+        ))
+    }
 }
