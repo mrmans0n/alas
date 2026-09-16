@@ -4559,6 +4559,33 @@ final class AppState {
         )
     }
 
+    /// Toggles a Files-tab bookmark for the repo the worktree belongs to.
+    /// Bookmarks are repo-level, so every worktree of the project sees this.
+    func toggleFileBookmark(projectId: String, path: String) {
+        projectsManager.toggleFileBookmark(projectId: projectId, path: path)
+        saveProjects()
+    }
+
+    func toggleFileBookmark(projectId: String, node: FileTreeNode) {
+        projectsManager.toggleFileBookmark(projectId: projectId, node: node)
+        saveProjects()
+    }
+
+    func removeFileBookmark(projectId: String, path: String) {
+        projectsManager.removeFileBookmark(projectId: projectId, path: path)
+        saveProjects()
+    }
+
+    func removeFileBookmark(projectId: String, node: FileTreeNode) {
+        projectsManager.removeFileBookmark(projectId: projectId, node: node)
+        saveProjects()
+    }
+
+    func removeFileBookmark(projectId: String, bookmark: String) {
+        projectsManager.removeFileBookmark(projectId: projectId, bookmark: bookmark)
+        saveProjects()
+    }
+
     func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
         projectsManager.setWorktreeLaunchDefaults(
             projectId: projectId,
@@ -12031,7 +12058,7 @@ extension AppState: RemoteSessionsProvider {
     /// browser is git-aware, so build output never reaches the phone.
     ///
     /// Runs the same recursive keep-if-has-visible-children pass
-    /// `FilesTabView.filteredNodes` uses for the native desktop Files tab
+    /// `FileTreeListView.filteredNodes` uses for the native desktop Files tab
     /// (`FileTreeNode.filteredKeepingVisibleDescendants`) BEFORE the flat
     /// wire projection below: a directory can be individually marked
     /// `.ignored`/`.excluded` while still holding a tracked (force-added)

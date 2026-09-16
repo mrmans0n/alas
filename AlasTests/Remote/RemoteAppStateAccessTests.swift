@@ -1431,7 +1431,7 @@ struct RemoteAppStateAccessTests {
     /// a tracked, force-added descendant (gitignore rules don't un-track a
     /// path already in the index) — intentional, since the native desktop
     /// Files tab keeps such a directory visible via
-    /// `FilesTabView.filteredNodes`'s recursive keep-if-has-visible-children
+    /// `FileTreeListView.filteredNodes`'s recursive keep-if-has-visible-children
     /// check. `AppState.remoteFileNodes` used to do a flat, non-recursive
     /// `compactMap` that dropped the directory outright — since
     /// `RemoteFileNode` carries no `children`, once dropped from the ROOT

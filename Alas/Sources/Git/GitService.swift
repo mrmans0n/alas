@@ -920,14 +920,9 @@ extension GitService {
 
     /// `badges` maps a worktree-relative path to its status letter (e.g.
     /// `"M"`, `"A"`, `"D"`), mirroring what `fileTree`'s ROOT listing already
-    /// receives from `status(worktreePath:)`. Defaults to `[:]` — the native
-    /// desktop Files tab (`RightPaneState.loadFileTreeChildren`) calls this
-    /// without a badge map and specifically relies on the returned nodes
-    /// having no badge of their own (see `RightPaneState.replacingChildren`'s
-    /// doc comment): it treats an incoming nil badge as "keep whatever badge
-    /// the existing node already had" rather than "this node has no badge".
-    /// Passing a real map here is opt-in for callers (the remote Files tree)
-    /// that want a directory expansion's badges to match the root listing's.
+    /// receives from `status(worktreePath:)`. Defaults to `[:]`; callers that
+    /// want directory expansion badges to match the root listing should pass a
+    /// real map.
     func fileTreeChildren(worktreePath: URL, path: String, badges: [String: String] = [:]) async throws -> [FileTreeNode] {
         if worktreePath.isRemoteAlasPath {
             let prefix = path.isEmpty ? "" : path + "/"

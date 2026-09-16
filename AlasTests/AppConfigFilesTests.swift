@@ -3,6 +3,27 @@ import Foundation
 @testable import Alas
 
 struct AppConfigFilesTests {
+    @Test func bookmarksCollapseRoundTripsWithoutChangingHeight() throws {
+        for collapsed in [true, false] {
+            var config = AppConfig.defaults
+            config.files.bookmarksPaneHeight = 210
+            config.files.bookmarksCollapsed = collapsed
+            let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+            #expect(decoded.files.bookmarksCollapsed == collapsed)
+            #expect(decoded.files.bookmarksPaneHeight == 210)
+        }
+    }
+
+    @Test func legacyFilesSettingsDefaultToExpanded() throws {
+        let defaults = try JSONEncoder().encode(AppConfig.defaults)
+        var legacy = try #require(JSONSerialization.jsonObject(with: defaults) as? [String: Any])
+        legacy["files"] = ["showIgnored": false, "bookmarksPaneHeight": 210]
+        let config = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(!config.files.bookmarksCollapsed)
+        #expect(config.files.bookmarksPaneHeight == 210)
+        #expect(!config.files.showIgnored)
+    }
+
     @Test func defaultsHaveShowIgnoredOn() {
         #expect(AppConfig.defaults.files.showIgnored == true)
     }

@@ -23,22 +23,22 @@ struct FilesTabLoadingIndicatorTests {
             childrenState: .loading
         )
 
-        #expect(FilesTabView.showsInlineLoadingIndicator(
+        #expect(FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: true,
             canExpand: true
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: false,
             canExpand: true
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingDirectory,
             open: true,
             canExpand: false
         ))
-        #expect(!FilesTabView.showsInlineLoadingIndicator(
+        #expect(!FileTreeListView.showsInlineLoadingIndicator(
             for: loadingFile,
             open: true,
             canExpand: true
@@ -57,11 +57,30 @@ struct FilesTabLoadingIndicatorTests {
                 childrenState: state
             )
 
-            #expect(!FilesTabView.showsInlineLoadingIndicator(
+            #expect(!FileTreeListView.showsInlineLoadingIndicator(
                 for: node,
                 open: true,
                 canExpand: true
             ))
         }
+    }
+
+    @Test func loadTaskIDIncludesRefreshPublicationRevision() {
+        let beforePublication = FileTreeListView.loadTaskID(
+            fileTreeGeneration: 7,
+            fileTreeRefreshRevision: 2,
+            path: "build/cache",
+            open: true,
+            childrenState: .loaded
+        )
+        let afterPublication = FileTreeListView.loadTaskID(
+            fileTreeGeneration: 7,
+            fileTreeRefreshRevision: 3,
+            path: "build/cache",
+            open: true,
+            childrenState: .loaded
+        )
+
+        #expect(beforePublication != afterPublication)
     }
 }

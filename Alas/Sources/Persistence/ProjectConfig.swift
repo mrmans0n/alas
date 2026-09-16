@@ -145,12 +145,16 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var ggWorktreeModes: [String: GGWorktreeMode] = [:]
     /// Sparse Issue attachments, keyed by worktree ID.
     var issueAttachments: [String: IssueAttachment] = [:]
+    /// Files-tab bookmarks, as worktree-relative paths in the order the
+    /// user added them. Repo-level on purpose: every worktree of the
+    /// project shares one list.
+    var fileBookmarks: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
-             ggWorktreeModes, issueAttachments
+             ggWorktreeModes, issueAttachments, fileBookmarks
     }
 
     init(
@@ -172,7 +176,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         host: String? = nil,
         ggMode: GGProjectMode = .auto,
         ggWorktreeModes: [String: GGWorktreeMode] = [:],
-        issueAttachments: [String: IssueAttachment] = [:]
+        issueAttachments: [String: IssueAttachment] = [:],
+        fileBookmarks: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -192,6 +197,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.ggMode = ggMode
         self.ggWorktreeModes = ggWorktreeModes
         self.issueAttachments = issueAttachments
+        self.fileBookmarks = fileBookmarks
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -230,6 +236,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
         issueAttachments = (try? c.decode([String: IssueAttachment].self, forKey: .issueAttachments)) ?? [:]
+        fileBookmarks = (try? c.decode([String].self, forKey: .fileBookmarks)) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -257,6 +264,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         }
         if !issueAttachments.isEmpty {
             try c.encode(issueAttachments, forKey: .issueAttachments)
+        }
+        if !fileBookmarks.isEmpty {
+            try c.encode(fileBookmarks, forKey: .fileBookmarks)
         }
     }
 

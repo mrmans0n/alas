@@ -432,9 +432,14 @@ struct AppConfig: Codable, Equatable {
 
     struct Files: Codable, Equatable {
         var showIgnored: Bool
+        /// Height of the Files-tab bookmarks drawer, in points. Nil until
+        /// the user drags the divider; the drawer then picks its default
+        /// from the pane height.
+        var bookmarksPaneHeight: Double?
+        var bookmarksCollapsed: Bool = false
 
         enum CodingKeys: String, CodingKey {
-            case showIgnored
+            case showIgnored, bookmarksPaneHeight, bookmarksCollapsed
         }
     }
 
@@ -523,7 +528,7 @@ struct AppConfig: Codable, Equatable {
             chatFontFamily: "",
             chatFontSize: 13
         ),
-        files: Files(showIgnored: true),
+        files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         workspacesEnabled: false,
         needsAttentionEnabled: false,
         recentProjectIds: [],
@@ -848,9 +853,13 @@ extension AppConfig {
             keyedBy: AppConfig.Files.CodingKeys.self, forKey: .files
         ) {
             let showIgnored = (try? filesContainer.decode(Bool.self, forKey: .showIgnored)) ?? true
-            files = Files(showIgnored: showIgnored)
+            files = Files(
+                showIgnored: showIgnored,
+                bookmarksPaneHeight: try? filesContainer.decode(Double.self, forKey: .bookmarksPaneHeight),
+                bookmarksCollapsed: (try? filesContainer.decode(Bool.self, forKey: .bookmarksCollapsed)) ?? false
+            )
         } else {
-            files = Files(showIgnored: true)
+            files = Files(showIgnored: true, bookmarksPaneHeight: nil)
         }
         // Older configs predate `remote`; default to disabled so they still load.
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()

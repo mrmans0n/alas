@@ -29,7 +29,7 @@ struct FilesTabFilterTests {
             ]),
             node(name: ".build", path: ".build", kind: .dir, visibility: .ignored)
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: true)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: true)
         #expect(result == tree)
     }
 
@@ -40,7 +40,7 @@ struct FilesTabFilterTests {
             node(name: "DerivedData", path: "DerivedData", kind: .dir, visibility: .excluded),
             node(name: "README.md", path: "README.md", kind: .file, visibility: .tracked)
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         #expect(result.map(\.path) == ["Sources", "README.md"])
     }
 
@@ -52,7 +52,7 @@ struct FilesTabFilterTests {
                 node(name: "secrets.env", path: "Sources/secrets.env", kind: .file, visibility: .excluded)
             ])
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         let sources = result.first
         #expect(sources?.path == "Sources")
         #expect(sources?.children?.map(\.path) == ["Sources/App.swift"])
@@ -70,7 +70,7 @@ struct FilesTabFilterTests {
                 node(name: "cache.log", path: ".build/cache.log", kind: .file, visibility: .ignored)
             ])
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         #expect(result.map(\.path) == [".build"])
         #expect(result.first?.children?.map(\.path) == [".build/out.swift"])
     }
@@ -81,7 +81,7 @@ struct FilesTabFilterTests {
                 node(name: "cache.log", path: ".build/cache.log", kind: .file, visibility: .ignored)
             ])
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         #expect(result.isEmpty)
     }
 
@@ -93,7 +93,7 @@ struct FilesTabFilterTests {
                 ])
             ])
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         #expect(result.map(\.path) == [".build"])
         #expect(result.first?.children?.map(\.path) == [".build/gen"])
         #expect(result.first?.children?.first?.children?.map(\.path) == [".build/gen/kept.swift"])
@@ -105,13 +105,13 @@ struct FilesTabFilterTests {
                 node(name: "cache.log", path: "Sources/cache.log", kind: .file, visibility: .ignored)
             ])
         ]
-        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        let result = FileTreeListView.filteredNodes(tree, showIgnored: false)
         #expect(result.map(\.path) == ["Sources"])
         #expect(result.first?.children?.isEmpty == true)
     }
 
     @Test func revealDisplayNameUsesLastPathComponent() {
-        #expect(FilesTabView.revealDisplayName(for: "Sources/Center/App.swift") == "App.swift")
-        #expect(FilesTabView.revealDisplayName(for: "README.md") == "README.md")
+        #expect(FileTreeListView.revealDisplayName(for: "Sources/Center/App.swift") == "App.swift")
+        #expect(FileTreeListView.revealDisplayName(for: "README.md") == "README.md")
     }
 }

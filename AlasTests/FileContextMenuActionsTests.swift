@@ -73,6 +73,28 @@ struct FileContextMenuActionsTests {
         ])
     }
 
+    @Test func filesTabOffersBookmarkingJustBeforeThePathActions() {
+        let file = FileContextMenuTarget(kind: .file, localURL: URL(fileURLWithPath: "/repo/README.md"))
+        let directory = FileContextMenuTarget(kind: .dir, localURL: URL(fileURLWithPath: "/repo/Sources"))
+        #expect(FileContextMenuConfiguration.filesTab(target: file, isBookmarked: false).actions == [
+            .openInAlas, .open, .openWith, .fileHistory, .toggleBookmark(isBookmarked: false),
+            .copyRelativePath, .copyFullPath, .revealInFinder
+        ])
+        #expect(FileContextMenuConfiguration.filesTab(target: directory, isBookmarked: true).actions == [
+            .newFile, .newFolder, .open, .toggleBookmark(isBookmarked: true),
+            .copyRelativePath, .copyFullPath, .revealInFinder
+        ])
+    }
+
+    @Test func filesTabOmitsBookmarkingWhenTheTargetCannotBeBookmarked() {
+        // The root-level menu targets the worktree itself, which is not a bookmark.
+        let root = FileContextMenuTarget(kind: .dir, localURL: URL(fileURLWithPath: "/repo"))
+        #expect(!FileContextMenuConfiguration.filesTab(target: root).actions.contains {
+            if case .toggleBookmark = $0 { return true }
+            return false
+        })
+    }
+
     @Test(arguments: ["README.md", "New Folder", ".env"])
     func acceptsChildNames(_ name: String) throws {
         #expect(try AppState.normalizedChildName("  \(name)  ") == name)

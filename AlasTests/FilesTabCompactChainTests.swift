@@ -32,7 +32,7 @@ struct FilesTabCompactChainTests {
 
     @Test func fileNodeReturnsItself() {
         let node = file(name: "App.swift", path: "App.swift")
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "App.swift")
         #expect(result.chainPaths == ["App.swift"])
         #expect(result.terminal.path == "App.swift")
@@ -40,7 +40,7 @@ struct FilesTabCompactChainTests {
 
     @Test func dirWithNoChildrenReturnsItself() {
         let node = dir(name: "src", path: "src", children: [])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -51,7 +51,7 @@ struct FilesTabCompactChainTests {
             dir(name: "main", path: "src/main"),
             dir(name: "test", path: "src/test")
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -61,7 +61,7 @@ struct FilesTabCompactChainTests {
         let node = dir(name: "src", path: "src", children: [
             file(name: "main.swift", path: "src/main.swift")
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -73,7 +73,7 @@ struct FilesTabCompactChainTests {
                 file(name: "App.swift", path: "src/main/App.swift")
             ])
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src/main")
         #expect(result.chainPaths == ["src", "src/main"])
         #expect(result.terminal.path == "src/main")
@@ -86,7 +86,7 @@ struct FilesTabCompactChainTests {
         let java = dir(name: "java", path: "src/main/java", children: [leaf])
         let main = dir(name: "main", path: "src/main", children: [java])
         let src = dir(name: "src", path: "src", children: [main])
-        let result = FilesTabView.compactChain(from: src)
+        let result = FileTreeListView.compactChain(from: src)
         #expect(result.displayName == "src/main/java/example")
         #expect(result.chainPaths == ["src", "src/main", "src/main/java", "src/main/java/example"])
         #expect(result.terminal.path == "src/main/java/example")
@@ -96,7 +96,7 @@ struct FilesTabCompactChainTests {
         let node = dir(name: "src", path: "src", children: [
             dir(name: "main", path: "src/main", childrenState: .notLoaded)
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -106,7 +106,7 @@ struct FilesTabCompactChainTests {
         let node = dir(name: "src", path: "src", children: [
             dir(name: "main", path: "src/main", childrenState: .loading)
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -114,7 +114,7 @@ struct FilesTabCompactChainTests {
 
     @Test func submoduleDirIsNotCompacted() {
         let node = dir(name: "vendor", path: "vendor", isSubmodule: true)
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "vendor")
         #expect(result.chainPaths == ["vendor"])
         #expect(result.terminal.path == "vendor")
@@ -124,7 +124,7 @@ struct FilesTabCompactChainTests {
         let node = dir(name: "src", path: "src", children: [
             dir(name: "sub", path: "src/sub", isSubmodule: true)
         ])
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
@@ -136,7 +136,7 @@ struct FilesTabCompactChainTests {
                 file(name: "App.swift", path: "ignored/tracked/App.swift")
             ])
         ], visibility: .ignored)
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "ignored")
         #expect(result.chainPaths == ["ignored"])
         #expect(result.terminal.path == "ignored")
@@ -148,7 +148,7 @@ struct FilesTabCompactChainTests {
                 file(name: "cache.log", path: "ignored/child/cache.log")
             ], visibility: .ignored)
         ], visibility: .ignored)
-        let result = FilesTabView.compactChain(from: node)
+        let result = FileTreeListView.compactChain(from: node)
         #expect(result.displayName == "ignored/child")
         #expect(result.chainPaths == ["ignored", "ignored/child"])
         #expect(result.terminal.path == "ignored/child")

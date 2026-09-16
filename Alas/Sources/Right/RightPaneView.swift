@@ -107,6 +107,14 @@ struct RightPaneView: View {
         }
     }
 
+    /// Changes whenever a directory listing lands, the tree is rebuilt, or the
+    /// bookmark list itself changes — the three things that can move a
+    /// bookmark closer to resolving.
+    private func bookmarkLoadSignal(rps: RightPaneState) -> String {
+        let bookmarks = state.projectsManager.fileBookmarks(projectId: worktree.projectId)
+        return "\(rps.fileTreeGeneration):\(rps.fileTreeRevision):\(rps.fileTreeRefreshRevision):\(rps.loadedFileTreeChildPaths.count):\(bookmarks.joined(separator: "|"))"
+    }
+
     @ViewBuilder
     private func tabContent(rps: RightPaneState) -> some View {
         if rps.hasLoadedSnapshot || rps.activeTab == .agent {
@@ -124,6 +132,7 @@ struct RightPaneView: View {
                 FilesTabView(
                     nodes: rps.fileTree,
                     fileTreeGeneration: rps.fileTreeGeneration,
+                    fileTreeRefreshRevision: rps.fileTreeRefreshRevision,
                     worktreePath: worktree.path,
                     openPaths: Binding(
                         get: { rps.openPaths },
@@ -151,8 +160,37 @@ struct RightPaneView: View {
                     revealPath: rps.revealPath,
                     revealTick: rps.revealTick,
                     onClearReveal: { rps.clearReveal() },
-                    worktreeRoot: rps.worktree.path
+                    worktreeRoot: rps.worktree.path,
+                    bookmarks: state.projectsManager.fileBookmarks(projectId: worktree.projectId),
+                    onToggleBookmark: { node in
+                        state.toggleFileBookmark(projectId: worktree.projectId, node: node)
+                    },
+                    onRemoveBookmark: { bookmark in
+                        state.removeFileBookmark(projectId: worktree.projectId, bookmark: bookmark)
+                    },
+                    bookmarkOpenPaths: Binding(
+                        get: { rps.bookmarkOpenPaths },
+                        set: { rps.bookmarkOpenPaths = $0 }
+                    ),
+                    bookmarksPaneHeight: state.config.files.bookmarksPaneHeight,
+                    onSetBookmarksPaneHeight: { height in
+                        state.config.files.bookmarksPaneHeight = Double(height)
+                    },
+                    onCommitBookmarksPaneHeight: { state.saveConfig() },
+                    bookmarksCollapsed: state.config.files.bookmarksCollapsed,
+                    onToggleBookmarksCollapsed: {
+                        state.config.files.bookmarksCollapsed.toggle()
+                        state.saveConfig()
+                    }
                 )
+                // The tree loads children lazily and the bookmarks drawer
+                // renders no ancestor rows, so each completed load has to
+                // nudge the next one along until every bookmark resolves.
+                .task(id: bookmarkLoadSignal(rps: rps)) {
+                    let bookmarks = state.projectsManager.fileBookmarks(projectId: worktree.projectId)
+                    rps.syncBookmarkRoots(bookmarks)
+                    rps.ensureBookmarkPathsLoaded(bookmarks)
+                }
             case .agent:
                 Group {
                     if let agentManager, agentManager.worktreeId == worktree.id {

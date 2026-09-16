@@ -178,16 +178,36 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var pullInFlight: Bool = false
     private var fetchInFlight: Bool = false
     private var lastSyncFetchAtByTarget: [SyncFetchTarget: Date] = [:]
-    var fileTree: [FileTreeNode] = []
+    var fileTree: [FileTreeNode] = [] {
+        didSet {
+            if oldValue != fileTree { fileTreeRevision &+= 1 }
+        }
+    }
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
+    /// Expanded directories inside the bookmarks drawer. Separate from
+    /// `openPaths` so expanding a bookmark leaves the tree above it alone.
+    var bookmarkOpenPaths: Set<String> = []
+    /// Bookmark roots already seeded into `bookmarkOpenPaths`, so a root the
+    /// user collapses is not re-expanded on the next render.
+    private var seededBookmarkRoots: Set<String> = []
     var revealPath: String? = nil
     private(set) var revealTick: Int = 0
     private var pendingRevealForPaneMount = false
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
+    private var fileTreeChildLoadTokens: [String: Int] = [:]
+    private var nextFileTreeChildLoadToken: Int = 0
     private(set) var failedFileTreeChildPaths: Set<String> = []
     private(set) var fileTreeGeneration: Int = 0
+    /// Advances when a refreshed or lazily loaded tree is actually published.
+    /// Views that resolve paths against the tree use this to avoid running
+    /// against the pre-refresh snapshot.
+    private(set) var fileTreeRevision: Int = 0
+    /// Lazy directories carried over during a refresh. They must be relisted
+    /// before bookmarks can trust their retained descendants.
+    private var bookmarkReconciliationPaths: Set<String> = []
+    private(set) var fileTreeRefreshRevision: Int = 0
 
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes {
@@ -1373,8 +1393,22 @@ final class RightPaneState: GGSplitCommitServicing {
                 self.changesGeneration += 1
             }
             if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
-            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
+            let previousFileTree = self.fileTree
+            let preservedLazyPaths = Self.preservedLazyChildPaths(fresh: tree, previous: previousFileTree)
+            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
+            bookmarkReconciliationPaths = Set(preservedLazyPaths)
+            let refreshedTreeBookkeeping = Self.bookkeepingAfterPublishingRefreshedTree(
+                loaded: loadedFileTreeChildPaths,
+                loading: loadingFileTreeChildPaths
+            )
+            loadedFileTreeChildPaths = refreshedTreeBookkeeping.loaded
+            loadingFileTreeChildPaths = refreshedTreeBookkeeping.loading
+            fileTreeChildLoadTokens = Self.loadTokensAfterPublishingRefreshedTree(
+                tokens: fileTreeChildLoadTokens,
+                loading: loadingFileTreeChildPaths
+            )
+            fileTreeRefreshRevision &+= 1
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
@@ -2905,6 +2939,7 @@ final class RightPaneState: GGSplitCommitServicing {
         fileTreeGeneration += 1
         loadedFileTreeChildPaths = [""]
         loadingFileTreeChildPaths = []
+        fileTreeChildLoadTokens = [:]
         failedFileTreeChildPaths = []
         fileTree = Self.resetLoadingFileTreeChildren(in: fileTree)
     }
@@ -3019,11 +3054,13 @@ final class RightPaneState: GGSplitCommitServicing {
         fresh: [FileTreeNode],
         previous: [FileTreeNode]
     ) -> [FileTreeNode] {
-        var previousByPath: [String: FileTreeNode] = [:]
-        for node in previous { previousByPath[node.path] = node }
+        var previousDirectoriesByPath: [String: FileTreeNode] = [:]
+        for node in previous where node.kind == .dir {
+            previousDirectoriesByPath[node.path] = node
+        }
         return fresh.map { node in
             var updated = node
-            let prior = previousByPath[node.path]
+            let prior = previousDirectoriesByPath[node.path]
             if node.kind == .dir,
                node.childrenState == .notLoaded,
                node.children == nil,
@@ -3045,27 +3082,60 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    /// Directories whose old children are retained because a refreshed tree
+    /// leaves them lazy. Their retained descendants need one fresh listing.
+    nonisolated static func preservedLazyChildPaths(
+        fresh: [FileTreeNode],
+        previous: [FileTreeNode]
+    ) -> [String] {
+        var previousDirectoriesByPath: [String: FileTreeNode] = [:]
+        for node in previous where node.kind == .dir {
+            previousDirectoriesByPath[node.path] = node
+        }
+        var paths: [String] = []
+        for node in fresh where node.kind == .dir {
+            let prior = previousDirectoriesByPath[node.path]
+            if let prior,
+               node.childrenState == .notLoaded,
+               node.children == nil,
+               prior.childrenState == .loaded,
+               prior.children != nil {
+                paths += loadedDirectoryPaths(in: prior)
+                continue
+            }
+            paths += preservedLazyChildPaths(
+                fresh: node.children ?? [],
+                previous: prior?.children ?? []
+            )
+        }
+        return paths
+    }
+
+    nonisolated private static func loadedDirectoryPaths(in node: FileTreeNode) -> [String] {
+        guard node.kind == .dir,
+              node.childrenState == .loaded,
+              let children = node.children else {
+            return []
+        }
+        return [node.path] + children.flatMap(loadedDirectoryPaths(in:))
+    }
+
     /// Reconciles the child list of the directory at `path` against a fresh
     /// listing from `GitService.fileTreeChildren`. Used when re-loading an
     /// already-loaded directory on refresh.
     ///
     /// `mergingChildren` seeds from the existing children and only overlays
     /// incoming entries, so deletions/renames linger. This instead treats the
-    /// listing as authoritative for what exists on disk and prunes entries that
-    /// are gone — but only when they are *filesystem*-authoritative (ignored or
-    /// excluded, with no git badge). Git-authoritative entries are kept even
-    /// when the listing omits them, because `fileTreeChildren` is a filesystem
-    /// scan and cannot represent them:
-    ///   - a tracked file deleted from disk still appears in the full tree with
-    ///     a `D` badge and must remain selectable;
-    ///   - surviving entries keep their badge, visibility, submodule flag, and
-    ///     any already-loaded subtree, since the listing has `badges: [:]` and a
-    ///     `.tracked` default that would otherwise erase that metadata.
+    /// listing as authoritative for which children still exist. Surviving
+    /// entries keep their badge, visibility, submodule flag, and any
+    /// already-loaded subtree, since the listing has `badges: [:]` and a
+    /// `.tracked` default that would otherwise erase that metadata.
     nonisolated static func replacingChildren(
         in nodes: [FileTreeNode],
         for path: String,
         with children: [FileTreeNode],
-        state: DirectoryChildrenState
+        state: DirectoryChildrenState,
+        currentDeletedPaths: Set<String> = []
     ) -> (nodes: [FileTreeNode], didMerge: Bool) {
         var didMerge = false
         let updatedNodes = nodes.map { node -> FileTreeNode in
@@ -3074,11 +3144,10 @@ final class RightPaneState: GGSplitCommitServicing {
                 var updated = node
                 var existingByID: [String: FileTreeNode] = [:]
                 for child in node.children ?? [] { existingByID[child.id] = child }
-                let incomingIDs = Set(children.map(\.id))
-                var reconciled = children.map { incoming -> FileTreeNode in
+                let reconciled = children.map { incoming -> FileTreeNode in
                     guard let existing = existingByID[incoming.id] else { return incoming }
                     var refreshed = incoming
-                    refreshed.badge = incoming.badge ?? existing.badge
+                    refreshed.badge = incoming.badge
                     refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: incoming.visibility)
                     refreshed.isSubmodule = incoming.isSubmodule || existing.isSubmodule
                     refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: incoming.childrenState)
@@ -3087,18 +3156,14 @@ final class RightPaneState: GGSplitCommitServicing {
                     }
                     return refreshed
                 }
-                // Keep git-authoritative entries the filesystem listing can't
-                // show (e.g. tracked deletions); drop only ignored/excluded
-                // entries with no badge that are actually gone from disk.
-                let keptDeletions = (node.children ?? []).filter { existing in
-                    guard !incomingIDs.contains(existing.id) else { return false }
-                    let filesystemAuthoritative =
-                        (existing.visibility == .ignored || existing.visibility == .excluded)
-                        && existing.badge == nil
-                    return !filesystemAuthoritative
+                let incomingIDs = Set(children.map(\.id))
+                let currentDeletions = (node.children ?? []).filter { existing in
+                    !incomingIDs.contains(existing.id)
+                        && existing.visibility == .tracked
+                        && currentDeletedPaths.contains(existing.path)
                 }
-                reconciled.append(contentsOf: keptDeletions)
-                updated.children = reconciled.sorted { lhs, rhs in
+                let nextChildren = reconciled + currentDeletions
+                updated.children = nextChildren.sorted { lhs, rhs in
                     if lhs.kind != rhs.kind { return lhs.kind == .dir }
                     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
                 }
@@ -3107,7 +3172,13 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             guard let existing = node.children else { return node }
             var updated = node
-            let result = replacingChildren(in: existing, for: path, with: children, state: state)
+            let result = replacingChildren(
+                in: existing,
+                for: path,
+                with: children,
+                state: state,
+                currentDeletedPaths: currentDeletedPaths
+            )
             didMerge = didMerge || result.didMerge
             updated.children = result.nodes
             return updated
@@ -3150,9 +3221,13 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func loadFileTreeChildren(path: String) {
-        guard !loadedFileTreeChildPaths.contains(path),
+        let reconcilesRetainedChildren = bookmarkReconciliationPaths.contains(path)
+        guard (!loadedFileTreeChildPaths.contains(path) || reconcilesRetainedChildren),
               !loadingFileTreeChildPaths.contains(path) else { return }
         loadingFileTreeChildPaths.insert(path)
+        nextFileTreeChildLoadToken &+= 1
+        let loadToken = nextFileTreeChildLoadToken
+        fileTreeChildLoadTokens[path] = loadToken
         // A directory whose children were carried over from a previous load
         // (e.g. across a refresh) is being reconciled, not loaded for the first
         // time. Flipping it to `.loading` would drop it out of a compacted chain
@@ -3160,39 +3235,69 @@ final class RightPaneState: GGSplitCommitServicing {
         // and refresh its contents in the background instead.
         let alreadyLoaded = Self.fileTreeNode(at: path, in: fileTree)
             .map { $0.childrenState == .loaded && $0.children != nil } ?? false
-        if !alreadyLoaded {
+        let replacesChildren = Self.shouldReplaceChildrenOnFileTreeLoad(
+            path: path,
+            in: fileTree,
+            bookmarkReconciliationPaths: bookmarkReconciliationPaths
+        )
+        if !alreadyLoaded && !replacesChildren {
             let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
             guard loadingMerge.didMerge else {
                 loadingFileTreeChildPaths.remove(path)
+                fileTreeChildLoadTokens[path] = nil
                 return
             }
             fileTree = loadingMerge.nodes
         }
         let generation = fileTreeGeneration
+        let refreshRevision = fileTreeRefreshRevision
         Task { @MainActor in
             defer {
-                if self.fileTreeGeneration == generation {
+                if self.fileTreeGeneration == generation,
+                   self.fileTreeChildLoadTokens[path] == loadToken {
+                    self.fileTreeChildLoadTokens[path] = nil
                     self.loadingFileTreeChildPaths.remove(path)
                 }
             }
             do {
-                let children = try await git.fileTreeChildren(worktreePath: worktree.path, path: path)
+                let children = try await git.fileTreeChildren(
+                    worktreePath: worktree.path,
+                    path: path,
+                    badges: Self.fileTreeBadges(from: self.changes)
+                )
                 guard self.fileTreeGeneration == generation else { return }
+                guard Self.shouldPublishFileTreeChildLoad(
+                    startedAtRefreshRevision: refreshRevision,
+                    currentRefreshRevision: self.fileTreeRefreshRevision
+                ) else { return }
                 // On the first load, merge so concurrent per-level loads (e.g. the
                 // reveal flow expanding several ancestors at once) accumulate.
                 // When reconciling an already-loaded directory, rebuild its child
                 // list from the fresh filesystem listing so deleted/renamed
                 // entries drop out — `mergingChildren` only overlays and would
                 // leave stale children behind.
-                let result = alreadyLoaded
-                    ? Self.replacingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                let result = replacesChildren
+                    ? Self.replacingChildren(
+                        in: self.fileTree,
+                        for: path,
+                        with: children,
+                        state: .loaded,
+                        currentDeletedPaths: Self.fileTreeDeletedPaths(from: self.changes)
+                    )
                     : Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
                 self.failedFileTreeChildPaths.remove(path)
+                if replacesChildren {
+                    self.bookmarkReconciliationPaths.remove(path)
+                }
                 self.fileTree = result.nodes
             } catch {
                 guard self.fileTreeGeneration == generation else { return }
+                guard Self.shouldPublishFileTreeChildLoad(
+                    startedAtRefreshRevision: refreshRevision,
+                    currentRefreshRevision: self.fileTreeRefreshRevision
+                ) else { return }
                 let result = Self.mergingChildren(in: self.fileTree, for: path, with: [], state: .failed)
                 guard result.didMerge else { return }
                 self.failedFileTreeChildPaths.insert(path)
@@ -3200,6 +3305,84 @@ final class RightPaneState: GGSplitCommitServicing {
                 logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    nonisolated static func shouldReplaceChildrenOnFileTreeLoad(
+        path: String,
+        in nodes: [FileTreeNode],
+        bookmarkReconciliationPaths: Set<String>
+    ) -> Bool {
+        if bookmarkReconciliationPaths.contains(path) { return true }
+        return fileTreeNode(at: path, in: nodes)
+            .map { $0.childrenState == .loaded && $0.children != nil } ?? false
+    }
+
+    nonisolated static func fileTreeBadges(from changes: [ChangedFile]) -> [String: String] {
+        var badges: [String: String] = [:]
+        for change in changes {
+            badges[change.path] = change.status
+        }
+        return badges
+    }
+
+    nonisolated static func fileTreeDeletedPaths(from changes: [ChangedFile]) -> Set<String> {
+        Set(changes.filter { $0.status == "D" }.map(\.path))
+    }
+
+    nonisolated static func bookkeepingAfterPublishingRefreshedTree(
+        loaded: Set<String>,
+        loading _: Set<String>
+    ) -> (loaded: Set<String>, loading: Set<String>) {
+        (
+            loaded.contains("") ? [""] : [],
+            []
+        )
+    }
+
+    nonisolated static func loadTokensAfterPublishingRefreshedTree(
+        tokens: [String: Int],
+        loading: Set<String>
+    ) -> [String: Int] {
+        tokens.filter { path, _ in loading.contains(path) }
+    }
+
+    nonisolated static func shouldPublishFileTreeChildLoad(
+        startedAtRefreshRevision: Int,
+        currentRefreshRevision: Int
+    ) -> Bool {
+        startedAtRefreshRevision == currentRefreshRevision
+    }
+
+    /// Bookmark roots start expanded. Seeding once (rather than on every
+    /// render) keeps a collapsed root collapsed, and dropping removed
+    /// bookmarks means re-adding one expands it again.
+    func syncBookmarkRoots(_ bookmarks: [String]) {
+        let paths = bookmarks.map(FileBookmarks.path(for:))
+        for path in paths where !seededBookmarkRoots.contains(path) {
+            seededBookmarkRoots.insert(path)
+            bookmarkOpenPaths.insert(path)
+        }
+        seededBookmarkRoots.formIntersection(paths)
+    }
+
+    /// Walks each bookmark toward its node and starts the next directory load
+    /// it needs. The file tree loads lazily and the drawer renders no ancestor
+    /// rows of its own, so nothing else would pull those levels in. One level
+    /// advances per call; callers re-invoke as the tree changes.
+    func ensureBookmarkPathsLoaded(_ bookmarks: [String]) {
+        for bookmark in bookmarks {
+            if let pending = FileBookmarks.pendingLoadPath(forBookmark: bookmark, in: fileTree) {
+                loadFileTreeChildren(path: pending)
+            } else if let reconciliationPath = bookmarkReconciliationPath(for: FileBookmarks.path(for: bookmark)) {
+                loadFileTreeChildren(path: reconciliationPath)
+            }
+        }
+    }
+
+    private func bookmarkReconciliationPath(for bookmarkPath: String) -> String? {
+        bookmarkReconciliationPaths
+            .filter { candidate in bookmarkPath == candidate || bookmarkPath.hasPrefix("\(candidate)/") }
+            .min { $0.split(separator: "/").count < $1.split(separator: "/").count }
     }
 
     func reveal(path: String, opensPane: Bool = false) {
