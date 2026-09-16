@@ -29,7 +29,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     private let rightMin: Double = 240
     private let rightMax: Double = 560
     private let centerMin: Double = 400
-    private let dividerWidth: Double = 6
+    private let dividerWidth: Double = 4
 
     var body: some View {
         GeometryReader { proxy in
