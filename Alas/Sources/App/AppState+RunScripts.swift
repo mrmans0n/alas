@@ -579,6 +579,11 @@ extension AppState {
         transientRunReports[runReportKey(worktreeID: worktreeID, runID: runID)]
     }
 
+    func hasRunReport(worktreeID: String, runID: String) -> Bool {
+        transientRunReport(worktreeID: worktreeID, runID: runID) != nil
+            || durableRunReportIDsByWorktreeID[worktreeID, default: []].contains(runID)
+    }
+
     func clearRunHistory(worktreeID: String) {
         tabs.closeRunReports(worktreeId: worktreeID)
         guard let runHistoryStore else { return }
@@ -586,6 +591,8 @@ extension AppState {
             await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
                 try await runHistoryStore.clear(worktreeID: worktreeID)
+                self?.runRecords.purgeFinished(worktreeID: worktreeID)
+                self?.durableRunReportIDsByWorktreeID[worktreeID] = []
                 self?.noteRunHistoryChanged(worktreeID: worktreeID)
             } catch {
                 self?.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
@@ -598,8 +605,25 @@ extension AppState {
     }
 
     func noteRunHistoryChanged(worktreeID: String) {
-        runHistoryChangedWorktreeID = worktreeID
+        runHistoryRevisionsByWorktreeID[worktreeID, default: 0] += 1
         runHistoryRevision += 1
+    }
+
+    func runHistoryRevision(worktreeID: String) -> Int {
+        runHistoryRevisionsByWorktreeID[worktreeID, default: 0]
+    }
+
+    @MainActor
+    func reloadDurableRunReportIDs(worktreeID: String) async {
+        guard let runHistoryStore else {
+            durableRunReportIDsByWorktreeID[worktreeID] = []
+            return
+        }
+        do {
+            durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
+        } catch {
+            durableRunReportIDsByWorktreeID[worktreeID] = []
+        }
     }
 
     func waitForRunScriptCompletionTasksForTesting() async {
@@ -641,6 +665,7 @@ extension AppState {
             do {
                 let inserted = try await runHistoryStore.append(entry)
                 if inserted {
+                    self?.durableRunReportIDsByWorktreeID[record.worktreeID] = try await runHistoryStore.ids(worktreeID: record.worktreeID)
                     self?.noteRunHistoryChanged(worktreeID: record.worktreeID)
                 }
             } catch {
@@ -898,6 +923,8 @@ extension AppState {
             }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
+            transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
+            durableRunReportIDsByWorktreeID[worktreeID] = []
             tabs.closeRunReports(worktreeId: worktreeID)
             if let runHistoryStore {
                 Task { @MainActor [weak self, runHistoryStore] in

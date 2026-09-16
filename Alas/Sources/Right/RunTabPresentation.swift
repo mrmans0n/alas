@@ -28,6 +28,7 @@ struct RunRowInput {
     /// shell is not evidence the command is still running — it only decides
     /// whether "jump to terminal" has anywhere to go.
     let hasTerminal: Bool
+    let hasReport: Bool
     let target: RunExecutionTarget
 }
 
@@ -188,7 +189,7 @@ enum RunTabPresentation {
         } else {
             let hasOutcome = if case .finished = status { true } else { false }
             actions.append(.start(label: hasOutcome ? "Rerun" : "Run"))
-            if hasOutcome, let runID = input.record?.id {
+            if hasOutcome, input.hasReport, let runID = input.record?.id {
                 actions.append(.showReport(runID: runID))
             }
         }

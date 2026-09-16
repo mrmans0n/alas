@@ -42,6 +42,7 @@ struct RunTabView: View {
 
     @State private var historyPage = RunHistoryPage(entries: [], totalCount: 0)
     @State private var historyPageIndex = 0
+    @State private var observedRunHistoryRevision = 0
     @State private var historyError: String?
     @State private var isClearingHistory = false
     var body: some View {
@@ -81,6 +82,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             let startedWorktreeID = worktree.id
             activeWorktreeID = startedWorktreeID
             historyPageIndex = 0
+            observedRunHistoryRevision = state.runHistoryRevision(worktreeID: startedWorktreeID)
             scripts = []
             scriptCatalogError = nil
             scannedWorktreeID = RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
@@ -105,7 +107,9 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             refreshScriptsFromControl()
         }
         .onChange(of: state.runHistoryRevision) {
-            guard state.runHistoryChangedWorktreeID == worktree.id else { return }
+            let revision = state.runHistoryRevision(worktreeID: worktree.id)
+            guard revision != observedRunHistoryRevision else { return }
+            observedRunHistoryRevision = revision
             historyPageIndex = 0
             Task { await loadHistory() }
         }
@@ -169,6 +173,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                 script: script,
                 record: record,
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
+                hasReport: record.map { state.hasRunReport(worktreeID: worktree.id, runID: $0.id) } ?? false,
                 target: record?.target ?? state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
@@ -426,6 +431,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         }
         do {
             let page = try await history.page(worktreeID: worktree.id, offset: historyPageIndex * 20, limit: 20)
+            await state.reloadDurableRunReportIDs(worktreeID: worktree.id)
             historyError = nil
             historyPage = page
         } catch {

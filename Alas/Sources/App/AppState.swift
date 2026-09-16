@@ -169,8 +169,10 @@ final class AppState {
     /// tab functional when Application Support cannot be opened.
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
     var runHistoryRevision = 0
-    var runHistoryChangedWorktreeID: String?
+    var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
     var runHistoryError: String?
+    @ObservationIgnored var transientRunReports: [String: RunHistoryEntry] = [:]
+    var durableRunReportIDsByWorktreeID: [String: Set<String>] = [:]
     @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.

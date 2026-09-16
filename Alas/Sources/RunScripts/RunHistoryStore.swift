@@ -156,6 +156,14 @@ actor RunHistoryStore {
         try clear(worktreeID: worktreeID)
     }
 
+    func ids(worktreeID: String) throws -> Set<String> {
+        let rows = try database.query(
+            "SELECT run_id FROM run_history WHERE worktree_id = ?",
+            bindings: [worktreeID]
+        )
+        return Set(try rows.map { try string("run_id", in: $0) })
+    }
+
     private func totalCount(worktreeID: String) throws -> Int {
         let rows = try database.query(
             "SELECT COUNT(*) AS count FROM run_history WHERE worktree_id = ?",

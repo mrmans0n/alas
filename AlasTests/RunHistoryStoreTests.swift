@@ -45,6 +45,15 @@ struct RunHistoryStoreTests {
         #expect(try await reopened.entry(id: stored.id) == stored)
     }
 
+    @Test func outputRetainsEmbeddedNULBytes() async throws {
+        let store = try RunHistoryStore(path: temporaryPath())
+        let stored = entry(id: "nul-output", output: .available(text: "a\u{0}b", truncated: false))
+
+        try await store.append(stored)
+
+        #expect(try await store.entry(id: stored.id) == stored)
+    }
+
     @Test func pageIsNewestFirstAndOmitsOutput() async throws {
         let store = try RunHistoryStore(path: temporaryPath())
         let oldest = entry(id: "oldest", completedAt: epoch)

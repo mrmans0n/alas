@@ -50,6 +50,7 @@ struct RunTabPresentationTests {
         script: RunScript? = nil,
         record: RunRecord? = nil,
         hasTerminal: Bool = false,
+        hasReport: Bool = true,
         host: String? = nil,
         workingDirectory: String = "/wt",
         now: Date? = nil
@@ -59,6 +60,7 @@ struct RunTabPresentationTests {
                 script: script ?? self.script(),
                 record: record,
                 hasTerminal: hasTerminal,
+                hasReport: hasReport,
                 target: RunExecutionTarget(host: host, workingDirectory: workingDirectory)
             ),
             now: now ?? epoch
@@ -157,6 +159,15 @@ struct RunTabPresentationTests {
         #expect(row.tone == .failure)
         #expect(row.detail == "exit 42 · 1m 15s · 1h ago")
         #expect(row.actions == [.start(label: "Rerun"), .showReport(runID: "run-1"), .edit])
+    }
+
+    @Test func completedRunHidesUnavailableReport() {
+        let row = row(
+            record: record(status: .finished(.stopped), finishedAt: epoch.addingTimeInterval(30)),
+            hasReport: false,
+            now: epoch.addingTimeInterval(30)
+        )
+        #expect(row.actions == [.start(label: "Rerun"), .edit])
     }
 
     @Test func succeededRunReportsDurationWithoutClaimingVerification() {
