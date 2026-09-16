@@ -101,9 +101,9 @@ struct HarnessSessionBadge: View {
 /// row behind it and so needs its own fixed contrast against the logo.
 struct HarnessSessionBadgeChrome: ViewModifier {
     /// Lightness of the gradient's first stop, from E1's `.agent`.
-    static let surfaceTopLightness: Double = 0.58
+    nonisolated static let surfaceTopLightness: Double = 0.58
     /// Lightness of the final stop.
-    static let surfaceBottomLightness: Double = 0.46
+    nonisolated static let surfaceBottomLightness: Double = 0.46
 
     let state: HarnessService.AggregatedState
     var isSelected = false

@@ -911,6 +911,15 @@ final class AppState {
         rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
             self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
         }
+        rightPaneStore.worktreeDidChange = { [weak self] worktreeID in
+            guard let self else { return }
+            if let resolved = self.projectAndWorktree(withWorktreeId: worktreeID),
+               resolved.project.host != nil {
+                self.rescanRemoteWorktreeStatuses(projectId: resolved.project.id)
+            } else {
+                self.rescanWorktreeStatuses(includeRemote: false)
+            }
+        }
         RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
             self?.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
         }
@@ -1276,17 +1285,19 @@ final class AppState {
 
     /// Recompute working-tree status for every local worktree.
     ///
-    /// Remote projects are excluded deliberately. Their status arrives with the
-    /// `RemoteWorktreeSummary` built in `remoteWorktreeOption(project:worktree:)`,
-    /// which already carries `changedFileCount` and `conflictCount` and is
-    /// fetched on the remote layer's own schedule — so scanning them here would
-    /// add per-worktree SSH round trips on every activation for information we
-    /// already have.
-    func rescanWorktreeStatuses() {
+    /// Remote projects are excluded from the local scanner deliberately. Their
+    /// status arrives through `RemoteWorktreeSummary`, which already carries
+    /// `changedFileCount` and `conflictCount`; when requested, remote projects
+    /// refresh through that summary path instead of the local git-status
+    /// scanner.
+    func rescanWorktreeStatuses(includeRemote: Bool = true) {
         let paths = projectsManager.projects
             .filter { $0.host == nil }
             .flatMap { projectsManager.worktrees(projectId: $0.id) }
             .map(\.path)
+        if includeRemote {
+            rescanRemoteWorktreeStatuses()
+        }
         guard !paths.isEmpty else { return }
         worktreeStatusRescanTask?.cancel()
         worktreeStatusRescanTask = Task { @MainActor in
@@ -1302,6 +1313,34 @@ final class AppState {
             // mid-scan sets a rescan flag instead of starting a second
             // pass), so letting this run to completion is correct.
             Task { await WorktreeStatusScanner.shared.scan(paths: paths) }
+        }
+    }
+
+    private func rescanRemoteWorktreeStatuses(projectId: String? = nil) {
+        let remoteProjects = projectsManager.projects.filter { project in
+            project.host != nil && (projectId == nil || project.id == projectId)
+        }
+        guard !remoteProjects.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var results: [String: WorktreeDirtyState] = [:]
+            for project in remoteProjects {
+                let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+                guard !isOfflineHost else { continue }
+                for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
+                    switch projectsManager.operationState(for: worktree.id) {
+                    case .creating, .deleting, .createFailed:
+                        continue
+                    case nil, .preparingDelete, .deleteFailed:
+                        let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
+                        guard summary.metricsAvailable else { continue }
+                        results[worktree.path.path] = summary.changedFileCount == 0
+                            ? .clean
+                            : .dirty(fileCount: summary.changedFileCount, conflictCount: summary.conflictCount)
+                    }
+                }
+            }
+            WorktreeStatusStore.shared.apply(results)
         }
     }
 
@@ -3807,24 +3846,40 @@ final class AppState {
             let watcher = RemoteProjectGitWatcher(projectPath: URL(fileURLWithPath: project.path))
             watcher.onHeadChanged = { [weak self] updates in
                 self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
             }
-            watcher.onRevisionChanged = { [weak self] in self?.handleProjectRevisionChange(projectId: project.id) }
+            watcher.onRevisionChanged = { [weak self] in
+                self?.handleProjectRevisionChange(projectId: project.id)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
+            }
             watcher.onTopologyChanged = { [weak self] in
                 self?.handleProjectRevisionChange(projectId: project.id)
                 self?.handleProjectTopologyChange(projectId: project.id)
+                self?.rescanRemoteWorktreeStatuses(projectId: project.id)
             }
             remoteProjectWatchers[project.id] = watcher
             watcher.start()
+            rescanRemoteWorktreeStatuses(projectId: project.id)
             return
         }
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
-        watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
-        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
-        watcher.onStackRevisionChanged = { [weak self] in self?.handleProjectStackRevisionChange(projectId: projectId) }
+        watcher.onHeadChanged = { [weak self] map in
+            self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map)
+            self?.rescanWorktreeStatuses(includeRemote: false)
+        }
+        watcher.onRevisionChanged = { [weak self] in
+            self?.bumpRevisionGenerationForProject(projectId: projectId)
+            self?.rescanWorktreeStatuses(includeRemote: false)
+        }
+        watcher.onStackRevisionChanged = { [weak self] in
+            self?.handleProjectStackRevisionChange(projectId: projectId)
+            self?.rescanWorktreeStatuses(includeRemote: false)
+        }
         watcher.onTopologyChanged = { [weak self] in
             self?.handleProjectRevisionChange(projectId: projectId)
             self?.handleProjectTopologyChange(projectId: projectId)
+            self?.rescanWorktreeStatuses(includeRemote: false)
         }
         watcher.start()
         projectGitWatchers[projectId] = watcher

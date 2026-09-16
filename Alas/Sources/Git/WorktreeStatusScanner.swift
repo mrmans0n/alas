@@ -19,6 +19,14 @@ actor WorktreeStatusScanner {
 
     private var isScanning = false
     private var rescanRequested = false
+    private var pendingPaths: [URL]?
+    private let statusesProvider: @Sendable ([URL]) async -> [String: WorktreeDirtyState]
+
+    init(
+        statusesProvider: @escaping @Sendable ([URL]) async -> [String: WorktreeDirtyState] = WorktreeStatusScanner.statuses(for:)
+    ) {
+        self.statusesProvider = statusesProvider
+    }
 
     /// Scans `paths` and publishes the results.
     ///
@@ -27,16 +35,22 @@ actor WorktreeStatusScanner {
     /// running pass repeats once when it finishes.
     func scan(paths: [URL]) async {
         guard !isScanning else {
+            pendingPaths = paths
             rescanRequested = true
             return
         }
         isScanning = true
         defer { isScanning = false }
 
+        var currentPaths = paths
         repeat {
             rescanRequested = false
-            let results = await Self.statuses(for: paths)
+            let results = await statusesProvider(currentPaths)
             await MainActor.run { WorktreeStatusStore.shared.apply(results) }
+            if rescanRequested, let pendingPaths {
+                currentPaths = pendingPaths
+                self.pendingPaths = nil
+            }
         } while rescanRequested
     }
 

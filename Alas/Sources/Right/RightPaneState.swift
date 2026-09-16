@@ -83,6 +83,8 @@ final class RightPaneState: GGSplitCommitServicing {
     var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
     @ObservationIgnored
     var attentionSnapshotDidChange: ((RightPaneAttentionSnapshot) -> Void)?
+    @ObservationIgnored
+    var worktreeDidChange: (() -> Void)?
 
     var attentionSnapshot: RightPaneAttentionSnapshot {
         RightPaneAttentionSnapshot(
@@ -595,7 +597,10 @@ final class RightPaneState: GGSplitCommitServicing {
         self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
-            Task { @MainActor in await self?.refresh() }
+            Task { @MainActor in
+                self?.worktreeDidChange?()
+                await self?.refresh()
+            }
         }
         remoteEventDebouncer.onFire = { [weak self] in
             Task { @MainActor in await self?.refresh() }

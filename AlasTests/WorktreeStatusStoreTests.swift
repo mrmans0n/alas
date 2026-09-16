@@ -1,9 +1,44 @@
+import Foundation
 import Testing
 @testable import Alas
 
 @Suite(.serialized)
 @MainActor
 struct WorktreeStatusStoreTests {
+    private actor ScanProbe {
+        private var calls: [[String]] = []
+        private var firstStarted: CheckedContinuation<Void, Never>?
+        private var releaseFirst: CheckedContinuation<Void, Never>?
+
+        func record(paths: [URL]) async -> [String: WorktreeDirtyState] {
+            calls.append(paths.map(\.path))
+            if calls.count == 1 {
+                firstStarted?.resume()
+                firstStarted = nil
+                await withCheckedContinuation { continuation in
+                    releaseFirst = continuation
+                }
+            }
+            return Dictionary(uniqueKeysWithValues: paths.map { ($0.path, .clean) })
+        }
+
+        func waitUntilFirstScanStarts() async {
+            guard calls.isEmpty else { return }
+            await withCheckedContinuation { continuation in
+                firstStarted = continuation
+            }
+        }
+
+        func releaseFirstScan() {
+            releaseFirst?.resume()
+            releaseFirst = nil
+        }
+
+        func recordedCalls() -> [[String]] {
+            calls
+        }
+    }
+
     private func freshStore() -> WorktreeStatusStore {
         let store = WorktreeStatusStore.shared
         store.prune(keepingPaths: [])
@@ -44,5 +79,25 @@ struct WorktreeStatusStoreTests {
         store.apply(["/a": .clean, "/b": .clean])
         store.prune(keepingPaths: ["/a", "/b"])
         #expect(store.statuses.count == 2)
+    }
+
+    @Test func coalescedScanUsesLatestRequestedPaths() async {
+        let probe = ScanProbe()
+        let scanner = WorktreeStatusScanner { paths in
+            await probe.record(paths: paths)
+        }
+
+        let firstPath = URL(fileURLWithPath: "/old")
+        let latestPath = URL(fileURLWithPath: "/new")
+        let scanTask = Task {
+            await scanner.scan(paths: [firstPath])
+        }
+
+        await probe.waitUntilFirstScanStarts()
+        await scanner.scan(paths: [latestPath])
+        await probe.releaseFirstScan()
+        await scanTask.value
+
+        #expect(await probe.recordedCalls() == [["/old"], ["/new"]])
     }
 }
