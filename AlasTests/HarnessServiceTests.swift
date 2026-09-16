@@ -101,6 +101,20 @@ struct HarnessServiceTests {
         #expect(changedWorktrees == ["w1", "w1"])
     }
 
+    @Test func worktreeActivityEventFiresWhenSessionDetaches() {
+        let (service, _) = makeService()
+        var changedWorktrees: [String] = []
+        service.onWorktreeActivityEvent = { changedWorktrees.append($0) }
+
+        service.handleSocketEvent(
+            makeEvent(event: .detached),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(changedWorktrees == ["w1"])
+    }
+
     @Test func worktreeActivityEventSkipsWorkspaceCheckoutOwner() {
         let (service, _) = makeService()
         var changedWorktrees: [String] = []

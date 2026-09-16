@@ -261,9 +261,9 @@ final class HarnessService {
 
     nonisolated static func shouldRefreshWorktreeStatus(after event: ActivityEvent) -> Bool {
         switch event {
-        case .busy, .idle, .awaitingInput, .permissionRequest:
+        case .busy, .idle, .awaitingInput, .permissionRequest, .detached:
             return true
-        case .attached, .detached:
+        case .attached:
             return false
         }
     }
