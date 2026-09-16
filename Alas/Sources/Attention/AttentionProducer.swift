@@ -217,7 +217,6 @@ enum AttentionProducer {
                         title: title, body: body, jumpTarget: jumpTarget, display: display)
     }
 
-
     private static func pathSetFingerprint(_ paths: [String]) -> String {
         paths.map { "\($0.count):\($0)" }.joined()
     }

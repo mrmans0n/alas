@@ -402,7 +402,6 @@ struct AgentSidebarRowView: View {
         )
     }
 
-
     private var agentName: String {
         agent?.displayName ?? row.agentID
     }
