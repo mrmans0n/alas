@@ -152,7 +152,8 @@ struct AppStateRunRecordTests {
             RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
         },
         endpoint: URL? = nil,
-        host: String? = nil
+        host: String? = nil,
+        terminalSessionOpener: AppState.TerminalSessionOpener? = nil
     ) throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("run-record-tests-\(UUID().uuidString)", isDirectory: true)
@@ -191,13 +192,14 @@ struct AppStateRunRecordTests {
         }
         let errors = ErrorBox()
         var openCount = 0
+        let opener = terminalSessionOpener ?? { _, _, _, _, _, _, _, _, _ in
+            openCount += 1
+            return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
+        }
         let state = AppState(
             store: MemoryStore(),
             fileActionErrorHandler: { title, message in errors.append((title, message)) },
-            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
-                openCount += 1
-                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
-            },
+            terminalSessionOpener: opener,
             runScriptCompletionWaiter: waiter,
             runHistoryStore: history,
             attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json"))
@@ -455,6 +457,26 @@ struct AppStateRunRecordTests {
 
         #expect(runRecord(fixture)?.status == .finished(.failed(exitCode: 7)))
         #expect(fixture.errors().contains { $0.title == "Run Script Failed" })
+    }
+
+    @Test func terminalOpenFailureDoesNotArchivePhantomRun() async throws {
+        let fixture = try makeFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+            },
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                throw NSError(domain: "test", code: 1)
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.flushRunHistoryPersistence()
+
+        #expect(runRecord(fixture) == nil)
+        #expect(try await fixture.history.page(worktreeID: fixture.worktree.id, offset: 0, limit: 20).totalCount == 0)
     }
 
     // MARK: - Launch races

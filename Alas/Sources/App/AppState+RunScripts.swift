@@ -510,7 +510,7 @@ extension AppState {
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(30))
                     }
                 } catch {
-                    cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
+                    releaseRunHistoryCapture(.location(captureLocation))
                     throw error
                 }
             } catch {
@@ -585,14 +585,16 @@ extension AppState {
     }
 
     func clearRunHistory(worktreeID: String) {
+        let cutoff = Date()
+        transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
         tabs.closeRunReports(worktreeId: worktreeID)
         guard let runHistoryStore else { return }
         Task { @MainActor [weak self, runHistoryStore] in
             await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
-                try await runHistoryStore.clear(worktreeID: worktreeID)
-                self?.runRecords.purgeFinished(worktreeID: worktreeID)
-                self?.durableRunReportIDsByWorktreeID[worktreeID] = []
+                try await runHistoryStore.clear(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                self?.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                self?.durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
                 self?.noteRunHistoryChanged(worktreeID: worktreeID)
             } catch {
                 self?.runHistoryError = "Could not clear run history: \(error.localizedDescription)"

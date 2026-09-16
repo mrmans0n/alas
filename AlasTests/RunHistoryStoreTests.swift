@@ -112,4 +112,17 @@ struct RunHistoryStoreTests {
         try await store.purge(worktreeID: "wt-2")
         #expect(try await store.entry(id: second.id) == nil)
     }
+
+    @Test func clearWithCutoffPreservesLaterCompletions() async throws {
+        let store = try RunHistoryStore(path: temporaryPath())
+        let old = entry(id: "old", completedAt: epoch)
+        let later = entry(id: "later", completedAt: epoch.addingTimeInterval(1))
+        try await store.append(old)
+        try await store.append(later)
+
+        try await store.clear(worktreeID: "wt-1", finishedOnOrBefore: epoch)
+
+        #expect(try await store.entry(id: "old") == nil)
+        #expect(try await store.entry(id: "later") == later)
+    }
 }

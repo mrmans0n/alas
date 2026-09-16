@@ -218,6 +218,19 @@ struct RunRecordStoreTests {
         #expect(store.records(worktreeID: "wt-2").count == 1)
     }
 
+    @Test func purgeFinishedWithCutoffKeepsLaterCompletions() {
+        var store = RunRecordStore()
+        store.begin(record(id: "old", scriptKey: "repo:old.sh"))
+        store.finish(runID: "old", outcome: .succeeded, at: epoch)
+        store.begin(record(id: "later", scriptKey: "repo:later.sh"))
+        store.finish(runID: "later", outcome: .succeeded, at: epoch.addingTimeInterval(1))
+
+        store.purgeFinished(worktreeID: "wt-1", finishedOnOrBefore: epoch)
+
+        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:old.sh") == nil)
+        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:later.sh")?.id == "later")
+    }
+
     // MARK: - Endpoint ownership
 
     @Test func portOwnerIsMatchedByHostAndPort() {

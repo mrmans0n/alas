@@ -152,6 +152,13 @@ actor RunHistoryStore {
         try database.exec("DELETE FROM run_history WHERE worktree_id = ?", bindings: [worktreeID])
     }
 
+    func clear(worktreeID: String, finishedOnOrBefore cutoff: Date) throws {
+        try database.exec(
+            "DELETE FROM run_history WHERE worktree_id = ? AND finished_at <= ?",
+            bindings: [worktreeID, cutoff.timeIntervalSince1970]
+        )
+    }
+
     func purge(worktreeID: String) throws {
         try clear(worktreeID: worktreeID)
     }

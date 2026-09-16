@@ -210,6 +210,15 @@ struct RunRecordStore: Equatable {
         }
     }
 
+    mutating func purgeFinished(worktreeID: String, finishedOnOrBefore cutoff: Date) {
+        byWorktree[worktreeID] = byWorktree[worktreeID]?.filter { _, record in
+            record.status.isActive || (record.finishedAt ?? .distantPast) > cutoff
+        }
+        if byWorktree[worktreeID]?.isEmpty == true {
+            byWorktree[worktreeID] = nil
+        }
+    }
+
     /// The run Alas already owns on `port` at `host`, if any. Used to name the
     /// other side of a port collision instead of guessing.
     func activeRunOwningPort(_ port: Int, host: String?, excludingRunID: String? = nil) -> RunRecord? {
