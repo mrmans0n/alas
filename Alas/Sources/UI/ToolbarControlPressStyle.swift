@@ -36,6 +36,34 @@ extension ButtonStyle where Self == ToolbarControlPressStyle {
     static var toolbarControl: ToolbarControlPressStyle { ToolbarControlPressStyle() }
 }
 
+/// Presentation state shared by menu-backed toolbar controls. Unlike buttons,
+/// `Menu` does not expose `ButtonStyleConfiguration.isPressed` to its label.
+enum ToolbarMenuControlPresentation {
+    static func isLit(hovering: Bool, isPressed: Bool) -> Bool {
+        hovering || isPressed
+    }
+}
+
+private struct ToolbarMenuControlPressFeedback: ViewModifier {
+    let isPressed: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isPressed ? 0.65 : 1)
+            .scaleEffect(reduceMotion || !isPressed ? 1 : 0.95)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: isPressed)
+    }
+}
+
+extension View {
+    /// Matches `ToolbarControlPressStyle` for menu labels, whose press state is
+    /// tracked by a simultaneous gesture so the menu still receives its click.
+    func toolbarMenuControlPressFeedback(isPressed: Bool) -> some View {
+        modifier(ToolbarMenuControlPressFeedback(isPressed: isPressed))
+    }
+}
+
 /// The shared toolbar-button surface: a fixed 26x22 hit area that fills with
 /// `bg-3` once lit.
 ///
