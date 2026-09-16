@@ -289,7 +289,6 @@ struct AlasApp: App {
                                                 object: RightPaneTab.run.rawValue)
             }
             .keyboardShortcut(state.shortcut(for: .rightPaneRunTab))
-            .disabled(!state.config.runTabEnabled)
             Button("New Terminal Tab") {
                 NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
             }

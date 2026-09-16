@@ -11,13 +11,12 @@ struct RightPaneRail: View {
     let changesCount: Int
     var activeAgentCount: Int = 0
     var activeRunCount: Int = 0
-    var showRunTab: Bool = false
     let onAction: (RightPaneRailAction) -> Void
 
     @Environment(\.theme) private var theme
 
     private var tabs: [RightPaneTab] {
-        RightPaneTab.available(runTabEnabled: showRunTab)
+        RightPaneTab.available()
     }
 
     var body: some View {
