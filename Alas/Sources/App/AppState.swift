@@ -129,6 +129,8 @@ final class AppState {
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteWorktreeStatusRescanTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var remoteWorktreeStatusRescanGenerations: [String: Int] = [:]
     var selectedWorktreeId: String? {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
@@ -917,11 +919,15 @@ final class AppState {
                resolved.project.host != nil {
                 self.rescanRemoteWorktreeStatuses(projectId: resolved.project.id)
             } else {
-                self.rescanWorktreeStatuses(includeRemote: false)
+                self.rescanLocalWorktreeStatus(worktreeId: worktreeID)
             }
         }
         RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
-            self?.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+            guard let self else { return }
+            self.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+            if !isDisconnected {
+                self.rescanRemoteWorktreeStatuses(host: host)
+            }
         }
         harness.onActivityTransition = { [weak self] transition in
             self?.observeHarnessAttention(transition)
@@ -1316,30 +1322,62 @@ final class AppState {
         }
     }
 
+    private func rescanLocalWorktreeStatus(worktreeId: String) {
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
+              resolved.project.host == nil
+        else { return }
+        Task { await WorktreeStatusScanner.shared.scan(paths: [resolved.worktree.path]) }
+    }
+
     private func rescanRemoteWorktreeStatuses(projectId: String? = nil) {
         let remoteProjects = projectsManager.projects.filter { project in
             project.host != nil && (projectId == nil || project.id == projectId)
         }
         guard !remoteProjects.isEmpty else { return }
-        Task { @MainActor [weak self] in
+        for project in remoteProjects {
+            enqueueRemoteWorktreeStatusRescan(project: project)
+        }
+    }
+
+    private func rescanRemoteWorktreeStatuses(host: String) {
+        let remoteProjects = projectsManager.projects.filter { $0.host == host }
+        guard !remoteProjects.isEmpty else { return }
+        for project in remoteProjects {
+            enqueueRemoteWorktreeStatusRescan(project: project)
+        }
+    }
+
+    private func enqueueRemoteWorktreeStatusRescan(project: ProjectConfig) {
+        let generation = (remoteWorktreeStatusRescanGenerations[project.id] ?? 0) + 1
+        remoteWorktreeStatusRescanGenerations[project.id] = generation
+        remoteWorktreeStatusRescanTasks[project.id]?.cancel()
+        remoteWorktreeStatusRescanTasks[project.id] = Task { @MainActor [weak self] in
             guard let self else { return }
-            var results: [String: WorktreeDirtyState] = [:]
-            for project in remoteProjects {
-                let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
-                guard !isOfflineHost else { continue }
-                for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
-                    switch projectsManager.operationState(for: worktree.id) {
-                    case .creating, .deleting, .createFailed:
-                        continue
-                    case nil, .preparingDelete, .deleteFailed:
-                        let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
-                        guard summary.metricsAvailable else { continue }
-                        results[worktree.path.path] = summary.changedFileCount == 0
-                            ? .clean
-                            : .dirty(fileCount: summary.changedFileCount, conflictCount: summary.conflictCount)
-                    }
+            try? await Task.sleep(for: Self.worktreeStatusDebounce)
+            guard !Task.isCancelled else { return }
+            defer {
+                if self.remoteWorktreeStatusRescanGenerations[project.id] == generation {
+                    self.remoteWorktreeStatusRescanTasks[project.id] = nil
                 }
             }
+            var results: [String: WorktreeDirtyState] = [:]
+            let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
+            guard !isOfflineHost else { return }
+            for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
+                switch projectsManager.operationState(for: worktree.id) {
+                case .creating, .deleting, .createFailed:
+                    continue
+                case nil, .preparingDelete, .deleteFailed:
+                    let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
+                    guard summary.metricsAvailable else { continue }
+                    results[worktree.path.path] = summary.changedFileCount == 0
+                        ? .clean
+                        : .dirty(fileCount: summary.changedFileCount, conflictCount: summary.conflictCount)
+                }
+            }
+            guard !Task.isCancelled,
+                  self.remoteWorktreeStatusRescanGenerations[project.id] == generation
+            else { return }
             WorktreeStatusStore.shared.apply(results)
         }
     }
