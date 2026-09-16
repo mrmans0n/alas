@@ -104,6 +104,25 @@ struct RunTabPresentationTests {
         ))
     }
 
+    @Test func historyDetailIncludesBranchAndCompletionTime() {
+        let finishedAt = epoch.addingTimeInterval(-180)
+        let entry = RunHistorySummary(
+            id: "run-1",
+            scriptKey: "repo:dev.sh",
+            scriptName: "Dev Server",
+            worktreeID: "wt-1",
+            branch: "feature/run-history",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/wt"),
+            endpoint: nil,
+            outcome: .succeeded,
+            startedAt: finishedAt.addingTimeInterval(-125),
+            finishedAt: finishedAt,
+            portConflict: nil
+        )
+
+        #expect(RunTabPresentation.historyDetail(entry, now: epoch) == "Succeeded · 2m 5s · feature/run-history · 3m ago")
+    }
+
     @Test func neverRunScriptOffersRunOnly() {
         let row = row()
         #expect(row.statusLabel == "Not run")

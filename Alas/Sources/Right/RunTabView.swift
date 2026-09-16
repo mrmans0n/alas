@@ -82,6 +82,8 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             let startedWorktreeID = worktree.id
             activeWorktreeID = startedWorktreeID
             historyPageIndex = 0
+            historyPage = .init(entries: [], totalCount: 0)
+            historyError = nil
             observedRunHistoryRevision = state.runHistoryRevision(worktreeID: startedWorktreeID)
             scripts = []
             scriptCatalogError = nil
@@ -362,7 +364,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.scriptName)
                                     .font(.system(size: 12, weight: .medium))
-                                Text(historyDetail(entry))
+                                Text(RunTabPresentation.historyDetail(entry, now: now))
                                     .font(.system(size: 10))
                                     .foregroundColor(theme.color("fg-faint"))
                             }
@@ -411,16 +413,6 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         case .failed: .failure
         case .stopped, .unknown: .warning
         }
-    }
-
-    private func historyDetail(_ entry: RunHistorySummary) -> String {
-        let outcome = switch entry.outcome {
-        case .succeeded: "Succeeded"
-        case let .failed(exitCode): "Failed · exit \(exitCode)"
-        case .stopped: "Stopped"
-        case .unknown: "Unknown"
-        }
-        return "\(outcome) · \(RunTabPresentation.format(duration: entry.duration))"
     }
 
     private func loadHistory() async {

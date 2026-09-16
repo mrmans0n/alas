@@ -148,6 +148,21 @@ enum RunTabPresentation {
         return "\(hours / 24)d ago"
     }
 
+    static func historyDetail(_ entry: RunHistorySummary, now: Date) -> String {
+        let outcome = switch entry.outcome {
+        case .succeeded: "Succeeded"
+        case let .failed(exitCode): "Failed · exit \(exitCode)"
+        case .stopped: "Stopped"
+        case .unknown: "Unknown"
+        }
+        return [
+            outcome,
+            format(duration: entry.duration),
+            entry.branch,
+            relative(from: entry.finishedAt, to: now),
+        ].joined(separator: " · ")
+    }
+
     // MARK: - Location
 
     private static func locationLabel(script: RunScript, target: RunExecutionTarget) -> String? {
