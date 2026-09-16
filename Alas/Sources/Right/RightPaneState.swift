@@ -184,7 +184,11 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var pullInFlight: Bool = false
     private var fetchInFlight: Bool = false
     private var lastSyncFetchAtByTarget: [SyncFetchTarget: Date] = [:]
-    var fileTree: [FileTreeNode] = []
+    var fileTree: [FileTreeNode] = [] {
+        didSet {
+            if oldValue != fileTree { fileTreeRevision &+= 1 }
+        }
+    }
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
     /// Expanded directories inside the bookmarks drawer. Separate from
@@ -200,6 +204,10 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var loadingFileTreeChildPaths: Set<String> = []
     private(set) var failedFileTreeChildPaths: Set<String> = []
     private(set) var fileTreeGeneration: Int = 0
+    /// Advances when a refreshed or lazily loaded tree is actually published.
+    /// Views that resolve paths against the tree use this to avoid running
+    /// against the pre-refresh snapshot.
+    private(set) var fileTreeRevision: Int = 0
 
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes {

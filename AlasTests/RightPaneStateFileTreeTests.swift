@@ -233,6 +233,37 @@ struct RightPaneStateFileTreeTests {
         #expect(state.failedFileTreeChildPaths.isEmpty)
     }
 
+    @Test func publishingAFileTreeAdvancesItsRevision() {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-filetree-revision-\(UUID().uuidString)")
+        let state = RightPaneState(
+            worktree: Worktree(
+                id: Worktree.makeId(path: path),
+                projectId: "test-project",
+                name: "main",
+                branch: "main",
+                path: path,
+                status: .clean,
+                lastActivity: Date()
+            ),
+            baseBranch: "main"
+        )
+        let revision = state.fileTreeRevision
+
+        state.fileTree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                childrenState: .notLoaded
+            )
+        ]
+
+        #expect(state.fileTreeRevision == revision + 1)
+    }
+
     @Test func invalidatingFileTreeChildLoadsResetsLoadingDirectoriesInRetainedTree() {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-filetree-loading-reset-\(UUID().uuidString)")
