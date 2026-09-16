@@ -1678,16 +1678,22 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { client.sent.filter { $0.method == "session/prompt" }.count == 1 }
         await recoveryGate.release()
         await attachTask.value
+        try await waitUntil { client.sent.filter { $0.method == "session/prompt" }.count == 2 }
 
         let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
-        #expect(prompts.count == 1)
+        #expect(prompts.count == 2)
         let recoveryBlock = try #require(prompts.first?.prompt.first)
         guard case .text(let recovery) = recoveryBlock else {
             Issue.record("Expected transcript recovery prompt first")
             return
         }
         #expect(recovery.contains("prior prompt"))
-        #expect(session.queue.contains { $0.id == forced.id && $0.status == .pending })
+        let forcedBlock = try #require(prompts.last?.prompt.first)
+        guard case .text(let forcedPrompt) = forcedBlock else {
+            Issue.record("Expected forced queued prompt after recovery")
+            return
+        }
+        #expect(forcedPrompt == "forced prompt")
     }
 
     @Test("new auth failure enters needsAuth with initialized auth method")

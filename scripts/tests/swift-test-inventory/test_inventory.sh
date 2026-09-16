@@ -58,6 +58,15 @@ struct WrapperFixtureTests {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/SharedGitFixtureTests.swift" <<'SWIFT'
+import Testing
+
+struct SharedGitFixtureTests {
+    @Test func usesSharedRepositoryHelper() {
+        _ = CheckpointTestRepository.make()
+    }
+}
+SWIFT
 cat > "${sandbox}/AlasTests/RunScriptFixtureTests.swift" <<'SWIFT'
 import Testing
 
@@ -96,7 +105,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=11 scheduled=10 ordinary=4 subprocess=6 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=12 scheduled=11 ordinary=4 subprocess=7 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -143,6 +152,7 @@ grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_sele
 grep -qx -- '-only-testing AlasTests/BeautifulMermaidFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/RunScriptFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/SharedGitFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WorkspaceEditExecutorFixtureTests' <<<"${subprocess_selectors}"
 
 mkdir -p "${sandbox}/bin"
@@ -170,6 +180,7 @@ grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/SharedGitFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WorkspaceEditExecutorFixtureTests' "${subprocess_log}"
 
