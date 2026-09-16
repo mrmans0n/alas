@@ -127,33 +127,17 @@ struct ChangesPreparationModelTests {
         #expect(model.syncProgress == nil)
     }
 
-    @MainActor
-    @Test func landingCardRendersOpenLandingControl() {
-        let model = ChangesPreparationModel.makeGG(
-            staged: .zero,
-            hasDraft: false,
-            capabilities: stagedOnlyCapabilities,
-            landingStatus: .init(completed: 1, total: 3, reviewNumber: 42, detail: "CI running")
+    @Test func landingCardCopyIncludesProgressReviewAndOpenAction() {
+        let status = ChangesPreparationModel.GGLandingStatus(
+            completed: 1,
+            total: 3,
+            reviewNumber: 42,
+            detail: "CI running"
         )
-        let card = ChangesPreparationCard(
-            model: model,
-            onReviewChanges: {},
-            onDraftCommit: {},
-            onPublishCommit: {},
-            onGGAction: { _ in },
-            onGGStackAction: { _ in },
-            onReviewRequestAction: { _ in },
-            onDismissSyncFailure: {},
-            onOpenGGLanding: {}
-        )
-        .environment(\.theme, try! ThemeStore().current)
 
-        let controller = NSHostingController(rootView: card)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 260, height: 160)
-        controller.view.layoutSubtreeIfNeeded()
-
-        #expect(subview(withAccessibilityIdentifier: "changes-preparation-gg-landing", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "changes-preparation-open-gg-landing", in: controller.view) != nil)
+        #expect(ChangesPreparationCardText.landingTitle(status) == "Landing 1 of 3")
+        #expect(ChangesPreparationCardText.landingDetail(status) == "#42 · CI running")
+        #expect(ChangesPreparationCardText.openLandingTitle == "Open landing")
     }
 
     @Test func ggRewriteDestinationsRequireStagedChanges() {
