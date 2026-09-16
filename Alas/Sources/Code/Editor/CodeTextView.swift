@@ -1914,7 +1914,7 @@ private final class WarningToolTipOwner: NSObject {
         self.provider = provider
     }
 
-    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+    @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         provider(point) ?? ""
     }
 }
