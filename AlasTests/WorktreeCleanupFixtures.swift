@@ -108,7 +108,7 @@ final class WorktreeCleanupMemoryStore: PersistenceStoreProtocol, @unchecked Sen
         lock.lock()
         defer { lock.unlock() }
         readPaths.insert(url.path)
-        nil
+        return nil
     }
 }
 
