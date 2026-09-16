@@ -104,7 +104,10 @@ actor WorktreeStatusScanner {
             if isUnmerged(code) { conflictCount += 1 }
 
             // Renames and copies spend a second field on their source path.
-            if code.hasPrefix("R") || code.hasPrefix("C") { index += 1 }
+            // Checked on either column deliberately: a record with `R` or `C`
+            // in the index or the work-tree position carries the extra path
+            // field, not just when it leads.
+            if code.contains("R") || code.contains("C") { index += 1 }
         }
 
         guard fileCount > 0 else { return .clean }

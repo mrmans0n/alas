@@ -7,7 +7,9 @@ import Foundation
 /// the sidebar cannot trust it; this type exists so that mistake is not
 /// repeated. Recompute it — do not store it.
 ///
-/// Named to avoid colliding with the legacy `WorktreeStatus` in `GitTypes.swift`, the persisted-and-never-updated enum this type replaces in practice.
+/// Named to avoid colliding with the legacy `WorktreeStatus` in
+/// `GitTypes.swift`, the persisted-and-never-updated enum this type replaces
+/// in practice.
 enum WorktreeDirtyState: Equatable, Sendable {
     /// No scan has completed for this worktree yet.
     ///

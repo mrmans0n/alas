@@ -1283,16 +1283,25 @@ final class AppState {
     /// add per-worktree SSH round trips on every activation for information we
     /// already have.
     func rescanWorktreeStatuses() {
-        worktreeStatusRescanTask?.cancel()
         let paths = projectsManager.projects
             .filter { $0.host == nil }
             .flatMap { projectsManager.worktrees(projectId: $0.id) }
             .map(\.path)
         guard !paths.isEmpty else { return }
+        worktreeStatusRescanTask?.cancel()
         worktreeStatusRescanTask = Task { @MainActor in
             try? await Task.sleep(for: Self.worktreeStatusDebounce)
             guard !Task.isCancelled else { return }
-            await WorktreeStatusScanner.shared.scan(paths: paths)
+            // Cancellation bounds only the debounce window above. The scan
+            // itself runs in a fresh unstructured task so a later rescan
+            // request cannot SIGTERM it mid-pass: `Process.run` is
+            // cancellation-aware, and killing an in-flight scan here would
+            // still let its drain loop spawn a process per remaining path
+            // that gets immediately terminated. `WorktreeStatusScanner`
+            // already coalesces overlapping requests (a request arriving
+            // mid-scan sets a rescan flag instead of starting a second
+            // pass), so letting this run to completion is correct.
+            Task { await WorktreeStatusScanner.shared.scan(paths: paths) }
         }
     }
 
@@ -11235,8 +11244,14 @@ extension AppState: RemoteSessionsProvider {
         // Remote status rides the summary pipeline rather than per-worktree SSH
         // calls. Hosts currently offline are skipped, leaving the previous
         // value in place rather than blanking the row. An unavailable metric
-        // is skipped too, rather than written as `.clean`.
-        if summary.metricsAvailable {
+        // is skipped too, rather than written as `.clean`. Local projects are
+        // excluded from this write: they are covered by the dedicated
+        // `WorktreeStatusScanner`, which counts untracked files with
+        // `--untracked-files=normal`, while this pipeline's `GitService.status`
+        // uses `--untracked-files=all`. The two disagree sharply on a worktree
+        // with an untracked directory, so letting both writers touch a local
+        // row makes the chip flip depending on which one ran last.
+        if project.host != nil, summary.metricsAvailable {
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             if !isOfflineHost {
                 let remoteStatus: WorktreeDirtyState = summary.changedFileCount == 0
