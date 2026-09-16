@@ -133,6 +133,10 @@ struct RunReportTabView: View {
 
     @MainActor
     private func load() async {
+        if let entry = state.transientRunReport(worktreeID: tabState.worktreeId, runID: tabState.runID) {
+            content = .report(entry)
+            return
+        }
         guard let history = state.runHistoryStore else {
             content = .error("Run history storage is unavailable.")
             return
