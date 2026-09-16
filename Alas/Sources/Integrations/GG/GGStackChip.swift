@@ -34,6 +34,9 @@ struct GGStackChipModel: Equatable {
 struct GGStackChip: View {
     let model: GGStackChipModel
     var onTap: (() -> Void)? = nil
+    /// Header-sized variant: matches the section count pill's height so the
+    /// Commits header stays as tall as Stashes/Working tree.
+    var compact: Bool = false
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
@@ -54,10 +57,11 @@ struct GGStackChip: View {
     private func chipBody(backgroundOpacity: Double) -> some View {
         let tint = theme.color(model.colorToken)
         return Text(model.label)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: compact ? 9.5 : 10.5, weight: .semibold))
             .lineLimit(1)
             .foregroundColor(tint)
-            .padding(.horizontal, 7).padding(.vertical, 2)
+            .padding(.horizontal, compact ? 6 : 7)
+            .padding(.vertical, compact ? 1 : 2)
             .background(tint.opacity(backgroundOpacity))
             .clipShape(Capsule())
     }

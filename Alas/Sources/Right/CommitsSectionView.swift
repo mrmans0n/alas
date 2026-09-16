@@ -139,7 +139,7 @@ struct CommitsSectionView: View {
                         if let status = GGCIStatus.rollup(of: request) {
                             GGCIDot(status: status)
                         }
-                        GGStackChip(model: .model(for: request), onTap: onOpenReviewRequest)
+                        GGStackChip(model: .model(for: request), onTap: onOpenReviewRequest, compact: true)
                     }
                     if let s = behindBase {
                         BehindChip(count: s.count, label: baseBranch, role: .base)
