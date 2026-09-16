@@ -4,6 +4,63 @@ import Testing
 
 @MainActor
 struct EditorDisplayDocumentTests {
+    @Test func hintRefreshPreservesLayoutBeforeTheHintExtent() throws {
+        let text = source(String(repeating: "let value = 123\n", count: 10000))
+        let document = try EditorDisplayDocument(source: text, revision: 0, hints: [])
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 800, height: 1e7))
+        manager.addTextContainer(container)
+        document.storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        let offset = text.length * 3 / 4
+        let hint = EditorDisplayHint(id: "hint", sourceOffset: offset, label: ": Int", size: CGSize(width: 35, height: 14))
+        try document.replaceHints(source: text, revision: 0, hints: [hint])
+        // A full storage replacement invalidates layout from zero. Keep the
+        // already laid-out prefix when a viewport receives fresh LSP hints.
+        #expect(manager.firstUnlaidCharacterIndex() >= offset - 16)
+        #expect(document.storage.string == (text.string as NSString).replacingCharacters(in: NSRange(location: offset, length: 0), with: "\u{FFFC}"))
+        manager.ensureLayout(for: container)
+        try document.replaceHints(source: text, revision: 0, hints: [])
+        #expect(manager.firstUnlaidCharacterIndex() >= offset - 16)
+        #expect(document.storage.string == text.string)
+    }
+
+    @Test func incrementalHintRefreshMatchesFullAssembly() throws {
+        for text in ["", "a🙂\tb\nאבגד\n", "plain source"] {
+            let original = source(text)
+            let document = try EditorDisplayDocument(source: original, revision: 4, hints: [])
+            let start = EditorDisplayHint(id: "start", sourceOffset: 0, label: "x:", size: CGSize(width: 12, height: 16))
+            let second = EditorDisplayHint(id: "second", sourceOffset: 0, label: "y:", size: CGSize(width: 20, height: 16))
+            let end = EditorDisplayHint(id: "end", sourceOffset: original.length, label: ": Int", size: CGSize(width: 40, height: 16))
+            for hints in [[start], [end, second, start], [end], [], [], [second, start], []] {
+                try document.replaceHints(source: original, revision: 4, hints: hints)
+                let expected = try EditorDisplayDocument(source: original, revision: 4, hints: hints)
+                #expect(document.storage.string == expected.storage.string)
+                #expect(document.map.hintRuns.map(\.hint) == expected.map.hintRuns.map(\.hint))
+                for index in 0..<document.storage.length {
+                    var actualAttributes = document.storage.attributes(at: index, effectiveRange: nil)
+                    var expectedAttributes = expected.storage.attributes(at: index, effectiveRange: nil)
+                    let actualHint = actualAttributes.removeValue(forKey: .attachment) as? EditorHintAttachment
+                    let expectedHint = expectedAttributes.removeValue(forKey: .attachment) as? EditorHintAttachment
+                    #expect(actualHint?.hint == expectedHint?.hint)
+                    #expect(NSDictionary(dictionary: actualAttributes).isEqual(to: expectedAttributes))
+                }
+            }
+        }
+    }
+
+    @Test func hintRefreshRejectsInvalidHintsWithoutMutatingStorage() throws {
+        let original = source("a🙂b")
+        let document = try EditorDisplayDocument(source: original, revision: 4, hints: pair)
+        let snapshot = NSAttributedString(attributedString: document.storage)
+        let invalid = EditorDisplayHint(id: "invalid", sourceOffset: 2, label: "x", size: CGSize(width: 10, height: 10))
+        #expect(throws: EditorDisplayMapError.self) {
+            try document.replaceHints(source: original, revision: 4, hints: [invalid])
+        }
+        #expect(document.storage.isEqual(to: snapshot))
+        #expect(document.map.hintRuns.map(\.hint) == pair)
+    }
+
     @Test func incrementalLineStartsHandleInsertionDeletionAndBoundaryEdits() {
         let starts = [0, 3, 6] // "ab\ncd\n"
         let cases: [(EditorTextEdit, [Int])] = [

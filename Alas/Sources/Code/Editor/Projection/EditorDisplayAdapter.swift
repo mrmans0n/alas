@@ -72,7 +72,7 @@ final class EditorDisplayAdapter {
         if composition.isActive { deferredHints = (revision, hints)
         return }
         self.hints = hints
-        rebuild()
+        rebuild(hintsOnly: true)
     }
 
     func sourceRange(forDisplay range: NSRange) -> NSRange? {
@@ -165,7 +165,7 @@ final class EditorDisplayAdapter {
         return result
     }
 
-    func rebuild(sourceEdit: EditorTextEdit? = nil, sourceDidChange: Bool = false) {
+    func rebuild(sourceEdit: EditorTextEdit? = nil, sourceDidChange: Bool = false, hintsOnly: Bool = false) {
         guard !isRebuilding, let view else { return }
         isRebuilding = true
         defer { isRebuilding = false }
@@ -186,6 +186,8 @@ final class EditorDisplayAdapter {
             } == true
             if appliedEdit {
                 hints = document.map.hintRuns.map(\.hint)
+            } else if hintsOnly {
+                try document.replaceHints(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
             } else {
                 try document.replace(source: buffer.storage, revision: buffer.editGeneration, hints: hints)
             }

@@ -27,6 +27,30 @@ final class EditorDisplayDocument {
         storage.endEditing()
     }
 
+    /// A hint response changes only presentation at the current source revision.
+    /// Preserve text outside the old/new hint extent so TextKit can reuse layout
+    /// above the viewport instead of laying out the document from the beginning.
+    func replaceHints(source: NSAttributedString, revision: Int, hints: [EditorDisplayHint]) throws {
+        guard revision == map.revision, source.length == map.sourceLength else {
+            try replace(source: source, revision: revision, hints: hints)
+            return
+        }
+        let replacementMap = try EditorDisplayMap(source: source.string, revision: revision, hints: hints)
+        let offsets = [map.hintRuns.first?.hint.sourceOffset, map.hintRuns.last?.hint.sourceOffset,
+                       replacementMap.hintRuns.first?.hint.sourceOffset, replacementMap.hintRuns.last?.hint.sourceOffset].compactMap { $0 }
+        guard let start = offsets.min(), let end = offsets.max() else {
+            map = replacementMap
+            return
+        }
+        let displayStart = try map.displayOffset(forSource: start, affinity: .beforeHints)
+        let displayEnd = try map.displayOffset(forSource: end, affinity: .afterHints)
+        let display = Self.assemble(source: source, map: replacementMap, range: NSRange(location: start, length: end - start))
+        storage.beginEditing()
+        map = replacementMap
+        storage.replaceCharacters(in: NSRange(location: displayStart, length: displayEnd - displayStart), with: display)
+        storage.endEditing()
+    }
+
     /// Applies one committed source edit, optionally retaining hints outside
     /// touched lines as presentation only. The caller
     /// supplies the buffer's edit event, so unchanged prefix/suffix text need
@@ -112,10 +136,12 @@ final class EditorDisplayDocument {
         return true
     }
 
-    private static func assemble(source: NSAttributedString, map: EditorDisplayMap) -> NSAttributedString {
+    private static func assemble(source: NSAttributedString, map: EditorDisplayMap, range: NSRange? = nil) -> NSAttributedString {
         let display = NSMutableAttributedString(string: "")
-        var cursor = 0
-        for run in map.hintRuns {
+        let range = range ?? NSRange(location: 0, length: source.length)
+        var cursor = range.location
+        let end = NSMaxRange(range)
+        for run in map.hintRuns where run.hint.sourceOffset >= range.location && run.hint.sourceOffset <= end {
             let offset = run.hint.sourceOffset
             if offset > cursor {
                 display.append(source.attributedSubstring(from: NSRange(location: cursor, length: offset - cursor)))
@@ -132,8 +158,8 @@ final class EditorDisplayDocument {
             display.append(attachment)
             cursor = offset
         }
-        if cursor < source.length {
-            display.append(source.attributedSubstring(from: NSRange(location: cursor, length: source.length - cursor)))
+        if cursor < end {
+            display.append(source.attributedSubstring(from: NSRange(location: cursor, length: end - cursor)))
         }
         return display
     }
