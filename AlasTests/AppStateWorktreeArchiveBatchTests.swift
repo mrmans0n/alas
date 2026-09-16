@@ -6,6 +6,7 @@ import Foundation
 struct AppStateWorktreeArchiveBatchTests {
     @Test func batchArchiveHidesEveryItemWithoutTouchingDisk() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())
 
         let results = fixture.state.batchArchiveWorktrees(targets)
@@ -24,6 +25,7 @@ struct AppStateWorktreeArchiveBatchTests {
 
     @Test func batchArchiveSkipsMainWorktree() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let main = fixture.worktrees[0]
 
         let results = fixture.state.batchArchiveWorktrees([main])
@@ -35,6 +37,7 @@ struct AppStateWorktreeArchiveBatchTests {
 
     @Test func archiveRoundTripRestoresTheWorktree() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
 
         _ = fixture.state.batchArchiveWorktrees([target])
