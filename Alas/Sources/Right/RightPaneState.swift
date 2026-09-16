@@ -3119,16 +3119,10 @@ final class RightPaneState: GGSplitCommitServicing {
     ///
     /// `mergingChildren` seeds from the existing children and only overlays
     /// incoming entries, so deletions/renames linger. This instead treats the
-    /// listing as authoritative for what exists on disk and prunes entries that
-    /// are gone — but only when they are *filesystem*-authoritative (ignored or
-    /// excluded, with no git badge). Git-authoritative entries are kept even
-    /// when the listing omits them, because `fileTreeChildren` is a filesystem
-    /// scan and cannot represent them:
-    ///   - a tracked file deleted from disk still appears in the full tree with
-    ///     a `D` badge and must remain selectable;
-    ///   - surviving entries keep their badge, visibility, submodule flag, and
-    ///     any already-loaded subtree, since the listing has `badges: [:]` and a
-    ///     `.tracked` default that would otherwise erase that metadata.
+    /// listing as authoritative for which children still exist. Surviving
+    /// entries keep their badge, visibility, submodule flag, and any
+    /// already-loaded subtree, since the listing has `badges: [:]` and a
+    /// `.tracked` default that would otherwise erase that metadata.
     nonisolated static func replacingChildren(
         in nodes: [FileTreeNode],
         for path: String,
@@ -3142,8 +3136,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 var updated = node
                 var existingByID: [String: FileTreeNode] = [:]
                 for child in node.children ?? [] { existingByID[child.id] = child }
-                let incomingIDs = Set(children.map(\.id))
-                var reconciled = children.map { incoming -> FileTreeNode in
+                let reconciled = children.map { incoming -> FileTreeNode in
                     guard let existing = existingByID[incoming.id] else { return incoming }
                     var refreshed = incoming
                     refreshed.badge = incoming.badge ?? existing.badge
@@ -3155,14 +3148,6 @@ final class RightPaneState: GGSplitCommitServicing {
                     }
                     return refreshed
                 }
-                // Keep git-authoritative entries the filesystem listing can't
-                // show (e.g. tracked deletions with a D badge); drop clean
-                // entries that are absent from both refreshed sources.
-                let keptDeletions = (node.children ?? []).filter { existing in
-                    guard !incomingIDs.contains(existing.id) else { return false }
-                    return existing.visibility == .tracked && existing.badge != nil
-                }
-                reconciled.append(contentsOf: keptDeletions)
                 updated.children = reconciled.sorted { lhs, rhs in
                     if lhs.kind != rhs.kind { return lhs.kind == .dir }
                     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending

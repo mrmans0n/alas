@@ -739,7 +739,7 @@ struct RightPaneStateFileTreeTests {
         #expect(new?.visibility == .untracked)
     }
 
-    @Test func replacingChildrenKeepsTrackedDeletionAbsentFromDiskListing() {
+    @Test func replacingChildrenDropsTrackedDeletionAbsentFromDiskListing() {
         // An open tracked directory whose tracked file was deleted from disk:
         // the full tree still carries the `D` node (from git's cached paths),
         // but a filesystem listing cannot include it.
@@ -788,10 +788,9 @@ struct RightPaneStateFileTreeTests {
 
         let result = RightPaneState.replacingChildren(in: tree, for: "Sources", with: incoming, state: .loaded)
         let sources = result.nodes.first
-        let gone = sources?.children?.first { $0.path == "Sources/Gone.swift" }
 
         #expect(result.didMerge)
-        #expect(gone?.badge == "D")
+        #expect(sources?.children?.contains { $0.path == "Sources/Gone.swift" } == false)
         #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
     }
 

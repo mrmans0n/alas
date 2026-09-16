@@ -43,9 +43,14 @@ struct FileBookmarksTests {
         #expect(FileBookmarks.normalized(" folder / document ") == " folder / document ")
     }
 
-    @Test(arguments: ["", "   ", "/", "."])
+    @Test(arguments: ["", "/", "."])
     func rejectsPathsThatCannotBeBookmarked(_ raw: String) {
         #expect(FileBookmarks.normalized(raw) == nil)
+    }
+
+    @Test(arguments: ["   ", "\t", "\n"])
+    func acceptsAllWhitespaceFilenames(_ raw: String) {
+        #expect(FileBookmarks.normalized(raw) == raw)
     }
 
     // MARK: - Toggle
