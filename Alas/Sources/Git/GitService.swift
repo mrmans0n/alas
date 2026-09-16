@@ -80,6 +80,12 @@ enum HeadBlobTextResult: Equatable, Sendable {
 }
 
 extension GitService {
+    struct UpstreamDivergence: Equatable, Sendable {
+        let upstreamRef: String
+        let ahead: Int
+        let behind: Int
+    }
+
     /// Whether the repo has any commits yet. `git diff HEAD` and friends
     /// fail with `bad revision 'HEAD'` on unborn branches; callers swap to
     /// index-based diffs in that case.
@@ -2116,6 +2122,30 @@ extension GitService {
             .max(by: { $0.count < $1.count })
         else { return nil }
         return (remote: remote, ref: name)
+    }
+
+    /// Counts commits unique to HEAD and its configured upstream. This only
+    /// reads the current remote-tracking ref; callers that need a network
+    /// refresh should fetch before invoking it.
+    func upstreamDivergence(worktreePath: URL) async throws -> UpstreamDivergence? {
+        guard let upstream = try await resolveUpstreamRef(worktreePath: worktreePath) else {
+            return nil
+        }
+        let result = try await Process.git(
+            ["rev-list", "--left-right", "--count", "HEAD...\(upstream.ref)"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+        let counts = result.stdout.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+        guard counts.count == 2,
+              let ahead = Int(counts[0]),
+              let behind = Int(counts[1])
+        else {
+            throw ProcessError.nonZeroExit(result.exitCode, "Unexpected upstream divergence output: \(result.stdout)")
+        }
+        return UpstreamDivergence(upstreamRef: upstream.ref, ahead: ahead, behind: behind)
     }
 
     /// Computes behind-count of HEAD relative to `ref`, plus the resolved

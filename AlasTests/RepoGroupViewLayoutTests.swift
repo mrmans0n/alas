@@ -51,6 +51,7 @@ struct RepoGroupViewLayoutTests {
             collapsed: .constant(collapsed),
             selectedWorktreeId: nil,
             isMain: { _ in false },
+            upstreamStatus: { _ in nil },
             operationState: { _ in nil },
             harnessSummary: { _ in nil },
             ggMenuModel: { _ in

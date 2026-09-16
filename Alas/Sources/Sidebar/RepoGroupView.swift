@@ -17,6 +17,7 @@ struct RepoGroupView: View {
     @Binding var collapsed: Bool
     let selectedWorktreeId: String?
     let isMain: (Worktree) -> Bool
+    let upstreamStatus: (Worktree) -> WorktreeUpstreamStatus?
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
@@ -144,6 +145,7 @@ struct RepoGroupView: View {
                             worktree: wt,
                             isSelected: wt.id == selectedWorktreeId,
                             isMain: isMain(wt),
+                            upstreamStatus: upstreamStatus(wt),
                             operationState: operationState(wt),
                             harnessSummary: harnessSummary(wt.id),
                             ggMenuModel: ggMenuModel(wt),
