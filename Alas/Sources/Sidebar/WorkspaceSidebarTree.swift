@@ -35,8 +35,8 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         let projects = Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0) })
 
         ZStack {
-            VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     switch row {
                     case .project(let id):
                         if let project = projects[id] {
@@ -54,14 +54,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                             .padding(.vertical, 5)
                     case .checkout(let id):
                         if let checkout = checkouts[id], checkout.workspaceID.map({ !collapsedWorkspaces.contains($0) }) ?? true {
-                            checkoutRows(
-                                checkout,
-                                projects: projects,
-                                railContinues: WorkspaceSidebarLayout.rowContinuesRail(
-                                    rows: rows,
-                                    after: index
-                                )
-                            )
+                            checkoutRows(checkout, projects: projects)
                         }
                     case .member:
                         EmptyView()
@@ -174,6 +167,12 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
             in: RoundedRectangle(cornerRadius: 8)
         )
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
+            }
+        }
         // Outer margin: trailing only. The leading side is already accounted
         // for by the outer scroll-content padding, so adding it here would
         // double-count it against the header's own leading inset above.
@@ -190,33 +189,16 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         }
     }
 
-    /// Spacing of the row list, mirrored here so a rail segment can bridge it.
-    /// Computed rather than stored: the enclosing view is generic, and generic
-    /// types cannot hold static stored properties.
-    private static var rowSpacing: CGFloat { 2 }
-
-    /// Vertical centre of the checkout row's single line of content, where the
-    /// elbow meets the rail. The row is `minHeight: 28`, so this is its midpoint
-    /// rather than `SidebarTreeGuide.elbowOffsetY`, which is measured for the
-    /// taller two-line worktree row.
-    private var checkoutElbowOffsetY: CGFloat { 14 }
-
-    private func checkoutBranchColorToken(
-        checkout: WorkspaceCheckout,
-        selected: Bool,
-        hovering: Bool
-    ) -> String {
-        if checkout.archivedAt != nil { return "fg-dim" }
-        return (selected || hovering) ? "fg" : "fg-muted"
+    /// Full strength at rest, matching a worktree row's branch label; archived
+    /// checkouts stay dimmed because that is a property of the checkout rather
+    /// than of the row's interaction state.
+    private func checkoutBranchColorToken(checkout: WorkspaceCheckout) -> String {
+        checkout.archivedAt != nil ? "fg-dim" : "fg"
     }
 
-    /// - Parameter railContinues: whether the next row belongs to the same
-    ///   workspace, so this row's rail segment should bridge the list's spacing
-    ///   instead of stopping short and leaving a visible gap.
     private func checkoutRows(
         _ checkout: WorkspaceCheckout,
-        projects: [String: ProjectConfig],
-        railContinues: Bool
+        projects: [String: ProjectConfig]
     ) -> some View {
         let selected = state.workspaceNavigationState.selectedCheckoutID == checkout.id
         let expanded = expandedCheckouts.contains(checkout.id)
@@ -240,14 +222,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     HStack(spacing: 7) {
                         Icon(name: checkout.archivedAt == nil ? "branch" : "archivebox", size: 12)
                         Text(checkout.branch)
-                            // Matches WorktreeRowView's branch label: same size,
-                            // same tracking, and the same muted-until-attended
-                            // treatment.
-                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                            .tracking(-0.34)
-                            .foregroundColor(theme.color(checkoutBranchColorToken(
-                                checkout: checkout, selected: selected, hovering: hovering
-                            )))
+                            // Matches WorktreeRowView's branch label.
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(theme.color(checkoutBranchColorToken(checkout: checkout)))
                             .lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 0)
                         if checkout.operation != .idle {
@@ -270,48 +247,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 selected ? theme.color("accent-soft") : (hovering ? theme.color("bg-2") : .clear),
                 in: RoundedRectangle(cornerRadius: 9)
             )
-            // The tree guide, drawn per row rather than by a container: this
-            // list is a flat sequence of rows, so there is no per-workspace
-            // view to hang a full-height rail on. Each row carries its own
-            // segment and they abut into a continuous line.
-            .overlay(alignment: .topLeading) {
-                Rectangle()
-                    .fill(theme.color("line-soft"))
-                    .frame(width: SidebarTreeGuide.railWidth)
-                    .frame(maxHeight: .infinity)
-                    // Bridge the enclosing VStack's 2pt spacing so consecutive
-                    // segments meet; the last one stops flush with its row.
-                    .padding(.bottom, railContinues ? -Self.rowSpacing : 0)
-                    .offset(x: SidebarTreeGuide.indent)
-                    .accessibilityHidden(true)
-            }
-            .overlay(alignment: .topLeading) {
-                Rectangle()
-                    .fill(theme.color("line-soft"))
-                    .frame(
-                        width: SidebarTreeGuide.elbowWidth,
-                        height: SidebarTreeGuide.elbowHeight
-                    )
-                    .offset(
-                        x: SidebarTreeGuide.indent + SidebarTreeGuide.railWidth,
-                        y: checkoutElbowOffsetY
-                    )
-                    .accessibilityHidden(true)
-            }
-            .overlay(alignment: .topLeading) {
+            .overlay {
                 if selected {
-                    Circle()
-                        .fill(theme.color("accent"))
-                        .frame(
-                            width: SidebarTreeGuide.selectionDotDiameter,
-                            height: SidebarTreeGuide.selectionDotDiameter
-                        )
-                        .offset(
-                            x: SidebarTreeGuide.indent
-                                - (SidebarTreeGuide.selectionDotDiameter - SidebarTreeGuide.railWidth) / 2,
-                            y: checkoutElbowOffsetY - SidebarTreeGuide.selectionDotDiameter / 2
-                        )
-                        .accessibilityHidden(true)
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                 }
             }
             .onHover { hoveringCheckoutID = $0 ? checkout.id : nil }

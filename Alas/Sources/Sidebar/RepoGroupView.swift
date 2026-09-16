@@ -9,6 +9,9 @@ struct ProjectDragId: Codable, Transferable {
 }
 
 struct RepoGroupView: View {
+    /// Leading inset that nests worktree rows under their repo header.
+    static let worktreeIndent: CGFloat = 26
+
     let project: ProjectConfig
     let worktrees: [Worktree]
     @Binding var collapsed: Bool
@@ -198,16 +201,10 @@ struct RepoGroupView: View {
                         }
                     }
                 }
-                // Inner padding: content sits this far right of the rail.
-                .padding(.leading, SidebarTreeGuide.indent)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(theme.color("line-soft"))
-                        .frame(width: SidebarTreeGuide.railWidth)
-                        .accessibilityHidden(true)
-                }
-                // Outer margin: the rail itself sits this far right of the group.
-                .padding(.leading, SidebarTreeGuide.indent)
+                // Worktrees are nested under their repo by indentation alone.
+                // This was previously split either side of a tree-guide rail;
+                // the rail is gone but the total inset is unchanged.
+                .padding(.leading, Self.worktreeIndent)
                 .padding(.trailing, 6)
             }
         }

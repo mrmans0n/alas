@@ -205,6 +205,10 @@ struct WorktreeRowView: View {
             if isSelected {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(theme.color("accent-soft"))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
+                    )
             } else if hovering {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(theme.color("bg-2"))
@@ -224,37 +228,6 @@ struct WorktreeRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
-        // Both overlays deliberately draw outside the row's bounds, into the
-        // container's leading padding where the rail lives. SwiftUI does not
-        // clip offset overlays, so no extra geometry plumbing is needed.
-        .overlay(alignment: .topLeading) {
-            Rectangle()
-                .fill(theme.color("line-soft"))
-                .frame(
-                    width: SidebarTreeGuide.elbowWidth,
-                    height: SidebarTreeGuide.elbowHeight
-                )
-                .offset(
-                    x: SidebarTreeGuide.elbowOffsetX,
-                    y: SidebarTreeGuide.elbowOffsetY
-                )
-                .accessibilityHidden(true)
-        }
-        .overlay(alignment: .topLeading) {
-            if isSelected {
-                Circle()
-                    .fill(theme.color("accent"))
-                    .frame(
-                        width: SidebarTreeGuide.selectionDotDiameter,
-                        height: SidebarTreeGuide.selectionDotDiameter
-                    )
-                    .offset(
-                        x: SidebarTreeGuide.selectionDotOffsetX,
-                        y: SidebarTreeGuide.selectionDotOffsetY
-                    )
-                    .accessibilityHidden(true)
-            }
-        }
         .onHover { hovering = $0 }
         .onTapGesture {
             if !isPending {
@@ -274,8 +247,13 @@ struct WorktreeRowView: View {
                 color: theme.color(iconColorToken(harnessState: harnessSummary?.state))
             )
             Text(worktree.branch)
-                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                .tracking(-0.34)
+                // Pre-E1 metrics, restored: E1 shrank this to 11.5pt, muted it
+                // until hover, and tightened it with negative tracking. Those
+                // compounded into a branch name that was harder to read, and a
+                // monospace face at this size suffers most from the tracking.
+                // Selection and hover are carried by the row's fill and outline,
+                // so the label does not need to dim to stay out of their way.
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundColor(theme.color(branchColorToken))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -299,9 +277,11 @@ struct WorktreeRowView: View {
         return isMain ? "fg-muted" : "fg-faint"
     }
 
+    /// Full-strength `fg` at rest. There is no brighter token to move to on
+    /// hover, which is the point — the name stays legible in every state and
+    /// the row's fill and outline carry selection instead.
     private var branchColorToken: String {
-        if isPending { return "fg-faint" }
-        return (isSelected || hovering) ? "fg" : "fg-muted"
+        isPending ? "fg-faint" : "fg"
     }
 
     private func secondLine(status: StatusPresentation?) -> some View {
