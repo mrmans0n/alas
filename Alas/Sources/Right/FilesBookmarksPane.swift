@@ -38,7 +38,7 @@ struct FilesBookmarksPane: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var rootPaths: Set<String> { Set(bookmarks) }
+    private var rootPaths: Set<String> { Set(bookmarks.map(FileBookmarks.path(for:))) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,8 +46,8 @@ struct FilesBookmarksPane: View {
             if !collapsed {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(bookmarks, id: \.self) { path in
-                            row(for: path)
+                        ForEach(bookmarks, id: \.self) { bookmark in
+                            row(for: bookmark)
                         }
                     }
                     .padding(.vertical, 4)
@@ -89,8 +89,9 @@ struct FilesBookmarksPane: View {
         .help(collapsed ? "Expand Bookmarks" : "Collapse Bookmarks")
     }
 
-    @ViewBuilder private func row(for path: String) -> some View {
-        switch FileBookmarks.resolve(path: path, in: nodes) {
+    @ViewBuilder private func row(for bookmark: String) -> some View {
+        let path = FileBookmarks.path(for: bookmark)
+        switch FileBookmarks.resolve(bookmark: bookmark, in: nodes) {
         case .resolved(let node):
             FileTreeListView(
                 nodes: [node],
@@ -101,13 +102,13 @@ struct FilesBookmarksPane: View {
                 filtersRootNodes: false
             )
         case .loading:
-            placeholderRow(for: path) {
+            placeholderRow(for: bookmark) {
                 Spinner(lineWidth: 1.5, duration: 0.7)
                     .frame(width: 12, height: 12)
                     .accessibilityLabel("Loading \(FilesBookmarksPane.leafName(of: path))")
             } trailing: { EmptyView() }
         case .failed(let ancestorPath):
-            placeholderRow(for: path) {
+            placeholderRow(for: bookmark) {
                 Icon(name: "alert", size: 12, color: theme.color("warn"))
                     .frame(width: 14, height: 14)
             } trailing: {
@@ -122,7 +123,7 @@ struct FilesBookmarksPane: View {
             }
             .help("Could not load \(ancestorPath)")
         case .missing:
-            placeholderRow(for: path) {
+            placeholderRow(for: bookmark) {
                 Icon(name: "folder", size: 12, color: theme.color("fg-faint"))
                     .frame(width: 14, height: 14)
             } trailing: { EmptyView() }
@@ -133,11 +134,12 @@ struct FilesBookmarksPane: View {
     /// A bookmark that has no node to render yet (or at all). Matches the tree
     /// row's metrics so the drawer doesn't jump when the real row arrives.
     private func placeholderRow<Leading: View, Trailing: View>(
-        for path: String,
+        for bookmark: String,
         @ViewBuilder leading: () -> Leading,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
-        HStack(spacing: 6) {
+        let path = FileBookmarks.path(for: bookmark)
+        return HStack(spacing: 6) {
             leading()
             Text(FilesBookmarksPane.leafName(of: path))
                 .font(.system(size: 11.5, design: .monospaced))
@@ -154,7 +156,7 @@ struct FilesBookmarksPane: View {
             Spacer()
             trailing()
             Button {
-                context.onToggleBookmark(path)
+                context.onRemoveBookmark(bookmark)
             } label: {
                 Icon(name: "x", size: 9, color: theme.color("fg-faint"))
                     .frame(width: 16, height: 16)

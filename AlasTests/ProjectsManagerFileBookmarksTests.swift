@@ -22,6 +22,17 @@ struct ProjectsManagerFileBookmarksTests {
         #expect(mgr.fileBookmarks(projectId: "abc") == [])
     }
 
+    @Test func togglingNodeBookmarksStoresKindAwareIdentity() throws {
+        let mgr = manager()
+        let node = FileTreeNode(name: "Entry", path: "Entry", kind: .file, children: nil, badge: nil)
+
+        mgr.toggleFileBookmark(projectId: "abc", node: node)
+        let bookmark = try #require(mgr.fileBookmarks(projectId: "abc").first)
+
+        #expect(FileBookmarks.path(for: bookmark) == "Entry")
+        #expect(FileBookmarks.kind(for: bookmark) == .file)
+    }
+
     @Test func togglingAnUnknownProjectIsANoOp() {
         let mgr = manager(bookmarks: ["Sources"])
         mgr.toggleFileBookmark(projectId: "nope", path: "docs")

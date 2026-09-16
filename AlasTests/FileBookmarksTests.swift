@@ -71,6 +71,24 @@ struct FileBookmarksTests {
         #expect(!FileBookmarks.contains("docs", in: ["Sources"]))
     }
 
+    @Test func nodeBookmarksIncludeKindInTheirIdentity() throws {
+        let dirNode = dir("Entry", "Entry")
+        let fileNode = file("Entry", "Entry")
+        let bookmarks = FileBookmarks.toggled(fileNode, in: [])
+
+        #expect(FileBookmarks.contains(fileNode, in: bookmarks))
+        #expect(!FileBookmarks.contains(dirNode, in: bookmarks))
+        #expect(FileBookmarks.path(for: try #require(bookmarks.first)) == "Entry")
+        #expect(FileBookmarks.kind(for: try #require(bookmarks.first)) == .file)
+    }
+
+    @Test func nodeToggleCanRemoveLegacyPathBookmarks() {
+        let dirNode = dir("Entry", "Entry")
+        #expect(FileBookmarks.contains(dirNode, in: ["Entry"]))
+        #expect(FileBookmarks.bookmarkValue(for: dirNode, in: ["Entry"]) == "Entry")
+        #expect(FileBookmarks.toggled(dirNode, in: ["Entry"]) == [])
+    }
+
     // MARK: - Resolution
 
     @Test func resolvesNodeWhenEveryAncestorIsLoaded() {
@@ -83,6 +101,22 @@ struct FileBookmarksTests {
     @Test func resolvesBookmarkedFileLeaf() {
         let resolution = FileBookmarks.resolve(path: "Sources/Center/App.swift", in: loadedTree)
         #expect(resolution == .resolved(file("App.swift", "Sources/Center/App.swift")))
+    }
+
+    @Test func resolvesKindSpecificBookmarkWhenFileAndDirectoryShareAPath() throws {
+        let dirNode = dir("Entry", "Entry")
+        let fileNode = file("Entry", "Entry")
+        let tree = [dirNode, fileNode]
+        let bookmark = try #require(FileBookmarks.toggled(fileNode, in: []).first)
+
+        let resolution = FileBookmarks.resolve(bookmark: bookmark, in: tree)
+
+        guard case .resolved(let node) = resolution else {
+            Issue.record("Expected file bookmark to resolve")
+            return
+        }
+        #expect(node.kind == .file)
+        #expect(node.path == "Entry")
     }
 
     @Test func reportsLoadingWhileAnAncestorHasNotLoadedItsChildren() {

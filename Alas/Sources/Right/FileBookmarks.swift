@@ -8,6 +8,8 @@ import Foundation
 /// Files tab is currently showing (a different branch, a deleted directory),
 /// which is what `Resolution.missing` reports.
 enum FileBookmarks {
+    private static let kindSeparator = "\u{0}"
+
     /// Where a bookmarked path currently stands in the file tree.
     enum Resolution: Equatable {
         /// The node is in the tree and can be rendered.
@@ -39,6 +41,17 @@ enum FileBookmarks {
         return bookmarks.contains(path)
     }
 
+    static func contains(_ node: FileTreeNode, in bookmarks: [String]) -> Bool {
+        bookmarkValue(for: node, in: bookmarks) != nil
+    }
+
+    static func bookmarkValue(for node: FileTreeNode, in bookmarks: [String]) -> String? {
+        let bookmark = identity(for: node)
+        if bookmarks.contains(bookmark) { return bookmark }
+        guard let path = normalized(node.path), bookmarks.contains(path) else { return nil }
+        return path
+    }
+
     /// Adds `path` to the end of the list, or drops it when already present.
     /// A path that cannot be bookmarked leaves the list untouched.
     static func toggled(_ path: String, in bookmarks: [String]) -> [String] {
@@ -47,20 +60,64 @@ enum FileBookmarks {
         return bookmarks.filter { $0 != path }
     }
 
+    static func toggled(_ node: FileTreeNode, in bookmarks: [String]) -> [String] {
+        let bookmark = identity(for: node)
+        guard !bookmarks.contains(bookmark) else { return bookmarks.filter { $0 != bookmark } }
+        if let path = normalized(node.path), bookmarks.contains(path) {
+            return bookmarks.filter { $0 != path }
+        }
+        return bookmarks + [bookmark]
+    }
+
     static func removing(_ path: String, from bookmarks: [String]) -> [String] {
         guard let path = normalized(path) else { return bookmarks }
         return bookmarks.filter { $0 != path }
     }
 
+    static func removing(_ node: FileTreeNode, from bookmarks: [String]) -> [String] {
+        let bookmark = identity(for: node)
+        guard let path = normalized(node.path) else { return bookmarks.filter { $0 != bookmark } }
+        return bookmarks.filter { $0 != bookmark && $0 != path }
+    }
+
+    static func removingBookmark(_ bookmark: String, from bookmarks: [String]) -> [String] {
+        bookmarks.filter { $0 != bookmark }
+    }
+
+    static func identity(for node: FileTreeNode) -> String {
+        guard let path = normalized(node.path) else { return node.path }
+        return "\(path)\(kindSeparator)\(node.kind.rawValue)"
+    }
+
+    static func path(for bookmark: String) -> String {
+        bookmark.split(separator: Character(kindSeparator), maxSplits: 1, omittingEmptySubsequences: false)
+            .first
+            .map(String.init) ?? bookmark
+    }
+
+    static func kind(for bookmark: String) -> FileTreeNode.Kind? {
+        let parts = bookmark.split(separator: Character(kindSeparator), maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        return FileTreeNode.Kind(rawValue: String(parts[1]))
+    }
+
     static func resolve(path: String, in nodes: [FileTreeNode]) -> Resolution {
-        walk(path: path, in: nodes).resolution
+        walk(path: path, kind: nil, in: nodes).resolution
+    }
+
+    static func resolve(bookmark: String, in nodes: [FileTreeNode]) -> Resolution {
+        walk(path: path(for: bookmark), kind: kind(for: bookmark), in: nodes).resolution
     }
 
     /// The ancestor directory whose children must load next before `path` can
     /// resolve. Nil when the walk is already settled — resolved, missing,
     /// failed, or waiting on a load that is in flight.
     static func pendingLoadPath(for path: String, in nodes: [FileTreeNode]) -> String? {
-        walk(path: path, in: nodes).pendingLoad
+        walk(path: path, kind: nil, in: nodes).pendingLoad
+    }
+
+    static func pendingLoadPath(forBookmark bookmark: String, in nodes: [FileTreeNode]) -> String? {
+        walk(path: path(for: bookmark), kind: kind(for: bookmark), in: nodes).pendingLoad
     }
 
     /// Descends the tree one path component at a time. A directory's own
@@ -70,17 +127,21 @@ enum FileBookmarks {
     /// without ever passing through `loadFileTreeChildren`.
     private static func walk(
         path: String,
+        kind: FileTreeNode.Kind?,
         in nodes: [FileTreeNode]
     ) -> (resolution: Resolution, pendingLoad: String?) {
         guard let normalized = normalized(path) else { return (.missing, nil) }
         let parts = normalized.split(separator: "/").map(String.init)
         var siblings = nodes
         for (index, part) in parts.enumerated() {
-            guard let node = siblings.first(where: { $0.name == part }) else {
+            let isLeaf = index == parts.count - 1
+            guard let node = siblings.first(where: { node in
+                node.name == part && (!isLeaf || kind == nil || node.kind == kind)
+            }) else {
                 // The parent listing is loaded and does not hold this name.
                 return (.missing, nil)
             }
-            if index == parts.count - 1 { return (.resolved(node), nil) }
+            if isLeaf { return (.resolved(node), nil) }
             guard node.kind == .dir else { return (.missing, nil) }
             switch node.childrenState {
             case .loaded:

@@ -3274,7 +3274,8 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Bookmark roots start expanded. Seeding once (rather than on every
     /// render) keeps a collapsed root collapsed, and dropping removed
     /// bookmarks means re-adding one expands it again.
-    func syncBookmarkRoots(_ paths: [String]) {
+    func syncBookmarkRoots(_ bookmarks: [String]) {
+        let paths = bookmarks.map(FileBookmarks.path(for:))
         for path in paths where !seededBookmarkRoots.contains(path) {
             seededBookmarkRoots.insert(path)
             bookmarkOpenPaths.insert(path)
@@ -3286,11 +3287,11 @@ final class RightPaneState: GGSplitCommitServicing {
     /// it needs. The file tree loads lazily and the drawer renders no ancestor
     /// rows of its own, so nothing else would pull those levels in. One level
     /// advances per call; callers re-invoke as the tree changes.
-    func ensureBookmarkPathsLoaded(_ paths: [String]) {
-        for path in paths {
-            if let pending = FileBookmarks.pendingLoadPath(for: path, in: fileTree) {
+    func ensureBookmarkPathsLoaded(_ bookmarks: [String]) {
+        for bookmark in bookmarks {
+            if let pending = FileBookmarks.pendingLoadPath(forBookmark: bookmark, in: fileTree) {
                 loadFileTreeChildren(path: pending)
-            } else if let reconciliationPath = bookmarkReconciliationPath(for: path) {
+            } else if let reconciliationPath = bookmarkReconciliationPath(for: FileBookmarks.path(for: bookmark)) {
                 loadFileTreeChildren(path: reconciliationPath)
             }
         }

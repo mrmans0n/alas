@@ -18,7 +18,8 @@ struct FileTreeContext {
     let onCreateFolder: (String) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
-    let onToggleBookmark: (String) -> Void
+    let onToggleBookmark: (FileTreeNode) -> Void
+    let onRemoveBookmark: (String) -> Void
 }
 
 /// Renders a file tree as indented rows. Used twice by `FilesTabView`: once for
@@ -243,7 +244,9 @@ struct FileTreeListView: View {
 
     private func removeBookmarkButton(for node: FileTreeNode) -> some View {
         Button {
-            context.onToggleBookmark(node.path)
+            context.onRemoveBookmark(
+                FileBookmarks.bookmarkValue(for: node, in: context.bookmarks) ?? FileBookmarks.identity(for: node)
+            )
         } label: {
             Icon(name: "x", size: 9, color: theme.color("fg-faint"))
                 .frame(width: 16, height: 16)
@@ -265,7 +268,7 @@ struct FileTreeListView: View {
         FileContextMenuActions(
             configuration: .filesTab(
                 target: target,
-                isBookmarked: FileBookmarks.contains(node.path, in: context.bookmarks)
+                isBookmarked: FileBookmarks.contains(node, in: context.bookmarks)
             ),
             onNewFile: node.kind == .dir ? {
                 openPaths.insert(node.path)
@@ -279,7 +282,7 @@ struct FileTreeListView: View {
             onFileHistory: node.kind == .file ? { context.onFileHistory(node) } : nil,
             onCopyRelativePath: { Clipboard.copy(node.path) },
             onCopyFullPath: { Clipboard.copy(context.worktreePath.appendingPathComponent(node.path).path) },
-            onToggleBookmark: { context.onToggleBookmark(node.path) }
+            onToggleBookmark: { context.onToggleBookmark(node) }
         )
     }
 

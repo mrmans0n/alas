@@ -22,7 +22,8 @@ struct FilesTabView: View {
 
     /// Repo-level bookmarks. Empty hides the drawer entirely.
     var bookmarks: [String] = []
-    var onToggleBookmark: (String) -> Void = { _ in }
+    var onToggleBookmark: (FileTreeNode) -> Void = { _ in }
+    var onRemoveBookmark: (String) -> Void = { _ in }
     /// Expansion state for the drawer, kept apart from `openPaths` so
     /// expanding a bookmark doesn't move the tree above it.
     @Binding var bookmarkOpenPaths: Set<String>
@@ -121,7 +122,8 @@ struct FilesTabView: View {
             onCreateFolder: onCreateFolder,
             shouldAutoLoadChildren: shouldAutoLoadChildren,
             onLoadChildren: onLoadChildren,
-            onToggleBookmark: onToggleBookmark
+            onToggleBookmark: onToggleBookmark,
+            onRemoveBookmark: onRemoveBookmark
         )
     }
 

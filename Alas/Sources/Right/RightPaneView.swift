@@ -172,8 +172,11 @@ struct RightPaneView: View {
                     onClearReveal: { rps.clearReveal() },
                     worktreeRoot: rps.worktree.path,
                     bookmarks: state.projectsManager.fileBookmarks(projectId: worktree.projectId),
-                    onToggleBookmark: { path in
-                        state.toggleFileBookmark(projectId: worktree.projectId, path: path)
+                    onToggleBookmark: { node in
+                        state.toggleFileBookmark(projectId: worktree.projectId, node: node)
+                    },
+                    onRemoveBookmark: { bookmark in
+                        state.removeFileBookmark(projectId: worktree.projectId, bookmark: bookmark)
                     },
                     bookmarkOpenPaths: Binding(
                         get: { rps.bookmarkOpenPaths },

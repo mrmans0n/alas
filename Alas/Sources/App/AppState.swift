@@ -4566,8 +4566,23 @@ final class AppState {
         saveProjects()
     }
 
+    func toggleFileBookmark(projectId: String, node: FileTreeNode) {
+        projectsManager.toggleFileBookmark(projectId: projectId, node: node)
+        saveProjects()
+    }
+
     func removeFileBookmark(projectId: String, path: String) {
         projectsManager.removeFileBookmark(projectId: projectId, path: path)
+        saveProjects()
+    }
+
+    func removeFileBookmark(projectId: String, node: FileTreeNode) {
+        projectsManager.removeFileBookmark(projectId: projectId, node: node)
+        saveProjects()
+    }
+
+    func removeFileBookmark(projectId: String, bookmark: String) {
+        projectsManager.removeFileBookmark(projectId: projectId, bookmark: bookmark)
         saveProjects()
     }
 

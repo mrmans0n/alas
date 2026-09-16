@@ -207,9 +207,24 @@ final class ProjectsManager {
         projects[idx].fileBookmarks = FileBookmarks.toggled(path, in: projects[idx].fileBookmarks)
     }
 
+    func toggleFileBookmark(projectId: String, node: FileTreeNode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].fileBookmarks = FileBookmarks.toggled(node, in: projects[idx].fileBookmarks)
+    }
+
     func removeFileBookmark(projectId: String, path: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.removing(path, from: projects[idx].fileBookmarks)
+    }
+
+    func removeFileBookmark(projectId: String, node: FileTreeNode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].fileBookmarks = FileBookmarks.removing(node, from: projects[idx].fileBookmarks)
+    }
+
+    func removeFileBookmark(projectId: String, bookmark: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].fileBookmarks = FileBookmarks.removingBookmark(bookmark, from: projects[idx].fileBookmarks)
     }
 
     func removeGGWorktreeMode(projectId: String, worktreeId: String) {
