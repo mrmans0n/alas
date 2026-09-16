@@ -714,6 +714,44 @@ struct AppStateRunRecordTests {
         #expect(fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
     }
 
+    @Test func gracefulTerminationArchivesPendingLaunch() async throws {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFlush = coordinator.flush
+        let fixture = try makeFixture()
+        defer {
+            coordinator.flush = originalFlush
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let worktreeID = fixture.worktree.id
+        let runID = UUID().uuidString
+        fixture.state.runRecords.begin(RunRecord(
+            id: runID,
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: worktreeID,
+            branch: fixture.worktree.branch,
+            target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+            status: .starting,
+            startedAt: Date()
+        ))
+        let launchID = UUID()
+        let task = Task<Void, Never> {
+            try? await Task.sleep(for: .seconds(30))
+        }
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+            id: launchID,
+            worktreeID: worktreeID,
+            scriptKey: fixture.script.key
+        )
+        fixture.state.pendingScriptLaunchTasks[launchID] = task
+
+        await coordinator.flush?()
+
+        #expect(task.isCancelled)
+        #expect(fixture.state.pendingScriptLaunches.isEmpty)
+        #expect(try await fixture.history.entry(id: runID)?.outcome == .stopped)
+    }
+
     @Test func pendingLaunchCancellationMatchesExactWorktreeID() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

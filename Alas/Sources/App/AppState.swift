@@ -1041,6 +1041,7 @@ final class AppState {
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
+            self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
             await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()

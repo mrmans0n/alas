@@ -50,14 +50,21 @@ struct AttentionNavigationEnvironment {
             },
             presentScriptFailure: { [weak appState] item, runID in
                 guard let appState, let worktree = item.worktree else { return false }
-                guard let body = item.body, let history = appState.runHistoryStore else {
+                let output: RunHistoryOutput
+                if let body = item.body {
+                    let marker = "\n\n[Output truncated]"
+                    output = body.hasSuffix(marker)
+                        ? .available(text: String(body.dropLast(marker.count)), truncated: true)
+                        : .available(text: body, truncated: false)
+                } else if appState.hasRunReport(worktreeID: worktree.id, runID: runID) {
                     appState.openRunReport(worktreeID: worktree.id, runID: runID)
                     return true
+                } else if await appState.hasPersistedRunReport(worktreeID: worktree.id, runID: runID) {
+                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
+                    return true
+                } else {
+                    output = .unavailable
                 }
-                let marker = "\n\n[Output truncated]"
-                let output: RunHistoryOutput = body.hasSuffix(marker)
-                    ? .available(text: String(body.dropLast(marker.count)), truncated: true)
-                    : .available(text: body, truncated: false)
                 let entry = RunHistoryEntry(
                     id: runID, scriptKey: "attention-history",
                     scriptName: item.title.replacingOccurrences(of: " failed with exit code [0-9]+$", with: "", options: .regularExpression),
@@ -66,15 +73,7 @@ struct AttentionNavigationEnvironment {
                     outcome: .failed(exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1),
                     startedAt: item.occurredAt, finishedAt: item.occurredAt, portConflict: nil, output: output
                 )
-                Task { @MainActor [weak appState, history] in
-                    guard let appState else { return }
-                    do {
-                        if try await history.append(entry) { appState.runHistoryRevision += 1 }
-                    } catch {
-                        appState.showFileActionError(title: "Run History Failed", message: "Could not preserve run history: \(error.localizedDescription)")
-                    }
-                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
-                }
+                appState.openTransientRunReport(entry)
                 return true
             },
             revealRightPane: { [weak appState] item, target in

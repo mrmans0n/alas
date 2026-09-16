@@ -294,6 +294,16 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] != nil)
     }
 
+    @Test func liveScriptRouteReconstructsLegacyReportWithoutOutput() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let item = try fixture.record(.runScriptFailure(failureID: "legacy"))
+
+        #expect(await fixture.state.openAttentionItem(item) == .opened)
+        #expect(fixture.state.transientRunReport(worktreeID: "worktree", runID: "legacy")?.output == .unavailable)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:legacy")
+    }
+
     @Test(arguments: [true, false])
     func liveReviewRouteWaitsForConfirmedCommentReveal(succeeds: Bool) async throws {
         let fixture = try Fixture()
