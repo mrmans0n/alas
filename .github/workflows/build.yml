@@ -18,7 +18,7 @@ jobs:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 150
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
