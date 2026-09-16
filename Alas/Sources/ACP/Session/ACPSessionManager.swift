@@ -4468,7 +4468,7 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
-        guard runner.sendRecoveryContext(prompt, flushQueueOnCompletion: false, onCompleted: { delivered in
+        guard runner.sendRecoveryContext(prompt, onCompleted: { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil

@@ -2437,10 +2437,10 @@ enum RunScriptStackDetector {
 
     private static func pythonExecutableCandidates() -> [(path: String, arguments: [String])] {
         [
+            ("/usr/bin/env", ["python3"]),
             ("/opt/homebrew/bin/python3", []),
             ("/usr/local/bin/python3", []),
             ("/usr/bin/python3", []),
-            ("/usr/bin/env", ["python3"]),
         ]
     }
 

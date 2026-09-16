@@ -1906,21 +1906,21 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: false)
 
         try await waitUntil {
-            client.sent.filter { $0.method == "session/prompt" }.count == 1
-                && session.queue.count == 1
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.queue.isEmpty
         }
         #expect(session.contextRestoreWarning == nil)
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
         let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
-        #expect(prompts.count == 1)
+        #expect(prompts.count == 2)
         let firstBlock = try #require(prompts.first?.prompt.first)
         guard case .text(let recovery) = firstBlock else {
             Issue.record("Expected transcript recovery prompt first")
             return
         }
         #expect(recovery.contains("Prior context"))
-        #expect(session.queue.first?.status == .pending)
-        #expect(session.queue.first?.blocks == [.text("queued prompt")])
+        #expect(prompts.last?.prompt == [.text("queued prompt")])
+        #expect(session.queue.isEmpty)
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
