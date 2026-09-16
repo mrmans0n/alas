@@ -572,6 +572,7 @@ extension AppState {
         tabs.closeRunReports(worktreeId: worktreeID)
         guard let runHistoryStore else { return }
         Task { @MainActor [weak self, runHistoryStore] in
+            await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
                 try await runHistoryStore.clear(worktreeID: worktreeID)
                 self?.runHistoryRevision += 1
@@ -613,6 +614,7 @@ extension AppState {
             releaseRunHistoryCapture(capture)
             return
         }
+        runHistoryPersistenceTaskWorktreeIDs[record.id] = record.worktreeID
         runHistoryPersistenceTasks[record.id] = Task { @MainActor [weak self, runHistoryStore] in
             let output = await Self.runHistoryOutput(for: capture)
             let entry = Self.runHistoryEntry(for: record, output: output) ?? entry
@@ -623,12 +625,14 @@ extension AppState {
                 }
             } catch {
                 self?.runHistoryError = "Could not save run history: \(error.localizedDescription)"
+                self?.showFileActionError(title: "Run History Failed", message: "Could not save run history: \(error.localizedDescription)")
                 runScriptLogger.error(
                     "Could not persist run \(record.id, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
             }
             self?.releaseRunHistoryCapture(capture)
             self?.runHistoryPersistenceTasks.removeValue(forKey: record.id)
+            self?.runHistoryPersistenceTaskWorktreeIDs.removeValue(forKey: record.id)
         }
     }
 
@@ -679,8 +683,12 @@ extension AppState {
         }
     }
 
-    func flushRunHistoryPersistence() async {
-        let tasks = runHistoryPersistenceTasks.values
+    func flushRunHistoryPersistence(worktreeID: String? = nil) async {
+        let tasks: [Task<Void, Never>] = runHistoryPersistenceTasks.compactMap { entry in
+            let (runID, task) = entry
+            guard worktreeID == nil || runHistoryPersistenceTaskWorktreeIDs[runID] == worktreeID else { return nil }
+            return task
+        }
         for task in tasks {
             await task.value
         }

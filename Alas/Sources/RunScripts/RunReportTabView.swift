@@ -27,7 +27,7 @@ struct RunReportTabView: View {
             .frame(maxWidth: 1_000, alignment: .leading)
             .padding(28)
         }
-        .task(id: tabState.id) {
+        .task(id: "\(tabState.id):\(state.runHistoryRevision)") {
             await load()
         }
     }

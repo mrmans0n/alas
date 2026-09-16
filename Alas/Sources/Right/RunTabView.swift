@@ -80,6 +80,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         .task(id: worktree.id) {
             let startedWorktreeID = worktree.id
             activeWorktreeID = startedWorktreeID
+            historyPageIndex = 0
             scripts = []
             scriptCatalogError = nil
             scannedWorktreeID = RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
@@ -104,6 +105,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             refreshScriptsFromControl()
         }
         .onChange(of: state.runHistoryRevision) {
+            historyPageIndex = 0
             Task { await loadHistory() }
         }
         .confirmationDialog(

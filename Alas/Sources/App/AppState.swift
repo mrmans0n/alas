@@ -171,6 +171,7 @@ final class AppState {
     var runHistoryRevision = 0
     var runHistoryError: String?
     @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
