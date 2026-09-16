@@ -4,6 +4,69 @@ import Testing
 
 @Suite("Workspace ACP session ownership")
 struct WorkspaceACPSessionTests {
+    @MainActor
+    @Test func reviewFeedbackFindsAndActivatesCheckoutAgent() async throws {
+        struct AvailableMemberObserver: WorkspaceCheckoutObserving {
+            func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+                .exactLineage("test-lineage")
+            }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = ProjectConfig(id: UUID().uuidString, name: "Repo", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(id: UUID().uuidString, projectId: project.id, name: "topic", branch: "topic", path: root.appendingPathComponent("repo"), status: .clean, lastActivity: Date())
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil, fallbackWorkspaceName: "Workspace", executionLocation: .local,
+            branch: "topic", rootPath: root.path,
+            members: [.init(workspaceMemberID: UUID(), projectID: project.id, fallbackProjectName: project.name,
+                            fallbackRepositoryRoot: project.path, worktreePath: worktree.path.path, availability: .available)]
+        )
+        try writeManifest(for: checkout)
+        let workspaceStore = WorkspaceStore(url: root.appendingPathComponent("workspaces.json"))
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore), observer: AvailableMemberObserver()
+        )
+        let state = AppState(store: MemoryStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.config.workspacesEnabled = true
+        state.config.changes.aiToolId = "none"
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        state.selectWorkspaceCheckout(id: checkout.id)
+        #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let session = manager.createSession(agentId: "test")
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        let tab = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Workspace agent"), to: owner)
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktree.id)
+        let target = try #require(sender.availableTargets().first)
+        #expect(target == .existingSession(worktreeID: worktree.id, sessionID: session.id, title: "Workspace agent"))
+        #expect(ReviewFeedbackAgentSender.production(appState: state, worktreeID: "unrelated").availableTargets().isEmpty)
+        state.tabs.clearActiveTab(owner: owner)
+
+        sender.send("Review feedback", target) { _ in }
+
+        #expect(state.tabs.activeTabId(for: owner) == tab.id)
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+
+        let result = await withCheckedContinuation { continuation in
+            sender.send("New review feedback", .newChat(agentID: "test", title: "New chat")) {
+                continuation.resume(returning: $0)
+            }
+        }
+        try result.get()
+        #expect(state.tabs.tabs(for: owner).count == 2)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+        let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
+        #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+    }
+
     @Test func checkoutOwnerUsesAnIsolatedDatabaseWhileWorktreesKeepLegacyPath() {
         let checkout = SessionOwnerID.workspaceCheckout(UUID(uuidString: "C88B61E6-4F97-4E47-A987-A4D8AC69F93D")!, .ssh("build-host"))
         #expect(Paths.acpSessionsDB(for: .worktree("legacy-worktree")) == Paths.acpSessionsDB(forWorktreeId: "legacy-worktree"))

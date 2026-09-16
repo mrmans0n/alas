@@ -19,6 +19,14 @@ struct ReviewDraftCommentStoreTests {
             store: store,
             now: { Date(timeIntervalSince1970: 100) }
         )
+        let otherView = ReviewDraftCommentController(sessionID: session, store: store)
+        try otherView.load()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .alasReviewDraftCommentsDidChangeExternally, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { try? otherView.load() }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
         let anchor = DiffReviewLineAnchor(
             path: "Sources/App.swift",
             side: .new,
@@ -38,6 +46,7 @@ return value + other
 
         try controller.add(anchor: anchor, fileID: fileID, bodyMarkdown: "Please revisit this.")
         let added = try #require(controller.comments.single)
+        #expect(otherView.comments == controller.comments)
         #expect(added.sessionID == session)
         #expect(added.fileID == fileID)
         #expect(added.path == "Sources/App.swift")
@@ -57,10 +66,12 @@ return value + other
         #expect(try store.load(sessionID: session).single?.id == added.id)
 
         try controller.edit(commentID: added.id, bodyMarkdown: "Updated")
+        #expect(otherView.comments == controller.comments)
         #expect(controller.comments.single?.bodyMarkdown == "Updated")
         #expect(try store.load(sessionID: session).single?.bodyMarkdown == "Updated")
 
         try controller.resolve(commentID: added.id)
+        #expect(otherView.comments == controller.comments)
         #expect(controller.comments.single?.state == .resolved)
         #expect(try store.load(sessionID: session).single?.state == .resolved)
 
@@ -69,6 +80,7 @@ return value + other
         #expect(try store.load(sessionID: session).single?.state == .dismissed)
 
         try controller.delete(commentID: added.id)
+        #expect(otherView.comments.isEmpty)
         #expect(controller.comments.isEmpty)
         #expect(try store.load(sessionID: session).isEmpty)
         #expect(controller.errorMessage == nil)
