@@ -511,6 +511,10 @@ struct RunScriptLaunchTests {
         #expect(fixture.state.attentionStore.events.isEmpty)
         #expect(notifications.count == 1)
         #expect(notifications[0].content.body == "Succeeded")
+        let inAppNotifications = fixture.state.inAppNotifications.notifications(in: fixture.worktree.id)
+        #expect(inAppNotifications.map(\.message) == ["Dev succeeded"])
+        #expect(inAppNotifications.map(\.severity) == [.success])
+        #expect(fixture.state.inAppNotifications.notifications(in: "another-worktree").isEmpty)
     }
 
     @MainActor

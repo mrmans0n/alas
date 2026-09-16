@@ -614,6 +614,11 @@ extension AppState {
                     guard completion.exitCode != 0 else {
                         runRecords.finish(runID: runID, outcome: .succeeded, at: observedAt)
                         retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
+                        inAppNotifications.post(
+                            "\(script.displayName) succeeded",
+                            severity: .success,
+                            worktreeID: worktree.id
+                        )
                         return
                     }
                     let capturedOutput: RunScriptCapturedOutput
