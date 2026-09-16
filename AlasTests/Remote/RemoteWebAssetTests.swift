@@ -866,6 +866,17 @@ struct RemoteWebAssetTests {
         #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
     }
 
+    @Test func detailTabsShowChangesCountBadge() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="tab-changes-count""#))
+        #expect(js.contains("function updateChangesTabBadge()"))
+        #expect(js.contains(#"$("tab-changes-count")"#))
+        #expect(css.contains(".tab-count"))
+    }
+
     @Test func repoListHasSearchAndFilterChips() throws {
         let html = try asset("index.html")
         let js = try asset("app.js")

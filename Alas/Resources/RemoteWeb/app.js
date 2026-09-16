@@ -794,6 +794,15 @@ function renderChanges() {
   const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
   if (notice) list.append(el("p", "placeholder-card", notice));
   if (changesState.commitsTruncated) list.append(el("p", "placeholder-card", "Commit list truncated — showing the first 100 commits."));
+  updateChangesTabBadge();
+}
+
+function updateChangesTabBadge() {
+  const badge = $("tab-changes-count");
+  if (!changesState.loaded) { badge.classList.add("hidden"); return; }
+  const count = (changesState.staged?.length || 0) + (changesState.unstaged?.length || 0);
+  badge.textContent = String(count);
+  badge.classList.toggle("hidden", count === 0);
 }
 
 function openDiff(path, stage = null) {
