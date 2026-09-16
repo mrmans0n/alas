@@ -901,4 +901,11 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#repo-filters"))
         #expect(css.contains(".filter-chip"))
     }
+
+    @Test func composerUsesModTokenAndRedesignedRadii() throws {
+        let css = try asset("style.css")
+
+        #expect(css.contains("--mod:"))
+        #expect(css.contains("#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 6px 6px 6px 14px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 18px; }"))
+    }
 }
