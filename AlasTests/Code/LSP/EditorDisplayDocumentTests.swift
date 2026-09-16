@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 struct EditorDisplayDocumentTests {
+    @Test func appendingPrefetchedHintsPreservesCachedAttachmentsAndLayout() throws {
+        let text = source(String(repeating: "let value = 123\n", count: 10000))
+        let first = EditorDisplayHint(id: "first", sourceOffset: 10, label: ": Int", size: CGSize(width: 35, height: 14))
+        let last = EditorDisplayHint(id: "last", sourceOffset: text.length * 3 / 4, label: ": Int", size: CGSize(width: 35, height: 14))
+        let document = try EditorDisplayDocument(source: text, revision: 0, hints: [first])
+        let attachment = try #require(document.storage.attribute(.attachment, at: 10, effectiveRange: nil) as? EditorHintAttachment)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 800, height: 1e7))
+        manager.addTextContainer(container)
+        document.storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        try document.replaceHints(source: text, revision: 0, hints: [first, last])
+        #expect(document.storage.attribute(.attachment, at: 10, effectiveRange: nil) as? EditorHintAttachment === attachment)
+        #expect(manager.firstUnlaidCharacterIndex() >= last.sourceOffset - 16)
+        manager.ensureLayout(for: container)
+        let laidOut = manager.firstUnlaidCharacterIndex()
+        try document.replaceHints(source: text, revision: 0, hints: [first, last])
+        #expect(manager.firstUnlaidCharacterIndex() == laidOut)
+        try document.replaceHints(source: text, revision: 0, hints: [first])
+        #expect(manager.firstUnlaidCharacterIndex() >= last.sourceOffset - 16)
+        #expect(document.storage.attribute(.attachment, at: 10, effectiveRange: nil) as? EditorHintAttachment === attachment)
+    }
+
     @Test func hintRefreshPreservesLayoutBeforeTheHintExtent() throws {
         let text = source(String(repeating: "let value = 123\n", count: 10000))
         let document = try EditorDisplayDocument(source: text, revision: 0, hints: [])

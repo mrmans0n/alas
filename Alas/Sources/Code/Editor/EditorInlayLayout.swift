@@ -64,8 +64,18 @@ final class EditorInlayLayout {
         let source = adapter.buffer.storage.string as NSString
         var display: [EditorDisplayHint] = []
         var retained: [String: LSPInlayHint] = [:]
-        let batch = UUID().uuidString
-        for (index, hint) in values.enumerated() where InlayHintsFeature.isVisible(kind: hint.kind, settings: settings) {
+        let previous = Dictionary(uniqueKeysWithValues: adapter.document.map.hintRuns.map { ($0.hint.id, $0.hint) })
+        var occurrences: [LSPPosition: Int] = [:]
+        for hint in values where InlayHintsFeature.isVisible(kind: hint.kind, settings: settings) {
+            let occurrence = occurrences[hint.position, default: 0]
+            occurrences[hint.position] = occurrence + 1
+            let id = "\(revision):\(hint.position.line):\(hint.position.character):\(occurrence)"
+            if self.revision == revision, hints[id]?.wireValue == hint.wireValue,
+               let existing = previous[id], existing.fontSize == fontSize {
+                display.append(existing)
+                retained[id] = hint
+                continue
+            }
             guard starts.indices.contains(hint.position.line) else { continue }
             let start = starts[hint.position.line]
             let end = hint.position.line + 1 < starts.count ? starts[hint.position.line + 1] : source.length
@@ -78,7 +88,6 @@ final class EditorInlayLayout {
                 defer { x += width }
                 return EditorDisplayHint.Part(label: part.value, rect: CGRect(x: x, y: 0, width: width, height: height))
             }
-            let id = "\(batch):\(index)"
             display.append(.init(id: id, sourceOffset: start + column, label: hint.label,
                                  size: CGSize(width: max(1, x + (hint.paddingRight ? padding : 0)), height: max(1, height)), parts: parts, fontSize: fontSize))
             retained[id] = hint

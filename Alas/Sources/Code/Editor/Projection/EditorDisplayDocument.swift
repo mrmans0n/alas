@@ -36,8 +36,17 @@ final class EditorDisplayDocument {
             return
         }
         let replacementMap = try EditorDisplayMap(source: source.string, revision: revision, hints: hints)
-        let offsets = [map.hintRuns.first?.hint.sourceOffset, map.hintRuns.last?.hint.sourceOffset,
-                       replacementMap.hintRuns.first?.hint.sourceOffset, replacementMap.hintRuns.last?.hint.sourceOffset].compactMap { $0 }
+        let old = map.hintRuns, new = replacementMap.hintRuns
+        var first = 0
+        while first < min(old.count, new.count), old[first].hint == new[first].hint { first += 1 }
+        var oldEnd = old.count, newEnd = new.count
+        while oldEnd > first, newEnd > first, old[oldEnd - 1].hint == new[newEnd - 1].hint {
+            oldEnd -= 1
+            newEnd -= 1
+        }
+        let changedOld = old[first..<oldEnd], changedNew = new[first..<newEnd]
+        let offsets = [changedOld.first?.hint.sourceOffset, changedOld.last?.hint.sourceOffset,
+                       changedNew.first?.hint.sourceOffset, changedNew.last?.hint.sourceOffset].compactMap { $0 }
         guard let start = offsets.min(), let end = offsets.max() else {
             map = replacementMap
             return

@@ -5,7 +5,7 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorInlayLayoutTests {
-    @Test func coordinatorRequestsVisibleMarginRejectsStaleResultsAndObservesSettings() async throws {
+    @Test func coordinatorPrefetchesChunksRejectsStaleResultsAndObservesSettings() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -14,11 +14,18 @@ struct EditorInlayLayoutTests {
         try Data(String(repeating: "let x = 1\n", count: 1000).utf8).write(to: file)
         let transport = FakeTransport()
         var requests: [LSPJSONValue] = []
+        var prefetched: [LSPJSONValue] = []
         transport.onSend = { sent in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
             if request["method"] == .string("initialize") {
                 transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .object(["capabilities": .object(["inlayHintProvider": .bool(true)])])]).encodedData(), as: UTF8.self))
-            } else if request["method"] == .string("textDocument/inlayHint") { requests.append(request) }
+            } else if request["method"] == .string("textDocument/inlayHint") {
+                if request["params"]?["range"]?["start"]?["line"] == .number("0") { requests.append(request) }
+                else {
+                    prefetched.append(request)
+                    transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .array([])]).encodedData(), as: UTF8.self))
+                }
+            }
         }
         let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
@@ -53,12 +60,14 @@ struct EditorInlayLayoutTests {
         }
         func reply(_ request: LSPJSONValue) throws {
             let hint = try LSPJSONValue.decode(from: Data(#"{"position":{"line":0,"character":5},"label":": Int","kind":1}"#.utf8))
-            transport.deliverFrame(String(decoding: try LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": request["id"]!, "result": .array([hint])]).encodedData(), as: UTF8.self))
+            // The next chunk owns a hint exactly at this request's end.
+            let boundary = try LSPJSONValue.decode(from: Data(#"{"position":{"line":256,"character":0},"label":"next:"}"#.utf8))
+            transport.deliverFrame(String(decoding: try LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": request["id"]!, "result": .array([hint, boundary])]).encodedData(), as: UTF8.self))
         }
         try await eventually("initial request") { !requests.isEmpty }
         let first = try #require(requests.first)
         let end = try #require(first["params"]?["range"]?["end"]?["line"])
-        if case .number(let value) = end { #expect((Int(value) ?? 1000) < 100) }
+        #expect(end == .number("256"))
         view.setSourceSelectedRange(NSRange(location: 0, length: 0))
         view.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
         try reply(first)
@@ -78,6 +87,29 @@ struct EditorInlayLayoutTests {
             guard let id = view.displayAdapter?.document.map.hintRuns.first?.hint.id else { return false }
             return id != retainedID && view.inlayAccessibilityActions?(id).isEmpty == false
         }
+        // Moving through a prefetched chunk and back must not request or
+        // recreate the already-visible hints at the beginning of the file.
+        let cachedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
+        let beforeScroll = requests.count
+        layout.ensureLayout(for: container)
+        let nextChunkY = try #require(view.sourceLineY(300))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: nextChunkY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await eventually("prefetch beyond scrolled chunk") {
+            prefetched.contains { $0["params"]?["range"]?["start"]?["line"] == .number("512") }
+        }
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(requests.count == beforeScroll)
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == cachedID)
+        typealias Response = (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])
+        let origins = try #require(Mirror(reflecting: coordinator).children.first { $0.label == "inlayResponsesByPosition" }?.value as? [LSPPosition: Response])
+        // A later prefetch must not retarget an existing hint's actions to
+        // the newer request's context or workspace-generation snapshot.
+        let origin = try #require(origins[.init(line: 0, character: 5)])
+        #expect(origin.context.range.start.line == 0)
+        #expect(origin.context.range.end.line == 256)
         let revision = buffer.editGeneration
         let version = view.displayAdapter?.document.map.revision
         app.config.code.inlayHintsByLanguage["swift"] = .init(enabled: false)
@@ -123,6 +155,9 @@ struct EditorInlayLayoutTests {
         #expect(runs[0].hint.parts[0].rect.maxX <= runs[0].hint.parts[1].rect.minX)
         #expect(runs[0].hint.parts[0].rect.minX > 0)
         #expect(runs[0].hint.parts[1].rect.maxX < runs[0].hint.size.width)
+        let originalAttachment = view.textStorage?.attribute(.attachment, at: runs[0].displayOffset, effectiveRange: nil) as? EditorHintAttachment
+        try layout.replace([hint, hint], revision: buffer.editGeneration, settings: .init())
+        #expect(view.textStorage?.attribute(.attachment, at: runs[0].displayOffset, effectiveRange: nil) as? EditorHintAttachment === originalAttachment)
         manager.ensureLayout(for: container)
         let glyphs = manager.glyphRange(forCharacterRange: NSRange(location: runs[0].displayOffset, length: 1), actualCharacterRange: nil)
         let frame = manager.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)

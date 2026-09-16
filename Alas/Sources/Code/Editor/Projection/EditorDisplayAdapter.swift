@@ -71,6 +71,7 @@ final class EditorDisplayAdapter {
         _ = try EditorDisplayMap(source: buffer.storage.string, revision: revision, hints: hints)
         if composition.isActive { deferredHints = (revision, hints)
         return }
+        guard document.map.revision != revision || document.map.hintRuns.map(\.hint) != hints else { return }
         self.hints = hints
         rebuild(hintsOnly: true)
     }
