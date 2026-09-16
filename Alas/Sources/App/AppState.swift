@@ -926,7 +926,7 @@ final class AppState {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.rescanWorktreeDirtyStatees()
+                self?.rescanWorktreeStatuses()
             }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
@@ -1282,7 +1282,7 @@ final class AppState {
     /// fetched on the remote layer's own schedule — so scanning them here would
     /// add per-worktree SSH round trips on every activation for information we
     /// already have.
-    func rescanWorktreeDirtyStatees() {
+    func rescanWorktreeStatuses() {
         worktreeStatusRescanTask?.cancel()
         let paths = projectsManager.projects
             .filter { $0.host == nil }
@@ -1801,7 +1801,7 @@ final class AppState {
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
-        rescanWorktreeDirtyStatees()
+        rescanWorktreeStatuses()
         if let id,
            let resolved = projectAndWorktree(withWorktreeId: id),
            resolved.project.host != nil {
@@ -4440,7 +4440,7 @@ final class AppState {
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
-        rescanWorktreeDirtyStatees()
+        rescanWorktreeStatuses()
         return changed || completedCreateFailure
     }
 
