@@ -3047,11 +3047,13 @@ final class RightPaneState: GGSplitCommitServicing {
         fresh: [FileTreeNode],
         previous: [FileTreeNode]
     ) -> [FileTreeNode] {
-        var previousByPath: [String: FileTreeNode] = [:]
-        for node in previous { previousByPath[node.path] = node }
+        var previousDirectoriesByPath: [String: FileTreeNode] = [:]
+        for node in previous where node.kind == .dir {
+            previousDirectoriesByPath[node.path] = node
+        }
         return fresh.map { node in
             var updated = node
-            let prior = previousByPath[node.path]
+            let prior = previousDirectoriesByPath[node.path]
             if node.kind == .dir,
                node.childrenState == .notLoaded,
                node.children == nil,
@@ -3079,15 +3081,19 @@ final class RightPaneState: GGSplitCommitServicing {
         fresh: [FileTreeNode],
         previous: [FileTreeNode]
     ) -> [String] {
-        let previousByPath = Dictionary(uniqueKeysWithValues: previous.map { ($0.path, $0) })
+        var previousDirectoriesByPath: [String: FileTreeNode] = [:]
+        for node in previous where node.kind == .dir {
+            previousDirectoriesByPath[node.path] = node
+        }
         var paths: [String] = []
         for node in fresh where node.kind == .dir {
-            let prior = previousByPath[node.path]
-            if node.childrenState == .notLoaded,
+            let prior = previousDirectoriesByPath[node.path]
+            if let prior,
+               node.childrenState == .notLoaded,
                node.children == nil,
-               prior?.childrenState == .loaded,
-               prior?.children != nil {
-                paths.append(node.path)
+               prior.childrenState == .loaded,
+               prior.children != nil {
+                paths += loadedDirectoryPaths(in: prior)
                 continue
             }
             paths += preservedLazyChildPaths(
@@ -3096,6 +3102,15 @@ final class RightPaneState: GGSplitCommitServicing {
             )
         }
         return paths
+    }
+
+    nonisolated private static func loadedDirectoryPaths(in node: FileTreeNode) -> [String] {
+        guard node.kind == .dir,
+              node.childrenState == .loaded,
+              let children = node.children else {
+            return []
+        }
+        return [node.path] + children.flatMap(loadedDirectoryPaths(in:))
     }
 
     /// Reconciles the child list of the directory at `path` against a fresh
