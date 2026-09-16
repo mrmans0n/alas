@@ -147,6 +147,26 @@ enum WorkspaceMemberWorktreeResolver {
 /// Pure presentation plan for the full sidebar tree. Views own disclosure
 /// state; this type only protects ordering and archive visibility.
 enum WorkspaceSidebarLayout {
+    /// Whether the checkout row at `index` should extend its tree-guide rail
+    /// through the gap below it.
+    ///
+    /// The sidebar renders these rows as one flat list rather than nesting
+    /// checkouts inside a per-workspace container, so no single view can draw a
+    /// full-height rail. Each row draws its own segment instead, and needs to
+    /// know whether a sibling follows — otherwise the last checkout of a
+    /// workspace would trail a stub into the next workspace's header.
+    ///
+    /// A `member` row counts as continuing: members are expanded beneath their
+    /// checkout and the rail should run past them to the next checkout.
+    static func rowContinuesRail(rows: [WorkspaceSidebarRow], after index: Int) -> Bool {
+        let next = index + 1
+        guard next < rows.count else { return false }
+        switch rows[next] {
+        case .checkout, .member: return true
+        case .project, .workspace, .formerWorkspace: return false
+        }
+    }
+
     static func visibleCheckoutIDs(
         members: [SpaceMemberReference],
         workspaces: [Workspace],
