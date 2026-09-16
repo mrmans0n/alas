@@ -25,6 +25,58 @@ private actor LandPreflightSuspension {
     }
 }
 
+private enum NoopCheckpointServiceError: Error { case unsupported }
+
+private actor NoopCheckpointService: WorktreeCheckpointServicing {
+    func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
+        .init(lineageID: target.lineageID, summaries: [], byteCount: 0)
+    }
+
+    func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] { [] }
+
+    func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+        throw NoopCheckpointServiceError.unsupported
+    }
+
+    func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
+        throw NoopCheckpointServiceError.unsupported
+    }
+
+    func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
+        .init(lineageID: target.lineageID, summaries: [], byteCount: 0)
+    }
+
+    func restorePreview(
+        target: CheckpointWorktreeTarget,
+        id: CheckpointID,
+        coordination: CheckpointCoordinationSnapshot,
+        selectedGroupIDs: Set<UUID>?
+    ) async throws -> CheckpointRestorePreview {
+        throw NoopCheckpointServiceError.unsupported
+    }
+
+    func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent {
+        .unavailable("unsupported")
+    }
+
+    func restore(
+        target: CheckpointWorktreeTarget,
+        preview: CheckpointRestorePreview,
+        selectedGroupIDs: Set<UUID>,
+        coordination: CheckpointCoordinationSnapshot
+    ) async throws -> CheckpointRestoreResult {
+        throw NoopCheckpointServiceError.unsupported
+    }
+
+    func recoverInterruptedRestore(
+        target: CheckpointWorktreeTarget,
+        operationID: UUID,
+        coordination: CheckpointCoordinationSnapshot
+    ) async throws -> CheckpointRestoreResult {
+        throw NoopCheckpointServiceError.unsupported
+    }
+}
+
 private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedCalls: [[String]] = []
@@ -166,10 +218,18 @@ private final class FreshUnstackGGRunner: GGCommandRunning, @unchecked Sendable 
 }
 
 @MainActor
+@Suite(.serialized)
 struct RightPaneGGLandTests {
     private struct MemoryStore: PersistenceStoreProtocol {
+        var projects: [ProjectConfig] = []
+
         func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+            if T.self == ProjectsFile.self {
+                return ProjectsFile(projects: projects) as? T
+            }
+            return nil
+        }
     }
 
     private func landingState(
@@ -184,19 +244,49 @@ struct RightPaneGGLandTests {
             path: URL(fileURLWithPath: "/tmp/alas-land-tests-\(UUID().uuidString)"),
             status: .clean, lastActivity: Date()
         )
-        let state = RightPaneState(worktree: worktree, baseBranch: "main", ggLandingStore: store)
+        let state = rightPaneState(worktree: worktree, baseBranch: "main", ggLandingStore: store)
         state.ggCapabilities = { GGCapabilities(structuredSplit: false, keepCurrentUnstack: false, landJSONL: supported) }
         state.ggService = GGService(runner: runner)
         state.ggStack = stack([entry(id: "change-1", prState: .open, approved: true, ci: .success)])
         return state
     }
 
-    private func waitForLand(_ condition: () -> Bool) async throws {
-        for _ in 0..<200 {
+    private func rightPaneState(
+        worktree: Worktree,
+        baseBranch: String,
+        ggLandingStore: GGLandingStore = .shared
+    ) -> RightPaneState {
+        let state = RightPaneState(
+            worktree: worktree,
+            baseBranch: baseBranch,
+            ggLandingStore: ggLandingStore,
+            checkpointService: NoopCheckpointService()
+        )
+        state.checkpointTargetProvider = {
+            CheckpointWorktreeTarget(
+                worktreeID: worktree.id,
+                projectID: worktree.projectId,
+                path: worktree.path,
+                lineageID: worktree.lineageID ?? "test-lineage-\(worktree.id)",
+                branch: worktree.branch,
+                repositoryName: worktree.name,
+                workspaceName: nil
+            )
+        }
+        return state
+    }
+
+    private func waitForLand(_ description: String = "landing", _ condition: () -> Bool) async throws {
+        for _ in 0..<500 {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw GGServiceError.commandFailed(stderr: "Timed out waiting for landing")
+        throw GGServiceError.commandFailed(stderr: "Timed out waiting for \(description)")
+    }
+
+    private func allowCheckpointMutations(_ state: RightPaneState) async throws {
+        let disabled = await state.checkpointMutationsDisabledAfterJournalRevalidation()
+        #expect(!disabled)
     }
 
     @Test func liveLandingBeginsBeforeExecutionAndCancelsRawOperation() async throws {
@@ -204,13 +294,15 @@ struct RightPaneGGLandTests {
         let runner = LiveLandGGRunner()
         let state = landingState(store: store, runner: runner, supported: true)
         state.requestGGLand(.ready)
-        try await waitForLand { state.pendingGGLand != nil }
+        try await waitForLand("land confirmation") { state.pendingGGLand != nil }
         #expect(store.sessions.isEmpty)
+        try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
+        try await waitForLand("live landing session") { store.sessions["live-project"]?.phase == .running }
         #expect(store.sessions["live-project"]?.phase == .running)
         #expect(store.sessions["live-project"]?.target == "change-1")
         #expect(!runner.calls.contains { $0.first == "land" })
-        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        try await waitForLand("live landing runner call") { runner.calls.contains { $0.first == "land" } }
         #expect(runner.calls.contains(["land", "--until", "change-1", "--wait", "--jsonl", "--no-clean"]))
         store.cancel(projectId: "live-project")
         await store.waitForOperation(projectId: "live-project")
@@ -228,8 +320,12 @@ struct RightPaneGGLandTests {
         state.ggStack = stack([entry(id: "change-2", position: 2, prState: .open, approved: true, ci: .success)])
 
         state.requestGGLand(.until(entryId: "change-2", title: "Target"))
-        try await waitForLand { state.pendingGGLand != nil }
+        try await waitForLand("fresh prepared land confirmation") { state.pendingGGLand != nil }
+        try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
+        try await waitForLand("fresh prepared live landing rows") {
+            store.sessions["live-project"]?.rows.map(\.ggId) == ["change-1", "change-2"]
+        }
 
         #expect(store.sessions["live-project"]?.rows.map(\.ggId) == ["change-1", "change-2"])
         await store.cancelAllAndWait()
@@ -270,9 +366,10 @@ struct RightPaneGGLandTests {
         let runner = LiveLandGGRunner()
         let state = landingState(store: store, runner: runner, supported: false)
         state.requestGGLand(.ready)
-        try await waitForLand { state.pendingGGLand != nil }
+        try await waitForLand("legacy land confirmation") { state.pendingGGLand != nil }
+        try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
-        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        try await waitForLand("legacy land runner call") { runner.calls.contains { $0.first == "land" } }
         #expect(runner.calls.contains(["land", "--until", "change-1", "--json", "--no-clean"]))
         #expect(store.sessions.isEmpty)
         try await waitForLand { state.ggActionState.inFlightAction == nil }
@@ -294,7 +391,8 @@ struct RightPaneGGLandTests {
         store.receive(.summary(.init(landed: [])), projectId: "live-project")
 
         state.requestGGLand(.ready)
-        try await waitForLand { state.pendingGGLand != nil }
+        try await waitForLand("cleanup land confirmation") { state.pendingGGLand != nil }
+        try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
         #expect(!runner.calls.contains { $0.first == "land" })
 
@@ -313,8 +411,10 @@ struct RightPaneGGLandTests {
         second.requestGGLand(.ready)
         try await waitForLand { first.pendingGGLand != nil && second.pendingGGLand != nil }
         let app = AppState(store: MemoryStore())
+        try await allowCheckpointMutations(first)
         first.performGGLand(appState: app)
         let sessionId = store.sessions["live-project"]?.id
+        try await allowCheckpointMutations(second)
         second.performGGLand(appState: app)
         #expect(store.sessions["live-project"]?.id == sessionId)
         #expect(!secondRunner.calls.contains { $0.first == "land" })
@@ -331,18 +431,52 @@ struct RightPaneGGLandTests {
         let second = landingState(
             store: store, runner: secondRunner, supported: true, worktreeId: "other-wt", projectId: projectId
         )
-        let tabs = TabsManager(store: MemoryStore())
-        let app = AppState(store: MemoryStore(), tabsManager: tabs)
+        let project = ProjectConfig(
+            id: projectId,
+            name: "Live landing",
+            path: "/tmp/alas-land-tests/\(projectId)",
+            color: "blue",
+            addedAt: Date()
+        )
+        let appStore = MemoryStore(projects: [project])
+        let tabs = TabsManager(store: appStore)
+        let app = AppState(store: appStore, tabsManager: tabs)
+        app.projectsManager.insertOptimisticWorktree(Worktree(
+            id: "live-wt",
+            projectId: projectId,
+            name: "feat",
+            branch: "feat",
+            path: URL(fileURLWithPath: "/tmp/alas-land-tests/\(projectId)/live"),
+            status: .clean,
+            lastActivity: Date()
+        ))
+        app.projectsManager.insertOptimisticWorktree(Worktree(
+            id: "other-wt",
+            projectId: projectId,
+            name: "other",
+            branch: "other",
+            path: URL(fileURLWithPath: "/tmp/alas-land-tests/\(projectId)/other"),
+            status: .clean,
+            lastActivity: Date()
+        ))
         first.requestGGLand(.ready)
         second.requestGGLand(.ready)
         try await waitForLand { first.pendingGGLand != nil && second.pendingGGLand != nil }
+        try await allowCheckpointMutations(first)
         first.performGGLand(appState: app)
         let tabId = "gg-land:\(projectId)"
+        try await waitForLand("initiating landing tab selection") {
+            app.selectedWorktreeId == "live-wt" && tabs.activeTabId(forWorktree: "live-wt") == tabId
+        }
         #expect(app.selectedWorktreeId == "live-wt")
         #expect(tabs.activeTabId(forWorktree: "live-wt") == tabId)
         tabs.close(worktreeId: "live-wt", tabId: tabId)
         app.selectWorktree(id: "other-wt")
+        try await allowCheckpointMutations(second)
         second.performGGLand(appState: app)
+        try await waitForLand("duplicate landing tab selection") {
+            app.selectedWorktreeId == "live-wt" && tabs.activeTabId(forWorktree: "live-wt") == tabId
+        }
         #expect(app.selectedWorktreeId == "live-wt")
         #expect(tabs.activeTabId(forWorktree: "live-wt") == tabId)
         #expect(tabs.tabs(forWorktree: "live-wt").count == 1)
@@ -358,6 +492,7 @@ struct RightPaneGGLandTests {
         let state = landingState(store: store, runner: runner, supported: true)
         state.requestGGLand(.ready)
         try await waitForLand { state.pendingGGLand != nil }
+        try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
         try await waitForLand { runner.calls.contains { $0.first == "land" } }
         await store.cancelAllAndWait()
@@ -463,7 +598,7 @@ struct RightPaneGGLandTests {
     }
 
     private func waitForUnstackPresentation(_ state: RightPaneState) async throws {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if state.pendingGGUnstack != nil { return }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -473,7 +608,7 @@ struct RightPaneGGLandTests {
     @Test func readyLandableWhenAnyEntryOpenApprovedGreen() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         let landable = stack([entry(id: "a", prState: .open, approved: true, ci: .success)])
         #expect(state.ggLandTargetStillLandable(.ready, in: landable))
         let landableWithoutCI = stack([entry(id: "a", prState: .open, approved: true, ci: nil)])
@@ -487,7 +622,7 @@ struct RightPaneGGLandTests {
     @Test func readyRequiresContiguousBottomPrefix() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         func positionedEntry(
             id: String,
             position: Int,
@@ -584,7 +719,7 @@ struct RightPaneGGLandTests {
     @Test func untilLandableWhenTargetEntryPresent() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         let s = stack([entry(id: "a", prState: .open, approved: true, ci: .success)])
         #expect(state.ggLandTargetStillLandable(.until(entryId: "a", title: "t"), in: s))
         #expect(!state.ggLandTargetStillLandable(.until(entryId: "missing", title: "t"), in: s))
@@ -593,7 +728,7 @@ struct RightPaneGGLandTests {
     @Test func untilRequiresReadyTargetEntry() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
 
         #expect(!state.ggLandTargetStillLandable(
             .until(entryId: "a", title: "t"),
@@ -616,7 +751,7 @@ struct RightPaneGGLandTests {
     @Test func untilRequiresReadyLowerEntries() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         func positionedEntry(
             id: String,
             position: Int,
@@ -654,7 +789,7 @@ struct RightPaneGGLandTests {
     @Test func requestWithoutCachedStackDoesNotStageLandConfirmation() {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.requestGGLand(.ready)
         #expect(state.pendingGGLand == nil)
         #expect(state.ggActionState.lastError == "This stack is no longer ready to land.")
@@ -663,7 +798,7 @@ struct RightPaneGGLandTests {
     @Test func cleanPreflightFailureDoesNotStageConfirmation() async throws {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.requestGGCleanAll()
         for _ in 0..<100 where state.ggActionState.lastError == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -721,7 +856,7 @@ struct RightPaneGGLandTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.ggStack = GGStack(
             name: "cached-lower",
             base: "main",
@@ -758,7 +893,7 @@ struct RightPaneGGLandTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.ggStack = stack([target])
         let runner = FreshUnstackGGRunner()
         state.ggService = GGService(runner: runner)
@@ -791,7 +926,7 @@ struct RightPaneGGLandTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.ggStack = stack([target])
         let runner = FreshUnstackGGRunner(stackResponses: [
             FreshUnstackGGRunner.freshStackJSON,
@@ -819,7 +954,7 @@ struct RightPaneGGLandTests {
             id: "i", projectId: "p", name: "f", branch: "f",
             path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date()
         )
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.ggStack = stack([target])
         let rewrittenHead = FreshUnstackGGRunner.freshStackJSON.replacingOccurrences(
             of: #""sha":"s5""#,
@@ -854,7 +989,7 @@ struct RightPaneGGLandTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        let state = rightPaneState(worktree: wt, baseBranch: "main")
         state.ggStack = stack([target])
         let runner = FreshUnstackGGRunner(
             unstackError: "Stack 'fresh-target' already exists."

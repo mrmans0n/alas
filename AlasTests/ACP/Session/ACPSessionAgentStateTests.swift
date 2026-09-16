@@ -210,7 +210,7 @@ struct ACPSessionManagerAttachStateTests {
 }
 
 @MainActor
-@Suite("ACPSessionManager reattach")
+@Suite("ACPSessionManager reattach", .serialized)
 struct ACPSessionManagerReattachTests {
     /// `.ready` is the steady state — reattach must not poke `attach()` and
     /// must leave the runner registry untouched.
@@ -275,11 +275,10 @@ struct ACPSessionManagerReattachTests {
         session.enqueueScheduled(blocks: [.text("due")], scheduledAt: Date().addingTimeInterval(-1))
 
         mgr.scheduleAutoReconnect(sessionId: session.id)
-        for _ in 0 ..< 50 where session.agentState == .disconnected {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try await Task.sleep(nanoseconds: 100_000_000)
 
-        #expect(session.agentState != .disconnected)
+        #expect(mgr.liveSession(for: session.id) == nil)
+        #expect(session.queue.isEmpty)
     }
 
     @Test("scheduled reconnect retains disconnected session")

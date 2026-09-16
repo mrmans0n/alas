@@ -58,6 +58,13 @@ struct WrapperFixtureTests {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/RunScriptFixtureTests.swift" <<'SWIFT'
+import Testing
+
+struct RunScriptFixtureTests {
+    @Test func detectsRuntimeMarkers() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/InlineSuiteTests.swift" <<'SWIFT'
 import Testing
 
@@ -75,7 +82,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=8 scheduled=7 ordinary=4 subprocess=3 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=9 scheduled=8 ordinary=4 subprocess=4 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -116,6 +123,7 @@ subprocess_selectors="$(
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/WrapperFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/RunScriptFixtureTests' <<<"${subprocess_selectors}"
 
 mkdir -p "${sandbox}/bin"
 cat > "${sandbox}/bin/xcodebuild" <<'SH'
@@ -137,9 +145,10 @@ fi
 
 subprocess_log="${sandbox}/subprocess-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${subprocess_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
-    bash "${batch_runner}" 0 2 subprocess
+    bash "${batch_runner}" 0 1 subprocess
 grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"
 
 printf 'MissingTests\tno longer exists; #23\n' >> "${sandbox}/quarantine.tsv"

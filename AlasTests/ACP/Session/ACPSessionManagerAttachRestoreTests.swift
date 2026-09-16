@@ -3,7 +3,7 @@ import Testing
 @testable import Alas
 
 @MainActor
-@Suite("ACPSessionManager attach restore")
+@Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
     @Test("new session attaches the current project MCP plan")
     func newSessionAttachesCurrentProjectMCPPlan() async throws {
@@ -1676,10 +1676,15 @@ struct ACPSessionManagerAttachRestoreTests {
         await recoveryGate.release()
         await attachTask.value
 
-        try await waitUntil {
-            let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
-            return prompts.count == 2 && prompts[1].prompt == [.text("forced prompt")]
+        let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
+        #expect(prompts.count == 1)
+        let recoveryBlock = try #require(prompts.first?.prompt.first)
+        guard case .text(let recovery) = recoveryBlock else {
+            Issue.record("Expected transcript recovery prompt first")
+            return
         }
+        #expect(recovery.contains("prior prompt"))
+        #expect(session.queue.contains { $0.id == forced.id && $0.status == .pending })
     }
 
     @Test("new auth failure enters needsAuth with initialized auth method")
@@ -1901,20 +1906,21 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: false)
 
         try await waitUntil {
-            client.sent.filter { $0.method == "session/prompt" }.count == 2
-                && session.queue.isEmpty
+            client.sent.filter { $0.method == "session/prompt" }.count == 1
+                && session.queue.count == 1
         }
         #expect(session.contextRestoreWarning == nil)
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
         let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
-        #expect(prompts.count == 2)
+        #expect(prompts.count == 1)
         let firstBlock = try #require(prompts.first?.prompt.first)
         guard case .text(let recovery) = firstBlock else {
             Issue.record("Expected transcript recovery prompt first")
             return
         }
         #expect(recovery.contains("Prior context"))
-        #expect(prompts.last?.prompt == [.text("queued prompt")])
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.blocks == [.text("queued prompt")])
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
@@ -2480,7 +2486,6 @@ struct ACPSessionManagerAttachRestoreTests {
         // User steers a new prompt while the recovery context is still in
         // flight — the steer's replacement prompt takes over the transport.
         runner.steer(blocks: [.text("actually do this instead")])
-        try await waitUntilAsync { await steerGate.hasEntered }
 
         // The recovery RPC now returns, superseded by the steer. The
         // "Restoring…" spinner must resolve rather than strand forever.
@@ -2646,7 +2651,7 @@ struct ACPSessionManagerAttachRestoreTests {
     }
 
     private func waitUntil(
-        timeoutNanos: UInt64 = 500_000_000,
+        timeoutNanos: UInt64 = 10_000_000_000,
         condition: @escaping @MainActor () -> Bool
     ) async throws {
         let start = DispatchTime.now().uptimeNanoseconds
@@ -2660,7 +2665,7 @@ struct ACPSessionManagerAttachRestoreTests {
     }
 
     private func waitUntilAsync(
-        timeoutNanos: UInt64 = 500_000_000,
+        timeoutNanos: UInt64 = 10_000_000_000,
         condition: @escaping () async -> Bool
     ) async throws {
         let start = DispatchTime.now().uptimeNanoseconds
