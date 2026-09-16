@@ -597,6 +597,44 @@ struct AppStateRunRecordTests {
         #expect(stopped?.outcome == .stopped)
     }
 
+    @Test func stoppingALocalRunSnapshotsTranscriptBeforeCancellingWaiter() async throws {
+        let fixture = try makeFixture(waiter: { location in
+            defer {
+                if case let .local(paths) = location {
+                    try? FileManager.default.removeItem(atPath: paths.transcript)
+                    try? FileManager.default.removeItem(atPath: paths.completion)
+                    try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
+                    try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
+                }
+            }
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let runID = try #require(runRecord(fixture)?.id)
+        let entry = try #require(fixture.state.runScriptCompletionTasks[runID])
+        guard case let .local(paths) = entry.location else {
+            Issue.record("Expected local capture")
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: paths.transcript).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("stopped output\n".utf8).write(to: URL(fileURLWithPath: paths.transcript))
+
+        fixture.state.stopScript(fixture.script, in: fixture.worktree)
+
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        await fixture.state.flushRunHistoryPersistence()
+        let stopped = try #require(try await fixture.history.entry(id: runID))
+        #expect(stopped.outcome == .stopped)
+        #expect(stopped.output == .available(text: "stopped output\n", truncated: false))
+    }
+
     @Test func closeAllTabsCancelsPendingLaunchesWithoutPurgingRunHistory() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

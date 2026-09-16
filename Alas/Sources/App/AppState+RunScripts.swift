@@ -276,8 +276,9 @@ extension AppState {
             return
         }
         if let existing = scriptTab(for: script, in: worktree) {
+            let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
             let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
-            archiveFinalizedRun(finalized, capture: runHistoryCapture(for: finalized?.id))
+            archiveFinalizedRun(finalized, capture: capture)
             closeTab(worktreeId: worktree.id, tabId: existing.id)
         }
         launchScript(script, in: worktree)
@@ -301,8 +302,9 @@ extension AppState {
             archiveFinalizedRun(finalized, capture: .unavailable)
             return
         }
+        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
         let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
-        archiveFinalizedRun(finalized, capture: runHistoryCapture(for: finalized?.id))
+        archiveFinalizedRun(finalized, capture: capture)
         closeTab(worktreeId: worktree.id, tabId: existing.id)
     }
 
@@ -661,11 +663,13 @@ extension AppState {
         case unavailable
     }
 
-    private func runHistoryCapture(for runID: String?) -> RunHistoryCapture {
-        guard let runID, let location = runScriptCompletionTasks[runID]?.location else {
-            return .unavailable
-        }
-        return .location(location)
+    private func stoppedRunHistoryCapture(worktreeID: String, scriptKey: String) -> RunHistoryCapture {
+        guard let runID = runRecords.record(worktreeID: worktreeID, scriptKey: scriptKey)?.id,
+              let entry = runScriptCompletionTasks.removeValue(forKey: runID)
+        else { return .unavailable }
+        let capture = runHistoryCaptureBeforeCancelling(entry.location)
+        entry.task.cancel()
+        return capture
     }
 
     private func runHistoryCaptureBeforeCancelling(_ location: RunScriptCaptureLocation) -> RunHistoryCapture {
@@ -999,7 +1003,9 @@ extension AppState {
                         try await runHistoryStore.purge(worktreeID: worktreeID)
                         self?.noteRunHistoryChanged(worktreeID: worktreeID)
                     } catch {
-                        self?.runHistoryError = "Could not purge run history: \(error.localizedDescription)"
+                        let message = "Could not purge run history: \(error.localizedDescription)"
+                        self?.runHistoryError = message
+                        self?.showFileActionError(title: "Run History Failed", message: message)
                     }
                 }
             }
