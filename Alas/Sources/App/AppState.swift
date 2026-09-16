@@ -1380,10 +1380,7 @@ final class AppState {
     /// refresh through that summary path instead of the local git-status
     /// scanner.
     func rescanWorktreeStatuses(includeRemote: Bool = true) {
-        let paths = projectsManager.projects
-            .filter { $0.host == nil }
-            .flatMap { projectsManager.worktrees(projectId: $0.id) }
-            .map(\.path)
+        let paths = localWorktreeStatusPaths()
         if includeRemote {
             rescanRemoteWorktreeStatuses()
         }
@@ -1401,8 +1398,17 @@ final class AppState {
 
     private func rescanLocalWorktreeStatuses(projectId: String) {
         guard projectsManager.projects.contains(where: { $0.id == projectId && $0.host == nil }) else { return }
-        let paths = projectsManager.worktrees(projectId: projectId).map(\.path)
+        let paths = localWorktreeStatusPaths(projectId: projectId)
         enqueueLocalWorktreeStatusRescan(paths: paths)
+    }
+
+    func localWorktreeStatusPaths(projectId: String? = nil) -> [URL] {
+        projectsManager.projects
+            .filter { project in
+                project.host == nil && (projectId == nil || project.id == projectId)
+            }
+            .flatMap { projectsManager.visibleWorktrees(projectId: $0.id) }
+            .map(\.path)
     }
 
     private func enqueueLocalWorktreeStatusRescan(paths: [URL]) {
@@ -1779,6 +1785,9 @@ final class AppState {
         guard let checkout = workspacesManager.checkout(id: id) else { return }
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+        if let selectedWorktreeId {
+            rescanWorktreeStatus(worktreeId: selectedWorktreeId)
+        }
     }
 
     func focusWorkspaceCheckoutMember(id: UUID) {
@@ -1786,6 +1795,9 @@ final class AppState {
         guard let checkout = selectedWorkspaceCheckout else { return }
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+        if let selectedWorktreeId {
+            rescanWorktreeStatus(worktreeId: selectedWorktreeId)
+        }
     }
 
     func openWorkspaceCheckoutSearchResult(
