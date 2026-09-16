@@ -1334,6 +1334,7 @@
 		B9F3258E4AE2DB1E7481690A /* SubprocessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06BA06E4A620EEE773E1672 /* SubprocessRunner.swift */; };
 		B9F75C605157BA01FD10DEE5 /* AppKitDiffRowSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E9E696C1C8F5817524752F /* AppKitDiffRowSpec.swift */; };
 		BA5D8E327F37D4C84CC80F95 /* CommitPublishModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC9DC3DFC2DB5006B624937 /* CommitPublishModelsTests.swift */; };
+		BA8A7E107C06C3F9060CE9CA /* WorktreeDirtyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F67FE50E02553ACB2CAC09F /* WorktreeDirtyState.swift */; };
 		BACDEEE3791E66405294B328 /* ACPFirstRunConnectingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6EDDD4D22267C26B496A6FF /* ACPFirstRunConnectingPolicyTests.swift */; };
 		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		BAE6B1D93387807ADD7ED0CC /* ACPImageThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E1462C85D0E49127BCED81 /* ACPImageThumbnail.swift */; };
@@ -1765,7 +1766,6 @@
 		F18EB035A8972F21D23F3810 /* SearchFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39DFD138FE855D8CFC464847 /* SearchFooter.swift */; };
 		F1AB5B4DF8A59DF85D585058 /* RemoteWeb in Resources */ = {isa = PBXBuildFile; fileRef = B586C7A794B846F3AD9228BD /* RemoteWeb */; };
 		F1C4DD0D3A95ED5301EE2AC9 /* ACPTranscriptMarkdownCacheEvictionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3708552C2BF0E70F10C76B63 /* ACPTranscriptMarkdownCacheEvictionTests.swift */; };
-		F1F15B2CAA7D4E66B9F6E086 /* WorktreeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4075623C5C454421DB51461 /* WorktreeStatus.swift */; };
 		F22A776D791ABA7A584B4C18 /* ACPTranscriptMessageIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E26C51ACE48A35EB4CD463 /* ACPTranscriptMessageIndexTests.swift */; };
 		F2385B8730E9D1F47C7FA423 /* ReviewChangesRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C9EEDB5A71C5FAE2D0E42B /* ReviewChangesRail.swift */; };
 		F24D9A50F61692958ABCB4F1 /* TrackedRevisionCodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3552BE48184E15F0BE6084C /* TrackedRevisionCodingTests.swift */; };
@@ -2471,6 +2471,7 @@
 		4F03EE87AC76203E09C9F1C5 /* DiffFeedbackLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffFeedbackLane.swift; sourceTree = "<group>"; };
 		4F4C4644111156AE241652CC /* ProjectAgentSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectAgentSettingsView.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
+		4F67FE50E02553ACB2CAC09F /* WorktreeDirtyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeDirtyState.swift; sourceTree = "<group>"; };
 		4FA5DB063C08A76B29D48C28 /* EditorDisplayAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDisplayAccessibility.swift; sourceTree = "<group>"; };
 		4FB0C89AA6E07A2402934FD2 /* DraftCommitTabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabsManagerTests.swift; sourceTree = "<group>"; };
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
@@ -3525,7 +3526,6 @@
 		E3CA4AD69CDACE0D41821742 /* WorktreeCreationCompletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCreationCompletion.swift; sourceTree = "<group>"; };
 		E3E17C2FF7553AEA01B535B1 /* FollowRevisionPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowRevisionPrefill.swift; sourceTree = "<group>"; };
 		E3F09E1DA9C67475445F4B63 /* RemoteFileStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileStatsTests.swift; sourceTree = "<group>"; };
-		E4075623C5C454421DB51461 /* WorktreeStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeStatus.swift; sourceTree = "<group>"; };
 		E4128039056F417E483AB4DC /* DiffFeedbackLaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffFeedbackLaneTests.swift; sourceTree = "<group>"; };
 		E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHeaderViewTests.swift; sourceTree = "<group>"; };
 		E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatchTests.swift; sourceTree = "<group>"; };
@@ -4604,8 +4604,8 @@
 				79DDEA496740F5B0B5EE808B /* Process+Git.swift */,
 				DFEE7C5318AA6D04095403B2 /* ShellEnvResolver.swift */,
 				91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */,
+				4F67FE50E02553ACB2CAC09F /* WorktreeDirtyState.swift */,
 				6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */,
-				E4075623C5C454421DB51461 /* WorktreeStatus.swift */,
 				913D207D8F2040A975CC5DD9 /* WorktreeStatusScanner.swift */,
 				53CBE03EC23380FD2AA19073 /* WorktreeStatusStore.swift */,
 				5B270704174889BC7F24E3D4 /* WorktreeTrash.swift */,
@@ -7999,13 +7999,13 @@
 				88A13347D0CB153554F00B24 /* WorktreeCleanupSheet.swift in Sources */,
 				40530C892BEFDCDB0831C22F /* WorktreeCleanupTypes.swift in Sources */,
 				2D63742A552F72DC6BEBF7DC /* WorktreeCreationCompletion.swift in Sources */,
+				BA8A7E107C06C3F9060CE9CA /* WorktreeDirtyState.swift in Sources */,
 				9D2E53FB0A57BC38C146EA5E /* WorktreeLaunchSurface.swift in Sources */,
 				F098EBE9088B2EE1DAAF1BFD /* WorktreePathTemplateRenderer.swift in Sources */,
 				4ECFD27396367A9A81D52A0D /* WorktreeRowView.swift in Sources */,
 				9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */,
 				52E3CDEB14242DB611348EEA /* WorktreeSortMenu.swift in Sources */,
 				BDCC42E0E558C92F0D5D50D1 /* WorktreeStateSnapshotter.swift in Sources */,
-				F1F15B2CAA7D4E66B9F6E086 /* WorktreeStatus.swift in Sources */,
 				3E351912BE4D7EFFDEA63BF2 /* WorktreeStatusScanner.swift in Sources */,
 				2D305EA4F66371F99E23264B /* WorktreeStatusStore.swift in Sources */,
 				92C1EDD306CEEF99DE875C62 /* WorktreeTrash.swift in Sources */,
