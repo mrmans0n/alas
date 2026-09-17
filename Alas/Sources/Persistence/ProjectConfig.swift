@@ -149,12 +149,19 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     /// user added them. Repo-level on purpose: every worktree of the
     /// project shares one list.
     var fileBookmarks: [String] = []
+    /// Per-user trust decisions for repo-defined MCP servers, keyed by
+    /// `RepoMCPTrust.hash(for:)`.
+    var repoMCPTrust: [String: RepoMCPTrustState] = [:]
+    /// Names of repo-defined MCP servers the user disabled without replacing
+    /// them with an app-level server of the same name.
+    var disabledRepoMCPServers: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
-             ggWorktreeModes, issueAttachments, fileBookmarks
+             ggWorktreeModes, issueAttachments, fileBookmarks,
+             repoMCPTrust, disabledRepoMCPServers
     }
 
     init(
@@ -177,7 +184,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         ggMode: GGProjectMode = .auto,
         ggWorktreeModes: [String: GGWorktreeMode] = [:],
         issueAttachments: [String: IssueAttachment] = [:],
-        fileBookmarks: [String] = []
+        fileBookmarks: [String] = [],
+        repoMCPTrust: [String: RepoMCPTrustState] = [:],
+        disabledRepoMCPServers: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -198,6 +207,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.ggWorktreeModes = ggWorktreeModes
         self.issueAttachments = issueAttachments
         self.fileBookmarks = fileBookmarks
+        self.repoMCPTrust = repoMCPTrust
+        self.disabledRepoMCPServers = disabledRepoMCPServers
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -237,6 +248,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
         issueAttachments = (try? c.decode([String: IssueAttachment].self, forKey: .issueAttachments)) ?? [:]
         fileBookmarks = (try? c.decode([String].self, forKey: .fileBookmarks)) ?? []
+        repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
+        disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -267,6 +280,12 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         }
         if !fileBookmarks.isEmpty {
             try c.encode(fileBookmarks, forKey: .fileBookmarks)
+        }
+        if !repoMCPTrust.isEmpty {
+            try c.encode(repoMCPTrust, forKey: .repoMCPTrust)
+        }
+        if !disabledRepoMCPServers.isEmpty {
+            try c.encode(disabledRepoMCPServers, forKey: .disabledRepoMCPServers)
         }
     }
 
