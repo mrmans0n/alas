@@ -18,7 +18,7 @@ final class ACPSessionOrchestrationCoordinator {
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
-        let availableAgents: (ACPOrchestrationSessionOrigin) -> [ACPOrchestrationAgent]
+        let availableAgents: (ACPOrchestrationSessionOrigin) async -> [ACPOrchestrationAgent]
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
@@ -113,7 +113,7 @@ final class ACPSessionOrchestrationCoordinator {
             agentID = try ACPSessionOrchestrationPolicy.resolveAgent(
                 requestedId: request.agentId,
                 parentAgentId: parentSession.agentId,
-                available: environment.availableAgents(origin)
+                available: await environment.availableAgents(origin)
             )
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")

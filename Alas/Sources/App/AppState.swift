@@ -5711,9 +5711,13 @@ final class AppState {
                 availableAgents: { [weak self] origin in
                     guard let self else { return [] }
                     let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    let agents = self.worktree(withId: origin.worktreeId)
-                        .map { self.agentAvailability(for: $0).agents }
-                        ?? self.agentRegistry.enabled()
+                    let agents: [AgentDefinition]
+                    if let worktree = self.worktree(withId: origin.worktreeId) {
+                        await self.loadAgentAvailability(for: worktree)
+                        agents = self.agentAvailability(for: worktree).agents
+                    } else {
+                        agents = self.agentRegistry.enabled()
+                    }
                     return agents.map {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
