@@ -10596,20 +10596,14 @@ final class AppState {
         guard await workspaceCheckoutManifestMatches(checkout) else { return .pendingRootOrLocation }
         if let existing = acpManagers[owner] { return .ready(existing) }
 
-        let configuredAgents = AgentConfiguredCatalog.enabled(
-            builtinState: config.agents.builtinState,
-            customs: config.agents.custom
-        )
         let launchSpecRemoteHome: String?
         if let pinnedRemoteHost,
-           configuredAgents.contains(where: { $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true }) {
-            guard let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost) else {
-                return .pendingRootOrLocation
-            }
+           let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost) {
             launchSpecRemoteHome = remoteHome
         } else {
             launchSpecRemoteHome = nil
         }
+        if let existing = acpManagers[owner] { return .ready(existing) }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
         let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
@@ -10677,7 +10671,6 @@ final class AppState {
                 guard let self else { return spec }
                 return self.workspaceACPLaunchSpec(
                     from: spec,
-                    configuredAgents: configuredAgents,
                     remoteHome: launchSpecRemoteHome,
                     useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
                 )
@@ -10829,7 +10822,7 @@ final class AppState {
            !binaryOverride.isEmpty,
            let command = Self.normalizedACPBinaryOverride(binaryOverride, remoteHome: remoteHome),
            command != spec.command {
-            launchSpec = launchSpec.overridingCommand(command)
+            launchSpec = launchSpec.overridingCommandAndSetupCheck(command)
         }
         if useBypassPermissions,
            let flag = configuredAgent?.bypassPermissionsFlag,

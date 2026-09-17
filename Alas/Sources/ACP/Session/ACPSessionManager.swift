@@ -1934,13 +1934,14 @@ final class ACPSessionManager: ObservableObject {
         guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
-        let setup = await evaluateSetup(for: spec)
+        let host = effectiveRemoteHost()
+        let setupSpec = launchSpecTransformer(spec)
+        let setup = await evaluateSetup(for: setupSpec)
         guard case .ready = setup else {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let host = effectiveRemoteHost()
-        let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+        let launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host))
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
@@ -3316,7 +3317,9 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId)
             return
         }
-        let setup = await evaluateSetup(for: spec)
+        let host = effectiveRemoteHost()
+        let setupSpec = launchSpecTransformer(spec)
+        let setup = await evaluateSetup(for: setupSpec)
         guard sessions[sessionId] === session, !disposingAttachments.contains(sessionId), !isDisposed else {
             await releaseWriterLease(sessionId: sessionId)
             return
@@ -3353,7 +3356,6 @@ extension ACPSessionManager {
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
         do {
-            let host = effectiveRemoteHost()
             var launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host))
             if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
                 launchSpec = launchSpec.mergingExtraEnv(cliEnv)
@@ -4884,7 +4886,8 @@ extension ACPSessionManager {
             return await setupEvaluator(spec)
         }
 
-        if let descriptor = ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) {
+        if let descriptor = ACPManagedAdapterDescriptor.descriptor(for: spec.agentID),
+           spec.setupCheck == ACPLaunchCatalog.spec(for: spec.agentID)?.setupCheck {
             let key = remoteAdapterKey(host: host, agentID: spec.agentID)
             let resolution = await remoteAdapterResolver(host, descriptor, spec.setupCheck)
             switch resolution {

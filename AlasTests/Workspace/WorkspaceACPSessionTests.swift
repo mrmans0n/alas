@@ -129,6 +129,47 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutManagerEvaluatesSetupAfterLaunchSpecTransform() async throws {
+        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
+        client.script(method: "session/new") { _ in Data(#"{"sessionId":"new"}"#.utf8) }
+        var setupSpec: ACPLaunchSpec?
+        var launchedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "checkout",
+            worktreePath: "/checkout",
+            owner: .workspaceCheckout(UUID(), .local),
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { spec in
+                setupSpec = spec
+                return .ready
+            },
+            connectionFactory: { spec, _, _ in
+                launchedSpec = spec
+                return ACPConnection(client: client)
+            },
+            launchSpecTransformer: { spec in
+                spec.agentID == "gemini"
+                    ? spec.overridingCommandAndSetupCheck("/opt/tools/gemini-acp")
+                    : spec
+            }
+        )
+        let session = manager.createSession(agentId: "gemini")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(setupSpec?.command == "/opt/tools/gemini-acp")
+        #expect(launchedSpec?.command == "/opt/tools/gemini-acp")
+        if case .binaryOnPath(let name) = setupSpec?.setupCheck {
+            #expect(name == "/opt/tools/gemini-acp")
+        } else {
+            Issue.record("expected setup to check the overridden binary")
+        }
+    }
+
+    @MainActor
     @Test func checkoutLaunchSpecPreservesAdapterCommandWithoutBinaryOverride() throws {
         let state = AppState(store: MemoryStore())
         state.config.agents.builtinState["claude"] = .init(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)
@@ -154,6 +195,11 @@ struct WorkspaceACPSessionTests {
 
         #expect(transformed.command == "/opt/agent-adapters/claude-agent-acp")
         #expect(transformed.arguments.first == "--dangerously-skip-permissions")
+        if case .binaryOnPath(let name) = transformed.setupCheck {
+            #expect(name == "/opt/agent-adapters/claude-agent-acp")
+        } else {
+            Issue.record("expected setup to check the overridden binary")
+        }
     }
 
     @MainActor
