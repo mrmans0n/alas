@@ -330,6 +330,13 @@ import Testing
     @Test func parses() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/ImplicitSuiteSpec.swift" <<'SWIFT'
+import Testing
+
+struct ImplicitParserSpec {
+    @Test func parses() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/RegexLiteralSuite.swift" <<'SWIFT'
 import Testing
 
@@ -382,6 +389,19 @@ enum AllmanNamespace
     @Suite
     struct AllmanParserTests
     {
+        @Test func ordinary() {}
+    }
+}
+SWIFT
+cat > "${sandbox}/AlasTests/ConformanceNamespace.swift" <<'SWIFT'
+import Testing
+
+protocol Marker {}
+
+enum ConformanceNamespace:
+    Marker
+{
+    struct InnerTests {
         @Test func ordinary() {}
     }
 }
@@ -448,7 +468,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=53 scheduled=52 ordinary=34 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=55 scheduled=54 ordinary=36 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -461,6 +481,7 @@ grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CaféTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'café' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'ConformanceNamespace.InnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedExtensionTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedTests' "${inventory_cache}/ordinary.txt"
@@ -471,6 +492,7 @@ grep -qx 'globalProcessBehavior' "${inventory_cache}/subprocess.txt"
 grep -qx 'IndirectTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'ImplicitParserSpec' "${inventory_cache}/ordinary.txt"
 grep -qx 'KeywordSplitTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ModifierTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
@@ -525,6 +547,7 @@ grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CaféTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/café' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/ConformanceNamespace.InnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedExtensionTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedTests' <<<"${selectors}"
@@ -535,6 +558,7 @@ grep -qx -- '-only-testing AlasTests/IndirectTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/ImplicitParserSpec' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/KeywordSplitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ModifierTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineAttributeTests' <<<"${selectors}"
@@ -587,6 +611,14 @@ if grep -q 'AlasTests/works' <<<"${selectors}"; then
 fi
 if grep -q 'AlasTests/parses' <<<"${selectors}"; then
     echo 'attributed suite test was scheduled as a free-standing test' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/ordinary$' <<<"${selectors}"; then
+    echo 'nested suite behind multiline conformance was scheduled as a free-standing test' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/InnerTests' <<<"${selectors}"; then
+    echo 'nested suite behind multiline conformance lost its namespace' >&2
     exit 1
 fi
 if grep -q 'AlasTests/RegexOwnerTests.FollowingRegexTests' <<<"${selectors}"; then

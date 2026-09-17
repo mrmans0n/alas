@@ -365,6 +365,13 @@ while IFS= read -r source; do
             }
             return result == "" ? name : result "." name
         }
+        function current_scope(    i, result) {
+            result = ""
+            for (i = 1; i <= scope_count; i++) {
+                result = result (result == "" ? "" : ".") scope_name[i]
+            }
+            return result
+        }
         function clean_identifier(name) {
             if (name ~ /^`/) {
                 sub(/^`/, "", name)
@@ -452,7 +459,7 @@ while IFS= read -r source; do
             if (pending_scope_name == "") {
                 return
             }
-            if (line ~ /^[[:space:]]*[{]/) {
+            if (line ~ /[{]/) {
                 push_scope(pending_scope_name, brace_depth + 1, pending_scope_previous_suite)
                 pending_scope_name = ""
                 pending_scope_previous_suite = ""
@@ -542,6 +549,10 @@ while IFS= read -r source; do
         }
         pending_test && suite != "" {
             print suite
+            pending_test = 0
+        }
+        pending_test && suite == "" && scope_count > 0 {
+            print current_scope()
             pending_test = 0
         }
         pending_test && suite == "" {
@@ -900,6 +911,13 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 }
                 return result == "" ? name : result "." name
             }
+            function current_scope(    i, result) {
+                result = ""
+                for (i = 1; i <= scope_count; i++) {
+                    result = result (result == "" ? "" : ".") scope_name[i]
+                }
+                return result
+            }
             function clean_identifier(name) {
                 if (name ~ /^`/) {
                     sub(/^`/, "", name)
@@ -973,7 +991,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 if (pending_scope_name == "") {
                     return
                 }
-                if (line ~ /^[[:space:]]*[{]/) {
+                if (line ~ /[{]/) {
                     push_scope(pending_scope_name, brace_depth + 1)
                     pending_scope_name = ""
                 }
@@ -1055,7 +1073,9 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             pending_test {
                 test_selector = test_function_selector(candidate)
                 if (test_selector != "") {
-                    if (scope_count == 0) {
+                    if (scope_count > 0) {
+                        print current_scope()
+                    } else {
                         print test_selector
                     }
                     pending_test = 0
