@@ -8,6 +8,9 @@ struct RepoMCPTrustBanner: View {
     let pendingServers: [ProjectMCPServer]
     let onApproveAll: () -> Void
     let onDeclineAll: () -> Void
+    /// Per-server decisions from the review sheet. Nil disables the affordance.
+    var onApproveServer: ((ProjectMCPServer) -> Void)? = nil
+    var onDeclineServer: ((ProjectMCPServer) -> Void)? = nil
 
     @State private var showsReview = false
     @Environment(\.theme) private var theme
@@ -62,8 +65,25 @@ struct RepoMCPTrustBanner: View {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(pendingServers) { server in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(server.name)
-                                .font(.system(size: 12, weight: .semibold))
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(server.name)
+                                    .font(.system(size: 12, weight: .semibold))
+                                Spacer()
+                                if let onApproveServer, let onDeclineServer {
+                                    HStack(spacing: 6) {
+                                        Button("Approve") { onApproveServer(server) }
+                                            .font(.system(size: 10.5))
+                                        Button {
+                                            onDeclineServer(server)
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 9))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Decline \(server.name)")
+                                    }
+                                }
+                            }
                             Text(Self.detail(for: server.transport))
                                 .font(.system(size: 11))
                                 .foregroundStyle(theme.color("fg-muted"))

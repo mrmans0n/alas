@@ -5,30 +5,31 @@ import Foundation
 ///
 /// Staging a repo icon reads and hashes the image, and the sidebar asks for a
 /// project's icon on every render pass, so the answer has to be kept. The
-/// lookup takes the same identity a stats-only probe produces, which is what
-/// keeps the steady state free of reads and hashes: the expensive resolve
-/// happens only on a miss. Keying on the source file's identity — not on the
-/// project alone — is what makes a replaced icon, an edited `config.json`
-/// pointing elsewhere, or a branch switch invalidate the entry with no explicit
-/// refresh.
+/// lookup takes the same candidate chain a stats-only probe produces, which
+/// is what keeps the steady state free of reads and hashes: the expensive
+/// resolve happens only on a miss. Keying on the candidates' identities —
+/// not on the project alone — is what makes a replaced icon, an edited
+/// `config.json` pointing elsewhere, or a branch switch invalidate the entry
+/// with no explicit refresh.
 ///
 /// Main-actor confined, like `RepoConfigStore`: `AppState` owns the single
 /// instance and only its render paths read it.
 final class RepoIconDisplayCache {
-    /// What an icon is cached against: the repo file it was staged from, plus
-    /// the app-icon preferences carried onto the rendered icon, so changing the
-    /// project's colour shows up without waiting for the file to change.
+    /// What an icon is cached against: the stamps of every repo file that could
+    /// currently supply it, in `resolve`'s candidate order, plus the app-icon
+    /// preferences carried onto the rendered icon.
+    ///
+    /// The whole chain, not just the winning file, because a head candidate that
+    /// exists but cannot be used makes `resolve` fall through to the next one —
+    /// and keying that outcome on the winner alone would keep serving a stale
+    /// fallback while the fallback file itself is edited or deleted.
     struct Key: Hashable {
-        let sourcePath: String
-        let modificationDate: Date?
-        let fileSize: Int?
+        let chain: [RepoIconResolver.SourceIdentity]
         let color: String
         let transparentBackground: Bool
 
-        init(identity: RepoIconResolver.SourceIdentity, appIcon: ProjectIcon) {
-            sourcePath = identity.url.path
-            modificationDate = identity.modificationDate
-            fileSize = identity.fileSize
+        init(chain: [RepoIconResolver.SourceIdentity], appIcon: ProjectIcon) {
+            self.chain = chain
             color = appIcon.color
             transparentBackground = appIcon.transparentBackground
         }
@@ -47,29 +48,23 @@ final class RepoIconDisplayCache {
     /// repeated store replaces rather than accumulates.
     var storedEntryCount: Int { entries.count }
 
-    /// The icon staged from this exact repo file revision, or nil when nothing
-    /// was stored for the project or the identity has moved on since.
+    /// The icon staged from these exact candidate revisions, or nil when
+    /// nothing was stored for the project or any candidate has moved on since.
     func icon(for key: Key, projectID: String) -> ProjectIcon? {
         guard let entry = entries[projectID], entry.key == key else { return nil }
         return entry.icon
     }
 
-    /// Caches the icon a repo file supplied. A resolution that fell back to the
-    /// app icon has no source to key on and is deliberately not cached: it costs
-    /// a few stats to recompute, and remembering it would hide an
-    /// `.alas/icon.png` added later.
-    func store(_ resolution: RepoIconResolver.RepoIconResolution, appIcon: ProjectIcon, projectID: String) {
-        guard let identity = resolution.sourceIdentity else { return }
-        store(resolution.icon, for: Key(identity: identity, appIcon: appIcon), projectID: projectID)
+    /// Caches the icon the current candidates resolved to. A resolution that
+    /// fell back to the app icon has no source to key on and is deliberately
+    /// not cached: it costs a few stats to recompute, and remembering it would
+    /// hide an `.alas/icon.png` added later.
+    func store(_ resolution: RepoIconResolver.RepoIconResolution, chain: [RepoIconResolver.SourceIdentity], appIcon: ProjectIcon, projectID: String) {
+        guard !chain.isEmpty else { return }
+        store(resolution.icon, for: Key(chain: chain, appIcon: appIcon), projectID: projectID)
     }
 
-    /// Caches an already-resolved icon under an identity a probe reported.
-    ///
-    /// Used when `resolve` had to skip the probe's first candidate — an
-    /// unreadable or oversized file the probe could not rule out with a stat —
-    /// and took the next one instead. Remembering that outcome under the probed
-    /// identity keeps the following render a hit rather than re-reading the
-    /// file that could not be used.
+    /// Caches an already-resolved icon under a chain a probe reported.
     func store(_ icon: ProjectIcon, for key: Key, projectID: String) {
         entries[projectID] = Entry(key: key, icon: icon)
     }

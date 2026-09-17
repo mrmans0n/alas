@@ -14,8 +14,11 @@ enum MCPAttachmentSkipReason: Equatable {
     /// A checkout snapshot retains the descriptor for diagnostics, but never
     /// retargets it to whichever member currently has focus.
     case unavailableMember
-    /// Repo-defined server the user has not approved (or declined).
+    /// Repo-defined server the user has not approved.
     case repoNotApproved
+    /// Repo-defined server the user explicitly declined, kept distinct so the
+    /// status control can offer a way to reconsider it.
+    case repoDeclined
     /// Repo-defined server the user disabled for this project.
     case repoDisabled
 }
@@ -215,7 +218,9 @@ enum MCPAttachmentPlanner {
                 return nil
             case .disabled:
                 return status(for: entry.server, disposition: .skipped(.repoDisabled))
-            case .declined, .notApproved:
+            case .declined:
+                return status(for: entry.server, disposition: .skipped(.repoDeclined))
+            case .notApproved:
                 return status(for: entry.server, disposition: .skipped(.repoNotApproved))
             }
         }

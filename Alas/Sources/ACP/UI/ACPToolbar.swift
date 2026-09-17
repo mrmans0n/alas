@@ -31,12 +31,27 @@ struct ACPToolbar: View {
                     reconnectSession()
                 },
                 onReconnect: reconnectSession,
-                onToggleRepoServer: { name, disable in
-                    state.setRepoMCPServerDisabled(
-                        projectId: worktree.projectId,
-                        name: name,
-                        disabled: disable
-                    )
+                onToggleRepoServer: { name, toggle in
+                    switch toggle {
+                    case .disable:
+                        state.setRepoMCPServerDisabled(
+                            projectId: worktree.projectId,
+                            name: name,
+                            disabled: true
+                        )
+                    case .enable:
+                        state.setRepoMCPServerDisabled(
+                            projectId: worktree.projectId,
+                            name: name,
+                            disabled: false
+                        )
+                    case .approve:
+                        state.approveRepoMCPServer(
+                            projectId: worktree.projectId,
+                            worktreeRoot: worktree.path,
+                            name: name
+                        )
+                    }
                 }
             )
             ACPRecoveryPill(session: session)

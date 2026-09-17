@@ -32,10 +32,12 @@ struct ACPMCPStatusState: Equatable {
         let repoToggle: RepoToggle?
     }
 
-    /// The enable/disable affordance a repo-defined server's row carries.
+    /// The enable/disable/approve affordance a repo-defined server's row carries.
     enum RepoToggle: Equatable {
         case enable
         case disable
+        /// Re-approving a declined repo server from the status control.
+        case approve
     }
 
     let requestedCount: Int
@@ -138,7 +140,14 @@ struct ACPMCPStatusState: Equatable {
             let skippedRows = externalStatus.skippedServerStatuses.map {
                 Self.row($0, idPrefix: "external-skipped-")
             }
-            let rows = [cliRow, adapterRow] + skippedRows
+            // Repo-defined servers the plan requested get real rows here too:
+            // `.external` injection replaces the attachment rows wholesale, so
+            // without them an approved repo server would be invisible — and its
+            // Disable action unreachable — in this presentation.
+            let requestedRepoRows = externalStatus.requestedServerStatuses
+                .filter { $0.id.hasPrefix(RepoConfig.repoServerIDPrefix) }
+                .map { Self.row($0, idPrefix: "external-requested-") }
+            let rows = [cliRow, adapterRow] + requestedRepoRows + skippedRows
             externalRows = rows
             requestedCount = rows.count(where: \.isRequested)
             skippedCount = (cliRow.isRequested ? 0 : 1)
@@ -204,8 +213,19 @@ struct ACPMCPStatusState: Equatable {
                 transport: transport,
                 detail: skipDetail(reason),
                 isRequested: false,
-                repoToggle: reason == .repoDisabled ? .enable : nil
+                repoToggle: repoToggle(for: reason)
             )
+        }
+    }
+
+    /// Declined repo servers carry an approve affordance so an accidental
+    /// decline is recoverable; disabled ones keep their enable toggle; an
+    /// unapproved server stays banner-owned.
+    private static func repoToggle(for reason: MCPAttachmentSkipReason) -> RepoToggle? {
+        switch reason {
+        case .repoDisabled: return .enable
+        case .repoDeclined: return .approve
+        default: return nil
         }
     }
 
@@ -221,6 +241,8 @@ struct ACPMCPStatusState: Equatable {
             return "Skipped: checkout member unavailable"
         case .repoNotApproved:
             return "Skipped: not enabled (repo)"
+        case .repoDeclined:
+            return "Skipped: declined (repo)"
         case .repoDisabled:
             return "Skipped: disabled (repo)"
         }

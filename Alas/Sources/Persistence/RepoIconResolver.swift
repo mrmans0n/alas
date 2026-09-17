@@ -31,7 +31,7 @@ enum RepoIconResolver {
     /// The repo file that supplies an icon, with the identity stamp a caller
     /// keys its cache on. Produced from filesystem stats alone: no reads, no
     /// staging.
-    struct SourceIdentity: Equatable {
+    struct SourceIdentity: Hashable {
         let url: URL
         let modificationDate: Date?
         let fileSize: Int?
@@ -70,39 +70,41 @@ enum RepoIconResolver {
         ).icon
     }
 
-    /// The repo file that would currently supply the icon, with the stamp a
-    /// render-time cache keys on. Stats only: no reads, no staging, no logging.
+    /// Stamps for every repo file that could currently supply the icon, in
+    /// `resolve`'s candidate order. Stats only: no reads, no staging, no
+    /// logging.
     ///
-    /// Returns nil when the app icon is in effect (it is explicit) and when no
-    /// usable candidate exists — the same two cases where `resolve` has nothing
-    /// to read, so a caller that resolves anyway pays no more than this probe.
-    static func sourceIdentity(
+    /// A caller caching the resolved icon keys on this chain rather than on a
+    /// single winning file: when the head candidate exists but cannot be used
+    /// (unreadable, undecodable), `resolve` falls through to the next one, and
+    /// a key naming only the broken head would keep serving a stale fallback
+    /// while the fallback itself changes. Stamping every usable candidate makes
+    /// any of their edits invalidate the entry.
+    static func sourceChain(
         repoConfig: RepoConfig?,
         appIcon: ProjectIcon,
         primaryCheckout: URL,
         store: RepoConfigStore
-    ) -> SourceIdentity? {
-        guard !iconIsExplicit(appIcon) else { return nil }
-
-        for candidate in candidates(
+    ) -> [SourceIdentity] {
+        guard !iconIsExplicit(appIcon) else { return [] }
+        return candidates(
             repoConfig: repoConfig,
             primaryCheckout: primaryCheckout,
             store: store
-        ) {
+        ).compactMap { candidate in
             // An oversized candidate is skipped here too, so the probe and
-            // `resolve` agree on which file wins instead of the caller caching
-            // an identity `resolve` would refuse to use.
+            // `resolve` agree on which files are usable instead of the caller
+            // caching stamps `resolve` would refuse to use.
             guard let values = try? candidate.url.resourceValues(
                 forKeys: [.contentModificationDateKey, .fileSizeKey]
             ), !isOversized(values)
-            else { continue }
+            else { return nil }
             return SourceIdentity(
                 url: candidate.url,
                 modificationDate: values.contentModificationDate,
                 fileSize: values.fileSize
             )
         }
-        return nil
     }
 
     /// The icon to display for a project: an explicit app icon wins, else the

@@ -78,8 +78,8 @@ struct RepoIconResolverTests {
         appIcon: ProjectIcon,
         repoConfig: RepoConfig? = nil,
         in fixture: Fixture
-    ) -> RepoIconResolver.SourceIdentity? {
-        RepoIconResolver.sourceIdentity(
+    ) -> [RepoIconResolver.SourceIdentity] {
+        RepoIconResolver.sourceChain(
             repoConfig: repoConfig,
             appIcon: appIcon,
             primaryCheckout: fixture.checkout,
@@ -308,11 +308,11 @@ struct RepoIconResolverTests {
         let fixture = try Fixture()
         try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
 
-        let identity = probe(appIcon: .default(), in: fixture)
+        let chain = probe(appIcon: .default(), in: fixture)
 
-        #expect(identity?.url == fixture.alas.appendingPathComponent("icon.png"))
-        #expect(identity?.modificationDate != nil)
-        #expect(identity?.fileSize == Self.pngBytes.count)
+        #expect(chain.map(\.url) == [fixture.alas.appendingPathComponent("icon.png")])
+        #expect(chain.first?.modificationDate != nil)
+        #expect(chain.first?.fileSize == Self.pngBytes.count)
         // Stats only: unlike a resolve of the same tree, nothing was staged.
         #expect(try fixture.stagedFileURLs().isEmpty)
     }
@@ -323,22 +323,27 @@ struct RepoIconResolverTests {
         try fixture.writeIcon("logo.png", bytes: Self.otherPNGBytes)
         let config = RepoConfig(icon: .init(image: "logo.png"))
 
-        let identity = probe(appIcon: .default(), repoConfig: config, in: fixture)
+        let chain = probe(appIcon: .default(), repoConfig: config, in: fixture)
         let resolution = resolution(appIcon: .default(), repoConfig: config, in: fixture)
 
         // The probe mirrors resolve's candidate order, which is what lets a
-        // caller cache on it and skip resolve entirely on a hit.
-        #expect(identity?.url == fixture.alas.appendingPathComponent("logo.png"))
-        #expect(identity == resolution.sourceIdentity)
+        // caller cache on it and skip resolve entirely on a hit. Both usable
+        // candidates are stamped, so a later edit to either invalidates a
+        // cached outcome keyed on the chain.
+        #expect(chain.map(\.url) == [
+            fixture.alas.appendingPathComponent("logo.png"),
+            fixture.alas.appendingPathComponent("icon.png"),
+        ])
+        #expect(resolution.sourceIdentity == chain.first)
     }
 
     @Test func probeIsNilWhenNothingUsableExists() throws {
         let fixture = try Fixture()
-        #expect(probe(appIcon: .default(), in: fixture) == nil)
+        #expect(probe(appIcon: .default(), in: fixture).isEmpty)
 
         try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
         let explicit = ProjectIcon(mode: .emoji, color: "#112233", emoji: "🚀")
-        #expect(probe(appIcon: explicit, in: fixture) == nil)
+        #expect(probe(appIcon: explicit, in: fixture).isEmpty)
     }
 
     @Test func probeSkipsAnOversizedConfiguredIcon() throws {
@@ -346,13 +351,13 @@ struct RepoIconResolverTests {
         try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
         try fixture.writeOversizedIcon("huge.png")
 
-        let identity = probe(
+        let chain = probe(
             appIcon: .default(),
             repoConfig: RepoConfig(icon: .init(image: "huge.png")),
             in: fixture
         )
 
-        #expect(identity?.url == fixture.alas.appendingPathComponent("icon.png"))
+        #expect(chain.map(\.url) == [fixture.alas.appendingPathComponent("icon.png")])
     }
 
     @Test func oversizedConfiguredIconFallsThroughToTheDiscoveredFile() throws {
@@ -379,7 +384,7 @@ struct RepoIconResolverTests {
             appIcon: .default(),
             repoConfig: RepoConfig(icon: .init(image: "huge.png")),
             in: fixture
-        ))
+        ).first)
     }
 
     // MARK: - Containment

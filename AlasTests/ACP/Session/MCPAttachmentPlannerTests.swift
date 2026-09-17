@@ -379,7 +379,7 @@ struct MCPAttachmentPlannerTests {
         ])
     }
 
-    @Test("a declined repo server is skipped like an unapproved one")
+    @Test("a declined repo server is skipped with its own recoverable reason")
     func declinedRepoServerIsSkipped() {
         let repo = repoServer("linear")
         let plan = planWithRepo(
@@ -389,7 +389,7 @@ struct MCPAttachmentPlannerTests {
         )
 
         #expect(plan.wireServers.isEmpty)
-        #expect(plan.statuses.map(\.disposition) == [.skipped(.repoNotApproved)])
+        #expect(plan.statuses.map(\.disposition) == [.skipped(.repoDeclined)])
     }
 
     @Test("a disabled repo server is skipped with its own reason")

@@ -16,20 +16,24 @@ extension AppState {
     ///
     /// This runs on sidebar render paths and staging a repo icon reads and
     /// hashes the image, so the icon is looked up first against a stats-only
-    /// probe of the file that supplies it: a hit returns without reading
-    /// anything, and the resolve below runs only on a miss.
+    /// probe of every candidate file: a hit returns without reading anything,
+    /// and the resolve below runs only on a miss. The key covers the whole
+    /// candidate chain, so a fallback that becomes usable — or a head file that
+    /// becomes unusable while a fallback changes — is picked up on the next
+    /// render.
     func effectiveIcon(for project: ProjectConfig) -> ProjectIcon {
         guard project.host == nil else { return project.icon }
         let checkout = URL(fileURLWithPath: project.path, isDirectory: true)
         let repoConfig = repoConfig(worktreeRoot: checkout)
         let appIcon = project.icon
 
-        guard let identity = RepoIconResolver.sourceIdentity(
+        let chain = RepoIconResolver.sourceChain(
             repoConfig: repoConfig,
             appIcon: appIcon,
             primaryCheckout: checkout,
             store: repoConfigStore
-        ) else {
+        )
+        guard !chain.isEmpty else {
             // No usable repo file: resolving costs the same stats and reads
             // nothing, so there is nothing to cache either.
             return RepoIconResolver.resolve(
@@ -42,7 +46,7 @@ extension AppState {
             ).icon
         }
 
-        let key = RepoIconDisplayCache.Key(identity: identity, appIcon: appIcon)
+        let key = RepoIconDisplayCache.Key(chain: chain, appIcon: appIcon)
         if let cached = repoIconDisplayCache.icon(for: key, projectID: project.id) {
             return cached
         }
@@ -55,14 +59,7 @@ extension AppState {
             store: repoConfigStore,
             stagingRoot: repoIconStagingRoot
         )
-        repoIconDisplayCache.store(resolution, appIcon: appIcon, projectID: project.id)
-        // When the probe named a file resolve had to skip, the stored identity
-        // is a different one. Remember the outcome under the probed identity as
-        // well, so the next render is a hit instead of re-reading that file.
-        if let resolvedIdentity = resolution.sourceIdentity,
-           RepoIconDisplayCache.Key(identity: resolvedIdentity, appIcon: appIcon) != key {
-            repoIconDisplayCache.store(resolution.icon, for: key, projectID: project.id)
-        }
+        repoIconDisplayCache.store(resolution, chain: chain, appIcon: appIcon, projectID: project.id)
         return resolution.icon
     }
 
@@ -76,6 +73,18 @@ extension AppState {
             )
         }
         saveProjects()
+    }
+
+    /// Approves a repo-defined MCP server by name, so a declined server can be
+    /// reconsidered from the MCP status control without editing projects.json.
+    /// Resolves the server from the worktree's repo config; nil when the name
+    /// no longer matches a repo-defined server.
+    func approveRepoMCPServer(projectId: String, worktreeRoot: URL, name: String) {
+        guard let server = repoConfig(worktreeRoot: worktreeRoot)?.mcpServers
+            .first(where: { $0.name == name }) else {
+            return
+        }
+        approveRepoMCPServers(projectId: projectId, servers: [server])
     }
 
     /// Declines a batch of repo-defined MCP servers.

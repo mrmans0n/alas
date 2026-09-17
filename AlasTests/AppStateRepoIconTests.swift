@@ -184,6 +184,27 @@ struct AppStateRepoIconTests {
         #expect(replaced.imagePath != first.imagePath)
     }
 
+    @Test func fallbackIconEditsAreNotMaskedByABrokenConfiguredFile() throws {
+        // A configured icon that exists but cannot be used (here: not an
+        // image) makes resolve fall through to the discovered icon.png. The
+        // cache key covers the whole candidate chain, so editing or deleting
+        // that fallback must show up even while the broken configured file is
+        // unchanged — keying only on the fallback's own identity would too,
+        // but keying on the broken head alone would keep the stale image.
+        let fixture = try Fixture()
+        try fixture.writeConfig(#"{"version": 1, "icon": {"image": "logo.svg"}}"#)
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let state = state(staging: fixture.staging)
+        let local = project(path: fixture.checkout.path)
+
+        let first = state.effectiveIcon(for: local)
+        #expect(first.mode == .image)
+
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes + Data([0x00]))
+        let second = state.effectiveIcon(for: local)
+        #expect(second.imagePath != first.imagePath)
+    }
+
     @Test("an unknown repo default agent falls through to the global one")
     func unknownRepoDefaultAgentFallsThroughToGlobal() throws {
         let fixture = try Fixture()

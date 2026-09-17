@@ -29,10 +29,12 @@ struct RepoMCPExternalSyncTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try await Process.git(["init"], cwd: root)
         try writeConfig(
-            #"{"version": 1, "mcpServers": [
+            #"""
+            {"version": 1, "mcpServers": [
                 {"name": "repo-approved", "transport": {"kind": "http", "url": "https://mcp.example/approved", "headers": []}},
                 {"name": "repo-declined", "transport": {"kind": "stdio", "command": "declined", "args": [], "environment": []}}
-            ]}"#,
+            ]}
+            """#,
             to: root
         )
         let approved = ProjectMCPServer(
@@ -71,9 +73,11 @@ struct RepoMCPExternalSyncTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try writeConfig(
-            #"{"version": 1, "mcpServers": [
+            #"""
+            {"version": 1, "mcpServers": [
                 {"name": "repo-approved", "transport": {"kind": "http", "url": "https://mcp.example/approved", "headers": []}}
-            ]}"#,
+            ]}
+            """#,
             to: root
         )
         var project = ProjectConfig(

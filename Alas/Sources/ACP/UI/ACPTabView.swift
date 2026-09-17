@@ -642,6 +642,12 @@ private struct ACPSessionView: View {
                     },
                     onDeclineAll: {
                         state.declineRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
+                    },
+                    onApproveServer: { server in
+                        state.approveRepoMCPServers(projectId: project.id, servers: [server])
+                    },
+                    onDeclineServer: { server in
+                        state.declineRepoMCPServers(projectId: project.id, servers: [server])
                     }
                 )
             }

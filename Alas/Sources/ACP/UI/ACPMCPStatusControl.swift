@@ -9,9 +9,9 @@ struct ACPMCPStatusControl: View {
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     var onSwitchToHTTP: (() -> Void)? = nil
     var onReconnect: (() -> Void)? = nil
-    /// Enable/disable affordance for repo-defined server rows; nil rows
+    /// Enable/disable/approve affordance for repo-defined server rows; nil rows
     /// (app-level or not-enabled repo servers) render no control.
-    var onToggleRepoServer: ((String, Bool) -> Void)? = nil
+    var onToggleRepoServer: ((String, ACPMCPStatusState.RepoToggle) -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
     @State private var hovering = false
@@ -96,9 +96,9 @@ private struct ACPMCPStatusPopover: View {
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     var onSwitchToHTTP: (() -> Void)? = nil
     var onReconnect: (() -> Void)? = nil
-    /// Enable/disable affordance for repo-defined server rows; nil rows
+    /// Enable/disable/approve affordance for repo-defined server rows; nil rows
     /// (app-level or not-enabled repo servers) render no control.
-    var onToggleRepoServer: ((String, Bool) -> Void)? = nil
+    var onToggleRepoServer: ((String, ACPMCPStatusState.RepoToggle) -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var installState: InstallState = .idle
 
@@ -169,13 +169,19 @@ private struct ACPMCPStatusPopover: View {
                            let onToggleRepoServer,
                            row.repoToggle == .disable {
                             Button("Disable") {
-                                onToggleRepoServer(row.name, true)
+                                onToggleRepoServer(row.name, .disable)
                             }
                             .font(.system(size: 10.5))
                         } else if row.repoToggle == .enable,
                                   let onToggleRepoServer {
                             Button("Enable") {
-                                onToggleRepoServer(row.name, false)
+                                onToggleRepoServer(row.name, .enable)
+                            }
+                            .font(.system(size: 10.5))
+                        } else if row.repoToggle == .approve,
+                                  let onToggleRepoServer {
+                            Button("Approve") {
+                                onToggleRepoServer(row.name, .approve)
                             }
                             .font(.system(size: 10.5))
                         }

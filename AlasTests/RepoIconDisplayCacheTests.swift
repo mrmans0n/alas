@@ -26,11 +26,18 @@ struct RepoIconDisplayCacheTests {
         )
     }
 
+    private func chain(_ identities: RepoIconResolver.SourceIdentity...) -> [RepoIconResolver.SourceIdentity] {
+        identities
+    }
+
     private func key(
-        _ identity: RepoIconResolver.SourceIdentity? = nil,
+        _ chain: [RepoIconResolver.SourceIdentity]? = nil,
         appIcon: ProjectIcon? = nil
     ) -> RepoIconDisplayCache.Key {
-        RepoIconDisplayCache.Key(identity: identity ?? self.identity(), appIcon: appIcon ?? self.appIcon())
+        RepoIconDisplayCache.Key(
+            chain: chain ?? [identity()],
+            appIcon: appIcon ?? self.appIcon()
+        )
     }
 
     private func resolution(
@@ -60,7 +67,7 @@ struct RepoIconDisplayCacheTests {
 
     @Test func returnsStoredIconWhileTheSourceIsUnchanged() {
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(), projectID: "project-1")
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
         #expect(cache.icon(for: key(), projectID: "project-1") == stagedIcon())
     }
 
@@ -71,25 +78,54 @@ struct RepoIconDisplayCacheTests {
 
     @Test func missesWhenSourceIsReplacedAtTheSamePath() {
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(), projectID: "project-1")
-        #expect(cache.icon(for: key(identity(modificationDate: stamp.addingTimeInterval(60))), projectID: "project-1") == nil)
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
+        #expect(cache.icon(for: key(chain(identity(modificationDate: stamp.addingTimeInterval(60)))), projectID: "project-1") == nil)
     }
 
     @Test func missesWhenSourceSizeChangesWithoutAnMtimeChange() {
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(), projectID: "project-1")
-        #expect(cache.icon(for: key(identity(fileSize: 4096)), projectID: "project-1") == nil)
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
+        #expect(cache.icon(for: key(chain(identity(fileSize: 4096))), projectID: "project-1") == nil)
     }
 
     @Test func missesWhenTheWinningFileChanges() {
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(), projectID: "project-1")
-        #expect(cache.icon(for: key(identity(source: "/repo/.alas/icon.jpg")), projectID: "project-1") == nil)
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
+        #expect(cache.icon(for: key(chain(identity(source: "/repo/.alas/icon.jpg"))), projectID: "project-1") == nil)
+    }
+
+    @Test func missesWhenAFallbackCandidateChanges() {
+        // The stored outcome came from the head candidate, but the chain also
+        // names a fallback. Editing the fallback must invalidate the entry:
+        // a head file that cannot be used makes resolve take the fallback, and
+        // keying that outcome on the fallback alone (or on nothing) would keep
+        // serving a stale image while the fallback file changes.
+        let cache = RepoIconDisplayCache()
+        let stored = chain(identity(source: "/repo/.alas/logo.png"), identity(source: "/repo/.alas/icon.png"))
+        cache.store(resolution(), chain: stored, appIcon: appIcon(), projectID: "project-1")
+
+        let fallbackEdited = chain(
+            identity(source: "/repo/.alas/logo.png"),
+            identity(source: "/repo/.alas/icon.png", modificationDate: stamp.addingTimeInterval(60))
+        )
+        #expect(cache.icon(for: key(fallbackEdited), projectID: "project-1") == nil)
+        #expect(cache.icon(for: key(stored), projectID: "project-1") == stagedIcon())
+    }
+
+    @Test func missesWhenTheChainGainsOrLosesACandidate() {
+        // An .alas/icon.png added after the fact changes the chain even though
+        // the winner's stamp is untouched, so the cached outcome must not keep
+        // hiding the new file.
+        let cache = RepoIconDisplayCache()
+        let withoutFallback = chain(identity(source: "/repo/.alas/logo.png"))
+        cache.store(resolution(), chain: withoutFallback, appIcon: appIcon(), projectID: "project-1")
+
+        #expect(cache.icon(for: key(chain(identity(source: "/repo/.alas/logo.png"), identity(source: "/repo/.alas/icon.png"))), projectID: "project-1") == nil)
     }
 
     @Test func missesForADifferentProject() {
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(), projectID: "project-1")
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
         #expect(cache.icon(for: key(), projectID: "project-2") == nil)
     }
 
@@ -97,14 +133,14 @@ struct RepoIconDisplayCacheTests {
         // The staged file did not move, but the colour carried onto the
         // rendered icon did, so the cached icon is no longer the right answer.
         let cache = RepoIconDisplayCache()
-        cache.store(resolution(), appIcon: appIcon(color: "#112233"), projectID: "project-1")
+        cache.store(resolution(), chain: chain(identity()), appIcon: appIcon(color: "#112233"), projectID: "project-1")
         #expect(cache.icon(for: key(appIcon: appIcon(color: "#ff0000")), projectID: "project-1") == nil)
         #expect(cache.icon(for: key(appIcon: appIcon(color: "#112233")), projectID: "project-1") != nil)
     }
 
     @Test func neverCachesAnIconThatCameFromNoRepoFile() {
         let cache = RepoIconDisplayCache()
-        cache.store(appIconResolution(), appIcon: appIcon(), projectID: "project-1")
+        cache.store(appIconResolution(), chain: [], appIcon: appIcon(), projectID: "project-1")
 
         #expect(cache.storedEntryCount == 0)
         #expect(cache.icon(for: key(), projectID: "project-1") == nil)
@@ -122,16 +158,16 @@ struct RepoIconDisplayCacheTests {
     @Test func keepsOneEntryPerProject() {
         let cache = RepoIconDisplayCache()
         let superseded = resolution(imagePath: "project-1/first.png")
-        cache.store(superseded, appIcon: appIcon(), projectID: "project-1")
+        cache.store(superseded, chain: chain(identity()), appIcon: appIcon(), projectID: "project-1")
         let current = resolution(
             imagePath: "project-1/second.png",
             modificationDate: stamp.addingTimeInterval(60)
         )
-        cache.store(current, appIcon: appIcon(), projectID: "project-1")
+        cache.store(current, chain: chain(identity(modificationDate: stamp.addingTimeInterval(60))), appIcon: appIcon(), projectID: "project-1")
 
         // The superseded revision is gone rather than accumulating per render.
         #expect(cache.storedEntryCount == 1)
-        #expect(cache.icon(for: key(identity(modificationDate: stamp.addingTimeInterval(60))), projectID: "project-1") == current.icon)
+        #expect(cache.icon(for: key(chain(identity(modificationDate: stamp.addingTimeInterval(60)))), projectID: "project-1") == current.icon)
         #expect(cache.icon(for: key(), projectID: "project-1") == nil)
     }
 }
