@@ -1014,7 +1014,7 @@ struct RemoteWebAssetTests {
     @Test func changesTabBadgeMarksATruncatedCountRatherThanSubstitutingAnUnrelatedTotal() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1100) })
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1450) })
         #expect(body.contains("count = RemoteChangesView.changedFileCount(changesState);"))
         #expect(body.contains(#"suffix = changesState.truncated ? "+" : "";"#))
         #expect(body.contains("badge.textContent = String(count) + suffix;"))
@@ -1068,5 +1068,23 @@ struct RemoteWebAssetTests {
         #expect(body.contains("if (worktree) {"))
         #expect(body.contains("head.append(branchIcon);"))
         #expect(body.contains("head.append(title, state);"))
+    }
+
+    // Regression (PR #1285 review): a failed listChanges request set
+    // changesState.loaded = true (correctly, to stop showing "Loading
+    // changes…") while leaving files/staged/unstaged at their initialized
+    // empty arrays — the badge then read that as a genuine zero and
+    // replaced a valid worktree-summary count with a hidden badge. Track
+    // failure separately so the badge keeps using the summary fallback.
+    @Test func changesTabBadgeKeepsTheSummaryFallbackAfterAFailedLoad() throws {
+        let js = try asset("app.js")
+
+        let failedBody = try #require(
+            js.range(of: #"case "changeListFailed":"#).map { js[$0.lowerBound...].prefix(250) })
+        #expect(failedBody.contains("changesState.failed = true;"))
+
+        let badgeBody = try #require(
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(badgeBody.contains("changesState.loaded && changesState.metricsAvailable && !changesState.failed"))
     }
 }

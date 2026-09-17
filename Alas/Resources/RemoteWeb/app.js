@@ -333,6 +333,7 @@ function handle(msg) {
     case "changeListFailed":
       if (msg.sessionId !== currentSession) break;
       changesState.loaded = true;
+      changesState.failed = true;
       showChangesError(fileAccessMessage(msg.reason, null));
       break;
     case "fileDiffResult":
@@ -846,14 +847,17 @@ function updateChangesTabBadge() {
   // Prefer the loaded, live changesState (kept fresh by every listChanges
   // response, including the idle-transition refresh while a session is
   // open) — it reflects edits the session-list snapshot below doesn't get
-  // repushed for. Fall back to the worktree summary only before that first
-  // load: it's a different git computation (working-tree status) from the
-  // change list (diff against the comparison ref), so once truncated it's
-  // not a valid substitute for the capped count — show "N+" instead of
-  // pretending the capped array length is exact or swapping in an unrelated
-  // number.
+  // repushed for. Fall back to the worktree summary before that first
+  // successful load (which includes a failed request: `loaded` becomes true
+  // on failure too, so `changeListFailed` also sets `failed` — otherwise the
+  // untouched, empty-by-default files/staged/unstaged would read as zero and
+  // wipe out a perfectly good summary count). It's also a different git
+  // computation (working-tree status) from the change list (diff against
+  // the comparison ref), so once truncated it's not a valid substitute for
+  // the capped count — show "N+" instead of pretending the capped array
+  // length is exact or swapping in an unrelated number.
   let count, suffix;
-  if (changesState.loaded && changesState.metricsAvailable) {
+  if (changesState.loaded && changesState.metricsAvailable && !changesState.failed) {
     count = RemoteChangesView.changedFileCount(changesState);
     suffix = changesState.truncated ? "+" : "";
   } else {
