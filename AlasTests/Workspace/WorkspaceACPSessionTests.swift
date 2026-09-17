@@ -31,6 +31,22 @@ struct WorkspaceACPSessionTests {
         let state = AppState(store: MemoryStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [.init(
+                id: "test",
+                displayName: "Test",
+                binary: "test",
+                binaryOverride: nil,
+                promptModeArgs: [],
+                bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
+                isBuiltin: false,
+                isEnabled: true,
+                builtinLogoAssetName: nil
+            )],
+            installedIds: ["test"]
+        )
         state.config.workspacesEnabled = true
         state.config.changes.aiToolId = "none"
         _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))

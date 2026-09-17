@@ -62,7 +62,7 @@ struct ReviewFeedbackAgentSender {
                 targets.append(contentsOf: sessionTargets)
 
                 let agentID = appState.config.changes.aiToolId
-                if agentID != "none", appState.agent(id: agentID) != nil {
+                if Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil {
                     targets.append(.newChat(agentID: agentID, title: "New chat"))
                 }
                 return targets
@@ -70,6 +70,10 @@ struct ReviewFeedbackAgentSender {
             send: { prompt, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
+                    guard Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil else {
+                        completion(.failure(ReviewFeedbackAgentSendError.rejected))
+                        return
+                    }
                     if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
                         Task { @MainActor in
                             let tab = await appState.openWorkspaceCheckoutACPSession(
@@ -104,13 +108,21 @@ struct ReviewFeedbackAgentSender {
             agent: { target in
                 switch target {
                 case .newChat(let agentID, _):
-                    return appState.agent(id: agentID)
+                    return Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID)
                 case .existingSession(_, let sessionID, _):
                     guard let session = appState.session(for: sessionID) else { return nil }
                     return appState.agent(id: session.agentId)
                 }
             }
         )
+    }
+
+    private static func availableAgent(appState: AppState, worktreeID: String, agentID: String?) -> AgentDefinition? {
+        if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
+            return appState.availableAgentForHandoff(id: agentID, checkout: checkout)
+        }
+        guard let resolved = projectAndWorktree(appState: appState, worktreeID: worktreeID) else { return nil }
+        return appState.availableAgentForHandoff(id: agentID, worktree: resolved.worktree)
     }
 
     private static func selectedCheckout(appState: AppState, worktreeID: String) -> WorkspaceCheckout? {

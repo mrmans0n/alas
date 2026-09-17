@@ -1196,8 +1196,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func canOpenReviewLoopHandoff(appState: AppState) -> Bool {
         guard let request = reviewLoop.snapshot?.reviewRequest else { return false }
         guard request.worstCheckBucket == .fail || request.hasActionableFeedback else { return false }
-        let agentID = appState.config.changes.aiToolId
-        return agentID != "none" && appState.agent(id: agentID) != nil
+        return appState.availableAgentForHandoff(id: appState.config.changes.aiToolId, worktree: worktree) != nil
     }
 
     func openReviewLoopProviderPage() {

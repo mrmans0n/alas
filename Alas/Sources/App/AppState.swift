@@ -704,6 +704,23 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
+    func availableAgentForHandoff(id: String?, worktree: Worktree) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        return agentAvailability(for: worktree).agents.first { $0.id == id }
+    }
+
+    func availableAgentForHandoff(id: String?, checkout: WorkspaceCheckout) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        let remoteHost: String? = switch checkout.executionLocation.normalized {
+        case .local: nil
+        case .ssh(let host): host
+        }
+        return agentAvailability(
+            worktreePath: URL(fileURLWithPath: checkout.rootPath),
+            remoteHost: remoteHost
+        ).agents.first { $0.id == id }
+    }
+
     func acpForkTargets(sourceAgentID: String, worktreePath: URL) -> [ACPSessionForkTarget] {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
@@ -11281,7 +11298,10 @@ final class AppState {
         guard let snapshot = reviewLoop.snapshot else { return }
         guard actionKind == .openAgentHandoff else { return }
         let agentID = config.changes.aiToolId
-        guard agentID != "none", agent(id: agentID) != nil else { return }
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+        else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: snapshot,
             action: ReviewLoopAction(
@@ -11295,7 +11315,10 @@ final class AppState {
 
     func openReviewEvidenceHandoff(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) {
         let agentID = config.changes.aiToolId
-        guard agentID != "none", agent(id: agentID) != nil else { return }
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+        else { return }
         let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
             snapshot: snapshot,
             detail: detail

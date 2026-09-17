@@ -227,7 +227,30 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(sender.agent(target)?.id == "other-agent")
     }
 
-    private func makeState() -> AppState {
+    @Test func reviewFeedbackDoesNotOfferUnavailablePinnedAgent() async throws {
+        let state = makeState(installedAgentIDs: ["other-agent"])
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktreeId)
+
+        #expect(sender.availableTargets().contains { target in
+            if case .newChat = target { return true }
+            return false
+        } == false)
+        #expect(sender.agent(.newChat(agentID: "test-agent", title: "New chat")) == nil)
+
+        let result = await withCheckedContinuation { continuation in
+            sender.send("Review feedback", .newChat(agentID: "test-agent", title: "New chat")) {
+                continuation.resume(returning: $0)
+            }
+        }
+        guard case .failure = result else {
+            Issue.record("Expected unavailable handoff agent to be rejected")
+            return
+        }
+        #expect(acpTabs(in: state).isEmpty)
+    }
+
+    private func makeState(installedAgentIDs: Set<String> = ["test-agent", "other-agent"]) -> AppState {
         let project = ProjectConfig(
             id: UUID().uuidString,
             name: "Project",
@@ -276,7 +299,7 @@ struct ReviewLoopHandoffRoutingTests {
                     builtinLogoAssetName: nil
                 ),
             ],
-            installedIds: ["test-agent", "other-agent"]
+            installedIds: installedAgentIDs
         )
         return state
     }
