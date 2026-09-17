@@ -159,6 +159,11 @@ final class AppState {
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
+    /// Repo-local `.alas/` config, read per worktree with its own change cache.
+    let repoConfigStore = RepoConfigStore()
+    /// Project icons already resolved from repo files, keyed by the identity of
+    /// the file that supplied them.
+    let repoIconDisplayCache = RepoIconDisplayCache()
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
     let inAppNotifications = InAppNotificationStore()

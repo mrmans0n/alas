@@ -45,7 +45,7 @@ struct WorktreeRowHeightTests {
         let worktree = Worktree(id: "wt1", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/tmp/alas"), status: .clean, lastActivity: Date())
         let view = RepoGroupView(
-            project: project, worktrees: [worktree], collapsed: .constant(collapsed), selectedWorktreeId: nil,
+            project: project, icon: { $0.icon }, worktrees: [worktree], collapsed: .constant(collapsed), selectedWorktreeId: nil,
             isMain: { _ in true }, upstreamStatus: { _ in nil }, workspaceCheckout: { _ in nil }, operationState: { _ in nil }, harnessSummary: { _ in nil },
             ggMenuModel: { _ in .init(selectedMode: .inherit, context: .inactive(reason: .policyOff), hasStackSummary: false) },
             onSelect: { _ in }, onNewWorktree: {}, onEditProject: {}, onRemoveProject: {}, onOpenGGInbox: nil,

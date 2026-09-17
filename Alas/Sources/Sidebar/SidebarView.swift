@@ -51,6 +51,7 @@ struct SidebarView: View {
                             ) { project in
                                 RepoGroupView(
                                     project: project,
+                                    icon: { state.effectiveIcon(for: $0) },
                                     worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
                                     collapsed: Binding(
                                         get: { collapsedProjects.contains(project.id) },

@@ -13,6 +13,9 @@ struct RepoGroupView: View {
     static let worktreeIndent: CGFloat = 26
 
     let project: ProjectConfig
+    /// Resolves the icon to display for a project, which may come from the
+    /// repo's `.alas/` directory when the project has no explicit icon.
+    let icon: (ProjectConfig) -> ProjectIcon
     let worktrees: [Worktree]
     @Binding var collapsed: Bool
     let selectedWorktreeId: String?
@@ -67,7 +70,7 @@ struct RepoGroupView: View {
                     Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                         .frame(width: 12, height: 14)
                         .contentShape(Rectangle())
-                    ProjectIconView(icon: project.icon, fallbackName: project.name, size: .repoHeader)
+                    ProjectIconView(icon: icon(project), fallbackName: project.name, size: .repoHeader)
                         .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
                     Text(project.name)
                         .font(.system(size: 12.5, weight: .semibold))

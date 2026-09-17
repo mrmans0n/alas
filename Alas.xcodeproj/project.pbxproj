@@ -1397,6 +1397,7 @@
 		C10B2726FF5606A3786ED3B4 /* TerminalServiceZmxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68B6937D50514C34A2C14BE1 /* TerminalServiceZmxTests.swift */; };
 		C10DDFA9216B53E3C9527F8C /* ReviewSessionLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C17465AF6747EDCD8CCE416 /* ReviewSessionLoader.swift */; };
 		C12FCCB35EBD486D20EC65D2 /* ACPTranscriptMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04B44F1DD775D2543439D508 /* ACPTranscriptMarkdown.swift */; };
+		C137DB1F0A977B7EF58735B2 /* RepoIconDisplayCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F54350E39EE34A0DEE7D481 /* RepoIconDisplayCacheTests.swift */; };
 		C14ECC6D006CCA4B671D9389 /* CheckpointFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D2E6D4519852A8D11C67FA1 /* CheckpointFileSystem.swift */; };
 		C179C5202C4BB8D73E7EB701 /* AppIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 620C4A708CD1013DE2736A00 /* AppIconTests.swift */; };
 		C1D83EEBE3AF4ABC04B3F7EB /* GitHubCLIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D2DA50E978EB0571D6A74C /* GitHubCLIProvider.swift */; };
@@ -1522,6 +1523,7 @@
 		D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */; };
 		D179A669627D70CC3C8DC4A5 /* GGConfigReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579717E28A31AA7575FE3E4 /* GGConfigReaderTests.swift */; };
 		D1826BD546F4C8D2755D8F56 /* ReviewDraftCommentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EC0311F5824C51F14EC4278 /* ReviewDraftCommentActions.swift */; };
+		D184F0B3D505BF9D90DFF5A4 /* RepoIconDisplayCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B123302E0FD0B9F187EA680 /* RepoIconDisplayCache.swift */; };
 		D1C14B54BE27D97E354F448B /* ProcessGitDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF741B889D6DC8B1F4EB350F /* ProcessGitDataTests.swift */; };
 		D1F372532A0F9607051020F5 /* HarnessDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F198697EB5305E5ECE97BC61 /* HarnessDetectorTests.swift */; };
 		D1FF11465D1309A56FCFFAF0 /* AppConfigCodeInstallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8ACFACD788DF2035534F62E /* AppConfigCodeInstallTests.swift */; };
@@ -1874,6 +1876,7 @@
 		FE3F355996C9362DA52687B9 /* MermaidDiagramTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD5EF425B826054367B9A98 /* MermaidDiagramTheme.swift */; };
 		FE5846F4401C702264817399 /* SpaceEmojiPickerSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28777B087266D8AE174BA233 /* SpaceEmojiPickerSelectionTests.swift */; };
 		FE5F2F9B468D045194B9443B /* ACPChatTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC558BE723378DCC7AA5B55 /* ACPChatTypography.swift */; };
+		FF154C3D22EE1C8E7857D61F /* AppState+RepoConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B6E33159E74B53749FDE5D /* AppState+RepoConfig.swift */; };
 		FF1FDAB1FE1CA5896B27A4F0 /* SemanticTokensFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D916D25B594AFFFFA63F46E6 /* SemanticTokensFeatureTests.swift */; };
 		FF23739CD41997C6DD44E18B /* ACPFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0C0029F439C282D474ED77 /* ACPFileWriter.swift */; };
 		FF34E8DF7CDAECF80934F3A0 /* PendingStashDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F66CF7F86AACAAEA759C8A1B /* PendingStashDropTests.swift */; };
@@ -2123,6 +2126,7 @@
 		1E717BE5BA723ADB74DB856C /* WorkspaceCheckoutLocalIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutLocalIntegrationTests.swift; sourceTree = "<group>"; };
 		1EC659A56A08A30F7784428D /* ACPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPClient.swift; sourceTree = "<group>"; };
 		1F28FA9BC3F5FC98D0A64747 /* GGFollowEntrySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGFollowEntrySheet.swift; sourceTree = "<group>"; };
+		1F54350E39EE34A0DEE7D481 /* RepoIconDisplayCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIconDisplayCacheTests.swift; sourceTree = "<group>"; };
 		1F72D6E7296DF0ACA2C60BB4 /* WorkspaceLifecycleConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycleConfirmationTests.swift; sourceTree = "<group>"; };
 		1F99A6DA89AA8E70B01FBD89 /* RunScriptStackDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptStackDetector.swift; sourceTree = "<group>"; };
 		1F9B399B5355B20890D8E42C /* ACPAdapterUpdateBannerDeciderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateBannerDeciderTests.swift; sourceTree = "<group>"; };
@@ -2659,6 +2663,7 @@
 		6791BB640C39115289BF6D07 /* ACPSetupNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSetupNudgeBanner.swift; sourceTree = "<group>"; };
 		679E62B501E0490F48CCA830 /* EditorFindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindBarView.swift; sourceTree = "<group>"; };
 		67AF057E852E15EFF7FD04EE /* MCPHelloEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPHelloEvent.swift; sourceTree = "<group>"; };
+		67B6E33159E74B53749FDE5D /* AppState+RepoConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+RepoConfig.swift"; sourceTree = "<group>"; };
 		67E03BF5DB4E6BFF8C2FA6A2 /* ACPPermissionRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionRequest.swift; sourceTree = "<group>"; };
 		67FE3B76C1F63C58B56BEC61 /* CheckpointModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointModels.swift; sourceTree = "<group>"; };
 		6821B71680094791995C4975 /* ShortcutsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsPane.swift; sourceTree = "<group>"; };
@@ -3028,6 +3033,7 @@
 		9A187BD52742E8F4A6E52667 /* tool-call-content-diff.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tool-call-content-diff.json"; sourceTree = "<group>"; };
 		9A2292E8F8E3D91440BE88FC /* ACPSessionTerminalRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionTerminalRoutingTests.swift; sourceTree = "<group>"; };
 		9A40BDC5115B641AB26220D9 /* ZmxSunPathBudget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxSunPathBudget.swift; sourceTree = "<group>"; };
+		9B123302E0FD0B9F187EA680 /* RepoIconDisplayCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIconDisplayCache.swift; sourceTree = "<group>"; };
 		9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingDiscard.swift; sourceTree = "<group>"; };
 		9B1E93FE66457A82A3348EDA /* GGMCPInjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGMCPInjection.swift; sourceTree = "<group>"; };
 		9B2CDF63D42D5322B04CDAB5 /* WorkspaceDefinitionDialogModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceDefinitionDialogModel.swift; sourceTree = "<group>"; };
@@ -4326,6 +4332,7 @@
 				C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */,
 				6D788808DF3BE405143F91F7 /* ReleaseInfoTests.swift */,
 				01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */,
+				1F54350E39EE34A0DEE7D481 /* RepoIconDisplayCacheTests.swift */,
 				220514C66CF29B6FD04EAB0B /* RepoSelectorModelTests.swift */,
 				784A5C206CA363AB14B709E6 /* RepoSelectorRecentsTests.swift */,
 				FB12D651DACE6AED9923BAC3 /* RepositoryImportServiceTests.swift */,
@@ -6784,6 +6791,7 @@
 				457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */,
 				942B0DCA09E1297D9380C58C /* AppQuitAction.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
+				67B6E33159E74B53749FDE5D /* AppState+RepoConfig.swift */,
 				89D180B7FCAA9DD1F7D7D2E4 /* AppState+RunScripts.swift */,
 				E2925F63616385CA18A90BFF /* AppState+WebPreviewAutomation.swift */,
 				57DEA304B6038D986A372150 /* BundledFontRegistrar.swift */,
@@ -6791,6 +6799,7 @@
 				90E9DAE6A3C83B64305D5805 /* EditorCommands.swift */,
 				B44D759586280250330A9A04 /* FontSizeCommands.swift */,
 				7FFC9539E615699AC90A7412 /* ProjectsManager.swift */,
+				9B123302E0FD0B9F187EA680 /* RepoIconDisplayCache.swift */,
 				6D7BE909731E9D15A032A6E0 /* ReviewCommentWireDTO.swift */,
 				B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */,
 				69024633944E9FFF6DA76FAE /* RootView.swift */,
@@ -7342,6 +7351,7 @@
 				A0012CF058E580908B5348BC /* AppKitDiffTilingController.swift in Sources */,
 				584066607B7E7E97A736213A /* AppQuitAction.swift in Sources */,
 				FD5659886908E19C5156D657 /* AppState+Attention.swift in Sources */,
+				FF154C3D22EE1C8E7857D61F /* AppState+RepoConfig.swift in Sources */,
 				74175A7BB07F7588E7B691F2 /* AppState+ReviewPalette.swift in Sources */,
 				B8C55D931C2774785CF747CC /* AppState+RunScriptWritingHelp.swift in Sources */,
 				AFC4DE3093E404E4D338E6EF /* AppState+RunScripts.swift in Sources */,
@@ -7847,6 +7857,7 @@
 				C1FE524BAD5B8EFB3B406BE3 /* RepoConfigStore.swift in Sources */,
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
+				D184F0B3D505BF9D90DFF5A4 /* RepoIconDisplayCache.swift in Sources */,
 				0480BCCA1A64270D2B368D29 /* RepoIconResolver.swift in Sources */,
 				A2B0E4C1D80EB12F7BECE7FC /* RepoSelectorDialog.swift in Sources */,
 				E6A429E3423A9A40A9B36C97 /* RepoSelectorEnvironment.swift in Sources */,
@@ -8745,6 +8756,7 @@
 				AF8B192B3B321E98F62D2CAF /* RepoConfigStoreTests.swift in Sources */,
 				B302771A4A89D6383726D290 /* RepoConfigTests.swift in Sources */,
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
+				C137DB1F0A977B7EF58735B2 /* RepoIconDisplayCacheTests.swift in Sources */,
 				6FD850ED8F7C6490451BCFF2 /* RepoIconResolverTests.swift in Sources */,
 				737EC7C9A35C9ED61ED67B83 /* RepoSelectorModelTests.swift in Sources */,
 				35705563BBEDDC1D0092C1F5 /* RepoSelectorRecentsTests.swift in Sources */,

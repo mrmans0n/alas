@@ -3,6 +3,9 @@ import SwiftUI
 struct ProjectPicker: View {
     @Binding var selection: String
     let projects: [ProjectConfig]
+    /// Resolves each project's icon, which may come from the repo's `.alas/`
+    /// directory when the project has no explicit icon.
+    let icon: (ProjectConfig) -> ProjectIcon
 
     @Environment(\.theme) var theme
     @State private var open = false
@@ -20,7 +23,7 @@ struct ProjectPicker: View {
         Button(action: { open.toggle() }) {
             HStack(spacing: 6) {
                 if let project = selectedProject {
-                    ProjectIconView(icon: project.icon, fallbackName: project.name, size: .picker)
+                    ProjectIconView(icon: icon(project), fallbackName: project.name, size: .picker)
                 }
                 Text(selectedProject?.name ?? "Choose a repository")
                     .font(.system(size: 12))
@@ -84,7 +87,7 @@ struct ProjectPicker: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(project.id == selection ? 1 : 0)
-                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .picker)
+                ProjectIconView(icon: icon(project), fallbackName: project.name, size: .picker)
                 Text(project.name)
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg"))

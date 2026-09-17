@@ -100,6 +100,7 @@ struct RepoSelectorDialog: View {
                             row: renderedRow.row,
                             isSelected: renderedRow.index == appState.repoSelector.selectedIndex,
                             projectsById: projectsById,
+                            icon: { appState.effectiveIcon(for: $0) },
                             onTap: {
                                 // Snap selection to the clicked row before
                                 // activating so a tap without a preceding hover

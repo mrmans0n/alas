@@ -84,7 +84,8 @@ struct NewWorktreeDialog: View {
                     DialogField(label: "Repository") {
                         ProjectPicker(
                             selection: $projectId,
-                            projects: state.projects
+                            projects: state.projects,
+                            icon: { state.effectiveIcon(for: $0) }
                         )
                     }
                 }
