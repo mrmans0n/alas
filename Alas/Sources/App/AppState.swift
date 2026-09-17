@@ -687,6 +687,7 @@ final class AppState {
         customs: [],
         installedIds: []
     )
+    let agentAvailabilityStore = AgentAvailabilityStore()
 
     /// Resolve a single agent by id (built-in id or custom UUID). Nil for
     /// unknown ids or "none".
@@ -724,6 +725,7 @@ final class AppState {
             let installedIds = await AgentDetector.scanCurrentEnvironment(
                 agents: registry.agents
             )
+            self.agentAvailabilityStore.invalidateAll()
             self.agentRegistry = AgentRegistry(
                 builtinState: self.config.agents.builtinState,
                 customs: self.config.agents.custom,
@@ -731,6 +733,39 @@ final class AppState {
             )
             self.snapInvalidatedAgentSelections()
         }
+    }
+
+    func agentAvailability(
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> AgentAvailabilityState {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return agentAvailabilityStore.state(
+            target: target,
+            worktreePath: worktreePath.path,
+            localAgents: agentRegistry.enabled()
+        )
+    }
+
+    func loadAgentAvailability(
+        worktreePath: URL,
+        remoteHost: String? = nil,
+        force: Bool = false
+    ) async {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        guard case .ssh = target else { return }
+        let candidates = AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        )
+        if force {
+            agentAvailabilityStore.invalidate(target: target, worktreePath: worktreePath.path)
+        }
+        await agentAvailabilityStore.load(
+            target: target,
+            worktreePath: worktreePath.path,
+            candidates: candidates
+        )
     }
 
     /// Build a registry view without running detection — used as the input
