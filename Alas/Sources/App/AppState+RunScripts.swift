@@ -960,11 +960,13 @@ extension AppState {
             && harness.detector.foregroundPid(sessionId: sessionID) == nil
     }
 
+    @discardableResult
     func cleanupRunScriptState(
         worktreeID: String,
         purgeFailures: Bool = true,
         purgeHistory: Bool = true
-    ) {
+    ) -> Task<Void, Never>? {
+        var historyPurgeTask: Task<Void, Never>?
         cancelPendingRunScriptLaunches(worktreeID: worktreeID)
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             if purgeFailures {
@@ -1000,7 +1002,8 @@ extension AppState {
             durableRunReportIDsByWorktreeID[worktreeID] = []
             tabs.closeRunReports(worktreeId: worktreeID)
             if purgeHistory, let runHistoryStore {
-                Task { @MainActor [weak self, runHistoryStore] in
+                historyPurgeTask = Task { @MainActor [weak self, runHistoryStore] in
+                    await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
                     do {
                         try await runHistoryStore.purge(worktreeID: worktreeID)
                         self?.noteRunHistoryChanged(worktreeID: worktreeID)
@@ -1018,6 +1021,7 @@ extension AppState {
                 archiveFinalizedRun(finalized, capture: .unavailable)
             }
         }
+        return historyPurgeTask
     }
 
     func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
