@@ -3625,12 +3625,11 @@ final class AppState {
                     case .none:
                         break
                     case .terminal(let agentId):
-                        let suffix: String? = {
-                            guard let id = agentId,
-                                  let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                            else { return nil }
-                            return self.agentStartupCommand(for: agent, project: project)
-                        }()
+                        let suffix = await self.worktreeAgentStartupSuffix(
+                            agentId: agentId,
+                            worktree: newWorktree,
+                            project: project
+                        )
                         _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
                             for: newWorktree,
                             startupScriptSuffix: suffix
@@ -3942,7 +3941,8 @@ final class AppState {
         for worktree: Worktree,
         remoteHost: String? = nil
     ) -> AgentDefinition? {
-        availableAgent(id: id, worktreePath: worktree.path, remoteHost: remoteHost)
+        let resolvedRemoteHost = remoteHost ?? projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        return availableAgent(id: id, worktreePath: worktree.path, remoteHost: resolvedRemoteHost)
     }
 
     private func availableAgent(
@@ -3953,6 +3953,17 @@ final class AppState {
         agentAvailability(worktreePath: worktreePath, remoteHost: remoteHost)
             .agents
             .first { $0.id == id }
+    }
+
+    private func worktreeAgentStartupSuffix(
+        agentId: String?,
+        worktree: Worktree,
+        project: ProjectConfig
+    ) async -> String? {
+        guard let agentId else { return nil }
+        await loadAgentAvailability(for: worktree)
+        guard let agent = availableAgent(id: agentId, for: worktree) else { return nil }
+        return agentStartupCommand(for: agent, project: project)
     }
 
     @discardableResult
@@ -5140,12 +5151,11 @@ final class AppState {
             case .none, .delegated:
                 break
             case .terminal(let agentId):
-                let suffix: String? = {
-                    guard let id = agentId,
-                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                    else { return nil }
-                    return self.agentStartupCommand(for: agent, project: project)
-                }()
+                let suffix = await self.worktreeAgentStartupSuffix(
+                    agentId: agentId,
+                    worktree: worktree,
+                    project: project
+                )
                 _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
                     for: worktree,
                     startupScriptSuffix: suffix

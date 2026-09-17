@@ -363,20 +363,18 @@ final class ACPSessionOrchestrationCoordinator {
         }
         guard let record else { return }
         environment.rememberParent(childID, record.parentSessionId)
-        guard let parentLocation = environment.sessionLocation(record.parentSessionId),
-              let parentSession = parentLocation.manager.liveSession(for: record.parentSessionId)
-        else {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "The originating ACP session is no longer available.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
-            return
-        }
+        let parentLocation = environment.sessionLocation(record.parentSessionId)
+        let parentSession = parentLocation?.manager.liveSession(for: record.parentSessionId)
+        let validationOrigin = parentLocation?.origin ?? ACPOrchestrationSessionOrigin(
+            sessionId: childID,
+            projectId: record.projectId,
+            worktreeId: worktree.id
+        )
         do {
             _ = try await resolveAgent(
                 requestedId: record.agentId,
-                parentAgentId: parentSession.agentId,
-                origin: parentLocation.origin,
+                parentAgentId: parentSession?.agentId ?? record.agentId,
+                origin: validationOrigin,
                 worktree: worktree
             )
         } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {

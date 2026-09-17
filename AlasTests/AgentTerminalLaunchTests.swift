@@ -455,7 +455,7 @@ struct AgentTerminalLaunchTests {
         #expect(FileManager.default.fileExists(atPath: hookURL.path))
     }
 
-    @Test func launchingCopilotForRemoteWorktreeSkipsLocalHookInstall() throws {
+    @Test func launchingCopilotForRemoteWorktreeRequiresHostAvailability() throws {
         var project = project(mode: .useGlobal, useBypass: false)
         project.path = "/srv/project"
         project.host = "devbox"
@@ -483,9 +483,10 @@ struct AgentTerminalLaunchTests {
             installedIds: ["copilot"]
         )
 
-        _ = try state.openAgentTerminalTab(for: worktree, agentId: "copilot")
-
-        #expect(openerCalled)
+        #expect(throws: AppState.AgentTerminalLaunchError.agentUnavailable) {
+            _ = try state.openAgentTerminalTab(for: worktree, agentId: "copilot")
+        }
+        #expect(!openerCalled)
     }
 
     @Test func launchingNonCopilotDoesNotCreateCopilotHook() throws {

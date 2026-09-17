@@ -362,7 +362,7 @@ struct NewWorktreeDialog: View {
               )?.defaultAgent else {
             return nil
         }
-        return state.agentRegistry.enabled().contains(where: { $0.id == candidate }) ? candidate : nil
+        return configuredEnabledAgents.contains(where: { $0.id == candidate }) ? candidate : nil
     }
 
     private var currentLaunchPreference: NewWorktreeLaunchPreference {
@@ -435,7 +435,7 @@ struct NewWorktreeDialog: View {
             preferredMode: defaults.launchMode,
             projectAgentMode: project?.startupScripts.worktreeAgentMode ?? .useGlobal,
             resolvedAgentID: effectiveAutoLaunchAgent?.id,
-            enabledAgents: state.agentRegistry.enabled()
+            enabledAgents: configuredEnabledAgents
         )
         persistableLaunchMode = defaults.persistableLaunchMode
         openAfterCreate = defaults.openAfterCreate
@@ -443,7 +443,7 @@ struct NewWorktreeDialog: View {
         launchAgentId = Self.resolvedLaunchAgent(
             initialAgentId: initialAgent,
             mode: launchMode,
-            enabledAgents: state.agentRegistry.enabled()
+            enabledAgents: configuredEnabledAgents
         )
     }
 
@@ -495,7 +495,7 @@ struct NewWorktreeDialog: View {
             launchMode = .acp
             persistableLaunchMode = .acp
             launchAgentId = Self.issueLaunchAgent(
-                from: state.agentRegistry.enabled(),
+                from: configuredEnabledAgents,
                 preferredAgentID: effectiveAutoLaunchAgent?.id
             )
         }
@@ -842,7 +842,7 @@ struct NewWorktreeDialog: View {
     // MARK: - Launch surface UI
 
     private var pickerAgents: [AgentDefinition] {
-        let enabled = state.agentRegistry.enabled()
+        let enabled = configuredEnabledAgents
         switch launchMode {
         case .terminal: return enabled
         case .acp:      return Self.acpCapableAgents(from: enabled)
@@ -850,7 +850,14 @@ struct NewWorktreeDialog: View {
     }
 
     private var acpSegmentEnabled: Bool {
-        Self.acpSegmentEnabled(enabledAgents: state.agentRegistry.enabled())
+        Self.acpSegmentEnabled(enabledAgents: configuredEnabledAgents)
+    }
+
+    private var configuredEnabledAgents: [AgentDefinition] {
+        AgentConfiguredCatalog.enabled(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom
+        )
     }
 
     private var launchAgentPicker: some View {
@@ -919,7 +926,7 @@ struct NewWorktreeDialog: View {
             launchAgentId = Self.resolvedLaunchAgent(
                 initialAgentId: launchAgentId,
                 mode: .terminal,
-                enabledAgents: state.agentRegistry.enabled()
+                enabledAgents: configuredEnabledAgents
             )
         case .acp:
             guard acpSegmentEnabled else { return }
@@ -929,7 +936,7 @@ struct NewWorktreeDialog: View {
             launchAgentId = Self.resolvedLaunchAgent(
                 initialAgentId: launchAgentId,
                 mode: .acp,
-                enabledAgents: state.agentRegistry.enabled()
+                enabledAgents: configuredEnabledAgents
             )
         }
         issueState.recordLaunchPreferenceChangeAfterAttach()

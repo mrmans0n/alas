@@ -282,6 +282,79 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(checkedWorktreeIDs.contains(origin.id) == false)
     }
 
+    @Test("persisted child start does not require live parent")
+    func persistedChildStartUsesSavedAgentWhenParentClosed() async throws {
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-\(UUID().uuidString).sqlite")
+            .path
+        let sessionPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-session-\(UUID().uuidString).sqlite")
+            .path
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
+        let sessionStore = try ACPSessionStore(path: sessionPath)
+        let manager = ACPSessionManager(
+            worktreeId: "worktree",
+            worktreePath: "/tmp/worktree",
+            store: sessionStore,
+            setupEvaluator: { _ in .missing(reason: "Install Codex") }
+        )
+        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        let worktree = Worktree(
+            id: "worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/worktree"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        var sessionLocationCalls = 0
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence,
+            instanceId: "instance",
+            now: { 100 },
+            makeID: { "child" },
+            worktree: { $0 == worktree.id ? worktree : nil },
+            existingWorktree: { _, _ in nil },
+            availableAgents: { _, destination in
+                destination.id == worktree.id
+                    ? [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+                    : []
+            },
+            sessionLocation: { sessionId in
+                sessionLocationCalls += 1
+                guard sessionLocationCalls == 1, sessionId == "parent" else { return nil }
+                return .init(
+                    origin: .init(sessionId: "parent", projectId: "project", worktreeId: worktree.id),
+                    manager: manager
+                )
+            },
+            manager: { _ in manager },
+            newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            rememberParent: { _, _ in },
+            autoRunDefault: { false },
+            notifyChanged: {}
+        ))
+
+        let response = await coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: worktree.id),
+            request: .init(prompt: "Investigate the parser.", agentId: nil, worktree: .current)
+        )
+
+        guard case .text = response else {
+            Issue.record("Expected delegated session creation response")
+            return
+        }
+        let record = try await eventuallyLoadDelegation(
+            persistence: persistence,
+            childSessionId: "child",
+            matching: { $0.phase == .failed }
+        )
+        #expect(record.failureMessage == "Install Codex")
+        #expect(manager.liveSession(for: "child")?.agentId == "codex")
+    }
+
     private func eventuallyLoadDelegation(
         persistence: ACPOrchestrationPersistence,
         childSessionId: String,
