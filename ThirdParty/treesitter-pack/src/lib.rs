@@ -25,7 +25,7 @@ extern "C" {
     fn tree_sitter_cpp() -> *const c_void;
     fn tree_sitter_css() -> *const c_void;
     fn tree_sitter_dart() -> *const c_void;
-    fn tree_sitter_dockerfile() -> *const c_void;
+    fn tree_sitter_containerfile() -> *const c_void;
     fn tree_sitter_elixir() -> *const c_void;
     fn tree_sitter_erlang() -> *const c_void;
     fn tree_sitter_go() -> *const c_void;
@@ -72,12 +72,6 @@ extern "C" {
 /// Alas. It moved here from `ThirdParty/TreeSitterHCL/queries/highlights.scm`.
 const HCL_HIGHLIGHTS: &str = include_str!("../queries/hcl/highlights.scm");
 
-/// tree-sitter-dockerfile packages `queries/highlights.scm` but keeps the
-/// const that would expose it commented out, and a crate cannot `include_str!`
-/// another crate's sources. Copied verbatim from the crate at the pinned
-/// version; refresh it when the dependency moves.
-const DOCKERFILE_HIGHLIGHTS: &str = include_str!("../queries/dockerfile/highlights.scm");
-
 /// tree-sitter-kotlin-ng ships no `queries/` directory at all. This is the
 /// query Alas shipped from fwcd/tree-sitter-kotlin (the grammar's stale
 /// predecessor), carried over because kotlin-ng's node types are compatible —
@@ -102,13 +96,12 @@ const GROOVY_HIGHLIGHTS: &str = include_str!("../queries/groovy/highlights.scm")
 
 /// These crates' queries are the local consts above, so nothing else here
 /// references the crates themselves and the linker is free to drop their
-/// objects — leaving `tree_sitter_hcl`, `tree_sitter_dockerfile`,
+/// objects — leaving `tree_sitter_hcl`,
 /// `tree_sitter_kotlin` and friends unresolved. Touching one const each keeps
 /// them in the link graph.
 #[used]
-static LINK_ANCHORS: [&str; 7] = [
+static LINK_ANCHORS: [&str; 6] = [
     tree_sitter_hcl::NODE_TYPES,
-    tree_sitter_dockerfile::NODE_TYPES,
     tree_sitter_kotlin_ng::NODE_TYPES,
     tree_sitter_julia::NODE_TYPES,
     tree_sitter_proto::NODE_TYPES,
@@ -127,7 +120,7 @@ static LANGUAGES: &[(&str, LanguageFn)] = &[
     ("csharp", tree_sitter_c_sharp),
     ("css", tree_sitter_css),
     ("dart", tree_sitter_dart),
-    ("dockerfile", tree_sitter_dockerfile),
+    ("dockerfile", tree_sitter_containerfile),
     ("elixir", tree_sitter_elixir),
     ("erlang", tree_sitter_erlang),
     ("go", tree_sitter_go),
@@ -180,7 +173,7 @@ static QUERIES: &[(&str, &str)] = &[
     ("csharp", tree_sitter_c_sharp::HIGHLIGHTS_QUERY),
     ("css", tree_sitter_css::HIGHLIGHTS_QUERY),
     ("dart", tree_sitter_dart::HIGHLIGHTS_QUERY),
-    ("dockerfile", DOCKERFILE_HIGHLIGHTS),
+    ("dockerfile", tree_sitter_containerfile::HIGHLIGHTS_QUERY),
     ("elixir", tree_sitter_elixir::HIGHLIGHTS_QUERY),
     ("erlang", tree_sitter_erlang::HIGHLIGHTS_QUERY),
     ("go", tree_sitter_go::HIGHLIGHTS_QUERY),
@@ -211,7 +204,7 @@ static QUERIES: &[(&str, &str)] = &[
     ("scala", tree_sitter_scala::HIGHLIGHTS_QUERY),
     ("scss", tree_sitter_scss::HIGHLIGHTS_QUERY),
     ("sql", tree_sitter_sequel::HIGHLIGHTS_QUERY),
-    ("svelte", tree_sitter_svelte::HIGHLIGHT_QUERY),
+    ("svelte", tree_sitter_svelte_ng::HIGHLIGHTS_QUERY),
     ("swift", tree_sitter_swift::HIGHLIGHTS_QUERY),
     ("toml", tree_sitter_toml_ng::HIGHLIGHTS_QUERY),
     ("tsx", tree_sitter_typescript::HIGHLIGHTS_QUERY),

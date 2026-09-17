@@ -194,7 +194,7 @@ symbol_dump="${build_root}/symbols.txt"
 nm -g "${cargo_output}" > "${symbol_dump}" 2>/dev/null || true
 missing=""
 for symbol in \
-    bash c c_sharp clojure_orchard cmake cpp css dart dockerfile elixir \
+    bash c c_sharp clojure_orchard cmake cpp css dart containerfile elixir \
     erlang go graphql groovy haskell hcl html ini java javascript json \
     julia kotlin lua make markdown markdown_inline objc php php_only \
     powershell proto python r ruby rust scala scss sql svelte swift toml \

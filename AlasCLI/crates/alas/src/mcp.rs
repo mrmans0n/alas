@@ -3105,8 +3105,12 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::path::PathBuf::from("/private/tmp")
-            .join(format!("alas-mcp-it-{}-{unique}", std::process::id()));
+        let base_dir = if cfg!(target_os = "macos") {
+            std::path::PathBuf::from("/private/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = base_dir.join(format!("alas-mcp-it-{}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("stub.sock");
