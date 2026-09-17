@@ -255,9 +255,11 @@ struct ProjectsManagerHeadUpdatesTests {
             topologyDebounceMaxWait: 0.2,
             startStreamOverride: { _, _ in }
         )
+        let cache = GGStackCache()
         let state = AppState(
             store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
-            projectGitWatcherFactory: { _ in watcher }
+            projectGitWatcherFactory: { _ in watcher },
+            ggStackCache: cache
         )
         seed(state.projectsManager, projectId: project.id, [main])
 
@@ -277,8 +279,7 @@ struct ProjectsManagerHeadUpdatesTests {
             entries: []
         )
 
-        await GGStackCache.shared.invalidate()
-        _ = try await GGStackCache.shared.stack(at: cachePath) {
+        _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
@@ -287,13 +288,12 @@ struct ProjectsManagerHeadUpdatesTests {
         watcher.processEvents([gitDir.appendingPathComponent("refs/heads/main").path])
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        _ = try await GGStackCache.shared.stack(at: cachePath) {
+        _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
         #expect(await loads.count == 2)
         state.stopProjectGitWatcher(projectId: project.id)
-        await GGStackCache.shared.invalidate()
     }
 
     @Test func fetchHeadRevisionDoesNotInvalidateGGStackCache() async throws {
@@ -320,9 +320,11 @@ struct ProjectsManagerHeadUpdatesTests {
             topologyDebounceMaxWait: 0.2,
             startStreamOverride: { _, _ in }
         )
+        let cache = GGStackCache()
         let state = AppState(
             store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
-            projectGitWatcherFactory: { _ in watcher }
+            projectGitWatcherFactory: { _ in watcher },
+            ggStackCache: cache
         )
         seed(state.projectsManager, projectId: project.id, [main])
 
@@ -342,8 +344,7 @@ struct ProjectsManagerHeadUpdatesTests {
             entries: []
         )
 
-        await GGStackCache.shared.invalidate()
-        _ = try await GGStackCache.shared.stack(at: cachePath) {
+        _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
@@ -352,14 +353,13 @@ struct ProjectsManagerHeadUpdatesTests {
         watcher.processEvents([gitDir.appendingPathComponent("FETCH_HEAD").path])
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        _ = try await GGStackCache.shared.stack(at: cachePath) {
+        _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
         #expect(state.revisionChangeGeneration(worktreeID: main.id) > 0)
         #expect(await loads.count == 1)
         state.stopProjectGitWatcher(projectId: project.id)
-        await GGStackCache.shared.invalidate()
     }
 
     @Test func localGitWatcherStatusRescanIsScopedToProject() async throws {

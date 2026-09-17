@@ -897,6 +897,8 @@ final class AppState {
     private var worktreeUpstreamStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored
     private let projectGitWatcherFactory: @MainActor (URL) -> ProjectGitWatcher
+    @ObservationIgnored
+    private let ggStackCache: GGStackCache
     private(set) var revisionChangeGenerations: [String: Int] = [:]
     private(set) var reviewSessionRetargetGenerations: [String: Int] = [:]
     var followRevisionEditorRequest: FollowRevisionEditorRequest?
@@ -912,6 +914,7 @@ final class AppState {
         acpDetachRunner: ACPDetachRunner? = nil,
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
+        ggStackCache: GGStackCache = .shared,
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         tabsManager: TabsManager? = nil,
@@ -954,6 +957,7 @@ final class AppState {
         self.worktreeCleanupLauncher = worktreeCleanupLauncher
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
+        self.ggStackCache = ggStackCache
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runHistoryStore = runHistoryStore
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -4154,8 +4158,11 @@ final class AppState {
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onRevisionChanged = { [weak self] in
-            self?.handleProjectRevisionChange(projectId: projectId)
+            self?.bumpRevisionGenerationForProject(projectId: projectId)
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
+            Task { @MainActor [weak self] in
+                await self?.refreshMainWorktreeUpstreamStatuses(projectId: projectId)
+            }
         }
         watcher.onStackRevisionChanged = { [weak self] in
             self?.handleProjectStackRevisionChange(projectId: projectId)
@@ -4265,7 +4272,7 @@ final class AppState {
     /// guaranteed-fresh reload instead of sticking to a stale entry.
     private func invalidateGGStackCacheAndRebumpGeneration(projectId: String) {
         Task { @MainActor in
-            await GGStackCache.shared.invalidate()
+            await ggStackCache.invalidate()
             self.bumpRevisionGenerationForProject(projectId: projectId)
         }
     }
@@ -4351,7 +4358,7 @@ final class AppState {
         Task { @MainActor in
             let state: GGFollowEntryLoadState
             do {
-                let stack = try await GGStackCache.shared.stack(at: worktree.path) {
+                let stack = try await ggStackCache.stack(at: worktree.path) {
                     try await GGService().currentStack(worktreePath: worktree.path.path)
                 }
                 if let stack {
