@@ -360,7 +360,7 @@ while IFS= read -r source; do
             sub(/^[[:space:]]*/, "", candidate)
             maybe_push_pending_scope(candidate)
         }
-        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|final)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
@@ -372,7 +372,7 @@ while IFS= read -r source; do
                 remember_scope(name, previous_suite)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|final)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
@@ -754,7 +754,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/^[[:space:]]*/, "", candidate)
                 maybe_push_pending_scope(candidate)
             }
-            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|final)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_].*/, "", name)
@@ -765,7 +765,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|final)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_].*/, "", name)

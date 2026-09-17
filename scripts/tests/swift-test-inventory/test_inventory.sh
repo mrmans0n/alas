@@ -269,6 +269,13 @@ A "quoted ) text"
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/ModifierOrderSuite.swift" <<'SWIFT'
+import Testing
+
+@Suite final private class ModifierTests {
+    @Test func runs() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
 import Testing
 
@@ -352,7 +359,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=39 scheduled=38 ordinary=20 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=40 scheduled=39 ordinary=21 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -370,6 +377,7 @@ grep -qx 'globalBehavior' "${inventory_cache}/ordinary.txt"
 grep -qx 'globalProcessBehavior' "${inventory_cache}/subprocess.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'ModifierTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
@@ -420,6 +428,7 @@ grep -qx -- '-only-testing AlasTests/globalBehavior' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/ModifierTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/NestedCommentTests' <<<"${selectors}"
@@ -451,6 +460,10 @@ if grep -q 'AllmanProcessNamespace.AllmanWorkerTests' <<<"${selectors}"; then
 fi
 if grep -q 'globalProcessBehavior' <<<"${selectors}"; then
     echo 'free-standing subprocess test was scheduled with ordinary suites' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/runs' <<<"${selectors}"; then
+    echo 'modifier-order suite test was scheduled as a free-standing test' >&2
     exit 1
 fi
 if grep -q 'RuntimeBehaviorTests' <<<"${selectors}"; then
