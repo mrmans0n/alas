@@ -710,6 +710,36 @@ final class AppState {
         )
     }
 
+    func acpForkTargets(
+        sourceAgentID: String,
+        worktreePath: URL,
+        remoteHost: String?
+    ) -> [ACPSessionForkTarget] {
+        ACPForkTargetPolicy.targets(
+            sourceAgentID: sourceAgentID,
+            enabledAgents: agentAvailability(worktreePath: worktreePath, remoteHost: remoteHost).agents.map {
+                ACPForkAgentOption(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    logoAssetName: $0.builtinLogoAssetName
+                )
+            },
+            catalogAgentIDs: ACPLaunchCatalog.specs.map(\.agentID)
+        )
+    }
+
+    func remoteHost(for worktree: Worktree) -> String? {
+        projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+    }
+
+    func workspaceCheckout(for owner: SessionOwnerID?) -> WorkspaceCheckout? {
+        guard case .workspaceCheckout(let checkoutID, let location) = owner,
+              let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.executionLocation.normalized == location.normalized
+        else { return nil }
+        return checkout
+    }
+
     /// Recompute `agentRegistry` from `config.agents` + a fresh detection
     /// scan. Safe to call repeatedly.
     func rescanAgents() {

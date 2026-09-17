@@ -70,6 +70,10 @@ struct AgentLauncherDialog: View {
             resetSessionBrowser()
             requestInputFocus()
         }
+        .task(id: selectedAgentAvailabilityTaskID) {
+            guard appState.isAgentLauncherOpen else { return }
+            await loadSelectedAgentAvailability()
+        }
         .confirmationDialog(
             deletionRequest?.title ?? "Delete session history?",
             isPresented: Binding(
@@ -108,7 +112,40 @@ struct AgentLauncherDialog: View {
     }
 
     private var selectedAgentAvailability: AgentAvailabilityState? {
-        selectedWorktree().map { appState.agentAvailability(worktreePath: $0.path) }
+        if let checkout = selectedWorkspaceCheckout() {
+            return appState.agentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                remoteHost: checkout.executionLocation.sshHost
+            )
+        }
+        return selectedWorktree().map { appState.agentAvailability(for: $0) }
+    }
+
+    private var selectedAgentAvailabilityTaskID: String {
+        guard appState.isAgentLauncherOpen else { return "closed" }
+        if let checkout = selectedWorkspaceCheckout() {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = appState.agentAvailabilityGeneration(
+                worktreePath: root,
+                remoteHost: checkout.executionLocation.sshHost
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        guard let worktree = selectedWorktree() else { return "no-worktree" }
+        return "\(worktree.id)\u{0000}\(appState.agentExecutionTarget(for: worktree))\u{0000}\(appState.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private func loadSelectedAgentAvailability(force: Bool = false) async {
+        if let checkout = selectedWorkspaceCheckout() {
+            await appState.loadAgentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                remoteHost: checkout.executionLocation.sshHost,
+                force: force
+            )
+            return
+        }
+        guard let worktree = selectedWorktree() else { return }
+        await appState.loadAgentAvailability(for: worktree, force: force)
     }
 
     /// Hidden while browsing an agent's sessions, and while the launcher is
@@ -274,9 +311,8 @@ struct AgentLauncherDialog: View {
             Text(message).lineLimit(2)
             Spacer()
             Button("Retry") {
-                guard let worktree = selectedWorktree() else { return }
                 Task {
-                    await appState.loadAgentAvailability(worktreePath: worktree.path, force: true)
+                    await loadSelectedAgentAvailability(force: true)
                 }
             }
             .buttonStyle(.plain)

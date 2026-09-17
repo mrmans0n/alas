@@ -32,12 +32,31 @@ struct ACPTabView: View {
             }
         }
         .task(id: agentAvailabilityTaskKey) {
-            await state.loadAgentAvailability(worktreePath: worktree.path)
+            if let checkout = selectedWorkspaceCheckout {
+                await state.loadAgentAvailability(
+                    worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                    remoteHost: checkout.executionLocation.sshHost
+                )
+            } else {
+                await state.loadAgentAvailability(for: worktree)
+            }
         }
     }
 
     private var agentAvailabilityTaskKey: String {
-        "\(worktree.path.path):\(state.agentAvailabilityGeneration(worktreePath: worktree.path))"
+        if let checkout = selectedWorkspaceCheckout {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = state.agentAvailabilityGeneration(
+                worktreePath: root,
+                remoteHost: checkout.executionLocation.sshHost
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        return "\(worktree.path.path):\(state.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private var selectedWorkspaceCheckout: WorkspaceCheckout? {
+        state.workspaceCheckout(for: owner)
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {
@@ -485,7 +504,8 @@ private struct ACPSessionView: View {
             },
             forkTargets: state.acpForkTargets(
                 sourceAgentID: session.agentId,
-                worktreePath: worktree.path
+                worktreePath: acpForkTargetWorktreePath,
+                remoteHost: acpForkTargetRemoteHost
             ),
             onQuote: { message in
                 composerActions.quote(message)
@@ -829,6 +849,20 @@ private struct ACPSessionView: View {
             target: adapterTarget,
             agentID: session.agentId
         )
+    }
+
+    private var acpForkTargetWorktreePath: URL {
+        if let checkout = state.workspaceCheckout(for: owner) {
+            return URL(fileURLWithPath: checkout.rootPath)
+        }
+        return worktree.path
+    }
+
+    private var acpForkTargetRemoteHost: String? {
+        if let checkout = state.workspaceCheckout(for: owner) {
+            return checkout.executionLocation.sshHost
+        }
+        return state.remoteHost(for: worktree)
     }
 
     private func reattachAfterAdapterChange() async {

@@ -71,12 +71,19 @@ final class MergeConflictTabModel {
     let worktreePath: URL
     let relativePath: String
     private let gitService: GitService
+    private let agentBinaryUnavailable: (AgentExecutionTarget) async -> Void
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "merge-conflict-tab")
 
-    init(worktreePath: URL, relativePath: String, gitService: GitService) {
+    init(
+        worktreePath: URL,
+        relativePath: String,
+        gitService: GitService,
+        agentBinaryUnavailable: @escaping (AgentExecutionTarget) async -> Void = { _ in }
+    ) {
         self.worktreePath = worktreePath
         self.relativePath = relativePath
         self.gitService = gitService
+        self.agentBinaryUnavailable = agentBinaryUnavailable
     }
 
     /// Number of unresolved conflict regions currently in `resultText`.
@@ -1011,6 +1018,12 @@ final class MergeConflictTabModel {
             if !sentence.isEmpty {
                 setAnnotation(sentence, for: block)
             }
+        } catch let runError as AgentRunError {
+            if case .binaryNotFound = runError,
+               case .ssh = target {
+                await agentBinaryUnavailable(target)
+            }
+            logger.error("explain failed: \(runError.localizedDescription, privacy: .public)")
         } catch {
             logger.error("explain failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -1066,6 +1079,14 @@ final class MergeConflictTabModel {
             )
             guard loadGeneration == startGeneration else { return }
             agentProposal = proposal
+        } catch let runError as AgentRunError {
+            guard loadGeneration == startGeneration else { return }
+            if case .binaryNotFound = runError,
+               case .ssh = target {
+                await agentBinaryUnavailable(target)
+            }
+            agentProposal = nil
+            logger.error("resolveFile failed: \(runError.localizedDescription, privacy: .public)")
         } catch {
             guard loadGeneration == startGeneration else { return }
             agentProposal = nil

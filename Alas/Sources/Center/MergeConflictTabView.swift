@@ -28,7 +28,15 @@ struct MergeConflictTabView: View {
             initialValue: MergeConflictTabModel(
                 worktreePath: worktree.path,
                 relativePath: tabState.relativePath,
-                gitService: GitService()
+                gitService: GitService(),
+                agentBinaryUnavailable: { [state, worktree] target in
+                    guard case .ssh = target else { return }
+                    state.agentAvailabilityStore.invalidate(
+                        target: target,
+                        worktreePath: worktree.path.path
+                    )
+                    await state.loadAgentAvailability(for: worktree)
+                }
             )
         )
     }
