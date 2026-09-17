@@ -45,10 +45,31 @@ In the repo, beside the existing `.alas/scripts/`:
   "icon": { "image": "logo.png" },
   "defaultAgent": "pi",
   "mcpServers": [
-    { "name": "linear", "transport": { "type": "http", "url": "https://mcp.linear.app/mcp" } }
+    {
+      "name": "linear",
+      "transport": { "kind": "http", "url": "https://mcp.linear.app/mcp", "headers": [] }
+    },
+    {
+      "name": "db",
+      "transport": {
+        "kind": "stdio",
+        "command": "npx",
+        "args": ["-y", "db-mcp"],
+        "environment": [
+          { "id": "env-1", "name": "DB_URL", "value": "${DB_URL}" }
+        ]
+      }
+    }
   ]
 }
 ```
+
+This mirrors the app's own persisted shape exactly: the discriminator is
+`kind` (not `type`), stdio requires `args` and `environment`, http/sse require
+`headers`, and each env/header entry carries an `id` because `MCPKeyValue` is
+synthesized `Codable` with a non-optional `id`. A hand-written team config that
+gets any of that wrong silently loses the server, so the README must show a
+complete, working example rather than a sketch.
 
 - Versioned, tolerant per-key decoding: unknown keys are ignored so future
   keys ship without breaking older Alas versions.
@@ -93,9 +114,13 @@ render in image mode, which draws no background.
 
 Renders via the existing `ProjectIcon.image` mode and `ProjectIconView`; the
 resolution layer maps the repo-relative path to absolute before rendering.
-Nothing repo-derived is persisted. Implementation detail to verify: whether
-the existing image pipeline accepts SVG via `NSImage`; if not, SVG drops out
-of the discovery list and we document PNG.
+Nothing repo-derived is persisted. Image paths that are absolute or contain a
+`..` component are rejected at decode time so a repo cannot point the icon
+loader outside its own checkout.
+
+Discovery covers `png`, `jpg`, `jpeg`, `gif`, `webp`. **SVG is out of v1:**
+repo icons are staged through `ProjectIconImageStaging`, which identifies
+formats by magic bytes and supports only PNG/JPEG/GIF/WebP.
 
 ## MCP servers and trust
 
@@ -160,6 +185,10 @@ agent). When the effective pick comes from the repo, it shows a caption —
 - **Not in v1:** startup scripts, gg mode, launch preference, per-user
   `.local` override files, file watchers, bypass-permissions from repo,
   "set as project override" convenience action.
+- **Deferred, explicitly:** a friendlier hand-written `mcpServers` shape (no
+  `id` on env/header entries, `type` accepted as an alias for `kind`), and an
+  "export this project's MCP servers to `.alas/config.json`" action. Until
+  then the README documents the app's exact shape.
 
 ## Testing
 

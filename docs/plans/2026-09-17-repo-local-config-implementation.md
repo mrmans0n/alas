@@ -205,6 +205,14 @@ git add Alas/Sources/Persistence/RepoConfig.swift AlasTests/Persistence/RepoConf
 git commit -m "feat(config): add RepoConfig model with tolerant decoding"
 ```
 
+> **Superseded by review (commit f8e7a596):** the whole-file `Wire` snippet
+> above was replaced by a strict `VersionProbe` version gate plus a
+> `RawContainer` that decodes `icon` / `defaultAgent` / `mcpServers`
+> independently, so one mis-typed key only drops that key instead of the whole
+> file. `icon.image` is also rejected at decode time when absolute or when it
+> contains a `..` component. Read
+> `Alas/Sources/Persistence/RepoConfig.swift` as the source of truth.
+
 ---
 
 ### Task 2: `RepoConfigStore` — mtime-cached loader + icon discovery
@@ -213,7 +221,15 @@ git commit -m "feat(config): add RepoConfig model with tolerant decoding"
 - Create: `Alas/Sources/Persistence/RepoConfigStore.swift`
 - Test: `AlasTests/Persistence/RepoConfigStoreTests.swift`
 
+The design requires malformed files to be distinguishable from absent ones and
+logged to diagnostics, so the store must not collapse both into `nil`.
+
 **Step 1: Write the failing tests**
+
+Include a case asserting the load result distinguishes missing from malformed
+(e.g. a `RepoConfigLoadResult` with `.missing` / `.loaded(RepoConfig)` /
+`.malformed`), plus a test that an unreadable-but-present file logs through the
+store's logger (assert the *result*, not the log text).
 
 ```swift
 import Foundation
@@ -281,10 +297,15 @@ Note: if the mtime cache flakily misses the "b" rewrite on fast filesystems, com
 
 **Step 2: Run to verify it fails** — same xcodebuild command with `-only-testing AlasTests/RepoConfigStoreTests`. Expected: compile error (type missing).
 
-**Step 3: Implement** `Alas/Sources/Persistence/RepoConfigStore.swift`:
+**Step 3: Implement** `Alas/Sources/Persistence/RepoConfigStore.swift`.
+
+Report a tri-state load result alongside the convenience accessor, and log
+malformed files the way the rest of the app does
+(`Logger(subsystem: "io.nlopez.alas", category: "repo-config")`):
 
 ```swift
 import Foundation
+import os
 
 /// Reads `.alas/config.json` per worktree with an mtime-keyed cache. Every
 /// lookup stats the file (cheap) and reparses on change, so `git pull` and
@@ -833,7 +854,9 @@ Match the exact `plan(_:)` input construction the existing tests use; keep the a
 **Files:**
 - Modify: `Alas/Sources/App/AppState.swift` (~line 10064, the `mcpProjectContextProvider` closure)
 
-**Step 1:** In the provider closure, after resolving `project`:
+**Step 1:** In the provider closure, after resolving `project` (note the store's
+tri-state result — a `.malformed` file contributes no repo servers, exactly like
+`.missing`, but has already been logged):
 
 ```swift
 let isLocal = project.host == nil
@@ -985,7 +1008,7 @@ Wire `AppState.defaultAgentID(projectID:)`: resolve repo default only for local 
 ### Task 12: Docs
 
 **Files:**
-- Modify: `README.md` — short section on `.alas/` repo config: `config.json` shape, icon discovery, trust flow, examples.
+- Modify: `README.md` — short section on `.alas/` repo config: `config.json` shape, icon discovery, trust flow, examples. The JSON example must be **complete and copy-pasteable**, matching the app's exact persisted shape (discriminator `kind`, stdio `args`+`environment`, http/sse `headers`, and an `id` on every env/header entry) — a sketch that omits those keys silently drops servers. Note that icon discovery covers png/jpg/jpeg/gif/webp and that SVG is not supported in v1.
 - Modify: `docs/plans/2026-09-17-repo-local-config-design.md` — one-line addendum noting SVG was dropped from discovery (staging pipeline supports PNG/JPEG/GIF/WebP only).
 
 Docs-only change: no build, no tests. **Commit** — `docs: document repo-local .alas configuration`.
