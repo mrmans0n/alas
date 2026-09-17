@@ -3,6 +3,17 @@ import Foundation
 @testable import Alas
 
 struct ProjectConfigAgentOverrideTests {
+    @Test func useGlobalPrefersRepoDefaultThenGlobal() {
+        var scripts = ProjectStartupScripts.defaults
+        #expect(scripts.defaultAgentID(repoDefaultAgent: "pi", globalAgentID: "claude") == "pi")
+        #expect(scripts.defaultAgentID(repoDefaultAgent: nil, globalAgentID: "claude") == "claude")
+        scripts.worktreeAgentMode = .overrideGlobal
+        scripts.worktreeAgentId = "mine"
+        #expect(scripts.defaultAgentID(repoDefaultAgent: "pi", globalAgentID: "claude") == "mine")
+        scripts.worktreeAgentMode = .disabled
+        #expect(scripts.defaultAgentID(repoDefaultAgent: "pi", globalAgentID: "claude") == nil)
+    }
+
     @Test func agentSelectionResolvesInheritanceOverrideAndNone() throws {
         var scripts = ProjectStartupScripts.defaults
         #expect(scripts.defaultAgentID(globalAgentID: "claude") == "claude")

@@ -51,12 +51,19 @@ struct ProjectStartupScripts: Codable, Equatable {
         }
     }
 
-    func defaultAgentID(globalAgentID: String?) -> String? {
+    /// `useGlobal` resolves repo-first: a team-defined default agent beats
+    /// the user's global one unless the project sets its own override.
+    func defaultAgentID(repoDefaultAgent: String?, globalAgentID: String?) -> String? {
         switch worktreeAgentMode {
-        case .useGlobal: globalAgentID
+        case .useGlobal: repoDefaultAgent ?? globalAgentID
         case .disabled: nil
         case .overrideGlobal, .appendToGlobal: worktreeAgentId
         }
+    }
+
+    /// Historical shim for callers without repo context.
+    func defaultAgentID(globalAgentID: String?) -> String? {
+        defaultAgentID(repoDefaultAgent: nil, globalAgentID: globalAgentID)
     }
 
     static let defaults = ProjectStartupScripts(

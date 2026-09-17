@@ -111,4 +111,17 @@ extension AppState {
             repoConfig: project.host == nil ? repoConfig(worktreeRoot: worktreeRoot) : nil
         )
     }
+
+    /// Display name of the repo default agent (`.alas/config.json`) when
+    /// the id names an installed, enabled agent. Nil otherwise.
+    func repoDefaultAgentDisplayName(repoPath: String, agents: [AgentDefinition]) -> String? {
+        guard let candidate = repoConfig(
+            worktreeRoot: URL(fileURLWithPath: repoPath, isDirectory: true)
+        )?.defaultAgent,
+           let agent = agents.first(where: { $0.id == candidate }),
+           agent.isEnabled else {
+            return nil
+        }
+        return agent.displayName
+    }
 }

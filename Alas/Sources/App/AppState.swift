@@ -3848,8 +3848,36 @@ final class AppState {
     }
 
     func defaultAgentID(projectID: String?) -> String? {
-        let scripts = projects.first { $0.id == projectID }?.startupScripts ?? .defaults
-        return scripts.defaultAgentID(globalAgentID: config.agents.worktreeAutoLaunch.agentId)
+        guard let project = projects.first(where: { $0.id == projectID }) else {
+            return ProjectStartupScripts.defaults.defaultAgentID(
+                globalAgentID: config.agents.worktreeAutoLaunch.agentId
+            )
+        }
+        return defaultAgentID(projectId: project.id, worktreeRoot: URL(fileURLWithPath: project.path, isDirectory: true))
+    }
+
+    /// Three-layer resolution against a concrete worktree: an explicit
+    /// project override, then the repo's `.alas/config.json` default (local
+    /// projects only, and only when the id names an installed, enabled
+    /// agent), then the global default.
+    func defaultAgentID(projectId: String, worktreeRoot: URL) -> String? {
+        let scripts = projects.first { $0.id == projectId }?.startupScripts ?? .defaults
+        var repoDefault: String?
+        if projects.first(where: { $0.id == projectId })?.host == nil,
+           let repo = repoConfig(worktreeRoot: worktreeRoot),
+           let candidate = repo.defaultAgent {
+            if agentRegistry.agents.first(where: { $0.id == candidate })?.isEnabled == true {
+                repoDefault = candidate
+            } else {
+                Self.logger.debug(
+                    "Repo default agent \(candidate, privacy: .public) is unknown or disabled - falling through to the global default."
+                )
+            }
+        }
+        return scripts.defaultAgentID(
+            repoDefaultAgent: repoDefault,
+            globalAgentID: config.agents.worktreeAutoLaunch.agentId
+        )
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
