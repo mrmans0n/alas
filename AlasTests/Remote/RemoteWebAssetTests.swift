@@ -1044,4 +1044,16 @@ struct RemoteWebAssetTests {
         #expect(body.contains("const cached = listedSessions.get(sessionId);"))
         #expect(body.contains("if (cached) cached.title = title;"))
     }
+
+    // Regression (PR #1285 review): opening a session straight to the
+    // default Chat tab never requested the change list, so the badge
+    // stayed sourced from the session summary's working-tree-only count
+    // (a different scope from what the Changes tab itself shows) until
+    // some other trigger — a turn, a reconnect, a tab switch — refreshed it.
+    @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
+        #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
+    }
 }

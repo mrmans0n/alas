@@ -709,6 +709,12 @@ function openSession(id) {
   pendingExpandedPathsRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  // The session summary's changedFileCount is working-tree status only —
+  // request the actual change list (comparison-ref scope, what the Changes
+  // tab itself shows) so a freshly opened session's badge isn't stuck
+  // showing/hiding based on a different scope until some other trigger
+  // (a turn, a reconnect, a tab switch) happens to refresh it.
+  if (summary && summary.worktree) requestChanges();
   updateChangesTabBadge();
   showTab("chat");
 }
