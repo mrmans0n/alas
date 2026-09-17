@@ -141,6 +141,12 @@ while IFS= read -r source; do
             sub(/[^A-Za-z0-9_].*/, "", name)
             suite = name
         }
+        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+            name = candidate
+            sub(/.*extension[[:space:]]+/, "", name)
+            sub(/[^A-Za-z0-9_].*/, "", name)
+            suite = name
+        }
         /@Test([[:space:](]|$)/ && suite != "" { print suite }
     ' "${source}"
 done < <(find "${tests_root}" -type f -name '*.swift' -print | sort) | sort -u > "${suite_file}"
@@ -265,6 +271,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
+                sub(/[^A-Za-z0-9_].*/, "", name)
+                print name
+            }
+            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+                name = candidate
+                sub(/.*extension[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_].*/, "", name)
                 print name
             }
