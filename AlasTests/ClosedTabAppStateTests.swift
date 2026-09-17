@@ -48,15 +48,30 @@ struct ClosedTabAppStateTests {
         let state: AppState
         let first: Worktree
         let second: Worktree
+        let tempRoot: URL
     }
 
     private func makeFixture(
         state: AppState = AppState(store: MemoryStore())
     ) -> Fixture {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-closed-tabs-\(UUID().uuidString)", isDirectory: true)
+        let projectPath = tempRoot.appendingPathComponent("project", isDirectory: true)
+        let firstPath = tempRoot.appendingPathComponent("first", isDirectory: true)
+        let secondPath = tempRoot.appendingPathComponent("second", isDirectory: true)
+        try? FileManager.default.createDirectory(at: projectPath, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: firstPath, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: secondPath, withIntermediateDirectories: true)
+        Self.initializeGitRepository(at: projectPath)
+        Self.initializeGitRepository(at: firstPath)
+        Self.initializeGitRepository(at: secondPath)
+        let firstLineageID = WorktreeService.localLineageID(forWorktreeAt: firstPath)
+        let secondLineageID = WorktreeService.localLineageID(forWorktreeAt: secondPath)
+
         let project = ProjectConfig(
             id: "closed-tabs-project",
             name: "Closed Tabs",
-            path: "/tmp/closed-tabs-project",
+            path: projectPath.path,
             color: "blue",
             addedAt: Date(timeIntervalSince1970: 0)
         )
@@ -65,23 +80,33 @@ struct ClosedTabAppStateTests {
             projectId: project.id,
             name: "first",
             branch: "first",
-            path: URL(fileURLWithPath: "/tmp/closed-tabs-first"),
+            path: firstPath,
             status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 0)
+            lastActivity: Date(timeIntervalSince1970: 0),
+            lineageID: firstLineageID
         )
         let second = Worktree(
             id: "closed-tabs-second",
             projectId: project.id,
             name: "second",
             branch: "second",
-            path: URL(fileURLWithPath: "/tmp/closed-tabs-second"),
+            path: secondPath,
             status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 0)
+            lastActivity: Date(timeIntervalSince1970: 0),
+            lineageID: secondLineageID
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(first)
         state.projectsManager.insertOptimisticWorktree(second)
-        return Fixture(state: state, first: first, second: second)
+        return Fixture(state: state, first: first, second: second, tempRoot: tempRoot)
+    }
+
+    private static func initializeGitRepository(at path: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["init", "-q", path.path]
+        try? process.run()
+        process.waitUntilExit()
     }
 
     @Test func explicitCloseRecordsAndReopenSwitchesWorktree() async {

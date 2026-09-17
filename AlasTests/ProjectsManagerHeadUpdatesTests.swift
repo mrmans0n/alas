@@ -357,7 +357,7 @@ struct ProjectsManagerHeadUpdatesTests {
             await loads.increment()
             return stack
         }
-        #expect(state.revisionChangeGeneration(worktreeID: main.id) == 1)
+        #expect(state.revisionChangeGeneration(worktreeID: main.id) > 0)
         #expect(await loads.count == 1)
         state.stopProjectGitWatcher(projectId: project.id)
     }

@@ -729,6 +729,18 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 scope_name[scope_count] = name
                 scope_depth[scope_count] = depth
             }
+            function remember_scope(name) {
+                pending_scope_name = name
+            }
+            function maybe_push_pending_scope(line) {
+                if (pending_scope_name == "") {
+                    return
+                }
+                if (line ~ /^[[:space:]]*[{]/) {
+                    push_scope(pending_scope_name, brace_depth + 1)
+                    pending_scope_name = ""
+                }
+            }
             function update_scope(line) {
                 brace_depth += scope_delta(line)
                 while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
@@ -740,6 +752,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             {
                 candidate = strip_attributes($0)
                 sub(/^[[:space:]]*/, "", candidate)
+                maybe_push_pending_scope(candidate)
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = candidate
@@ -748,6 +761,8 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 print qualified(name)
                 if (candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
+                } else {
+                    remember_scope(name)
                 }
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
@@ -756,6 +771,8 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/[^A-Za-z0-9_].*/, "", name)
                 if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
+                } else if (name !~ /Tests$/) {
+                    remember_scope(name)
                 }
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
@@ -763,6 +780,11 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/.*extension[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_.].*/, "", name)
                 print qualified(name)
+                if (candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                } else {
+                    remember_scope(name)
+                }
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
                 name = candidate
@@ -770,6 +792,8 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/[^A-Za-z0-9_.].*/, "", name)
                 if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
+                } else if (name !~ /Tests$/) {
+                    remember_scope(name)
                 }
             }
             pending_test {
