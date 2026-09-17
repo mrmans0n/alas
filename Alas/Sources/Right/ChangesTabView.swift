@@ -128,7 +128,7 @@ struct ChangesTabView: View {
             }
         }
         .onDisappear { rps.endAttentionReveal() }
-        .task(id: appState.agentExecutionTarget(for: rps.worktree)) {
+        .task(id: agentAvailabilityTaskID) {
             await appState.loadAgentAvailability(for: rps.worktree)
         }
         .task(id: amendProbeKey) {
@@ -143,6 +143,10 @@ struct ChangesTabView: View {
     private var isRevealingAttentionReview: Bool {
         if case .reviewRequest = rps.attentionRevealedTarget { return true }
         return false
+    }
+
+    private var agentAvailabilityTaskID: String {
+        "\(rps.worktree.id)\u{0000}\(rps.worktree.path.path)\u{0000}\(appState.agentExecutionTarget(for: rps.worktree))\u{0000}\(appState.agentAvailabilityGeneration(for: rps.worktree))"
     }
 
     private var publishMutationDisabledReason: String? {

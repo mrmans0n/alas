@@ -35,7 +35,9 @@ struct TabBarView: View {
     let onCopyACPSession: (TabID) -> Void
     let onExportACPSession: (TabID) -> Void
     let onNewTerminal: () -> Void
+    var agentAvailability: AgentAvailabilityState? = nil
     let enabledAgents: [AgentDefinition]
+    var onRetryAgentAvailability: () -> Void = {}
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
     let acpAgents: [AgentDefinition]
@@ -117,8 +119,10 @@ struct TabBarView: View {
                 .padding(.leading, 8)
                 .padding(.trailing, 2)
             AgentSparkleMenu(
+                availability: agentAvailability,
                 agents: enabledAgents,
                 acpAgents: acpAgents,
+                onRetryAvailability: onRetryAgentAvailability,
                 onLaunchAgent: onLaunchAgent,
                 onLaunchACPSession: onLaunchACPSession
             )
@@ -404,13 +408,22 @@ private struct ToolbarIconButton: View {
 }
 
 private struct AgentSparkleMenu: View {
+    let availability: AgentAvailabilityState?
     let agents: [AgentDefinition]
     let acpAgents: [AgentDefinition]
+    let onRetryAvailability: () -> Void
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
     var body: some View {
         Menu {
-            if agents.isEmpty && acpAgents.isEmpty {
+            if case .some(.loading) = availability {
+                Text("Checking agents on SSH host…")
+            } else if case .some(.failed(let message)) = availability {
+                Text(message)
+                Button("Retry") {
+                    onRetryAvailability()
+                }
+            } else if agents.isEmpty && acpAgents.isEmpty {
                 Text("No enabled agents")
             } else {
                 if !agents.isEmpty {
@@ -450,7 +463,17 @@ private struct AgentSparkleMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        if case .some(.loading) = availability {
+            return "Checking agents on SSH host…"
+        }
+        if case .some(.failed) = availability {
+            return "Agent check failed"
+        }
+        return (agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent"
     }
 }
 

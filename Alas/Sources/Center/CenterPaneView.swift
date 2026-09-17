@@ -325,7 +325,13 @@ struct CenterPaneView: View {
                     }
                 },
                 onNewTerminal: openTerminal,
+                agentAvailability: centerAgentAvailability,
                 enabledAgents: RepositoryAgentMenuPolicy.directAgents(from: availableAgents),
+                onRetryAgentAvailability: {
+                    Task {
+                        await loadCenterAgentAvailability(force: true)
+                    }
+                },
                 onLaunchAgent: { agentId in
                     Task { @MainActor in
                         if let checkout = selectedCheckoutForSharedOwner {
@@ -788,14 +794,7 @@ struct CenterPaneView: View {
             completeStartupRecoveryIfPaneIsStable()
         }
         .task(id: centerAgentAvailabilityTaskID) {
-            if let checkout = selectedCheckoutForSharedOwner {
-                await state.loadAgentAvailability(
-                    worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                    remoteHost: checkout.executionLocation.sshHost
-                )
-            } else {
-                await state.loadAgentAvailability(for: worktree)
-            }
+            await loadCenterAgentAvailability()
         }
         .background(theme.color("bg-1"))
     }
@@ -958,5 +957,17 @@ struct CenterPaneView: View {
             return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
         }
         return "\(worktree.id)\u{0000}\(state.agentExecutionTarget(for: worktree))\u{0000}\(state.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private func loadCenterAgentAvailability(force: Bool = false) async {
+        if let checkout = selectedCheckoutForSharedOwner {
+            await state.loadAgentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                remoteHost: checkout.executionLocation.sshHost,
+                force: force
+            )
+        } else {
+            await state.loadAgentAvailability(for: worktree, force: force)
+        }
     }
 }
