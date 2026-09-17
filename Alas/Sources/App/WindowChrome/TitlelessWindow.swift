@@ -14,9 +14,8 @@ final class TitlelessWindow: NSWindow {
         // areas (like split dividers). Keep it off.
         window.isMovableByWindowBackground = false
         if disablesSystemDrag {
-            // Disable mouse-driven window-moves entirely (titlebar drag too)
-            // so the center pane's top tab bar isn't hijacked. Areas that
-            // should still drag the window opt in via `.windowDragHandle()`.
+            // Disable titlebar-driven moves so tab dragging is never
+            // hijacked. Explicit `WindowDragHandle` regions move the window.
             window.isMovable = false
         }
         window.backgroundColor = .clear

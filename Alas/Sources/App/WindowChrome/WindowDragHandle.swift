@@ -1,29 +1,46 @@
 import AppKit
 import SwiftUI
 
-extension View {
-    /// Mark this view as a window-drag handle. Clicks on interactive children
-    /// (buttons, etc.) still work because they're in front in the view tree;
-    /// clicks on empty regions trigger `NSWindow.performDrag(with:)`. Use this
-    /// alongside `window.isMovable = false` (set by `TitlelessWindow.configure`)
-    /// to control exactly which areas can move the window.
-    func windowDragHandle() -> some View {
-        background(WindowDragHandle())
-    }
-}
-
-private struct WindowDragHandle: NSViewRepresentable {
+/// A concrete hit-tested region that moves the main nonmovable window.
+///
+/// This must participate in layout rather than sit in a SwiftUI background:
+/// `NSHostingView` owns background hit testing, so a representable installed
+/// there never receives the mouse sequence.
+struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { WindowDragHandleView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-private final class WindowDragHandleView: NSView {
+final class WindowDragHandleView: NSView {
+    private var dragStart: (pointer: NSPoint, windowOrigin: NSPoint)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
             performTitlebarDoubleClickAction()
             return
         }
-        window?.performDrag(with: event)
+        guard let window else { return }
+        dragStart = (
+            pointer: window.convertPoint(toScreen: event.locationInWindow),
+            windowOrigin: window.frame.origin
+        )
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let dragStart else { return }
+        let pointer = window.convertPoint(toScreen: event.locationInWindow)
+        window.setFrameOrigin(NSPoint(
+            x: dragStart.windowOrigin.x + pointer.x - dragStart.pointer.x,
+            y: dragStart.windowOrigin.y + pointer.y - dragStart.pointer.y
+        ))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragStart = nil
     }
 
     // Mirror the system titlebar's response to a double-click, which the user

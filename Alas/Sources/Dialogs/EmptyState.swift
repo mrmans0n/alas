@@ -8,6 +8,9 @@ struct EmptyState: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            theme.color("bg-1")
+                .allowsHitTesting(false)
+            WindowDragHandle()
             VStack(spacing: 18) {
                 ZStack {
                     LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
@@ -46,12 +49,10 @@ struct EmptyState: View {
                 .foregroundColor(theme.color("fg-faint"))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(theme.color("bg-1"))
 
             TrafficLights()
                 .padding(.leading, 12)
                 .padding(.top, 10)
         }
-        .windowDragHandle()
     }
 }

@@ -23,8 +23,10 @@ struct RightPaneToolbar: View {
     var body: some View {
         HStack(spacing: 6) {
             leading
+                .overlay { WindowDragHandle() }
 
-            Spacer(minLength: 6)
+            WindowDragHandle()
+                .frame(minWidth: 6, maxWidth: .infinity, maxHeight: .infinity)
             trailing
             if tab == .run {
                 runControls
@@ -41,7 +43,6 @@ struct RightPaneToolbar: View {
         // bands start below it.
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
-        .windowDragHandle()
     }
 
     /// Only the Changes tab names a branch, so only it gets the branch icon;
