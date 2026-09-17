@@ -100,13 +100,15 @@ struct AgentLauncherDialog: View {
     }
 
     private var rows: [AgentDefinition] {
-        let availableAgents = selectedWorktree().map {
-            appState.agentAvailability(worktreePath: $0.path).agents
-        } ?? appState.agentRegistry.enabled()
+        let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
         return appState.agentLauncher.rows(
             enabledAgents: availableAgents,
             preferredAgentID: appState.defaultAgentID(projectID: selectedWorktree()?.projectId)
         )
+    }
+
+    private var selectedAgentAvailability: AgentAvailabilityState? {
+        selectedWorktree().map { appState.agentAvailability(worktreePath: $0.path) }
     }
 
     /// Hidden while browsing an agent's sessions, and while the launcher is
@@ -230,7 +232,13 @@ struct AgentLauncherDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if agents.isEmpty {
+                    if let availability = selectedAgentAvailability,
+                       case .loading = availability {
+                        launcherStatusRow("Checking agents on SSH host…", progress: true)
+                    } else if let availability = selectedAgentAvailability,
+                              case .failed(let message) = availability {
+                        failedAvailabilityRow(message)
+                    } else if agents.isEmpty {
                         emptyState
                     } else {
                         ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
@@ -259,6 +267,25 @@ struct AgentLauncherDialog: View {
                 }
             }
         }
+    }
+
+    private func failedAvailabilityRow(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Text(message).lineLimit(2)
+            Spacer()
+            Button("Retry") {
+                guard let worktree = selectedWorktree() else { return }
+                Task {
+                    await appState.loadAgentAvailability(worktreePath: worktree.path, force: true)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.color("accent"))
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(theme.color("fg-faint"))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
     }
 
     private func sessionRowList(agent: AgentDefinition) -> some View {

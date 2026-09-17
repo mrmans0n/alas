@@ -2372,6 +2372,12 @@ final class AppState {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
+        if let remoteHost = authoritative.executionLocation.sshHost {
+            await loadAgentAvailability(
+                worktreePath: focusedMemberWorktree.path,
+                remoteHost: remoteHost
+            )
+        }
         guard let agent = availableAgent(
             id: agentId,
             for: focusedMemberWorktree,
