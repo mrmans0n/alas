@@ -19,7 +19,7 @@ jobs:
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
     # Build once, publish products, then run ordinary tests on this same runner.
-    timeout-minutes: 150
+    timeout-minutes: 165
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -256,6 +256,31 @@ jobs:
           path: .build/xcode/SourcePackages
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
+      - name: Identify compilation cache compatibility
+        run: |
+          cp .xcode-cache-toolchain .xcode-compilation-cache-toolchain
+          {
+            sw_vers
+            xcode-select -p
+            xcrun --sdk macosx --show-sdk-path
+            xcrun --sdk macosx --show-sdk-version
+            xcrun --sdk macosx --show-sdk-build-version
+            printf '%s\n' "$GITHUB_WORKSPACE" 'Debug arm64 macOS unsigned'
+          } >> .xcode-compilation-cache-toolchain
+          cat .xcode-compilation-cache-toolchain
+
+      - name: Restore compilation cache
+        id: compilation-cache
+        timeout-minutes: 5
+        uses: actions/cache/restore@v6
+        with:
+          # Compiler content-addressed storage only; Xcode rebuilds its graph
+          # against this checkout and verifies the actual compilation inputs.
+          path: .build/xcode/CompilationCache.noindex
+          key: swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+
       - name: Build for testing
         timeout-minutes: 30
         # Splitting build/test into `build-for-testing` + `test-without-building`
@@ -269,7 +294,8 @@ jobs:
         # — codesign on macos-26 has occasionally blocked on keychain access in
         # CI with no signing identity present (per supacode's CI workflow).
         run: |
-          xcodebuild -project Alas.xcodeproj -scheme Alas \
+          python3 scripts/swift_build_metrics.py run --output .build/xcode/build-metrics -- \
+            xcodebuild -project Alas.xcodeproj -scheme Alas -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath .build/xcode/DerivedData \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
@@ -277,8 +303,29 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            COMPILATION_CACHE_ENABLE_CACHING=YES \
+            COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES \
+            COMPILATION_CACHE_CAS_PATH="$GITHUB_WORKSPACE/.build/xcode/CompilationCache.noindex" \
+            -resultBundlePath .build/xcode/build-metrics/build.xcresult \
             -showBuildTimingSummary \
             build-for-testing
+
+      - name: Summarize Swift compilation
+        if: ${{ !cancelled() && hashFiles('.build/xcode/build-metrics/build.xcresult/Info.plist') != '' }}
+        timeout-minutes: 2
+        run: |
+          python3 scripts/swift_build_metrics.py report --output .build/xcode/build-metrics \
+            --result .build/xcode/build-metrics/build.xcresult
+
+      - name: Upload Swift build measurements
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-build-metrics-${{ github.run_attempt }}
+          path: .build/xcode/build-metrics
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Locate compiled test plan
         run: |
@@ -334,6 +381,17 @@ jobs:
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
+
+      - name: Measure compilation cache size
+        run: du -sk .build/xcode/CompilationCache.noindex
+
+      - name: Save compilation cache
+        if: success() && steps.compilation-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@v6
+        with:
+          path: .build/xcode/CompilationCache.noindex
+          key: ${{ steps.compilation-cache.outputs.cache-primary-key }}
 
       - name: Test — ordinary Swift batch 1/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
@@ -519,6 +577,9 @@ jobs:
 
       - name: Test CI workflow contract
         run: bash scripts/tests/ci-workflow/run.sh
+
+      - name: Test Swift build measurements
+        run: bash scripts/tests/swift-build-metrics/run.sh
 
   rust-tests:
     name: Rust tests (${{ matrix.project }})
