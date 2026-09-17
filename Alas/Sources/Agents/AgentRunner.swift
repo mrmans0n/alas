@@ -390,7 +390,6 @@ private struct AgentPromptInvocation {
         let subcommand = agent.promptModeArgs.first
         return binaryName == "codex" && (subcommand == "exec" || subcommand == "e")
     }
-
 }
 
 /// Thread-safe latch for "did the watchdog terminate this child?" Set
