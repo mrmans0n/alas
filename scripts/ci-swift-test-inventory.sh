@@ -49,6 +49,8 @@ case "${lane}" in
     *) usage ;;
 esac
 
+export LC_ALL=C
+
 suite_file="$(mktemp)"
 quarantine_file="$(mktemp)"
 trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
