@@ -94,7 +94,6 @@ struct ACPSessionForkPolicyTests {
                 .init(id: "claude", displayName: "Claude", logoAssetName: "agent-claude"),
                 .init(id: "claude", displayName: "Custom duplicate", logoAssetName: nil)
             ],
-            sourceAgent: nil,
             catalogAgentIDs: ["claude"]
         )
 
@@ -106,6 +105,19 @@ struct ACPSessionForkPolicyTests {
                 isSameAgent: true
             )
         ])
+    }
+
+    @Test("an unavailable source agent is not reinserted")
+    func unavailableSourceIsNotReinserted() {
+        let targets = ACPForkTargetPolicy.targets(
+            sourceAgentID: "claude",
+            enabledAgents: [
+                .init(id: "codex", displayName: "Codex", logoAssetName: "agent-codex")
+            ],
+            catalogAgentIDs: ["claude", "codex"]
+        )
+
+        #expect(targets.map(\.id) == ["codex"])
     }
 
     @Test("snapshot is inclusive and conversation-only")

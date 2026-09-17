@@ -696,17 +696,10 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
-    func acpForkTargets(sourceAgentID: String) -> [ACPSessionForkTarget] {
+    func acpForkTargets(sourceAgentID: String, worktreePath: URL) -> [ACPSessionForkTarget] {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
-            enabledAgents: agentRegistry.enabled().map {
-                ACPForkAgentOption(
-                    id: $0.id,
-                    displayName: $0.displayName,
-                    logoAssetName: $0.builtinLogoAssetName
-                )
-            },
-            sourceAgent: agentRegistry.agents.first(where: { $0.id == sourceAgentID }).map {
+            enabledAgents: agentAvailability(worktreePath: worktreePath).agents.map {
                 ACPForkAgentOption(
                     id: $0.id,
                     displayName: $0.displayName,

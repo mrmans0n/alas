@@ -138,6 +138,7 @@ struct CenterPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            let availableAgents = state.agentAvailability(worktreePath: worktree.path).agents
             let composition = state.centerTabComposition(
                 focusedWorktreeID: worktree.id,
                 sharedSessionOwner: sharedSessionOwner
@@ -324,7 +325,7 @@ struct CenterPaneView: View {
                     }
                 },
                 onNewTerminal: openTerminal,
-                enabledAgents: state.agentRegistry.enabled(),
+                enabledAgents: RepositoryAgentMenuPolicy.directAgents(from: availableAgents),
                 onLaunchAgent: { agentId in
                     Task { @MainActor in
                         if let checkout = selectedCheckoutForSharedOwner {
@@ -343,14 +344,7 @@ struct CenterPaneView: View {
                         state.openNewACPSession(agentID: agentId)
                     }
                 },
-                acpAgents: {
-                    // Only enabled builtins with a wired ACP launch spec.
-                    let enabledIds = Set(state.agentRegistry.enabled().map(\.id))
-                    return ACPLaunchCatalog.specs.compactMap { spec in
-                        guard enabledIds.contains(spec.agentID) else { return nil }
-                        return AgentBuiltins.entry(id: spec.agentID)
-                    }
-                }(),
+                acpAgents: RepositoryAgentMenuPolicy.acpAgents(from: availableAgents),
                 loadRunScripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
                 isScriptRunning: { script in state.runningScriptTab(for: script, in: worktree) != nil },
                 onRunScript: { script in state.runOrFocusScript(script, in: worktree) },
@@ -792,6 +786,9 @@ struct CenterPaneView: View {
         }
         .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
+        }
+        .task(id: worktree.path) {
+            await state.loadAgentAvailability(worktreePath: worktree.path)
         }
         .background(theme.color("bg-1"))
     }

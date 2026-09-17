@@ -29,6 +29,9 @@ struct ACPTabView: View {
         } else {
             unavailable
         }
+        .task(id: worktree.path) {
+            await state.loadAgentAvailability(worktreePath: worktree.path)
+        }
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {
@@ -474,7 +477,10 @@ private struct ACPSessionView: View {
                 await manager.reloadFullToolCallContent(
                     sessionId: sessionId, toolCallId: toolCallId)
             },
-            forkTargets: state.acpForkTargets(sourceAgentID: session.agentId),
+            forkTargets: state.acpForkTargets(
+                sourceAgentID: session.agentId,
+                worktreePath: worktree.path
+            ),
             onQuote: { message in
                 composerActions.quote(message)
             },
