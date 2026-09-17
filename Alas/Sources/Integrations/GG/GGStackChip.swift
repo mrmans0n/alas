@@ -4,6 +4,9 @@ import SwiftUI
 /// label/color mapping is unit-testable without rendering.
 struct GGStackChipModel: Equatable {
     let label: String
+    /// Whether the PR/MR is approved. Rendered as a ` ✓` suffix, but the
+    /// compact (header) variant drops it to keep the chip short.
+    let approved: Bool
     let colorToken: String
     /// Tooltip for the clickable chip, e.g. "Open PR #840" / "Open MR !840".
     let helpLabel: String
@@ -12,7 +15,6 @@ struct GGStackChipModel: Equatable {
         guard let number = entry.prNumber else { return nil }
         let prefix = kind == .gitlab ? "!" : "#"
         let reference = "\(prefix)\(number)"
-        let label = reference + (entry.approved ? " ✓" : "")
         let token: String
         switch entry.prState {
         case .open: token = "add"
@@ -22,7 +24,8 @@ struct GGStackChipModel: Equatable {
         case nil: token = "fg-faint"
         }
         return GGStackChipModel(
-            label: label,
+            label: reference,
+            approved: entry.approved,
             colorToken: token,
             helpLabel: "Open \(kind?.reviewRequestLabel ?? "PR") \(reference)"
         )
@@ -56,9 +59,13 @@ struct GGStackChip: View {
 
     private func chipBody(backgroundOpacity: Double) -> some View {
         let tint = theme.color(model.colorToken)
-        return Text(model.label)
+        // The compact (header) variant drops the approval checkmark so the
+        // chip stays short next to the behind-count chips.
+        return Text(model.approved && !compact ? model.label + " ✓" : model.label)
             .font(.system(size: compact ? 9.5 : 10.5, weight: .semibold))
             .lineLimit(1)
+            // Take the width the text needs; the header title side yields.
+            .fixedSize()
             .foregroundColor(tint)
             .padding(.horizontal, compact ? 6 : 7)
             .padding(.vertical, compact ? 1 : 2)

@@ -46,8 +46,11 @@ struct ReviewRequestChipModelTests {
         #expect(GGStackChipModel.model(for: request(kind: .gitlab)).label == "!512")
     }
 
-    @Test func approvedAddsCheckmark() {
-        #expect(GGStackChipModel.model(for: request(reviewDecision: .approved)).label == "#512 ✓")
+    @Test func approvedIsFlaggedNotSuffixed() {
+        let model = GGStackChipModel.model(for: request(reviewDecision: .approved))
+        #expect(model.label == "#512")
+        #expect(model.approved)
+        #expect(GGStackChipModel.model(for: request()).approved == false)
     }
 
     @Test func stateMapsToColorToken() {

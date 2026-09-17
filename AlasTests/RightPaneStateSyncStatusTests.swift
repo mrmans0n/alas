@@ -351,13 +351,13 @@ struct RightPaneStateSyncStatusTests {
 
     // MARK: - BehindChip rendering
 
-    @Test func behindChipDisplayTextComposesArrowCountLabel() {
-        #expect(BehindChip.displayText(count: 3, label: "main") == "↓3 main")
-        #expect(BehindChip.displayText(count: 2, label: "remote") == "↓2 remote")
+    @Test func behindChipDisplayTextComposesArrowCount() {
+        #expect(BehindChip.displayText(count: 3) == "↓3")
+        #expect(BehindChip.displayText(count: 2) == "↓2")
     }
 
-    @Test func behindChipDisplayTextHandlesLongBaseName() {
-        #expect(BehindChip.displayText(count: 12, label: "release/v1") == "↓12 release/v1")
+    @Test func behindChipDisplayTextHandlesLargeCounts() {
+        #expect(BehindChip.displayText(count: 12) == "↓12")
     }
 
     @Test func behindChipBaseRoleUsesAccentToken() {

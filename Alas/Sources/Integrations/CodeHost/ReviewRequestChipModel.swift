@@ -7,7 +7,6 @@ extension GGStackChipModel {
     static func model(for request: ReviewRequest) -> GGStackChipModel {
         let kind = request.provider
         let reference = "\(kind.reviewRequestNumberPrefix)\(request.number)"
-        let label = reference + (request.reviewDecision == .approved ? " ✓" : "")
         let token: String
         switch request.state {
         case .open: token = request.isDraft ? "fg-muted" : "add"
@@ -15,7 +14,8 @@ extension GGStackChipModel {
         case .closed: token = "del"
         }
         return GGStackChipModel(
-            label: label,
+            label: reference,
+            approved: request.reviewDecision == .approved,
             colorToken: token,
             helpLabel: "Open \(kind.reviewRequestLabel) \(reference)"
         )

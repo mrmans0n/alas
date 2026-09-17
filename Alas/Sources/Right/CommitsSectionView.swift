@@ -21,7 +21,6 @@ struct BehindChip: View {
     }
 
     let count: Int
-    let label: String
     let role: Role
     /// Spinner shown while a pull triggered by this chip is in flight.
     var inFlight: Bool = false
@@ -34,10 +33,11 @@ struct BehindChip: View {
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
-    /// Pure text composition: `↓N label` (e.g. "↓3 main"). `↓` reads as
-    /// "commits to pull in."
-    static func displayText(count: Int, label: String) -> String {
-        "↓\(count) \(label)"
+    /// Pure text composition: just `↓N` (e.g. "↓3"). `↓` reads as "commits
+    /// to pull in." The target ref lives in the tooltip/accessibility label,
+    /// matching the arrow-only convention of the sidebar's upstream badges.
+    static func displayText(count: Int) -> String {
+        "↓\(count)"
     }
 
     @ViewBuilder
@@ -67,11 +67,15 @@ struct BehindChip: View {
                 Spinner(lineWidth: 1.2, duration: 0.7)
                     .frame(width: 9, height: 9)
             }
-            Text(Self.displayText(count: count, label: label))
+            Text(Self.displayText(count: count))
                 .font(.system(size: 9.5, weight: .semibold))
                 .lineLimit(1)
         }
+        // Take the width the text needs instead of being compressed (and
+        // ellipsized) when the header gets tight; the title side yields.
+        .fixedSize()
         .foregroundColor(highlighted ? tint.opacity(0.8) : tint)
+        .accessibilityLabel("\(count) commit\(count == 1 ? "" : "s") behind \(ref ?? "upstream")")
         .padding(.horizontal, 6).padding(.vertical, 1)
         .background(tint.opacity(highlighted ? 0.2 : 0.12))
         .clipShape(Capsule())
@@ -142,13 +146,12 @@ struct CommitsSectionView: View {
                         GGStackChip(model: .model(for: request), onTap: onOpenReviewRequest, compact: true)
                     }
                     if let s = behindBase {
-                        BehindChip(count: s.count, label: baseBranch, role: .base)
+                        BehindChip(count: s.count, role: .base, ref: s.ref)
                             .help("\(s.count) behind \(s.ref)")
                     }
                     if let s = behindUpstream {
                         BehindChip(
                             count: s.count,
-                            label: "remote",
                             role: .upstream,
                             inFlight: rps.pullInFlight,
                             onTap: { rps.pull() },
