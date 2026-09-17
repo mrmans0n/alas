@@ -98,6 +98,12 @@ struct FilesTabCompactChainTests {
         #expect(FileTreeListView.isOpen(chainPaths: ["src", "src/main"], openPaths: openPaths))
     }
 
+    @Test func staleDescendantStateDoesNotReopenCollapsedChainRoot() {
+        let openPaths: Set<String> = ["src/main"]
+
+        #expect(!FileTreeListView.isOpen(chainPaths: ["src", "src/main"], openPaths: openPaths))
+    }
+
     @Test func chainStopsAtNotLoadedChild() {
         let node = dir(name: "src", path: "src", children: [
             dir(name: "main", path: "src/main", childrenState: .notLoaded)

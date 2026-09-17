@@ -377,10 +377,10 @@ struct FileTreeListView: View {
     }
 
     /// A compacted row may gain a deeper terminal as lazy child listings
-    /// arrive. Its expansion belongs to the displayed chain, not only to
-    /// whichever directory is currently the terminal.
+    /// arrive. Its expansion belongs to the displayed root so stale descendant
+    /// state cannot reopen an explicitly collapsed ancestor.
     nonisolated static func isOpen(chainPaths: [String], openPaths: Set<String>) -> Bool {
-        chainPaths.contains { openPaths.contains($0) }
+        chainPaths.first.map { openPaths.contains($0) } ?? false
     }
 
     private func isOffGit(_ node: FileTreeNode) -> Bool {
