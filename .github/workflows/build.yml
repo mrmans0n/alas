@@ -18,7 +18,9 @@ jobs:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
-    timeout-minutes: 150
+    # Cover every sequential batch even on timeout, leaving time for preparation,
+    # the final coverage audit, and diagnostic upload. Invocations stay bounded.
+    timeout-minutes: 300
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -256,6 +258,7 @@ jobs:
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
       - name: Build for testing
+        timeout-minutes: 30
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
         # when xcodebuild's `test` action re-validates the build description and
@@ -350,10 +353,12 @@ jobs:
 
       - name: Reconcile Swift coverage and publish timings
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 2
         run: python3 scripts/ci_swift_tests.py summary
 
       - name: Upload Swift test result bundles
         if: always()
+        timeout-minutes: 10
         uses: actions/upload-artifact@v7
         with:
           name: swift-test-results

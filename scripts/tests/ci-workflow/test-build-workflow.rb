@@ -4,6 +4,12 @@ workflow_path = File.expand_path("../../../.github/workflows/build.yml", __dir__
 workflow = YAML.safe_load_file(workflow_path, aliases: true)
 jobs = workflow.fetch("jobs")
 
+swift_job = jobs.fetch("build-test")
+bounded_step_minutes = swift_job.fetch("steps").sum { |step| step.fetch("timeout-minutes", 0) }
+# Reserve time for checkout, tools, caches, and other preparation steps.
+raise "build-test timeout must cover its sequential steps plus 30 minutes of preparation" unless
+  swift_job.fetch("timeout-minutes") >= bounded_step_minutes + 30
+
 expected_runners = {
   "ci-workflow-contract" => "ubuntu-24.04",
   "rust-tests" => "ubuntu-24.04",
