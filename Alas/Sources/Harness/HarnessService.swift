@@ -51,6 +51,7 @@ final class HarnessService {
     private var backgroundActivityIdsBySession: [String: Set<String>] = [:]
     private var completedBackgroundActivityIdsBySession: [String: Set<String>] = [:]
     private var deferredForegroundIdleBySession: [String: DeferredForegroundIdle] = [:]
+    private var detachedSocketSessions: Set<String> = []
     private let cursorIdleDebounceInterval: TimeInterval
 
     init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
@@ -130,6 +131,11 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
+        if event.event == .attached {
+            detachedSocketSessions.remove(event.sessionId)
+        } else if detachedSocketSessions.contains(event.sessionId) {
+            return
+        }
         emitWorktreeActivityEventIfNeeded(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
         let previousState = activityBySession[event.sessionId]?.state
         let previous = activityBySession[event.sessionId]
@@ -279,6 +285,7 @@ final class HarnessService {
             }
 
         case .detached:
+            detachedSocketSessions.insert(event.sessionId)
             cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
             pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
             backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
@@ -362,6 +369,7 @@ final class HarnessService {
         backgroundActivityIdsBySession.removeAll()
         completedBackgroundActivityIdsBySession.removeAll()
         deferredForegroundIdleBySession.removeAll()
+        detachedSocketSessions.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {

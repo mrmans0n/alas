@@ -355,6 +355,36 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"] == nil)
     }
 
+    @Test func lateBackgroundStartDoesNotRestoreDetachedSession() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"] == nil)
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func attachedStartsNewLifecycleAfterDetach() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(service.activityBySession["session-1"]?.agent == .pi)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(
