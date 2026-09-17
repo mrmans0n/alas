@@ -134,6 +134,8 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
+        let previous = activityBySession[event.sessionId]
+        let previousState = previous?.state
         if let lifecycleId = event.lifecycleId {
             if retiredSocketLifecycleIdsBySession[event.sessionId]?.contains(lifecycleId) == true {
                 return
@@ -172,8 +174,6 @@ final class HarnessService {
             }
         }
         emitWorktreeActivityEventIfNeeded(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
-        let previousState = activityBySession[event.sessionId]?.state
-        let previous = activityBySession[event.sessionId]
         var transitionHandledSeparately = event.event == .idle
         // Idle commits separately because Cursor may defer the authoritative change.
         defer {

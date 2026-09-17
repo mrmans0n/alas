@@ -538,6 +538,36 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
     }
 
+    @Test func newerLifecycleDetachClearsOldAttentionTransition() {
+        let (service, _) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .permissionRequest, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 110), lifecycleId: "old"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(transitions.last?.previousState == .permissionRequest)
+        #expect(transitions.last?.state == nil)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(
