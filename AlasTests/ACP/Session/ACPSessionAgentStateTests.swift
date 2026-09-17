@@ -110,6 +110,38 @@ struct ACPSessionAgentStateTests {
 
         #expect(session.currentProviderDisplayName == nil)
     }
+
+    @Test("connection recovery incident is consumed exactly once")
+    func connectionRecoveryIncidentCompletesOnce() {
+        let session = ACPSession(
+            id: "recovery",
+            agentId: "codex",
+            worktreeId: "wt",
+            title: "Recovery"
+        )
+        let retryAt = Date(timeIntervalSince1970: 120)
+
+        #expect(session.beginConnectionRecovery())
+        #expect(session.connectionRecoveryState == .disconnected)
+        #expect(!session.beginConnectionRecovery())
+
+        session.scheduleConnectionRecoveryAttempt(2, maxAttempts: 5, retryAt: retryAt)
+        #expect(session.connectionRecoveryState == .waiting(
+            attempt: 2,
+            maxAttempts: 5,
+            retryAt: retryAt
+        ))
+
+        session.beginConnectionRecoveryAttempt()
+        #expect(session.connectionRecoveryState == .reconnecting(
+            attempt: 2,
+            maxAttempts: 5
+        ))
+
+        #expect(session.completeConnectionRecovery())
+        #expect(session.connectionRecoveryState == nil)
+        #expect(!session.completeConnectionRecovery())
+    }
 }
 
 @MainActor
@@ -147,6 +179,7 @@ struct ACPSessionRunnerAgentStateTests {
         }
 
         #expect(session.agentState == .disconnected)
+        #expect(session.connectionRecoveryState == .disconnected)
     }
 }
 
@@ -271,8 +304,10 @@ struct ACPSessionManagerReattachTests {
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
         let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        await mgr.flushPersistence()
         session.agentState = .disconnected
         session.enqueueScheduled(blocks: [.text("due")], scheduledAt: Date().addingTimeInterval(-1))
+        try store.upsertQueue(sessionId: session.id, items: session.queue)
 
         mgr.scheduleAutoReconnect(sessionId: session.id)
         for _ in 0 ..< 50 where session.agentState == .disconnected {
@@ -280,6 +315,39 @@ struct ACPSessionManagerReattachTests {
         }
 
         #expect(session.agentState != .disconnected)
+    }
+
+    @Test("remote disconnect publishes the next automatic retry")
+    func remoteDisconnectPublishesNextRetry() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-retry-state-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "/tmp/wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            remoteHost: "buildbox",
+            usesRemoteHostRegistry: false
+        )
+        let session = mgr.createSession(agentId: "claude")
+        #expect(session.beginConnectionRecovery())
+        session.agentState = .disconnected
+        let scheduledAfter = Date()
+
+        mgr.scheduleAutoReconnect(sessionId: session.id)
+        for _ in 0 ..< 50 where session.connectionRecoveryState == .disconnected {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        defer { mgr.closeSession(id: session.id) }
+
+        guard case .waiting(let attempt, let maxAttempts, let retryAt) =
+                session.connectionRecoveryState else {
+            Issue.record("expected a scheduled remote reconnect")
+            return
+        }
+        #expect(attempt == 1)
+        #expect(maxAttempts == ACPReconnectPolicy.delays.count)
+        #expect(retryAt > scheduledAfter)
     }
 
     @Test("scheduled reconnect retains disconnected session")

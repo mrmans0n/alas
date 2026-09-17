@@ -454,6 +454,11 @@ private struct ACPSessionView: View {
                     agentName: state.agent(id: session.agentId)?.displayName
                 )
             },
+            reconnectAvailable: !isMirror,
+            onReconnect: {
+                guard !isMirror else { return }
+                Task { await manager.reconnectNow(to: sessionId) }
+            },
             rememberedScrollAnchor: {
                 manager.rememberedTranscriptScrollAnchor(for: sessionId)
             },

@@ -35,6 +35,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onQueueReorder: (Int, Int) -> Void
     let onQueueClearAll: () -> Void
     let onRetryContextRecovery: () -> Void
+    var reconnectAvailable: Bool = true
+    var onReconnect: () -> Void = {}
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
@@ -415,6 +417,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let canMoveDown: Bool
         }
 
+        private struct ConnectionRecoveryTokenInputs: Equatable {
+            let state: ACPConnectionRecoveryState
+            let queuedMessageCount: Int
+            let reconnectAvailable: Bool
+        }
+
         /// Message rows from the render window + synthetic tail rows, in the
         /// same order the legacy VStack rendered them.
         static func rowSpecs(
@@ -748,6 +756,31 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 host.onQueueReorder(src, idx)
                                 return true
                             }
+                        }
+                    }
+                ))
+            }
+
+            if let recoveryState = session.connectionRecoveryState {
+                let queuedMessageCount = session.visibleQueueCount
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__connection_recovery__",
+                    equalityToken: token(
+                        ConnectionRecoveryTokenInputs(
+                            state: recoveryState,
+                            queuedMessageCount: queuedMessageCount,
+                            reconnectAvailable: host.reconnectAvailable
+                        ),
+                        host: host
+                    ),
+                    build: {
+                        wrapRow(host: host) {
+                            ACPConnectionRecoveryCard(
+                                state: recoveryState,
+                                queuedMessageCount: queuedMessageCount,
+                                reconnectAvailable: host.reconnectAvailable,
+                                onReconnect: host.onReconnect
+                            )
                         }
                     }
                 ))

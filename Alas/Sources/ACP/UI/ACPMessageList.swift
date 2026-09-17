@@ -23,6 +23,8 @@ struct ACPMessageList: View {
     let onQueueReorder: (Int, Int) -> Void
     let onQueueClearAll: () -> Void
     let onRetryContextRecovery: () -> Void
+    let reconnectAvailable: Bool
+    let onReconnect: () -> Void
     let rememberedScrollAnchor: () -> String?
     let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
     /// Resolves the full persisted content of a tool call by id when an
@@ -76,6 +78,8 @@ struct ACPMessageList: View {
                 onQueueReorder: onQueueReorder,
                 onQueueClearAll: onQueueClearAll,
                 onRetryContextRecovery: onRetryContextRecovery,
+                reconnectAvailable: reconnectAvailable,
+                onReconnect: onReconnect,
                 onOpenForkSource: onOpenForkSource,
                 agentDisplayName: agentDisplayName,
                 showMinimap: showMinimap

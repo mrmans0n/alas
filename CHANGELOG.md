@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Show live reconnect status and actions in ACP transcripts after an agent disconnects.
+
 ## [0.18.2] - 2026-09-16
 
 ### ✨ Features

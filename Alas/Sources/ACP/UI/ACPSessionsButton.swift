@@ -259,8 +259,7 @@ private struct SessionsPopover: View {
 
     private func reconnect() {
         Task {
-            await manager.detach(sessionId: session.id)
-            await manager.attach(to: session.id, freshlyCreated: false)
+            await manager.reconnectNow(to: session.id)
         }
     }
 }

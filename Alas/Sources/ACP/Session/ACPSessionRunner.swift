@@ -277,12 +277,15 @@ final class ACPSessionRunner {
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
+                let startedRecovery = self.session.beginConnectionRecovery()
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
                 // No flushQueueIfIdle() here: the connection is dead, so
                 // the next prompt would just fail. The queue stays put
                 // and drains naturally on the next successful reattach.
-                self.appendAndPersistSystemNotice("Agent disconnected.")
+                if startedRecovery {
+                    self.appendAndPersistSystemNotice("Agent disconnected.")
+                }
                 self.onUnexpectedDisconnect?()
             }
         }
