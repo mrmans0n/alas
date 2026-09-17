@@ -69,6 +69,28 @@ struct RepoMCPTrustTests {
             transport: .http(url: "https://other.example/mcp", headers: [])
         )
         #expect(RepoMCPTrust.hash(for: http) != RepoMCPTrust.hash(for: differentURL))
+
+        let sse = ProjectMCPServer(
+            id: "repo:remote",
+            name: "remote",
+            transport: .sse(url: "https://mcp.example/sse", headers: [])
+        )
+        let sseDifferentURL = ProjectMCPServer(
+            id: "repo:remote",
+            name: "remote",
+            transport: .sse(url: "https://other.example/sse", headers: [])
+        )
+        #expect(RepoMCPTrust.hash(for: sse) != RepoMCPTrust.hash(for: sseDifferentURL))
+
+        let httpWithHeaders = ProjectMCPServer(
+            id: "repo:remote",
+            name: "remote",
+            transport: .http(
+                url: "https://mcp.example/mcp",
+                headers: [.init(id: "h", name: "Authorization", value: "Bearer x")]
+            )
+        )
+        #expect(RepoMCPTrust.hash(for: http) != RepoMCPTrust.hash(for: httpWithHeaders))
     }
 
     @Test func projectConfigRoundTripsTrustFields() throws {
