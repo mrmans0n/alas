@@ -14,13 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  swift-build:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
-    # Cover every sequential batch even on timeout, leaving time for preparation,
-    # the final coverage audit, and diagnostic upload. Invocations stay bounded.
-    timeout-minutes: 330
+    # Build once and publish the compiled test products. Test shards never rebuild.
+    timeout-minutes: 90
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -281,6 +280,17 @@ jobs:
             -showBuildTimingSummary \
             build-for-testing
 
+      - name: Locate compiled test plan
+        run: |
+          xctestrun_count="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f | wc -l | tr -d ' ')"
+          xctestrun="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f -print -quit)"
+          if [[ "$xctestrun_count" -ne 1 ]]; then
+            printf 'Expected one xctestrun file, found %s\n' "$xctestrun_count" >&2
+            find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f >&2
+            exit 1
+          fi
+          printf 'SWIFT_TEST_XCTESTRUN=%s/%s\n' "$GITHUB_WORKSPACE" "$xctestrun" >> "$GITHUB_ENV"
+
       # Xcode enumerates the compiled tests. Unlisted tests run automatically;
       # explicit execution requirements and exclusions are validated against it.
       - name: Discover and assign Swift tests
@@ -288,82 +298,157 @@ jobs:
         timeout-minutes: 3
         run: python3 scripts/ci_swift_tests.py plan
 
-      - name: Test — ordinary Swift batch 1/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 0 --lane ordinary
+      - name: Package compiled Swift test products
+        timeout-minutes: 5
+        run: |
+          mkdir -p .build/xcode/test-artifact
+          {
+            xcodebuild -version
+            printf 'macOS '
+            sw_vers -productVersion
+            uname -m
+          } > .build/xcode/test-artifact/toolchain.txt
+          tar -czf .build/xcode/swift-test-products.tgz \
+            -C .build/xcode \
+            DerivedData/Build/Products \
+            test-artifact/toolchain.txt
+          du -h .build/xcode/swift-test-products.tgz
 
-      - name: Test — ordinary Swift batch 2/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 1 --lane ordinary
-
-      - name: Test — ordinary Swift batch 3/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 2 --lane ordinary
-
-      - name: Test — ordinary Swift batch 4/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 3 --lane ordinary
-
-      - name: Test — ordinary Swift batch 5/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 4 --lane ordinary
-
-      - name: Test — ordinary Swift batch 6/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 5 --lane ordinary
-
-      # Preserve the conservative subprocess-isolation baseline from #1277.
-      # The explicit policy caps these invocations at three suites. Each step
-      # owns several invocations, including bounded startup and teardown time.
-      - name: Test — subprocess-sensitive Swift batch 1/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 0 --lane subprocess
-
-      - name: Test — subprocess-sensitive Swift batch 2/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 1 --lane subprocess
-
-      - name: Test — subprocess-sensitive Swift batch 3/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 2 --lane subprocess
-
-      - name: Test — subprocess-sensitive Swift batch 4/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 3 --lane subprocess
-
-      - name: Test — subprocess-sensitive Swift batch 5/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 4 --lane subprocess
-
-      - name: Test — subprocess-sensitive Swift batch 6/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 30
-        run: python3 scripts/ci_swift_tests.py run --batch 5 --lane subprocess
-
-      - name: Reconcile Swift coverage and publish timings
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 2
-        run: python3 scripts/ci_swift_tests.py summary
-
-      - name: Upload Swift test result bundles
-        if: always()
+      - name: Upload compiled Swift test products
         timeout-minutes: 10
         uses: actions/upload-artifact@v7
         with:
-          name: swift-test-results
+          name: swift-test-products
+          path: .build/xcode/swift-test-products.tgz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload Swift test plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-plan
+          path: |
+            .build/xcode/results/plan.json
+            .build/xcode/results/enumeration.json
+            .build/xcode/results/enumeration.log
+          retention-days: 1
+          if-no-files-found: error
+
+  swift-tests:
+    name: Swift tests (shard ${{ matrix.shard }})
+    needs: swift-build
+    runs-on: macos-26
+    # Covers three subprocess batch deadlines plus four ordinary deadlines,
+    # setup, and diagnostic upload if several independent invocations hang.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_ASKPASS: "/usr/bin/true"
+      SSH_ASKPASS: "/usr/bin/true"
+      DISPLAY: ":0"
+      GIT_PAGER: "cat"
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Configure test runner
+        run: |
+          git config --global user.email "ci@alas.invalid"
+          git config --global user.name "Alas CI"
+          git config --global init.defaultBranch main
+          git config --global advice.detachedHead false
+          git config --global --unset-all credential.helper || true
+          git config --global credential.helper ""
+
+      - name: Install test runtime tools
+        # ContentSearcherTests require rg and treat a missing binary as a
+        # runtime skip, which the coverage audit correctly rejects.
+        run: brew install ripgrep
+
+      - name: Download compiled Swift test products
+        uses: actions/download-artifact@v8
+        with:
+          name: swift-test-products
+          path: .build/xcode/artifact
+
+      - name: Download Swift test plan
+        uses: actions/download-artifact@v8
+        with:
+          name: swift-test-plan
           path: .build/xcode/results
+
+      - name: Restore and validate compiled test products
+        run: |
+          tar -xzf .build/xcode/artifact/swift-test-products.tgz -C .build/xcode
+          {
+            xcodebuild -version
+            printf 'macOS '
+            sw_vers -productVersion
+            uname -m
+          } > .build/xcode/test-artifact/current-toolchain.txt
+          diff -u .build/xcode/test-artifact/toolchain.txt .build/xcode/test-artifact/current-toolchain.txt
+          xctestrun_count="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f | wc -l | tr -d ' ')"
+          xctestrun="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f -print -quit)"
+          if [[ "$xctestrun_count" -ne 1 ]]; then
+            printf 'Expected one xctestrun file, found %s\n' "$xctestrun_count" >&2
+            exit 1
+          fi
+          printf 'SWIFT_TEST_XCTESTRUN=%s/%s\n' "$GITHUB_WORKSPACE" "$xctestrun" >> "$GITHUB_ENV"
+
+      - name: Run measured Swift shard
+        run: python3 scripts/ci_swift_tests.py run-shard --shard ${{ matrix.shard }}
+
+      - name: Upload Swift shard diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-results-${{ matrix.shard }}
+          path: |
+            .build/xcode/results/*.xcresult
+            .build/xcode/results/*.log
+            .build/xcode/results/*.report.json
+            .build/xcode/results/*.tests.json
           include-hidden-files: true
+          if-no-files-found: warn
+
+  swift-coverage:
+    name: Swift coverage audit
+    needs: [swift-build, swift-tests]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Download Swift test plan
+        uses: actions/download-artifact@v8
+        with:
+          name: swift-test-plan
+          path: .build/xcode/results
+
+      - name: Download every Swift shard result
+        uses: actions/download-artifact@v8
+        with:
+          pattern: swift-test-results-*
+          path: .build/xcode/results
+          merge-multiple: true
+
+      - name: Reconcile Swift coverage and publish timings
+        run: python3 scripts/ci_swift_tests.py summary
+
+      - name: Upload Swift coverage summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-summary
+          path: .build/xcode/results/summary.md
           if-no-files-found: warn
 
   ci-workflow-contract:

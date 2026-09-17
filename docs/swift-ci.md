@@ -19,15 +19,33 @@ suites retain #23 as their follow-up. The subprocess list preserves the conserva
 isolation baseline gathered during #1277; it does not assert every listed suite
 individually reproduced a hang. Shrink it using measured runs, not source heuristics.
 
-Six ordinary batches run sequentially on one runner. The subprocess lane also has
-six batches, each containing invocations of at most three suites. Each invocation
-has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
+The planner retains six ordinary batches and six subprocess batches. Subprocess
+batches contain invocations of at most three suites. Each invocation has a
+wall-clock deadline, including startup and teardown: 360 seconds ordinary and
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
 locally in 229 seconds (286 seconds for its three-suite invocation). Planning
 checks that invocation limits plus termination and result-extraction allowances
-fit each 30-minute subprocess step. Tests retain Xcode's 60-second execution allowance.
-Failures do not prevent later invocations or batches from collecting evidence.
+fit each batch. Tests retain Xcode's 60-second execution allowance. Failures do
+not prevent later invocations or batches from collecting evidence.
+
+`scripts/ci-swift-test-timings.json` records the full-suite batch durations from
+run 35222266640. Longest-processing-time assignment balances complete batches
+across two runners without splitting a suite or subprocess invocation. The two
+measured loads are 913.47 and 958.47 seconds. New or removed batches fail planning
+until the timing inventory is updated, so an unmeasured batch cannot silently land
+on an arbitrary shard.
+
+The `swift-build` job builds once, enumerates the compiled inventory, and archives
+`DerivedData/Build/Products` as a tarball. Tar preserves executable permissions and
+symlinks that a direct artifact upload would discard. Each `macos-26` shard checks
+out the same commit, verifies its Xcode, macOS, and architecture against the build
+job, restores the products, and runs `test-without-building` from the packaged
+`.xctestrun`. It does not resolve packages or rebuild the application. Each shard
+uploads its own result bundles, logs, structured outcomes, and reports with
+`if: always()`. The final Ubuntu audit merges both artifacts and applies the same
+exact-once coverage check used by the sequential workflow. Matrix fail-fast is
+disabled, so one failing shard cannot suppress the other's diagnostics.
 
 Quarantine overrides execution requirements independently of policy order. For
 partially excluded suites, Xcode receives individual runnable test identifiers;
@@ -71,6 +89,21 @@ and passed all six subprocess batches. Its sole failure was
 it passed focused execution but failed in ordinary batch 3. That exact parameterized
 definition is quarantined under #1297; its sibling rename tests remain scheduled.
 
+The successful unsharded run
+[35234212370](https://github.com/mrmans0n/alas/actions/runs/35234212370) is the
+distribution comparison baseline. Its `build-test` job used 38m48s of wall and
+runner time. Checkout, preparation, the single build, and discovery took 13m57s.
+The twelve sequential test steps took 24m02s: 7m35s ordinary and 16m27s
+subprocess-sensitive. Uploading 625 MB of result diagnostics took another 43s.
+
+The first two-shard run is the portability and adoption measurement. Keep the
+distributed workflow only if it saves at least five minutes of end-to-end wall
+time while increasing total macOS runner time by no more than 25%. The comparison
+must include build-product packaging and upload, both shard downloads and setup,
+queue delay, result uploads, and the final audit. A failed toolchain check,
+missing resource, permission error, discovery mismatch, or smaller measured gain
+means reverting to sequential execution while retaining this evidence.
+
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
 unexpected tests, failed tests, unapproved runtime skips, and incomplete invocations.
@@ -95,4 +128,5 @@ python3 scripts/ci_swift_tests.py plan --enumeration /path/to/enumeration.json -
 
 Use a fresh output directory per run. `SWIFT_TEST_DERIVED_DATA` can select an
 existing local build for focused verification. CI uses `.build/xcode/DerivedData`.
-Distributed sharding is deferred until the published durations provide a baseline.
+The timing file changes only from a complete audited run whose result artifacts
+are still available for inspection.
