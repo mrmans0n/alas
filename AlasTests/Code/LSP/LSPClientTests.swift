@@ -5,7 +5,9 @@ import Testing
 final class FakeTransport: LSPTransporting, @unchecked Sendable {
     var incoming: AsyncStream<LSPTransport.Incoming>
     private let cont: AsyncStream<LSPTransport.Incoming>.Continuation
-    private(set) var sent: [String] = []
+    private let sentLock = NSLock()
+    private var sentStorage: [String] = []
+    var sent: [String] { sentLock.withLock { sentStorage } }
     private(set) var terminateCount = 0
     var onSend: ((String) -> Void)?
 
@@ -18,7 +20,7 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     func send(_ data: Data) throws {
         // Strip the JSON-RPC header before storing — caller passes the body only.
         let s = String(data: data, encoding: .utf8) ?? ""
-        sent.append(s)
+        sentLock.withLock { sentStorage.append(s) }
         onSend?(s)
     }
     func terminate() { terminateCount += 1 }
