@@ -4906,7 +4906,7 @@ extension ACPSessionManager {
         do {
             let probe = try await RemoteExec.run(
                 host: host,
-                cwd: nil,
+                cwd: worktreePath,
                 command: ACPRemoteLaunch.setupProbeCommand(check: spec.setupCheck)
             )
             guard probe.exitCode == 0 else {

@@ -42,7 +42,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            availableAgents: { _ in
+            availableAgents: { _, _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
             sessionLocation: { sessionId in
@@ -109,7 +109,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            availableAgents: { _ in
+            availableAgents: { _, _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
             sessionLocation: { sessionId in
@@ -177,7 +177,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            availableAgents: { _ in
+            availableAgents: { _, _ in
                 didLoadAgents = true
                 return [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
@@ -204,6 +204,82 @@ struct ACPSessionOrchestrationCoordinatorTests {
             return
         }
         #expect(didLoadAgents)
+    }
+
+    @Test("delegated existing worktree validates agents against the destination")
+    func delegatedExistingWorktreeUsesDestinationAgentAvailability() async throws {
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-\(UUID().uuidString).sqlite")
+            .path
+        let sessionPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-session-\(UUID().uuidString).sqlite")
+            .path
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
+        let sessionStore = try ACPSessionStore(path: sessionPath)
+        let manager = ACPSessionManager(
+            worktreeId: "origin",
+            worktreePath: "/tmp/origin",
+            store: sessionStore,
+            setupEvaluator: { _ in .ready }
+        )
+        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        let origin = Worktree(
+            id: "origin",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/origin"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let destination = Worktree(
+            id: "feature",
+            projectId: "project",
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: "/tmp/feature"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        var checkedWorktreeIDs: [String] = []
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence,
+            instanceId: "instance",
+            now: { 100 },
+            makeID: { "child" },
+            worktree: { $0 == origin.id ? origin : nil },
+            existingWorktree: { _, id in id == destination.id ? destination : nil },
+            availableAgents: { _, worktree in
+                checkedWorktreeIDs.append(worktree.id)
+                if worktree.id == destination.id {
+                    return [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+                }
+                return []
+            },
+            sessionLocation: { sessionId in
+                sessionId == "parent"
+                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: origin.id), manager: manager)
+                    : nil
+            },
+            manager: { worktree in worktree.id == destination.id ? manager : nil },
+            newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            rememberParent: { _, _ in },
+            autoRunDefault: { false },
+            notifyChanged: {}
+        ))
+
+        let response = await coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: origin.id),
+            request: .init(prompt: "Investigate the parser.", agentId: nil, worktree: .existing(worktreeId: destination.id))
+        )
+
+        guard case .text = response else {
+            Issue.record("Expected delegated session creation response")
+            return
+        }
+        #expect(checkedWorktreeIDs.first == destination.id)
+        #expect(checkedWorktreeIDs.contains(origin.id) == false)
     }
 
     private func eventuallyLoadDelegation(

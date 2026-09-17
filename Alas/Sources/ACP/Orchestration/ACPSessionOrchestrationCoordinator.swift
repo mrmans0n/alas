@@ -18,7 +18,7 @@ final class ACPSessionOrchestrationCoordinator {
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
-        let availableAgents: (ACPOrchestrationSessionOrigin) async -> [ACPOrchestrationAgent]
+        let availableAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent]
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
@@ -107,18 +107,13 @@ final class ACPSessionOrchestrationCoordinator {
         }
 
         let prompt: String
-        let agentID: String
+        let requestedAgentID: String
         do {
             prompt = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
-            agentID = try ACPSessionOrchestrationPolicy.resolveAgent(
-                requestedId: request.agentId,
-                parentAgentId: parentSession.agentId,
-                available: await environment.availableAgents(origin)
-            )
+            let trimmed = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            requestedAgentID = trimmed?.isEmpty == false ? trimmed! : parentSession.agentId
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")
-        } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
-            return .error("Agent is not enabled or ACP-capable: \(id)")
         } catch {
             return .error("Could not validate delegated session request.")
         }
@@ -129,6 +124,19 @@ final class ACPSessionOrchestrationCoordinator {
         case .current:
             guard let worktree = environment.worktree(origin.worktreeId) else {
                 return .error("The current worktree is no longer available.")
+            }
+            let agentID: String
+            do {
+                agentID = try await resolveAgent(
+                    requestedId: request.agentId,
+                    parentAgentId: parentSession.agentId,
+                    origin: origin,
+                    worktree: worktree
+                )
+            } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
+                return .error("Agent is not enabled or ACP-capable: \(id)")
+            } catch {
+                return .error("Could not validate delegated session request.")
             }
             return await createChild(
                 childID: childID,
@@ -143,6 +151,19 @@ final class ACPSessionOrchestrationCoordinator {
         case .existing(let id):
             guard let worktree = environment.existingWorktree(origin.projectId, id) else {
                 return .error("The requested worktree is not available in this project.")
+            }
+            let agentID: String
+            do {
+                agentID = try await resolveAgent(
+                    requestedId: request.agentId,
+                    parentAgentId: parentSession.agentId,
+                    origin: origin,
+                    worktree: worktree
+                )
+            } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
+                return .error("Agent is not enabled or ACP-capable: \(id)")
+            } catch {
+                return .error("Could not validate delegated session request.")
             }
             return await createChild(
                 childID: childID,
@@ -171,7 +192,7 @@ final class ACPSessionOrchestrationCoordinator {
                 projectId: origin.projectId,
                 parentWorktreeId: origin.worktreeId,
                 childWorktreeId: nil,
-                agentId: agentID,
+                agentId: requestedAgentID,
                 worktreeRequest: .new(
                     branch: branch,
                     base: base,
@@ -204,6 +225,19 @@ final class ACPSessionOrchestrationCoordinator {
             }
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil))
         }
+    }
+
+    private func resolveAgent(
+        requestedId: String?,
+        parentAgentId: String,
+        origin: ACPOrchestrationSessionOrigin,
+        worktree: Worktree
+    ) async throws -> String {
+        try ACPSessionOrchestrationPolicy.resolveAgent(
+            requestedId: requestedId,
+            parentAgentId: parentAgentId,
+            available: await environment.availableAgents(origin, worktree)
+        )
     }
 
     func send(
@@ -329,6 +363,35 @@ final class ACPSessionOrchestrationCoordinator {
         }
         guard let record else { return }
         environment.rememberParent(childID, record.parentSessionId)
+        guard let parentLocation = environment.sessionLocation(record.parentSessionId),
+              let parentSession = parentLocation.manager.liveSession(for: record.parentSessionId)
+        else {
+            try? await environment.persistence.updatePhase(
+                childSessionId: childID, phase: .failed, failureMessage: "The originating ACP session is no longer available.", updatedAt: environment.now()
+            )
+            environment.notifyChanged()
+            return
+        }
+        do {
+            _ = try await resolveAgent(
+                requestedId: record.agentId,
+                parentAgentId: parentSession.agentId,
+                origin: parentLocation.origin,
+                worktree: worktree
+            )
+        } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
+            try? await environment.persistence.updatePhase(
+                childSessionId: childID, phase: .failed, failureMessage: "Agent is not enabled or ACP-capable: \(id)", updatedAt: environment.now()
+            )
+            environment.notifyChanged()
+            return
+        } catch {
+            try? await environment.persistence.updatePhase(
+                childSessionId: childID, phase: .failed, failureMessage: "Could not validate delegated session request.", updatedAt: environment.now()
+            )
+            environment.notifyChanged()
+            return
+        }
         try? await environment.persistence.updateChildWorktree(
             childSessionId: childID,
             worktreeId: worktree.id,
