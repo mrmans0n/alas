@@ -39,6 +39,24 @@ struct HarnessBadgeSurfaceTests {
         #expect(running[0].h != awaiting[0].h)
     }
 
+    @Test func overflowSurfaceReflectsOnlyHiddenSessionStates() {
+        let running = HarnessService.WorktreeHarnessSession(id: "running", state: .running, agent: .claude)
+        let awaiting = HarnessService.WorktreeHarnessSession(id: "awaiting", state: .awaiting, agent: .pi)
+
+        #expect(HarnessSessionBadgeSurface(sessions: [running]) == .running)
+        #expect(HarnessSessionBadgeSurface(sessions: [awaiting]) == .awaiting)
+        #expect(HarnessSessionBadgeSurface(sessions: [running, awaiting]) == .mixed)
+    }
+
+    @Test func mixedRampTransitionsFromRunningToAwaitingHue() throws {
+        let stops = try #require(HarnessSessionBadgeChrome.mixedSurfaceRamp(
+            running: "oklch(0.78 0.14 155)",
+            awaiting: "oklch(0.80 0.13 95)"
+        ))
+
+        #expect(stops.map(\.h) == [155, 95])
+    }
+
     @Test func missingOrUnparseableTokenYieldsNoRamp() {
         // Theme.fallback ships no tokens; callers fall back to a flat fill
         // rather than gradient-ing the pink sentinel.

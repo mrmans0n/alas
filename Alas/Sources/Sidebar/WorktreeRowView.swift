@@ -93,6 +93,10 @@ struct WorktreeRowView: View {
         !isMain
     }
 
+    nonisolated static func visibleHarnessSessionCount(for sessionCount: Int) -> Int {
+        min(sessionCount, 3)
+    }
+
     /// What line 2's status chip shows for a row. The dot and its label are one
     /// unit — a presentation always carries a label, so there is no way to
     /// render a bare, unexplained dot.
@@ -399,43 +403,21 @@ struct WorktreeRowView: View {
         summary: HarnessService.WorktreeHarnessSummary
     ) -> some View {
         HStack(spacing: 4) {
-            ForEach(summary.sessions.prefix(2)) { session in
+            let visibleSessionCount = Self.visibleHarnessSessionCount(for: summary.sessions.count)
+            ForEach(summary.sessions.prefix(visibleSessionCount)) { session in
                 HarnessSessionBadge(
                     session: session,
                     onActivate: { onActivateHarness(session.id) },
                     isSelected: isSelected
                 )
             }
-            if summary.sessions.count > 2 {
-                let hiddenSessions = Array(summary.sessions.dropFirst(2))
-                let overflowState: HarnessService.AggregatedState =
-                    hiddenSessions.contains { $0.state == .running } ? .running : .awaiting
-                Menu {
-                    ForEach(hiddenSessions) { session in
-                        Button {
-                            onActivateHarness(session.id)
-                        } label: {
-                            Label {
-                                Text("\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")")
-                            } icon: {
-                                Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
-                            }
-                        }
-                    }
-                } label: {
-                    Text("+\(summary.sessions.count - 2)")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(theme.color("fg-dim"))
-                        .frame(
-                            width: HarnessSessionBadge.diameter,
-                            height: HarnessSessionBadge.diameter
-                        )
-                        .modifier(HarnessSessionBadgeChrome(state: overflowState, isSelected: isSelected))
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")
-                .accessibilityLabel("\(summary.sessions.count - 2) more active sessions")
+            if summary.sessions.count > visibleSessionCount {
+                let hiddenSessions = Array(summary.sessions.dropFirst(visibleSessionCount))
+                HarnessSessionOverflowBadge(
+                    sessions: hiddenSessions,
+                    onActivate: onActivateHarness,
+                    isSelected: isSelected
+                )
             }
         }
         .accessibilityElement(children: .contain)
