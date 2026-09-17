@@ -217,6 +217,10 @@ final class AppState {
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
     @ObservationIgnored private lazy var ggSidebarRefresh = GGSidebarRefreshController()
+    @ObservationIgnored private var ggSidebarPreparationTask: Task<Void, Never>?
+    private var ggSidebarSnapshots: [String: GGConfigReader.SidebarSnapshot] = [:]
+    @ObservationIgnored private var worktreeSelectionFollowUp: Task<Void, Never>?
+    @ObservationIgnored private var worktreeSelectionFollowUpGeneration = 0
     @ObservationIgnored private var pendingWorktreeStatusRescanPaths: [URL] = []
     @ObservationIgnored private var remoteWorktreeStatusRescanTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var remoteWorktreeStatusRescanGenerations = RemoteWorktreeStatusRescanGenerations()
@@ -224,6 +228,7 @@ final class AppState {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
             attentionNavigationGeneration += 1
+            worktreeSelectionFollowUpGeneration += 1
             attentionPendingReviewReveal = nil
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
@@ -1409,6 +1414,25 @@ final class AppState {
     /// Only local, enabled and unambiguous stacks participate. The controller
     /// shares inbox work with the tab and throttles attention-triggered scans.
     func refreshGGSidebar() {
+        ggSidebarPreparationTask?.cancel()
+        guard config.changes.stackedDiffsEnabled, GGAvailability.shared.isInstalled else {
+            if !ggSidebarSnapshots.isEmpty { ggSidebarSnapshots = [:] }
+            ggSidebarRefresh.refresh(projects: [])
+            return
+        }
+        let paths = projects.filter { $0.host == nil }.map(\.path)
+        ggSidebarPreparationTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            let snapshots = await GGConfigReader.sidebarSnapshots(repoPaths: paths)
+            guard !Task.isCancelled, let self else { return }
+            if self.ggSidebarSnapshots != snapshots {
+                self.ggSidebarSnapshots = snapshots
+            }
+            self.refreshGGSidebarFromSnapshot()
+        }
+    }
+
+    private func refreshGGSidebarFromSnapshot() {
         let availability = GGAvailability.shared
         guard availability.capabilities.localStackSnapshot,
               GGInboxSupport.isSupported(version: availability.version),
@@ -1417,9 +1441,10 @@ final class AppState {
             return
         }
         let targets: [GGSidebarRefreshController.Project] = projects.compactMap { project in
-            guard ggInboxAvailable(projectId: project.id) else { return nil }
-            let repoHasGGConfig = GGStackGate.repoHasGGConfig(repoPath: project.path)
-            let username = GGConfigReader.branchUsername(repoPath: project.path)
+            guard ggSidebarInboxAvailable(projectId: project.id) else { return nil }
+            let snapshot = ggSidebarSnapshots[project.path] ?? .init()
+            let repoHasGGConfig = snapshot.hasConfig
+            let username = snapshot.branchUsername
             let allWorktrees = projectsManager.worktrees(projectId: project.id)
             let branches = allWorktrees.map { (id: $0.id, branch: $0.branch) }
             let names = branches.compactMap { branch -> String? in
@@ -2132,19 +2157,46 @@ final class AppState {
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
-        rescanWorktreeStatuses(includeRemote: includeRemoteStatus)
-        if let id,
-           let resolved = projectAndWorktree(withWorktreeId: id),
-           resolved.project.host != nil {
-            Task { @MainActor [weak self] in
-                await self?.prepareRemoteAccelerationIfNeeded(for: resolved.project)
-            }
-        }
+        scheduleWorktreeSelectionFollowUp(id: id, includeRemoteStatus: includeRemoteStatus)
     }
 
     func selectWorktreeFromSidebar(id: String) {
         selectWorktree(id: id)
-        acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
+        scheduleWorktreeSelectionFollowUp(id: id, acknowledgeSidebar: true)
+    }
+
+    private func scheduleWorktreeSelectionFollowUp(
+        id: String?, includeRemoteStatus: Bool = true, acknowledgeSidebar: Bool = false
+    ) {
+        worktreeSelectionFollowUp?.cancel()
+        let generation = worktreeSelectionFollowUpGeneration
+        worktreeSelectionFollowUp = Task { @MainActor [weak self] in
+            // Leave the click handler and initial view update free of metadata
+            // work. Coalesce rapid selections before starting any refreshes.
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            guard let self, !Task.isCancelled, self.selectedWorktreeId == id,
+                  self.worktreeSelectionFollowUpGeneration == generation, let id else { return }
+            if acknowledgeSidebar {
+                self.acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
+            }
+            self.refreshGGSidebar()
+            guard let resolved = self.projectAndWorktree(withWorktreeId: id) else { return }
+            if resolved.project.host == nil {
+                // Once a scan starts, let it finish. Canceling a later selection
+                // must not terminate Git processes belonging to that scan.
+                let scan = self.worktreeStatusScan
+                await Task { await scan([resolved.worktree.path]) }.value
+            } else {
+                if includeRemoteStatus {
+                    self.enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
+                }
+                await self.prepareRemoteAccelerationIfNeeded(for: resolved.project)
+            }
+        }
+    }
+
+    func waitForWorktreeSelectionFollowUp() async {
+        await worktreeSelectionFollowUp?.value
     }
 
     func selectInitialWorktree(id: String?, includeRemoteStatus: Bool = true) {
@@ -11304,12 +11356,26 @@ final class AppState {
     /// hosting worktree's effective context because the inbox spans the repo.
     func ggInboxAvailable(projectId: String) -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
+        guard config.changes.stackedDiffsEnabled, GGAvailability.shared.isInstalled, project.host == nil else { return false }
         return Self.resolveGGInboxAvailable(
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
             isRemoteProject: project.host != nil,
             projectMode: project.ggMode,
             repoHasGGConfig: GGStackGate.repoHasGGConfig(repoPath: project.path),
+            worktreeOverrides: Array(project.ggWorktreeModes.values)
+        )
+    }
+
+    /// Rendering uses the last background snapshot; actions still validate live state.
+    func ggSidebarInboxAvailable(projectId: String) -> Bool {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return false }
+        return Self.resolveGGInboxAvailable(
+            masterEnabled: config.changes.stackedDiffsEnabled,
+            ggInstalled: GGAvailability.shared.isInstalled,
+            isRemoteProject: project.host != nil,
+            projectMode: project.ggMode,
+            repoHasGGConfig: ggSidebarSnapshots[project.path]?.hasConfig ?? false,
             worktreeOverrides: Array(project.ggWorktreeModes.values)
         )
     }
@@ -11334,7 +11400,10 @@ final class AppState {
         branch: String,
         ggInstalled: Bool = GGAvailability.shared.isInstalled
     ) -> GGWorktreeContext {
-        Self.resolveGGWorktreeContext(
+        guard config.changes.stackedDiffsEnabled else { return .inactive(reason: .masterDisabled) }
+        guard ggInstalled else { return .inactive(reason: .cliMissing) }
+        guard project.host == nil else { return .inactive(reason: .remoteProject) }
+        return Self.resolveGGWorktreeContext(
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: ggInstalled,
             project: project,
@@ -11351,11 +11420,17 @@ final class AppState {
         worktree: Worktree
     ) -> GGWorktreeMenuModel {
         let selectedMode = effectiveGGWorktreeMode(projectId: project.id, worktreeId: worktree.id)
+        let snapshot = ggSidebarSnapshots[project.path] ?? .init()
         return GGWorktreeMenuModel(
             selectedMode: selectedMode,
-            context: ggWorktreeContext(
+            context: Self.resolveGGWorktreeContext(
+                masterEnabled: config.changes.stackedDiffsEnabled,
+                ggInstalled: GGAvailability.shared.isInstalled,
                 project: project,
-                worktree: worktree,
+                worktreeOverride: selectedMode,
+                isMainWorktree: projectsManager.isMain(worktree, in: project),
+                repoHasGGConfig: snapshot.hasConfig,
+                branchUsername: snapshot.branchUsername,
                 branch: worktree.branch
             ),
             hasStackSummary: GGStackSummaryStore.shared.summary(forPath: worktree.path.path) != nil,

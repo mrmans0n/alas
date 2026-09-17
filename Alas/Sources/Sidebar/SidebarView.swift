@@ -28,36 +28,18 @@ struct SidebarView: View {
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
-        let attentionAggregation = state.attentionAggregation
-        let attentionPresentation = SidebarAttentionPresentation(
-            enabled: state.config.needsAttentionEnabled,
-            aggregation: attentionAggregation
-        )
         ZStack {
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
             VStack(spacing: 0) {
-                SidebarHeaderView(
-                    worktreeSortMode: state.config.worktrees.defaultOrdering,
-                    onSetWorktreeSortMode: { state.setDefaultWorktreeOrdering($0) },
+                SidebarAttentionHeader(
+                    state: state,
                     onSettings: onSettings,
                     onAddProject: onAddProject,
-                    onSearch: {
-                        NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
-                    },
                     onHideSidebar: onHideSidebar,
-                    onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
-                    attentionCount: attentionPresentation.count,
-                    showsAttentionInbox: attentionPresentation.showsInbox,
-                    attentionInboxOpen: $state.isAttentionInboxOpen,
-                    attentionAggregation: attentionAggregation,
-                    attentionLoadError: state.attentionStore.loadError?.localizedDescription,
-                    attentionWriteError: state.attentionStore.writeError?.localizedDescription,
-                    attentionNavigationErrors: state.attentionNavigationErrors,
-                    onDismissAttentionItem: { state.dismissAttentionItem($0) },
-                    onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
+                    showingNewWorkspace: $showingNewWorkspace
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     ScrollView(.vertical, showsIndicators: false) {
@@ -100,7 +82,7 @@ struct SidebarView: View {
                                     onNewWorktree: { onNewWorktree(project.id) },
                                     onEditProject: { onEditProject(project.id) },
                                     onRemoveProject: { onRemoveProject(project.id) },
-                                    onOpenGGInbox: state.ggInboxAvailable(projectId: project.id)
+                                    onOpenGGInbox: state.ggSidebarInboxAvailable(projectId: project.id)
                                         ? { state.openGGInbox(projectId: project.id) }
                                         : nil,
                                     onResetSort: {
@@ -254,6 +236,9 @@ struct SidebarView: View {
                 }
             }
         }
+        .task(id: state.config.changes.stackedDiffsEnabled && GGAvailability.shared.isInstalled) {
+            state.refreshGGSidebar()
+        }
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
@@ -307,5 +292,39 @@ struct SidebarView: View {
             guard !Task.isCancelled else { return }
             spaceTitleVisible = false
         }
+    }
+}
+
+/// Keep attention aggregation out of the tree's selection-driven body updates.
+private struct SidebarAttentionHeader: View {
+    @Bindable var state: AppState
+    let onSettings: () -> Void
+    let onAddProject: () -> Void
+    let onHideSidebar: () -> Void
+    @Binding var showingNewWorkspace: Bool
+
+    var body: some View {
+        let aggregation = state.attentionAggregation
+        let presentation = SidebarAttentionPresentation(
+            enabled: state.config.needsAttentionEnabled, aggregation: aggregation
+        )
+        SidebarHeaderView(
+            worktreeSortMode: state.config.worktrees.defaultOrdering,
+            onSetWorktreeSortMode: { state.setDefaultWorktreeOrdering($0) },
+            onSettings: onSettings,
+            onAddProject: onAddProject,
+            onSearch: { NotificationCenter.default.post(name: .alasOpenSearch, object: nil) },
+            onHideSidebar: onHideSidebar,
+            onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
+            attentionCount: presentation.count,
+            showsAttentionInbox: presentation.showsInbox,
+            attentionInboxOpen: $state.isAttentionInboxOpen,
+            attentionAggregation: aggregation,
+            attentionLoadError: state.attentionStore.loadError?.localizedDescription,
+            attentionWriteError: state.attentionStore.writeError?.localizedDescription,
+            attentionNavigationErrors: state.attentionNavigationErrors,
+            onDismissAttentionItem: { state.dismissAttentionItem($0) },
+            onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
+        )
     }
 }
