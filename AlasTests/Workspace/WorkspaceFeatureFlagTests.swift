@@ -518,6 +518,7 @@ struct WorkspaceFeatureFlagTests {
             isEnabled: true,
             builtinLogoAssetName: nil
         )
+        state.config.agents.custom = [agent]
         state.agentRegistry = AgentRegistry(builtinState: [:], customs: [agent], installedIds: [agent.id])
         let workspace = Workspace(
             name: "Release",
