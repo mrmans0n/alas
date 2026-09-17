@@ -192,6 +192,27 @@ import Testing
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/LSPInstallerTests.swift" <<'SWIFT'
+import Testing
+
+struct LSPInstallerTests {
+    @Test func installsThroughProductionWrapper() {}
+}
+SWIFT
+cat > "${sandbox}/AlasTests/SelfUpdaterTests.swift" <<'SWIFT'
+import Testing
+
+struct SelfUpdaterTests {
+    @Test func updatesThroughProductionWrapper() {}
+}
+SWIFT
+cat > "${sandbox}/AlasTests/AgentRunnerInvocationTests.swift" <<'SWIFT'
+import Testing
+
+struct AgentRunnerInvocationTests {
+    @Test func invokesAgentRunnerWrapper() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/MultilineStringTests.swift" <<'SWIFT'
 import Testing
 
@@ -204,11 +225,12 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=22 scheduled=21 ordinary=11 subprocess=10 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=25 scheduled=24 ordinary=11 subprocess=13 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
+grep -qx 'AgentRunnerInvocationTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
@@ -217,6 +239,8 @@ grep -qx 'MultilineStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'LSPInstallerTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'SelfUpdaterTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SplitDeclarationTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SplitRuntimeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'StringParenSuiteTests' "${inventory_cache}/ordinary.txt"
@@ -279,6 +303,10 @@ if grep -q 'SplitRuntimeTests' <<<"${selectors}"; then
     echo 'split-file subprocess suite was scheduled with ordinary suites' >&2
     exit 1
 fi
+if grep -Eq 'LSPInstallerTests|SelfUpdaterTests|AgentRunnerInvocationTests' <<<"${selectors}"; then
+    echo 'production-wrapper subprocess suite was scheduled with ordinary suites' >&2
+    exit 1
+fi
 if grep -q 'WrapperFixtureTests' <<<"${selectors}"; then
     echo 'process-wrapper suite was scheduled with ordinary suites' >&2
     exit 1
@@ -292,7 +320,10 @@ subprocess_selectors="$(
     bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" \
         --batch 0 --batch-count 1 --lane subprocess
 )"
+grep -qx -- '-only-testing AlasTests/AgentRunnerInvocationTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/LSPInstallerTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/SelfUpdaterTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BeautifulMermaidFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNestedAttributeTests' <<<"${subprocess_selectors}"
@@ -332,12 +363,15 @@ fi
 subprocess_log="${sandbox}/subprocess-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${subprocess_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
     bash "${batch_runner}" 0 1 subprocess
+grep -qx -- 'AlasTests/AgentRunnerInvocationTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/InlineNestedAttributeTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/LSPInstallerTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RuntimeBehaviorTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/SelfUpdaterTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/SharedGitFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/SplitRuntimeTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/WrapperFixtureTests' "${subprocess_log}"

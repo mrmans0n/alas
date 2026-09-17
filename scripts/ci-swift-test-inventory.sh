@@ -249,7 +249,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 # so a newly added process-facing suite joins the protected lane without a
 # workflow edit.
 {
-    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid|WorkspaceEditExecutor' "${scheduled_file}" || true
+    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid|WorkspaceEditExecutor|LSPInstaller|SelfUpdater|AgentRunner' "${scheduled_file}" || true
     while IFS= read -r source; do
         grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture' "${source}" || continue
         awk '
