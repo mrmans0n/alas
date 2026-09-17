@@ -67,6 +67,12 @@ struct WorktreeRowHeightTests {
         #expect(WorktreeRowView.showsRemovalActions(isMain: false))
     }
 
+    @Test func thirdHarnessSessionRemainsVisibleBeforeOverflow() {
+        #expect(WorktreeRowView.visibleHarnessSessionCount(for: 2) == 2)
+        #expect(WorktreeRowView.visibleHarnessSessionCount(for: 3) == 3)
+        #expect(WorktreeRowView.visibleHarnessSessionCount(for: 4) == 3)
+    }
+
     @Test func ggModeMenuUsesStackedDiffsName() {
         #expect(WorktreeRowView.ggModeMenuTitle == "Stacked Diffs Mode")
     }

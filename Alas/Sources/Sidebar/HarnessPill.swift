@@ -75,7 +75,7 @@ struct HarnessSessionBadge: View {
                 .scaledToFit()
                 .frame(width: Self.logoSize, height: Self.logoSize)
                 .frame(width: Self.diameter, height: Self.diameter)
-                .modifier(HarnessSessionBadgeChrome(state: session.state, isSelected: isSelected))
+                .modifier(HarnessSessionBadgeChrome(surface: .init(state: session.state), isSelected: isSelected))
         }
         .buttonStyle(.plain)
         .help(tooltip)
@@ -87,6 +87,71 @@ struct HarnessSessionBadge: View {
     }
 }
 
+struct HarnessSessionOverflowBadge: View {
+    let sessions: [HarnessService.WorktreeHarnessSession]
+    let onActivate: (String) -> Void
+    var isSelected = false
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Menu {
+            ForEach(sessions) { session in
+                Button {
+                    onActivate(session.id)
+                } label: {
+                    Label {
+                        Text(session.agent.displayName)
+                    } icon: {
+                        Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
+                    }
+                }
+                .badge(session.state == .running ? "Running" : "Waiting")
+            }
+        } label: {
+            Text("+\(sessions.count)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.color("fg-dim"))
+                .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
+        .modifier(HarnessSessionBadgeChrome(surface: .init(sessions: sessions), isSelected: isSelected))
+        .help(accessibilityLabel)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        "\(sessions.count) more active session\(sessions.count == 1 ? "" : "s")"
+    }
+}
+
+enum HarnessSessionBadgeSurface: Equatable {
+    case running
+    case awaiting
+    case mixed
+
+    init(state: HarnessService.AggregatedState) {
+        switch state {
+        case .running: self = .running
+        case .awaiting: self = .awaiting
+        }
+    }
+
+    init(sessions: [HarnessService.WorktreeHarnessSession]) {
+        let hasRunning = sessions.contains { $0.state == .running }
+        let hasAwaiting = sessions.contains { $0.state == .awaiting }
+
+        switch (hasRunning, hasAwaiting) {
+        case (true, true): self = .mixed
+        case (true, false): self = .running
+        case (false, true), (false, false): self = .awaiting
+        }
+    }
+}
+
 /// E1's agent tile surface: a filled gradient chip with a hairline of light
 /// along its edge, lifted off the row by a soft drop shadow.
 ///
@@ -95,17 +160,17 @@ struct HarnessSessionBadge: View {
 /// box-shadow: inset 0 0 0 0.5px oklch(1 0 0/0.22), 0 1px 3px rgba(0,0,0,0.35);
 /// ```
 ///
-/// The hue and chroma come from the state's theme token so running and awaiting
-/// stay distinguishable and both themes are honoured; only the lightness ramp is
-/// taken from E1, because the tile is a solid surface rather than a tint of the
-/// row behind it and so needs its own fixed contrast against the logo.
+/// The surface is determined by the sessions it represents: a uniform state
+/// uses that state's token, while mixed hidden sessions transition from running
+/// green to waiting orange. The fixed lightness ramp keeps either surface
+/// legible against the logo and both themes.
 struct HarnessSessionBadgeChrome: ViewModifier {
     /// Lightness of the gradient's first stop, from E1's `.agent`.
     nonisolated static let surfaceTopLightness: Double = 0.58
     /// Lightness of the final stop.
     nonisolated static let surfaceBottomLightness: Double = 0.46
 
-    let state: HarnessService.AggregatedState
+    let surface: HarnessSessionBadgeSurface
     var isSelected = false
 
     @Environment(\.theme) private var theme
@@ -114,7 +179,7 @@ struct HarnessSessionBadgeChrome: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: HarnessSessionBadge.cornerRadius)
-                    .fill(surface)
+                    .fill(background)
             )
             // E1's `inset 0 0 0 0.5px oklch(1 0 0/0.22)`. `strokeBorder` draws
             // inside the shape's bounds, which is what makes it read as an edge
@@ -126,24 +191,32 @@ struct HarnessSessionBadgeChrome: ViewModifier {
             .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
     }
 
-    /// Token carrying the hue for each state.
-    private var token: String {
-        switch state {
-        case .running:  return "add"
-        case .awaiting: return "caution"
+    private var background: LinearGradient {
+        let gradientColors: [Color]
+        switch surface {
+        case .running:
+            gradientColors = colors(for: "add")
+        case .awaiting:
+            gradientColors = colors(for: "caution")
+        case .mixed:
+            let stops = Self.mixedSurfaceRamp(
+                running: theme.tokens["add"],
+                awaiting: theme.tokens["caution"]
+            )
+            gradientColors = stops?.map { $0.toColor() } ?? [theme.color("add"), theme.color("caution")]
         }
-    }
-
-    private var surface: LinearGradient {
-        let stops = Self.surfaceRamp(from: theme.tokens[token])
-        let colors = stops?.map { $0.toColor() } ?? [theme.color(token), theme.color(token)]
         return LinearGradient(
-            colors: colors,
+            colors: gradientColors,
             // CSS measures gradient angles clockwise from "to top", so E1's
             // 160deg runs top-slightly-left to bottom-slightly-right.
             startPoint: UnitPoint(x: 0.33, y: 0),
             endPoint: UnitPoint(x: 0.67, y: 1)
         )
+    }
+
+    private func colors(for token: String) -> [Color] {
+        let stops = Self.surfaceRamp(from: theme.tokens[token])
+        return stops?.map { $0.toColor() } ?? [theme.color(token), theme.color(token)]
     }
 
     /// Builds E1's two gradient stops from a raw OKLCH token, keeping the
@@ -158,5 +231,17 @@ struct HarnessSessionBadgeChrome: ViewModifier {
             OKLCH(l: surfaceTopLightness, c: base.c, h: base.h, a: 1),
             OKLCH(l: surfaceBottomLightness, c: base.c, h: base.h, a: 1)
         ]
+    }
+
+    /// Builds a mixed-state surface from the bright running stop through the
+    /// darker waiting stop, retaining each token's hue and chroma.
+    nonisolated static func mixedSurfaceRamp(running: String?, awaiting: String?) -> [OKLCH]? {
+        guard
+            let runningStops = surfaceRamp(from: running),
+            let awaitingStops = surfaceRamp(from: awaiting)
+        else {
+            return nil
+        }
+        return [runningStops[0], awaitingStops[1]]
     }
 }
