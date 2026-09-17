@@ -10660,21 +10660,10 @@ final class AppState {
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }
-                let configuredAgent = AgentConfiguredCatalog.enabled(
-                    builtinState: self.config.agents.builtinState,
-                    customs: self.config.agents.custom
-                ).first(where: { $0.id == spec.agentID })
-                var launchSpec = spec
-                if let configuredBinary = configuredAgent?.configuredBinary,
-                   configuredBinary != spec.command {
-                    launchSpec = launchSpec.overridingCommand(configuredBinary)
-                }
-                if checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
-                   let flag = configuredAgent?.bypassPermissionsFlag,
-                   launchSpec.arguments.contains(flag) == false {
-                    launchSpec = launchSpec.prependingArguments([flag])
-                }
-                return launchSpec
+                return self.workspaceACPLaunchSpec(
+                    from: spec,
+                    useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
+                )
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -10805,6 +10794,28 @@ final class AppState {
         memoryDiagnostics.attach(manager: manager)
         #endif
         return .ready(manager)
+    }
+
+    func workspaceACPLaunchSpec(
+        from spec: ACPLaunchSpec,
+        useBypassPermissions: Bool
+    ) -> ACPLaunchSpec {
+        let configuredAgent = AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        ).first(where: { $0.id == spec.agentID })
+        var launchSpec = spec
+        if let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
+           !binaryOverride.isEmpty,
+           binaryOverride != spec.command {
+            launchSpec = launchSpec.overridingCommand(binaryOverride)
+        }
+        if useBypassPermissions,
+           let flag = configuredAgent?.bypassPermissionsFlag,
+           launchSpec.arguments.contains(flag) == false {
+            launchSpec = launchSpec.prependingArguments([flag])
+        }
+        return launchSpec
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed

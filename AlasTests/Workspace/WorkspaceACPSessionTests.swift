@@ -129,6 +129,34 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutLaunchSpecPreservesAdapterCommandWithoutBinaryOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.command == spec.command)
+        #expect(transformed.command == ACPManagedAdapterDescriptor.claude.binaryName)
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecAppliesExplicitBinaryOverrideAndBypassFlag() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: "/opt/agent-adapters/claude-agent-acp",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: true)
+
+        #expect(transformed.command == "/opt/agent-adapters/claude-agent-acp")
+        #expect(transformed.arguments.first == "--dangerously-skip-permissions")
+    }
+
+    @MainActor
     @Test func appStateCreatesCheckoutManagerAtTheFrozenRootAndKeepsMissingRootPending() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
