@@ -38,10 +38,14 @@ final class RepoConfigStore {
         }
 
         let result = Self.classify(file)
-        // Logged on reparse only, so a broken file in a project on screen
-        // reports once per change instead of once per render.
+        // Logged on reparse only, so a broken or unreadable file in a project
+        // on screen reports once per change instead of once per render.
         if case .malformed = result {
-            Self.logger.error("Malformed repo config ignored at \(file.path)")
+            // `public` on purpose: the useful part of this diagnostic is *which*
+            // repo needs fixing, and a redacted path makes it useless.
+            Self.logger.error(
+                "Repo config at \(file.path, privacy: .public) is unreadable or malformed; ignoring it"
+            )
         }
         cache[file.path] = Entry(
             modificationDate: values?.contentModificationDate,
@@ -75,10 +79,16 @@ final class RepoConfigStore {
         return nil
     }
 
-    /// An unreadable path (missing, or a directory in the file's place) reads
-    /// as absent; present-but-undecodable data is what "malformed" means.
+    /// A path that does not exist reads as missing. Anything else that cannot
+    /// become a config — unreadable (permissions, or a directory in the file's
+    /// place), or readable but undecodable — is malformed, so "this repo has no
+    /// config" stays distinguishable from "this repo's config is broken".
     private static func classify(_ file: URL) -> RepoConfigLoadResult {
-        guard let data = try? Data(contentsOf: file) else { return .missing }
+        guard let data = try? Data(contentsOf: file) else {
+            // The happy path keeps its single stat: only a failed read pays for
+            // the extra existence check.
+            return FileManager.default.fileExists(atPath: file.path) ? .malformed : .missing
+        }
         guard let config = RepoConfig(jsonData: data) else { return .malformed }
         return .loaded(config)
     }
