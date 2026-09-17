@@ -44,7 +44,7 @@ respond when it needs you.
   scroll positions persist per worktree. Spaces organize repositories into
   focused sidebar groups.
 
-  ![Terminal pane with a live agent run and per-worktree changes](art/alas-terminal.png)
+  ![Persistent terminal pane alongside the worktree sidebar](art/alas-terminal.png)
 
 - **Remote machines, same workspace.** Add a project on an SSH host. A
   connection assistant reads `~/.ssh/config` and bootstraps a helper on the
@@ -73,6 +73,10 @@ respond when it needs you.
   running desktop turn — send a prompt, stop a run, or answer a permission request
   from the couch. Browse worktree files and changes, create worktrees, and manage
   queued prompts in the web client. Push notifications fire when an agent needs you.
+
+  <p align="center">
+    <img src="art/alas-remote.png" width="360" alt="Phone client connected to a live agent session">
+  </p>
 
 - **Harness-aware.** Detects Claude Code, Codex, Cursor, Gemini, and friends
   running in your worktrees and shows live sidebar badges for busy agents,
