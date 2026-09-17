@@ -44,6 +44,7 @@ final class HarnessService {
     private var cursorIdleDebouncers: [String: DebounceTimer] = [:]
     private var pendingCursorIdleEvents: [String: AgentHookEvent] = [:]
     private var backgroundActivityIdsBySession: [String: Set<String>] = [:]
+    private var completedBackgroundActivityIdsBySession: [String: Set<String>] = [:]
     private var deferredForegroundIdleEventsBySession: [String: AgentHookEvent] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
@@ -150,15 +151,32 @@ final class HarnessService {
 
         case .backgroundStarted:
             guard let activityId = event.activityId else { return }
+            if completedBackgroundActivityIdsBySession[event.sessionId]?.remove(activityId) != nil {
+                if completedBackgroundActivityIdsBySession[event.sessionId]?.isEmpty == true {
+                    completedBackgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+                }
+                if backgroundActivityIdsBySession[event.sessionId]?.isEmpty != false,
+                   let idleEvent = deferredForegroundIdleEventsBySession.removeValue(forKey: event.sessionId) {
+                    transitionHandledSeparately = true
+                    commitIdle(event: idleEvent, stateLookup: stateLookup, ownerLookup: ownerLookup)
+                }
+                return
+            }
             backgroundActivityIdsBySession[event.sessionId, default: []].insert(activityId)
-            activityBySession[event.sessionId] = HarnessActivityState(
-                agent: event.agent, state: .busy, pid: event.pid,
-                lastBody: nil, updatedAt: Date()
-            )
+            let foregroundState = activityBySession[event.sessionId]?.state
+            if foregroundState != .awaitingInput, foregroundState != .permissionRequest {
+                activityBySession[event.sessionId] = HarnessActivityState(
+                    agent: event.agent, state: .busy, pid: event.pid,
+                    lastBody: nil, updatedAt: Date()
+                )
+            }
 
         case .backgroundEnded:
             guard let activityId = event.activityId else { return }
-            backgroundActivityIdsBySession[event.sessionId]?.remove(activityId)
+            guard backgroundActivityIdsBySession[event.sessionId]?.remove(activityId) != nil else {
+                completedBackgroundActivityIdsBySession[event.sessionId, default: []].insert(activityId)
+                return
+            }
             if backgroundActivityIdsBySession[event.sessionId]?.isEmpty == true {
                 backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
                 if let idleEvent = deferredForegroundIdleEventsBySession.removeValue(forKey: event.sessionId) {
@@ -249,6 +267,7 @@ final class HarnessService {
             cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
             pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
             backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+            completedBackgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
             deferredForegroundIdleEventsBySession.removeValue(forKey: event.sessionId)
             activityBySession.removeValue(forKey: event.sessionId)
         }
@@ -319,6 +338,7 @@ final class HarnessService {
         cursorIdleDebouncers.removeAll()
         pendingCursorIdleEvents.removeAll()
         backgroundActivityIdsBySession.removeAll()
+        completedBackgroundActivityIdsBySession.removeAll()
         deferredForegroundIdleEventsBySession.removeAll()
     }
 
@@ -330,6 +350,7 @@ final class HarnessService {
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
         pendingCursorIdleEvents.removeValue(forKey: sessionId)
         backgroundActivityIdsBySession.removeValue(forKey: sessionId)
+        completedBackgroundActivityIdsBySession.removeValue(forKey: sessionId)
         deferredForegroundIdleEventsBySession.removeValue(forKey: sessionId)
         emitActivityTransition(sessionID: sessionId, previous: previous, owner: nil)
     }
@@ -354,7 +375,11 @@ final class HarnessService {
         if recordIdleTransition {
             setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .idle)
         }
+        let completedBackgroundActivityIds = completedBackgroundActivityIdsBySession[sessionId]
         forgetSession(sessionId)
+        if let completedBackgroundActivityIds {
+            completedBackgroundActivityIdsBySession[sessionId] = completedBackgroundActivityIds
+        }
         deferredForegroundIdleEventsBySession[sessionId] = idleEvent
     }
 

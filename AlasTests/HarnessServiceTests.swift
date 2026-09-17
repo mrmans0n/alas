@@ -540,6 +540,45 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
     }
 
+    @Test func earlyBackgroundEndReconcilesWithLaterStart() {
+        let (service, _) = makeService()
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func lateBackgroundStartPreservesForegroundAttention() {
+        let (service, _) = makeService()
+        service.setExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            state: .permissionRequest
+        )
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .permissionRequest)
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .awaiting)
+    }
+
     @Test func finalBackgroundCompletionSendsDeferredFinishedNotification() {
         let (service, collector) = makeService()
         let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
