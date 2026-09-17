@@ -3466,13 +3466,19 @@ mod tests {
             .arg("trap '' TERM; sleep 30")
             .process_group(0);
         let mut child = child.spawn().expect("child");
-        write_proc_pid(&root, child.id()).expect("pid metadata");
+        let pid = child.id();
+        write_proc_pid(&root, pid).expect("pid metadata");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reaper = thread::spawn(move || {
+            let status = child.wait().expect("wait");
+            tx.send(status.success()).expect("status");
+        });
 
-        terminate_process_group_and_wait(&root, child.id()).expect("terminated");
+        terminate_process_group_and_wait(&root, pid).expect("terminated");
         remove_proc_directory(&root).expect("cleanup");
 
-        let status = child.wait().expect("wait");
-        assert!(!status.success());
+        assert!(!rx.recv_timeout(Duration::from_secs(1)).expect("status"));
+        reaper.join().expect("reaper");
         assert!(!root.exists());
     }
 
