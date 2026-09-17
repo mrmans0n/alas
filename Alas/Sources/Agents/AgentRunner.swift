@@ -5,6 +5,17 @@ struct GeneratedMessage: Equatable {
     let body: String
 }
 
+/// Complete process configuration for one direct agent invocation.
+/// SSH commands run locally through `/usr/bin/ssh`, but their command and
+/// working directory are represented in the final remote-shell script.
+struct AgentRunnerProcessInvocation {
+    let executable: String
+    let arguments: [String]
+    let currentDirectory: String?
+    let environment: [String: String]
+    let stdin: String
+}
+
 /// First paragraph = subject (first line only); the rest = body.
 /// Tolerates missing blank lines, trailing whitespace, empty input.
 enum AgentMessageParser {
@@ -42,19 +53,23 @@ enum AgentRunner {
         agent: AgentDefinition,
         input: String,
         prompt: String,
+        target: AgentExecutionTarget = .local,
         workingDirectory: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         timeout: TimeInterval = 120,
-        bypassPermissions: Bool = false
+        bypassPermissions: Bool = false,
+        processExecutableOverride: String? = nil
     ) async throws -> GeneratedMessage {
         let stdout = try await runPromptRaw(
             agent: agent,
             input: input,
             prompt: prompt,
+            target: target,
             workingDirectory: workingDirectory,
             environment: environment,
             timeout: timeout,
-            bypassPermissions: bypassPermissions
+            bypassPermissions: bypassPermissions,
+            processExecutableOverride: processExecutableOverride
         )
         return AgentMessageParser.parse(stdout)
     }
@@ -67,17 +82,22 @@ enum AgentRunner {
         agent: AgentDefinition,
         input: String,
         prompt: String,
+        target: AgentExecutionTarget = .local,
         workingDirectory: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         timeout: TimeInterval = 120,
-        bypassPermissions: Bool = false
+        bypassPermissions: Bool = false,
+        processExecutableOverride: String? = nil
     ) async throws -> String {
-        let binary = agent.resolvedBinary
-        let invocation = AgentPromptInvocation.make(
+        let invocation = try processInvocation(
             agent: agent,
             input: input,
             prompt: prompt,
-            bypassPermissions: bypassPermissions
+            target: target,
+            workingDirectory: workingDirectory,
+            environment: environment,
+            bypassPermissions: bypassPermissions,
+            executableOverride: processExecutableOverride
         )
         let pipe = Pipe()
         // We can't use Process.run directly because it doesn't accept
@@ -85,18 +105,16 @@ enum AgentRunner {
         // semantics (parent env + GIT_OPTIONAL_LOCKS=0 doesn't matter
         // for these CLIs, but the parent-env passthrough does).
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [binary] + invocation.arguments
+        process.executableURL = URL(fileURLWithPath: invocation.executable)
+        process.arguments = invocation.arguments
         // Without an explicit cwd, the child inherits the app bundle's
         // launch directory (typically `/`), which breaks CLIs whose first
         // act is to inspect the surrounding git repo — codex refuses with
         // "Not inside a trusted directory" before reading stdin.
-        if let workingDirectory {
-            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+        if let currentDirectory = invocation.currentDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory)
         }
-        var env = environment
-        env["PATH"] = AgentPath.augmented(base: env["PATH"])
-        process.environment = env
+        process.environment = invocation.environment
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -226,11 +244,79 @@ enum AgentRunner {
             // that as .binaryNotFound so callers can show a targeted "install
             // the CLI" message rather than a generic non-zero-exit one.
             if process.terminationStatus == 127 {
-                throw AgentRunError.binaryNotFound(agentId: agent.id, displayName: agent.displayName)
+                let host: String?
+                if case let .ssh(value) = target {
+                    host = value
+                } else {
+                    host = nil
+                }
+                throw AgentRunError.binaryNotFound(
+                    agentId: agent.id,
+                    displayName: agent.displayName,
+                    host: host
+                )
+            }
+            if process.terminationStatus == 255, case let .ssh(host) = target {
+                let message = stderr
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .first
+                    .map(String.init) ?? "SSH exited with status 255"
+                throw AgentRunError.sshConnectionFailed(host: host, message: message)
             }
             throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
         return stdout
+    }
+
+    static func processInvocation(
+        agent: AgentDefinition,
+        input: String,
+        prompt: String,
+        target: AgentExecutionTarget,
+        workingDirectory: String?,
+        environment: [String: String],
+        bypassPermissions: Bool = false,
+        executableOverride: String? = nil
+    ) throws -> AgentRunnerProcessInvocation {
+        let promptInvocation = AgentPromptInvocation.make(
+            agent: agent,
+            input: input,
+            prompt: prompt,
+            bypassPermissions: bypassPermissions
+        )
+
+        switch target {
+        case .local:
+            var localEnvironment = environment
+            localEnvironment["PATH"] = AgentPath.augmented(base: localEnvironment["PATH"])
+            return AgentRunnerProcessInvocation(
+                executable: executableOverride ?? "/usr/bin/env",
+                arguments: [agent.resolvedBinary] + promptInvocation.arguments,
+                currentDirectory: workingDirectory,
+                environment: localEnvironment,
+                stdin: promptInvocation.stdin
+            )
+
+        case .ssh(let host):
+            guard let workingDirectory else {
+                throw AgentRunError.missingRemoteWorkingDirectory(host: host)
+            }
+            let remoteCommand = ([agent.configuredBinary] + promptInvocation.arguments)
+                .map(SSHCommand.shellQuote)
+                .joined(separator: " ")
+            let script = SSHCommand.remoteScript(
+                cwd: workingDirectory,
+                command: "exec \(remoteCommand)"
+            )
+            let ssh = SSHCommand(host: host, mode: .batch)
+            return AgentRunnerProcessInvocation(
+                executable: executableOverride ?? SSHCommand.executable,
+                arguments: ssh.argv(remoteScript: script),
+                currentDirectory: FileManager.default.temporaryDirectory.path,
+                environment: ProcessInfo.processInfo.environment,
+                stdin: promptInvocation.stdin
+            )
+        }
     }
 }
 

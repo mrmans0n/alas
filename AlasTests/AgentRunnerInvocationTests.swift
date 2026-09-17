@@ -40,6 +40,129 @@ struct AgentRunnerInvocationTests {
         )
     }
 
+    @Test func sshInvocationUsesRemoteWorktreeAndQuotedAgentArguments() throws {
+        let invocation = try AgentRunner.processInvocation(
+            agent: agent(id: "custom", binary: "agent tool", args: ["--mode", "review now"]),
+            input: "payload",
+            prompt: "Prompt's text",
+            target: .ssh(host: "dev@example"),
+            workingDirectory: "/srv/repo with space",
+            environment: ["PATH": "/local-only"]
+        )
+
+        #expect(invocation.executable == SSHCommand.executable)
+        #expect(invocation.arguments.contains("dev@example"))
+        #expect(invocation.arguments.last?.contains("cd '\\''/srv/repo with space'\\''") == true)
+        #expect(invocation.arguments.last?.contains("'review now'") == true)
+        #expect(invocation.currentDirectory == FileManager.default.temporaryDirectory.path)
+        #expect(invocation.environment["PATH"] != "/local-only")
+    }
+
+    @Test func localInvocationRemainsEnvBased() throws {
+        let invocation = try AgentRunner.processInvocation(
+            agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+            input: "diff",
+            prompt: "prompt",
+            target: .local,
+            workingDirectory: "/tmp/repo",
+            environment: ["PATH": "/test/bin"]
+        )
+
+        #expect(invocation.executable == "/usr/bin/env")
+        #expect(invocation.arguments.first == "claude")
+        #expect(invocation.currentDirectory == "/tmp/repo")
+        #expect(invocation.environment["PATH"]?.contains("/test/bin") == true)
+    }
+
+    @Test func sshExecutionFeedsStdinAndParsesGeneratedMessage() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let (record, path) = try shim(named: "ssh-shim", in: tmp)
+
+        let result = try await AgentRunner.runPrompt(
+            agent: agent(id: "custom", binary: "agent tool", args: ["--mode", "review now"]),
+            input: "payload",
+            prompt: "Prompt's text",
+            target: .ssh(host: "dev@example"),
+            workingDirectory: "/srv/repo with space",
+            environment: ["PATH": path],
+            processExecutableOverride: "\(tmp.path)/ssh-shim"
+        )
+
+        #expect(result == GeneratedMessage(
+            subject: "subject from ssh-shim",
+            body: "body from ssh-shim"
+        ))
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        #expect(recorded.contains("dev@example\n"))
+        #expect(recorded.contains("cd '\\''/srv/repo with space'\\''"))
+        #expect(recorded.contains("'\\''agent tool'\\'' '\\''--mode'\\'' '\\''review now'\\''"))
+        #expect(recorded.contains("stdin=\npayload"))
+    }
+
+    @Test func sshExit255ReportsConnectionFailure() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let bin = tmp.appendingPathComponent("ssh-failure")
+        try "#!/bin/sh\nprintf 'connection refused\\n' >&2\nexit 255\n".write(
+            to: bin,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+
+        await #expect(throws: AgentRunError.sshConnectionFailed(
+            host: "dev@example",
+            message: "connection refused"
+        )) {
+            _ = try await AgentRunner.runPromptRaw(
+                agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+                input: "",
+                prompt: "prompt",
+                target: .ssh(host: "dev@example"),
+                workingDirectory: "/srv/repo",
+                processExecutableOverride: bin.path
+            )
+        }
+    }
+
+    @Test func sshExit127ReportsHostAwareBinaryNotFound() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let bin = tmp.appendingPathComponent("ssh-not-found")
+        try "#!/bin/sh\nexit 127\n".write(to: bin, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+
+        do {
+            _ = try await AgentRunner.runPromptRaw(
+                agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+                input: "",
+                prompt: "prompt",
+                target: .ssh(host: "dev@example"),
+                workingDirectory: "/srv/repo",
+                processExecutableOverride: bin.path
+            )
+            Issue.record("expected throw")
+        } catch let AgentRunError.binaryNotFound(agentId, displayName, host) {
+            #expect(agentId == "claude")
+            #expect(displayName == "claude")
+            #expect(host == "dev@example")
+        }
+    }
+
+    @Test func sshInvocationRequiresRemoteWorkingDirectory() {
+        #expect(throws: AgentRunError.missingRemoteWorkingDirectory(host: "dev@example")) {
+            _ = try AgentRunner.processInvocation(
+                agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+                input: "",
+                prompt: "prompt",
+                target: .ssh(host: "dev@example"),
+                workingDirectory: nil,
+                environment: [:]
+            )
+        }
+    }
+
     @Test func claudeArgvIsBinaryThenArgsThenPrompt() async throws {
         let tmp = try makeTmp()
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -190,9 +313,10 @@ struct AgentRunnerInvocationTests {
                 environment: ["PATH": path]
             )
             Issue.record("expected throw")
-        } catch let AgentRunError.binaryNotFound(agentId, displayName) {
+        } catch let AgentRunError.binaryNotFound(agentId, displayName, host) {
             #expect(agentId == "ghost")
             #expect(displayName == "ghost")
+            #expect(host == nil)
         } catch {
             Issue.record("wrong error: \(error)")
         }
