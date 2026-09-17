@@ -42,7 +42,9 @@ struct PersistenceStore: PersistenceStoreProtocol {
     func write<T: Encodable>(_ value: T, to url: URL) throws {
         try Paths.ensureDirectoryExists(url.deletingLastPathComponent())
         let data = try encoder.encode(value)
-        let tmp = url.appendingPathExtension("tmp")
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: tmp) }
         try data.write(to: tmp, options: .atomic)
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)

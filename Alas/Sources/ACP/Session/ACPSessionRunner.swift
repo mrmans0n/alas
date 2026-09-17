@@ -2071,7 +2071,8 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {
                         self.activePromptID = nil
-                        if flushQueueOnCompletion && self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                        let outputBoundaryReady = self.deferCompletedOutputBoundaryUntilUpdatesDrain()
+                        if flushQueueOnCompletion && outputBoundaryReady {
                             self.flushQueueIfIdle()
                         }
                         self.onPromptWorkChanged?()

@@ -2427,10 +2427,27 @@ enum RunScriptStackDetector {
     }
 
     private static func currentPythonMarkerEnvironment() -> PythonMarkerEnvironment {
+        for executable in pythonExecutableCandidates() {
+            if let environment = pythonMarkerEnvironment(executable: executable) {
+                return environment
+            }
+        }
+        return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil)
+    }
+
+    private static func pythonExecutableCandidates() -> [(path: String, arguments: [String])] {
+        [
+            ("/usr/bin/env", ["python3"]),
+            ("/opt/homebrew/bin/python3", []),
+            ("/usr/local/bin/python3", []),
+            ("/usr/bin/python3", []),
+        ]
+    }
+
+    private static func pythonMarkerEnvironment(executable: (path: String, arguments: [String])) -> PythonMarkerEnvironment? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            "python3",
+        process.executableURL = URL(fileURLWithPath: executable.path)
+        process.arguments = executable.arguments + [
             "-c",
             "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'); print(platform.machine())",
         ]
@@ -2445,12 +2462,12 @@ enum RunScriptStackDetector {
             }
             if process.isRunning {
                 process.terminate()
-                return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil)
+                return nil
             }
         } catch {
-            return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil)
+            return nil
         }
-        guard process.terminationStatus == 0 else { return .init(pythonVersion: nil, pythonFullVersion: nil, platformMachine: nil) }
+        guard process.terminationStatus == 0 else { return nil }
         let lines = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

@@ -1,6 +1,17 @@
 import SwiftUI
 
 enum ChangesPreparationCardText {
+    static let openLandingTitle = "Open landing"
+
+    static func landingTitle(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
+        "Landing \(landing.completed) of \(landing.total)"
+    }
+
+    static func landingDetail(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
+        let review = landing.reviewNumber.map { "#\($0) · " } ?? ""
+        return review + landing.detail
+    }
+
     static func reviewStats(fileCount: Int, additions: Int?, deletions: Int?) -> String {
         let files = fileCount == 1 ? "1 file" : "\(fileCount) files"
         guard let additions, let deletions else { return files }
@@ -20,6 +31,24 @@ enum ChangesPreparationCardText {
         case .complete: "Complete"
         case .failed: "Failed"
         }
+    }
+}
+
+struct ChangesPreparationCardAccessibilityIdentifierPreferenceKey: PreferenceKey {
+    static let defaultValue: Set<String> = []
+
+    static func reduce(value: inout Set<String>, nextValue: () -> Set<String>) {
+        value.formUnion(nextValue())
+    }
+}
+
+private extension View {
+    func changesPreparationAccessibilityIdentifier(_ identifier: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .background(
+                Color.clear
+                    .preference(key: ChangesPreparationCardAccessibilityIdentifierPreferenceKey.self, value: [identifier])
+            )
     }
 }
 
@@ -113,10 +142,10 @@ struct ChangesPreparationCard: View {
                     .frame(width: 12, height: 12)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Landing \(landing.completed) of \(landing.total)")
+                    Text(ChangesPreparationCardText.landingTitle(landing))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
-                    Text(landingDetail(landing))
+                    Text(ChangesPreparationCardText.landingDetail(landing))
                         .font(.system(size: 10.5))
                         .foregroundStyle(theme.color("fg-faint"))
                         .lineLimit(1)
@@ -124,7 +153,7 @@ struct ChangesPreparationCard: View {
                 Spacer(minLength: 0)
             }
             Button(action: onOpenGGLanding) {
-                Text("Open landing")
+                Text(ChangesPreparationCardText.openLandingTitle)
                     .font(.system(size: 11.5, weight: .semibold))
                     .frame(maxWidth: .infinity, minHeight: 30)
                     .contentShape(RoundedRectangle(cornerRadius: 6))
@@ -138,15 +167,10 @@ struct ChangesPreparationCard: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
             )
-            .accessibilityIdentifier("changes-preparation-open-gg-landing")
+            .changesPreparationAccessibilityIdentifier("changes-preparation-open-gg-landing")
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("changes-preparation-gg-landing")
-    }
-
-    private func landingDetail(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
-        let review = landing.reviewNumber.map { "#\($0) · " } ?? ""
-        return review + landing.detail
+        .changesPreparationAccessibilityIdentifier("changes-preparation-gg-landing")
     }
 
     private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
-@Suite("Workspace ACP session ownership")
+@Suite("Workspace ACP session ownership", .serialized)
 struct WorkspaceACPSessionTests {
     @MainActor
     @Test func reviewFeedbackFindsAndActivatesCheckoutAgent() async throws {
@@ -228,7 +228,19 @@ struct WorkspaceACPSessionTests {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let dbURL = Paths.acpSessionsDB(for: owner)
         defer { try? FileManager.default.removeItem(at: dbURL) }
-        let state = AppState(store: MemoryStore())
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        #expect(workspacesManager.checkout(id: checkout.id)?.executionLocation == .local)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
             return
@@ -461,11 +473,28 @@ struct WorkspaceACPSessionTests {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let dbURL = Paths.acpSessionsDB(for: owner)
         defer { try? FileManager.default.removeItem(at: dbURL) }
-        let state = AppState(store: MemoryStore())
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let registeredCheckout = try #require(workspacesManager.checkout(id: checkout.id))
+        #expect(registeredCheckout.executionLocation == .local)
+        #expect(registeredCheckout.members.isEmpty)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
             return
         }
+        #expect(state.acpManager(for: owner) === manager)
+        let admissionDisabled = await state.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil)
+        #expect(!admissionDisabled)
         let session = manager.createSession(id: "checkout-existing", agentId: "test")
         manager.persistComposerDraft(.init(segments: [.text("draft")]), for: session)
         await manager.flushPersistence()
@@ -653,10 +682,11 @@ struct WorkspaceACPSessionTests {
         )
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
 
-        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: owner).map(\.name) == [
+        let expectedFrozenServerNames = [
             "filesystem (\(memberID.uuidString):frozen-server)",
             "filesystem (\(secondMemberID.uuidString):frozen-server)",
-        ])
+        ].sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: owner).map(\.name) == expectedFrozenServerNames)
         #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: nil).map(\.name) == ["live-filesystem"])
     }
 

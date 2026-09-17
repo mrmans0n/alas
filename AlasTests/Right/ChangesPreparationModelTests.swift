@@ -127,8 +127,25 @@ struct ChangesPreparationModelTests {
         #expect(model.syncProgress == nil)
     }
 
+    @Test func landingCardCopyIncludesProgressReviewAndOpenAction() {
+        let status = ChangesPreparationModel.GGLandingStatus(
+            completed: 1,
+            total: 3,
+            reviewNumber: 42,
+            detail: "CI running"
+        )
+
+        #expect(ChangesPreparationCardText.landingTitle(status) == "Landing 1 of 3")
+        #expect(ChangesPreparationCardText.landingDetail(status) == "#42 · CI running")
+        #expect(ChangesPreparationCardText.openLandingTitle == "Open landing")
+    }
+
     @MainActor
-    @Test func landingCardRendersOpenLandingControl() {
+    @Test func landingCardRendersOpenLandingControl() async throws {
+        final class RenderedIdentifiers {
+            var values: Set<String> = []
+        }
+        let rendered = RenderedIdentifiers()
         let model = ChangesPreparationModel.makeGG(
             staged: .zero,
             hasDraft: false,
@@ -147,13 +164,27 @@ struct ChangesPreparationModelTests {
             onOpenGGLanding: {}
         )
         .environment(\.theme, try! ThemeStore().current)
+        .onPreferenceChange(ChangesPreparationCardAccessibilityIdentifierPreferenceKey.self) {
+            rendered.values = $0
+        }
 
         let controller = NSHostingController(rootView: card)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 260, height: 160)
-        controller.view.layoutSubtreeIfNeeded()
+        controller.view.frame = NSRect(x: 0, y: 0, width: 320, height: 220)
+        let window = NSWindow(contentRect: controller.view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = controller.view
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
 
-        #expect(subview(withAccessibilityIdentifier: "changes-preparation-gg-landing", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "changes-preparation-open-gg-landing", in: controller.view) != nil)
+        for _ in 0..<20 where !hasRenderedLandingControls(in: rendered.values) {
+            controller.view.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(rendered.values.contains("changes-preparation-gg-landing"))
+        #expect(rendered.values.contains("changes-preparation-open-gg-landing"))
     }
 
     @Test func ggRewriteDestinationsRequireStagedChanges() {
@@ -431,4 +462,10 @@ private func subview(withAccessibilityIdentifier identifier: String, in view: NS
         return view
     }
     return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+}
+
+@MainActor
+private func hasRenderedLandingControls(in identifiers: Set<String>) -> Bool {
+    identifiers.contains("changes-preparation-gg-landing")
+        && identifiers.contains("changes-preparation-open-gg-landing")
 }

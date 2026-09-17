@@ -240,7 +240,9 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let store = WorkspaceStore(url: url)
         let fixture = makeFixture(count: 1)
         let memberPlan = fixture.plan.members[0]
+        let checkoutID = UUID()
         let checkout = WorkspaceCheckout(
+            id: checkoutID,
             workspaceID: fixture.workspace.id,
             fallbackWorkspaceName: fixture.workspace.name,
             executionLocation: fixture.workspace.executionLocation,
@@ -255,6 +257,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                     fallbackProjectName: "Project 0",
                     fallbackRepositoryRoot: "/repos/0",
                     worktreePath: memberPlan.destinationPath,
+                    gitLineageID: "workspace-\(checkoutID.uuidString.lowercased())-\(memberPlan.checkoutMemberID.uuidString.lowercased())",
                     availability: .explicitlyDeleted,
                     checkpoint: .setupComplete,
                     cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .unknown),
@@ -268,7 +271,8 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             store: store,
             git: git,
             scripts: NoopWorkspaceScriptRunner(),
-            projectMutationGate: ProjectMutationGate()
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: BlockingCleanupLifecycle()
         )
 
         _ = try await coordinator.resumeCreation(checkoutID: checkout.id, memberID: memberPlan.checkoutMemberID)

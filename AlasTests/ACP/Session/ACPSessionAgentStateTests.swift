@@ -243,7 +243,7 @@ struct ACPSessionManagerAttachStateTests {
 }
 
 @MainActor
-@Suite("ACPSessionManager reattach")
+@Suite("ACPSessionManager reattach", .serialized)
 struct ACPSessionManagerReattachTests {
     /// `.ready` is the steady state — reattach must not poke `attach()` and
     /// must leave the runner registry untouched.
@@ -310,11 +310,13 @@ struct ACPSessionManagerReattachTests {
         try store.upsertQueue(sessionId: session.id, items: session.queue)
 
         mgr.scheduleAutoReconnect(sessionId: session.id)
-        for _ in 0 ..< 50 where session.agentState == .disconnected {
+        for _ in 0 ..< 50
+            where mgr.liveSession(for: session.id) != nil || !session.queue.isEmpty
+        {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-
-        #expect(session.agentState != .disconnected)
+        #expect(mgr.liveSession(for: session.id) == nil)
+        #expect(session.queue.isEmpty)
     }
 
     @Test("remote disconnect publishes the next automatic retry")

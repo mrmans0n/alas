@@ -21,6 +21,8 @@ enum WorkspaceStoreError: Error, Equatable, Sendable {
 }
 
 actor WorkspaceStore {
+    private static let inProcessLock = NSLock()
+
     private let store: PersistenceStore
     private let url: URL
 
@@ -168,6 +170,9 @@ actor WorkspaceStore {
     }
 
     private func withExclusiveLock<Value>(_ body: () throws -> Value) throws -> Value {
+        Self.inProcessLock.lock()
+        defer { Self.inProcessLock.unlock() }
+
         try Paths.ensureDirectoryExists(url.deletingLastPathComponent())
         let lockURL = url.appendingPathExtension("lock")
         if !FileManager.default.fileExists(atPath: lockURL.path) {

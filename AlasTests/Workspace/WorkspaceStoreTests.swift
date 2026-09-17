@@ -113,6 +113,7 @@ struct WorkspaceStoreTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("workspaces.json")
         try Data("not JSON".utf8).write(to: url)
+        _ = FileManager.default.createFile(atPath: url.appendingPathExtension("lock").path, contents: nil)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
 

@@ -1475,7 +1475,7 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("update-ref -d"))
         #expect(commands.contains("rev-parse --show-object-format"))
-        #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000000000000000000000000000"))
+        #expect(commands.contains(#"update-ref '\''refs/heads/feature'\'' '\''abc'\'' 0000000000000000000000000000000000000000000000000000000000000000"#))
     }
 
     @Test func remoteMergedBranchDeletionFailsWhenConcurrentCheckoutCannotBeRestored() async throws {
