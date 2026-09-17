@@ -23,6 +23,15 @@ struct AttachIssueDialogModelTests {
         #expect(model.reference == "https://acme.atlassian.net/browse/ALAS-42")
     }
 
+    @Test("a clipboard URL with a trailing newline prefills the issue reference")
+    func prefillsReferenceFromClipboardURLWithTrailingNewline() {
+        let model = AttachIssueDialogModel(
+            environment: Fixture(clipboardText: "https://github.com/mrmans0n/alas/issues/42\n").environment
+        )
+
+        #expect(model.reference == "https://github.com/mrmans0n/alas/issues/42")
+    }
+
     @Test("non-URL clipboard content does not prefill the issue reference")
     func ignoresInvalidClipboardText() {
         for clipboardText in ["42", "plain text", "https://example.com/one\nhttps://example.com/two", ""] {
