@@ -908,4 +908,40 @@ struct RemoteWebAssetTests {
         #expect(css.contains("--mod:"))
         #expect(css.contains("#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 6px 6px 6px 14px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 18px; }"))
     }
+
+    // Regression (Codex review, PR #1285): `session.updatedAt` is Unix
+    // seconds on the wire (matches RemoteSessionSummary /
+    // Date().timeIntervalSince1970 elsewhere in the app), but
+    // RemoteRepoFilter.relativeTimeShort and Date.now() are milliseconds —
+    // every session appeared ~53 years old until this converted units.
+    @Test func sessionRecencyConvertsWireSecondsToMilliseconds() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();"))
+    }
+
+    // Regression (Codex review, PR #1285): the primary-branch (home) icon
+    // was keyed off `worktree.worktreeName` (a display name that can differ
+    // from the actual checked-out branch) instead of `worktree.branch`.
+    @Test func sessionCardIconChecksTheActualBranchField() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch)"))
+        #expect(!js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.worktreeName)"))
+    }
+
+    // Regression (Codex review, PR #1285): the Changes tab badge was sourced
+    // only from the session-list snapshot's `worktree.changedFileCount`,
+    // which the gateway does not repush after an idle-turn edit — so the
+    // badge could stay stale (including stuck hidden at zero) while the
+    // Changes tab itself showed fresh files. It must prefer the loaded,
+    // live `changesState` (kept current by every listChanges response) and
+    // only fall back to the snapshot before that first load.
+    @Test func changesTabBadgePrefersLiveChangeStateOverStaleSnapshot() throws {
+        let js = try asset("app.js")
+        let changesView = try asset("changes-view.js")
+
+        #expect(js.contains("changesState.loaded && changesState.metricsAvailable"))
+        #expect(js.contains("RemoteChangesView.changedFileCount(changesState)"))
+        #expect(changesView.contains("function changedFileCount(state)"))
+        #expect(changesView.contains("changedFileCount,"))
+    }
 }

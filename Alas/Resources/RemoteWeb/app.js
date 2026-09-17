@@ -573,7 +573,10 @@ function renderWorktreeGroup(section, worktree) {
 
 function sessionRecencyMs(session) {
   const updatedAt = Number(session.updatedAt);
-  return Number.isFinite(updatedAt) ? updatedAt : Date.now();
+  // The wire's `updatedAt` is Unix seconds (matches RemoteSessionSummary /
+  // the app's general Date().timeIntervalSince1970 convention) — convert to
+  // milliseconds to match Date.now() and RemoteRepoFilter.relativeTimeShort.
+  return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();
 }
 
 function renderSessionRow(s) {
@@ -590,7 +593,7 @@ function renderSessionRow(s) {
 
   const head = el("div", "session-head");
   const worktree = s.worktree;
-  const branchIcon = el("span", "card-branch-icon", worktree && RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.worktreeName) ? "⌂" : "⑂");
+  const branchIcon = el("span", "card-branch-icon", worktree && RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch) ? "⌂" : "⑂");
   const title = el("span", "session-title card-branch", s.title);
   const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
   head.append(branchIcon, title, state);
@@ -809,8 +812,14 @@ function renderChanges() {
 
 function updateChangesTabBadge() {
   const badge = $("tab-changes-count");
-  const summary = currentSession ? listedSessions.get(currentSession) : null;
-  const count = summary?.worktree?.changedFileCount || 0;
+  // Prefer the loaded, live changesState (kept fresh by every listChanges
+  // response, including the idle-transition refresh while a session is
+  // open) — it reflects edits the session-list snapshot below doesn't get
+  // repushed for. Before that first load (e.g. right after opening a
+  // session), fall back to the worktree summary so the badge isn't blank.
+  const count = changesState.loaded && changesState.metricsAvailable
+    ? RemoteChangesView.changedFileCount(changesState)
+    : (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
   badge.textContent = String(count);
   badge.classList.toggle("hidden", count === 0);
 }
