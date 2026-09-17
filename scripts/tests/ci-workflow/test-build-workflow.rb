@@ -31,6 +31,7 @@ raise "rust-tests must run cargo test --locked" unless rust_command&.fetch("run"
 remote_steps = jobs.fetch("remote-web-tests").fetch("steps").map { |step| step["run"] }
 [
   "bash scripts/tests/remote-web-changes/run.sh",
+  "bash scripts/tests/remote-web-file-browser/run.sh",
   "bash scripts/tests/remote-web-session-ordering/run.sh",
   "bash scripts/tests/remote-web-worktree-creation/run.sh"
 ].each do |command|
@@ -43,7 +44,8 @@ shell_steps = jobs.fetch("shell-harness-tests").fetch("steps").map { |step| step
   "bash scripts/tests/build-fff/run.sh",
   "bash scripts/tests/build-treesitter-pack/run.sh",
   "bash scripts/tests/embed-ghostty-resources/run.sh",
-  "bash scripts/tests/xcode-state/run.sh"
+  "bash scripts/tests/xcode-state/run.sh",
+  "bash scripts/tests/alas-build/run.sh"
 ].each do |command|
   raise "shell-harness-tests must run #{command}" unless shell_steps.include?(command)
 end

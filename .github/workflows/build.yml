@@ -507,6 +507,10 @@ jobs:
       - name: Test remote web changes
         run: bash scripts/tests/remote-web-changes/run.sh
 
+      - name: Test remote web file browser
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-file-browser/run.sh
+
       - name: Test remote web session ordering
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-session-ordering/run.sh
@@ -544,3 +548,7 @@ jobs:
       - name: Test Xcode state harness
         if: ${{ !cancelled() }}
         run: bash scripts/tests/xcode-state/run.sh
+
+      - name: Test Alas build harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/alas-build/run.sh
