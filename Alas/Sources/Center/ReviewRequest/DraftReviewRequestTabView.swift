@@ -37,6 +37,14 @@ struct DraftReviewRequestTabView: View {
 
     private let git = GitService()
 
+    private var executionTarget: AgentExecutionTarget {
+        .resolve(worktreePath: worktreePath)
+    }
+
+    private var agentAvailability: AgentAvailabilityState {
+        appState.agentAvailability(worktreePath: worktreePath)
+    }
+
     private enum Field: Hashable { case title, body }
 
     private var snapshot: ReviewLoopSnapshot? {
@@ -113,6 +121,9 @@ struct DraftReviewRequestTabView: View {
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }
+        .task(id: executionTarget) {
+            await appState.loadAgentAvailability(worktreePath: worktreePath)
+        }
         .onDisappear {
             generation?.cancel()
         }
@@ -178,7 +189,11 @@ struct DraftReviewRequestTabView: View {
                 editorTitle: editorTitle,
                 busy: busy,
                 error: error,
-                availableAgents: appState.agentRegistry.enabled(),
+                agentAvailability: agentAvailability,
+                executionTarget: executionTarget,
+                onRetryAgentAvailability: {
+                    Task { await appState.loadAgentAvailability(worktreePath: worktreePath, force: true) }
+                },
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
                     label: "Create \(tabState.provider.reviewRequestLabel)",
@@ -552,8 +567,11 @@ struct DraftReviewRequestTabView: View {
             generation?.cancel()
             return
         }
-        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
-            error = "Select an AI tool to generate a \(tabState.provider.reviewRequestLabel) description."
+        guard let agent = RepositoryAgentSelectionPolicy.selection(
+            selectedID: appState.config.changes.aiToolId,
+            availability: agentAvailability
+        ).agent else {
+            error = "Select an AI tool available on this host."
             return
         }
         guard matchingSnapshot != nil else {
@@ -590,6 +608,7 @@ struct DraftReviewRequestTabView: View {
                     agent: agent,
                     input: payload,
                     prompt: prompt,
+                    target: executionTarget,
                     workingDirectory: worktreePath.path
                 )
                 guard !Task.isCancelled else { return }
@@ -598,6 +617,15 @@ struct DraftReviewRequestTabView: View {
                 bodyText = message.body
             } catch is CancellationError {
                 // user-cancelled
+            } catch let runError as AgentRunError {
+                if case .binaryNotFound = runError,
+                   case .ssh = executionTarget {
+                    appState.agentAvailabilityStore.invalidate(
+                        target: executionTarget,
+                        worktreePath: worktreePath.path
+                    )
+                }
+                self.error = runError.localizedDescription
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
@@ -780,7 +808,9 @@ struct ReviewRequestMessageEditor: View {
     let editorTitle: String
     let busy: Bool
     let error: String?
-    let availableAgents: [AgentDefinition]
+    let agentAvailability: AgentAvailabilityState
+    let executionTarget: AgentExecutionTarget
+    let onRetryAgentAvailability: () -> Void
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
     let editorDisabled: Bool
@@ -795,7 +825,9 @@ struct ReviewRequestMessageEditor: View {
             title: editorTitle,
             busy: busy,
             error: error,
-            availableAgents: availableAgents,
+            agentAvailability: agentAvailability,
+            executionTarget: executionTarget,
+            onRetryAgentAvailability: onRetryAgentAvailability,
             onGenerate: onGenerate,
             primaryAction: primaryAction,
             iconName: "branch",
