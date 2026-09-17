@@ -331,6 +331,20 @@ while IFS= read -r source; do
             scope_depth[scope_count] = depth
             scope_previous_suite[scope_count] = previous_suite
         }
+        function remember_scope(name, previous_suite) {
+            pending_scope_name = name
+            pending_scope_previous_suite = previous_suite
+        }
+        function maybe_push_pending_scope(line) {
+            if (pending_scope_name == "") {
+                return
+            }
+            if (line ~ /^[[:space:]]*[{]/) {
+                push_scope(pending_scope_name, brace_depth + 1, pending_scope_previous_suite)
+                pending_scope_name = ""
+                pending_scope_previous_suite = ""
+            }
+        }
         function update_scope(line) {
             brace_depth += scope_delta(line)
             while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
@@ -344,6 +358,7 @@ while IFS= read -r source; do
         {
             candidate = strip_attributes($0)
             sub(/^[[:space:]]*/, "", candidate)
+            maybe_push_pending_scope(candidate)
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
             name = candidate
@@ -353,6 +368,8 @@ while IFS= read -r source; do
             suite = qualified(name)
             if (candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, previous_suite)
+            } else {
+                remember_scope(name, previous_suite)
             }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
@@ -361,6 +378,8 @@ while IFS= read -r source; do
             sub(/[^A-Za-z0-9_].*/, "", name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, suite)
+            } else if (name !~ /Tests$/) {
+                remember_scope(name, suite)
             }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
@@ -371,6 +390,8 @@ while IFS= read -r source; do
             suite = qualified(name)
             if (candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, previous_suite)
+            } else {
+                remember_scope(name, previous_suite)
             }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
@@ -379,6 +400,8 @@ while IFS= read -r source; do
             sub(/[^A-Za-z0-9_.].*/, "", name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, suite)
+            } else if (name !~ /Tests$/) {
+                remember_scope(name, suite)
             }
         }
         pending_test && suite != "" {
