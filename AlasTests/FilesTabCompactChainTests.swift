@@ -104,6 +104,12 @@ struct FilesTabCompactChainTests {
         #expect(!FileTreeListView.isOpen(chainPaths: ["src", "src/main"], openPaths: openPaths))
     }
 
+    @Test func compactChainExpansionPathUsesRootForCreateActions() {
+        #expect(
+            FileTreeListView.expansionPath(chainPaths: ["src", "src/main"], fallback: "src/main") == "src"
+        )
+    }
+
     @Test func chainStopsAtNotLoadedChild() {
         let node = dir(name: "src", path: "src", children: [
             dir(name: "main", path: "src/main", childrenState: .notLoaded)

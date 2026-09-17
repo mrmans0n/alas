@@ -68,6 +68,7 @@ struct FileTreeListView: View {
                 ? (displayName: node.name, chainPaths: [node.path], terminal: node)
                 : Self.compactChain(from: node)
             let terminal = chain.terminal
+            let expansionPath = Self.expansionPath(chainPaths: chain.chainPaths, fallback: terminal.path)
             let open = Self.isOpen(chainPaths: chain.chainPaths, openPaths: openPaths)
             let canExpand = !terminal.isSubmodule
             let isBookmarkRoot = bookmarkRootPaths.contains(node.path)
@@ -145,7 +146,7 @@ struct FileTreeListView: View {
                             .padding(.trailing, 12)
                     }
                     }
-                    .contextMenu { contextMenu(for: terminal) }
+                    .contextMenu { contextMenu(for: terminal, expansionPath: expansionPath) }
                     .dragOut {
                         context.worktreeRoot.map {
                             DragOutPayload.workingTreeFile(
@@ -260,7 +261,8 @@ struct FileTreeListView: View {
 
     // MARK: - Context menu
 
-    @ViewBuilder private func contextMenu(for node: FileTreeNode) -> some View {
+    @ViewBuilder private func contextMenu(for node: FileTreeNode, expansionPath: String? = nil) -> some View {
+        let expansionPath = expansionPath ?? node.path
         let target = FileContextMenuTarget.resolve(
             kind: node.kind,
             worktreePath: context.worktreePath,
@@ -272,11 +274,11 @@ struct FileTreeListView: View {
                 isBookmarked: FileBookmarks.contains(node, in: context.bookmarks)
             ),
             onNewFile: node.kind == .dir ? {
-                openPaths.insert(node.path)
+                openPaths.insert(expansionPath)
                 context.onCreateFile(node.path)
             } : nil,
             onNewFolder: node.kind == .dir ? {
-                openPaths.insert(node.path)
+                openPaths.insert(expansionPath)
                 context.onCreateFolder(node.path)
             } : nil,
             onOpenInAlas: node.kind == .file ? { context.onSelectFile(node) } : nil,
@@ -380,7 +382,12 @@ struct FileTreeListView: View {
     /// arrive. Its expansion belongs to the displayed root so stale descendant
     /// state cannot reopen an explicitly collapsed ancestor.
     nonisolated static func isOpen(chainPaths: [String], openPaths: Set<String>) -> Bool {
-        chainPaths.first.map { openPaths.contains($0) } ?? false
+        guard let root = chainPaths.first else { return false }
+        return openPaths.contains(root)
+    }
+
+    nonisolated static func expansionPath(chainPaths: [String], fallback: String) -> String {
+        chainPaths.first ?? fallback
     }
 
     private func isOffGit(_ node: FileTreeNode) -> Bool {
