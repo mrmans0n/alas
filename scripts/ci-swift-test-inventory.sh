@@ -72,7 +72,22 @@ while IFS= read -r source; do
                     continue
                 }
                 if (attribute_in_string) {
-                    if (attribute_raw_hashes > 0) {
+                    if (attribute_multiline_string) {
+                        if (substr(line, i, 3) == "\"\"\"") {
+                            closing = 1
+                            for (j = 1; j <= attribute_raw_hashes; j++) {
+                                if (substr(line, i + 2 + j, 1) != "#") {
+                                    closing = 0
+                                }
+                            }
+                            if (closing) {
+                                attribute_in_string = 0
+                                attribute_multiline_string = 0
+                                i += 2 + attribute_raw_hashes
+                                attribute_raw_hashes = 0
+                            }
+                        }
+                    } else if (attribute_raw_hashes > 0) {
                         if (c == "\"") {
                             closing = 1
                             for (j = 1; j <= attribute_raw_hashes; j++) {
@@ -108,15 +123,31 @@ while IFS= read -r source; do
                     for (j = i; substr(line, j, 1) == "#"; j++) {
                         hashes++
                     }
+                    if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
+                        attribute_in_string = 1
+                        attribute_multiline_string = 1
+                        attribute_raw_hashes = hashes
+                        i += hashes + 2
+                        continue
+                    }
                     if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
                         attribute_in_string = 1
+                        attribute_multiline_string = 0
                         attribute_raw_hashes = hashes
                         i += hashes
                         continue
                     }
                 }
+                if (substr(line, i, 3) == "\"\"\"") {
+                    attribute_in_string = 1
+                    attribute_multiline_string = 1
+                    attribute_raw_hashes = 0
+                    i += 2
+                    continue
+                }
                 if (c == "\"") {
                     attribute_in_string = 1
+                    attribute_multiline_string = 0
                     attribute_raw_hashes = 0
                     continue
                 }
@@ -127,6 +158,7 @@ while IFS= read -r source; do
                     if (attribute_depth == 0) {
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_multiline_string = 0
                         attribute_raw_hashes = 0
                         attribute_block_comment_depth = 0
                         return substr(line, i + 1)
@@ -150,6 +182,7 @@ while IFS= read -r source; do
                     attribute_depth = 0
                     attribute_in_string = 0
                     attribute_escaped = 0
+                    attribute_multiline_string = 0
                     attribute_raw_hashes = 0
                     attribute_block_comment_depth = 0
                     line = consume_attribute_arguments(line)
@@ -234,7 +267,22 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         continue
                     }
                     if (attribute_in_string) {
-                        if (attribute_raw_hashes > 0) {
+                        if (attribute_multiline_string) {
+                            if (substr(line, i, 3) == "\"\"\"") {
+                                closing = 1
+                                for (j = 1; j <= attribute_raw_hashes; j++) {
+                                    if (substr(line, i + 2 + j, 1) != "#") {
+                                        closing = 0
+                                    }
+                                }
+                                if (closing) {
+                                    attribute_in_string = 0
+                                    attribute_multiline_string = 0
+                                    i += 2 + attribute_raw_hashes
+                                    attribute_raw_hashes = 0
+                                }
+                            }
+                        } else if (attribute_raw_hashes > 0) {
                             if (c == "\"") {
                                 closing = 1
                                 for (j = 1; j <= attribute_raw_hashes; j++) {
@@ -270,15 +318,31 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         for (j = i; substr(line, j, 1) == "#"; j++) {
                             hashes++
                         }
+                        if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
+                            attribute_in_string = 1
+                            attribute_multiline_string = 1
+                            attribute_raw_hashes = hashes
+                            i += hashes + 2
+                            continue
+                        }
                         if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
                             attribute_in_string = 1
+                            attribute_multiline_string = 0
                             attribute_raw_hashes = hashes
                             i += hashes
                             continue
                         }
                     }
+                    if (substr(line, i, 3) == "\"\"\"") {
+                        attribute_in_string = 1
+                        attribute_multiline_string = 1
+                        attribute_raw_hashes = 0
+                        i += 2
+                        continue
+                    }
                     if (c == "\"") {
                         attribute_in_string = 1
+                        attribute_multiline_string = 0
                         attribute_raw_hashes = 0
                         continue
                     }
@@ -289,6 +353,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         if (attribute_depth == 0) {
                             attribute_in_string = 0
                             attribute_escaped = 0
+                            attribute_multiline_string = 0
                             attribute_raw_hashes = 0
                             attribute_block_comment_depth = 0
                             return substr(line, i + 1)
@@ -312,6 +377,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         attribute_depth = 0
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_multiline_string = 0
                         attribute_raw_hashes = 0
                         attribute_block_comment_depth = 0
                         line = consume_attribute_arguments(line)
