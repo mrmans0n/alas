@@ -5,6 +5,49 @@ import Testing
 @MainActor
 @Suite("Attach Issue dialog model")
 struct AttachIssueDialogModelTests {
+    @Test("a valid URL from the clipboard prefills the issue reference")
+    func prefillsReferenceFromClipboardURL() {
+        let fixture = Fixture(clipboardText: " https://github.com/mrmans0n/alas/issues/42 ")
+
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+
+        #expect(model.reference == "https://github.com/mrmans0n/alas/issues/42")
+    }
+
+    @Test("an arbitrary HTTP(S) URL from the clipboard prefills the issue reference")
+    func prefillsReferenceFromArbitraryClipboardURL() {
+        let model = AttachIssueDialogModel(
+            environment: Fixture(clipboardText: "https://acme.atlassian.net/browse/ALAS-42").environment
+        )
+
+        #expect(model.reference == "https://acme.atlassian.net/browse/ALAS-42")
+    }
+
+    @Test("non-URL clipboard content does not prefill the issue reference")
+    func ignoresInvalidClipboardText() {
+        for clipboardText in ["42", "plain text", "https://example.com/one\nhttps://example.com/two", ""] {
+            let model = AttachIssueDialogModel(environment: Fixture(clipboardText: clipboardText).environment)
+
+            #expect(model.reference.isEmpty)
+        }
+    }
+
+    @Test("an existing draft takes precedence over the clipboard")
+    func doesNotOverrideInitialDraftWithClipboardURL() {
+        let draft = AttachedIssueDraft(
+            source: Fixture.resolvedIssue().source,
+            projectID: "alas",
+            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            prompt: "Implement the issue."
+        )
+        let model = AttachIssueDialogModel(
+            environment: Fixture(clipboardText: "https://example.com/issues/100").environment,
+            initialDraft: draft
+        )
+
+        #expect(model.reference == "https://github.com/mrmans0n/alas/issues/42")
+    }
+
     @Test("the selected project is exposed for issue autocomplete")
     func exposesSelectedProjectForIssueAutocomplete() {
         let fixture = Fixture(selectedProjectID: "alas")
@@ -262,6 +305,7 @@ private final class Fixture {
     let projects: [ProjectConfig]
     let suspendResolution: Bool
     let selectedProjectID: String
+    let clipboardText: String?
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(
@@ -269,7 +313,8 @@ private final class Fixture {
         resolutionFailure: IssueResolutionFailure? = nil,
         candidateProjectIDs: [String] = ["alas"],
         suspendResolution: Bool = false,
-        selectedProjectID: String = "alas"
+        selectedProjectID: String = "alas",
+        clipboardText: String? = nil
     ) {
         projects = [ProjectConfig(
             id: "alas",
@@ -282,6 +327,7 @@ private final class Fixture {
         self.resolutionFailure = resolutionFailure
         self.suspendResolution = suspendResolution
         self.selectedProjectID = selectedProjectID
+        self.clipboardText = clipboardText
     }
 
     var environment: AttachIssueDialogModel.Environment {
@@ -298,7 +344,8 @@ private final class Fixture {
             loadSuggestions: { _, _ in [] },
             selectedProjectID: selectedProjectID,
             projects: { [self] in projects },
-            configuredBranchPrefix: { _ in "feature/" }
+            configuredBranchPrefix: { _ in "feature/" },
+            clipboardText: { [self] in clipboardText }
         )
     }
 

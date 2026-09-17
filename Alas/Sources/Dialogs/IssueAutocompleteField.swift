@@ -83,7 +83,7 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
             nsView.focusOnAppear = false
             DispatchQueue.main.async {
                 guard let editor = window.fieldEditor(false, for: nsView) as? NSTextView else { return }
-                editor.setSelectedRange(NSRange(location: nsView.stringValue.count, length: 0))
+                editor.setSelectedRange(NSRange(location: 0, length: nsView.stringValue.count))
             }
         }
 

@@ -16,6 +16,23 @@ final class AttachIssueDialogModel {
         let selectedProjectID: String
         let projects: () -> [ProjectConfig]
         let configuredBranchPrefix: (String) -> String
+        let clipboardText: () -> String?
+
+        init(
+            resolve: @escaping (String) async throws -> ResolvedIssue,
+            loadSuggestions: @escaping @Sendable (String, Int) async throws -> [CodeHostIssueSuggestion],
+            selectedProjectID: String,
+            projects: @escaping () -> [ProjectConfig],
+            configuredBranchPrefix: @escaping (String) -> String,
+            clipboardText: @escaping () -> String? = Clipboard.read
+        ) {
+            self.resolve = resolve
+            self.loadSuggestions = loadSuggestions
+            self.selectedProjectID = selectedProjectID
+            self.projects = projects
+            self.configuredBranchPrefix = configuredBranchPrefix
+            self.clipboardText = clipboardText
+        }
     }
 
     var reference = "" {
@@ -72,6 +89,8 @@ final class AttachIssueDialogModel {
             prompt = initialDraft.prompt
             promptIsUserOwned = initialDraft.prompt != IssuePromptBuilder.build(source: initialDraft.source)
             phase = .confirmation
+        } else {
+            reference = IssueClipboardPrefill.candidate(from: environment.clipboardText()) ?? ""
         }
     }
 
