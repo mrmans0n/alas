@@ -61,6 +61,13 @@ while IFS= read -r source; do
         function consume_attribute_arguments(line,    i, c) {
             for (i = 1; i <= length(line); i++) {
                 c = substr(line, i, 1)
+                if (attribute_block_comment) {
+                    if (c == "*" && substr(line, i + 1, 1) == "/") {
+                        attribute_block_comment = 0
+                        i++
+                    }
+                    continue
+                }
                 if (attribute_in_string) {
                     if (attribute_escaped) {
                         attribute_escaped = 0
@@ -69,6 +76,14 @@ while IFS= read -r source; do
                     } else if (c == "\"") {
                         attribute_in_string = 0
                     }
+                    continue
+                }
+                if (c == "/" && substr(line, i + 1, 1) == "/") {
+                    return ""
+                }
+                if (c == "/" && substr(line, i + 1, 1) == "*") {
+                    attribute_block_comment = 1
+                    i++
                     continue
                 }
                 if (c == "\"") {
@@ -82,6 +97,7 @@ while IFS= read -r source; do
                     if (attribute_depth == 0) {
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_block_comment = 0
                         return substr(line, i + 1)
                     }
                 }
@@ -103,6 +119,7 @@ while IFS= read -r source; do
                     attribute_depth = 0
                     attribute_in_string = 0
                     attribute_escaped = 0
+                    attribute_block_comment = 0
                     line = consume_attribute_arguments(line)
                     if (attribute_depth > 0) {
                         return ""
@@ -168,6 +185,13 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             function consume_attribute_arguments(line,    i, c) {
                 for (i = 1; i <= length(line); i++) {
                     c = substr(line, i, 1)
+                    if (attribute_block_comment) {
+                        if (c == "*" && substr(line, i + 1, 1) == "/") {
+                            attribute_block_comment = 0
+                            i++
+                        }
+                        continue
+                    }
                     if (attribute_in_string) {
                         if (attribute_escaped) {
                             attribute_escaped = 0
@@ -176,6 +200,14 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         } else if (c == "\"") {
                             attribute_in_string = 0
                         }
+                        continue
+                    }
+                    if (c == "/" && substr(line, i + 1, 1) == "/") {
+                        return ""
+                    }
+                    if (c == "/" && substr(line, i + 1, 1) == "*") {
+                        attribute_block_comment = 1
+                        i++
                         continue
                     }
                     if (c == "\"") {
@@ -189,6 +221,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         if (attribute_depth == 0) {
                             attribute_in_string = 0
                             attribute_escaped = 0
+                            attribute_block_comment = 0
                             return substr(line, i + 1)
                         }
                     }
@@ -210,6 +243,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         attribute_depth = 0
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_block_comment = 0
                         line = consume_attribute_arguments(line)
                         if (attribute_depth > 0) {
                             return ""

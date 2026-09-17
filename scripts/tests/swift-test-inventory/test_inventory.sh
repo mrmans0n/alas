@@ -139,14 +139,25 @@ import Testing
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/CommentAttributeTests.swift" <<'SWIFT'
+import Testing
+
+@Suite( // rationale mentions ) here
+    /* block comment mentions ) too */
+    .serialized
+) struct CommentAttributeTests {
+    @Test func ordinary() {}
+}
+SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=16 scheduled=15 ordinary=6 subprocess=9 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=17 scheduled=16 ordinary=7 subprocess=9 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
+grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
@@ -177,6 +188,7 @@ selectors="$(
         --batch 0 --batch-count 1
 )"
 grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
@@ -236,14 +248,15 @@ ordinary_log="${sandbox}/ordinary-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
     bash "${batch_runner}" 0 2
 grep -qx -- '-only-testing' "${ordinary_log}"
-grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/MultilineAttributeTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/StringParenSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/CommentAttributeTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/UnitTests' "${ordinary_log}"
 if grep -q 'AlasTests/InlineNestedAttributeTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
-if grep -q 'AlasTests/InlineSuiteTests' "${ordinary_log}"; then
+if grep -q 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
