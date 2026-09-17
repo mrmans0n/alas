@@ -1004,12 +1004,20 @@ struct RemoteWebAssetTests {
     // over the server's changed-file cap) made the badge show the capped
     // array length as if it were the exact total. changedFileCount is the
     // server's untruncated unique-path count and must win once truncated.
-    @Test func changesTabBadgeFallsBackToTheUntruncatedSummaryCountWhenTruncated() throws {
+    // Regression (PR #1285 review): the worktree summary (working-tree
+    // status) and the change list (diff against the comparison ref) are
+    // different git computations, so swapping in the summary's count when
+    // changesState.truncated is set could show a number from an unrelated
+    // scope — including zero on an otherwise clean branch with hundreds of
+    // committed changes. A truncated live count must stay in its own scope,
+    // marked "N+" rather than presented as exact or replaced outright.
+    @Test func changesTabBadgeMarksATruncatedCountRatherThanSubstitutingAnUnrelatedTotal() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(900) })
-        #expect(body.contains("changesState.loaded && changesState.metricsAvailable && !changesState.truncated"))
-        #expect(body.contains("summaryCount"))
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1100) })
+        #expect(body.contains("count = RemoteChangesView.changedFileCount(changesState);"))
+        #expect(body.contains(#"suffix = changesState.truncated ? "+" : "";"#))
+        #expect(body.contains("badge.textContent = String(count) + suffix;"))
     }
 
     // Regression (PR #1285 review): reconnecting while Chat was the active
@@ -1022,5 +1030,18 @@ struct RemoteWebAssetTests {
         let body = try #require(
             js.range(of: "function replayActiveListRequest() {").map { js[$0.lowerBound...].prefix(500) })
         #expect(body.contains(#"activeTab === "changes" || activeTab === "chat""#))
+    }
+
+    // Regression (PR #1285 review): an acknowledged rename only updated
+    // sessionTitles and the live DOM, leaving the cached listedSessions
+    // entry (renderSessions()'s only source of truth) on the old title —
+    // any full rerender before the gateway's own sessionList refresh
+    // landed would visibly revert the rename.
+    @Test func sessionRenameUpdatesTheCachedListedSessionsEntry() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function applySessionRenamed(sessionId, title) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("const cached = listedSessions.get(sessionId);"))
+        #expect(body.contains("if (cached) cached.title = title;"))
     }
 }

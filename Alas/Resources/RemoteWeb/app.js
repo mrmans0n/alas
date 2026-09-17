@@ -837,14 +837,21 @@ function updateChangesTabBadge() {
   // Prefer the loaded, live changesState (kept fresh by every listChanges
   // response, including the idle-transition refresh while a session is
   // open) — it reflects edits the session-list snapshot below doesn't get
-  // repushed for. Fall back to the worktree summary (the server's untruncated
-  // unique-path count) before that first load, or once the list is truncated
-  // — a capped array's .length would otherwise understate the real total.
-  const summaryCount = (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
-  const count = changesState.loaded && changesState.metricsAvailable && !changesState.truncated
-    ? RemoteChangesView.changedFileCount(changesState)
-    : summaryCount;
-  badge.textContent = String(count);
+  // repushed for. Fall back to the worktree summary only before that first
+  // load: it's a different git computation (working-tree status) from the
+  // change list (diff against the comparison ref), so once truncated it's
+  // not a valid substitute for the capped count — show "N+" instead of
+  // pretending the capped array length is exact or swapping in an unrelated
+  // number.
+  let count, suffix;
+  if (changesState.loaded && changesState.metricsAvailable) {
+    count = RemoteChangesView.changedFileCount(changesState);
+    suffix = changesState.truncated ? "+" : "";
+  } else {
+    count = (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
+    suffix = "";
+  }
+  badge.textContent = String(count) + suffix;
   badge.classList.toggle("hidden", count === 0);
 }
 
@@ -1222,6 +1229,12 @@ function submitRename() {
 
 function applySessionRenamed(sessionId, title) {
   sessionTitles.set(sessionId, title);
+  // listedSessions is renderSessions()'s only source of truth — without this,
+  // the next full rerender (a search keystroke, a filter tap) rebuilds rows
+  // from the pre-rename snapshot and visibly reverts the acknowledged rename
+  // until the gateway's own sessionList refresh eventually lands.
+  const cached = listedSessions.get(sessionId);
+  if (cached) cached.title = title;
   const row = Array.from(document.querySelectorAll("[data-session-id]"))
     .find(candidate => candidate.dataset.sessionId === sessionId);
   const rowTitle = row && row.querySelector(".session-title");
