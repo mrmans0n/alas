@@ -311,16 +311,19 @@ while IFS= read -r source; do
             }
             return result == "" ? name : result "." name
         }
-        function push_scope(name, depth) {
+        function push_scope(name, depth, previous_suite) {
             scope_count++
             scope_name[scope_count] = name
             scope_depth[scope_count] = depth
+            scope_previous_suite[scope_count] = previous_suite
         }
         function update_scope(line) {
             brace_depth += scope_delta(line)
             while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
+                suite = scope_previous_suite[scope_count]
                 delete scope_name[scope_count]
                 delete scope_depth[scope_count]
+                delete scope_previous_suite[scope_count]
                 scope_count--
             }
         }
@@ -332,9 +335,10 @@ while IFS= read -r source; do
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
+            previous_suite = suite
             suite = qualified(name)
             if (candidate ~ /[{]/) {
-                push_scope(name, brace_depth + 1)
+                push_scope(name, brace_depth + 1, previous_suite)
             }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
@@ -342,21 +346,25 @@ while IFS= read -r source; do
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
-                push_scope(name, brace_depth + 1)
+                push_scope(name, brace_depth + 1, suite)
             }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_.].*/, "", name)
+            previous_suite = suite
             suite = qualified(name)
+            if (candidate ~ /[{]/) {
+                push_scope(name, brace_depth + 1, previous_suite)
+            }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_.].*/, "", name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
-                push_scope(name, brace_depth + 1)
+                push_scope(name, brace_depth + 1, suite)
             }
         }
         /@Test([[:space:](]|$)/ && suite != "" { print suite }

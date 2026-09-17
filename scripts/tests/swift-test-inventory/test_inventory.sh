@@ -285,6 +285,17 @@ extension ExtensionNamespace {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/NestedSuiteRestoreTests.swift" <<'SWIFT'
+import Testing
+
+struct OuterTests {
+    struct InnerTests {
+        @Test func inner() {}
+    }
+
+    @Test func outer() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/BraceScopeTests.swift" <<'SWIFT'
 import Testing
 
@@ -301,7 +312,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=33 scheduled=32 ordinary=16 subprocess=16 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=35 scheduled=34 ordinary=18 subprocess=16 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -318,6 +329,8 @@ grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'OuterTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'OuterTests.InnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ParserNamespace.ParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
@@ -364,6 +377,8 @@ grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/NestedCommentTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/OuterTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/OuterTests.InnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ParserNamespace.ParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/RawStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitDeclarationTests' <<<"${selectors}"
@@ -442,6 +457,7 @@ grep -qx -- 'AlasTests/EscapedDelimiterTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/FollowingTopLevelTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/MultilineStringTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/OuterTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/ParserNamespace.ParserTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/StringParenSuiteTests' "${ordinary_log}"
