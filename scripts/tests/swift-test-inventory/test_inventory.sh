@@ -302,6 +302,15 @@ import Testing
 
 struct `EscapedTests` { @Test func works() {} }
 SWIFT
+cat > "${sandbox}/AlasTests/EscapedExtensionSuite.swift" <<'SWIFT'
+import Testing
+
+struct `EscapedExtensionTests` {}
+
+extension `EscapedExtensionTests` {
+    @Test func works() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
 import Testing
 
@@ -395,7 +404,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=45 scheduled=44 ordinary=26 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=46 scheduled=45 ordinary=27 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -407,6 +416,7 @@ grep -qx 'AllmanProcessNamespace.AllmanWorkerTests' "${inventory_cache}/subproce
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'EscapedExtensionTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ExtensionNamespace.ExtensionParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'FollowingTopLevelTests' "${inventory_cache}/ordinary.txt"
@@ -463,6 +473,7 @@ grep -qx -- '-only-testing AlasTests/AllmanNamespace.AllmanParserTests' <<<"${se
 grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/EscapedExtensionTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ExtensionNamespace.ExtensionParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/FollowingTopLevelTests' <<<"${selectors}"

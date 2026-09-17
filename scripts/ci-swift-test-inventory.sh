@@ -432,19 +432,21 @@ while IFS= read -r source; do
                 remember_scope(name, suite)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             name = clean_qualified_identifier(name)
-            previous_suite = suite
-            suite = qualified(name)
-            if (candidate ~ /[{]/) {
-                push_scope(name, brace_depth + 1, previous_suite)
-            } else {
-                remember_scope(name, previous_suite)
+            if (name ~ /Tests$/) {
+                previous_suite = suite
+                suite = qualified(name)
+                if (candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1, previous_suite)
+                } else {
+                    remember_scope(name, previous_suite)
+                }
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             name = clean_qualified_identifier(name)
@@ -865,18 +867,20 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
                 name = clean_qualified_identifier(name)
-                print qualified(name)
-                if (candidate ~ /[{]/) {
-                    push_scope(name, brace_depth + 1)
-                } else {
-                    remember_scope(name)
+                if (name ~ /Tests$/) {
+                    print qualified(name)
+                    if (candidate ~ /[{]/) {
+                        push_scope(name, brace_depth + 1)
+                    } else {
+                        remember_scope(name)
+                    }
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
                 name = clean_qualified_identifier(name)
