@@ -215,6 +215,11 @@ while IFS= read -r source; do
             name = clean_identifier(name)
             return name
         }
+        function regex_can_start(line, pos,    prefix) {
+            prefix = substr(line, 1, pos - 1)
+            sub(/[[:space:]]*$/, "", prefix)
+            return prefix == "" || prefix ~ /[=(:,[{!&|?+*%<>~^-]$/
+        }
         function scope_delta(line,    i, c, hashes, j, closing, delta) {
             delta = 0
             for (i = 1; i <= length(line); i++) {
@@ -272,6 +277,26 @@ while IFS= read -r source; do
                     }
                     continue
                 }
+                if (scope_in_regex) {
+                    if (scope_regex_escaped) {
+                        scope_regex_escaped = 0
+                    } else if (c == "\\") {
+                        scope_regex_escaped = 1
+                    } else if (c == "/") {
+                        closing = 1
+                        for (j = 1; j <= scope_regex_hashes; j++) {
+                            if (substr(line, i + j, 1) != "#") {
+                                closing = 0
+                            }
+                        }
+                        if (closing) {
+                            scope_in_regex = 0
+                            i += scope_regex_hashes
+                            scope_regex_hashes = 0
+                        }
+                    }
+                    continue
+                }
                 if (c == "/" && substr(line, i + 1, 1) == "/") {
                     break
                 }
@@ -284,6 +309,12 @@ while IFS= read -r source; do
                     hashes = 0
                     for (j = i; substr(line, j, 1) == "#"; j++) {
                         hashes++
+                    }
+                    if (hashes > 0 && substr(line, i + hashes, 1) == "/") {
+                        scope_in_regex = 1
+                        scope_regex_hashes = hashes
+                        i += hashes
+                        continue
                     }
                     if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
                         scope_in_string = 1
@@ -311,6 +342,12 @@ while IFS= read -r source; do
                     scope_in_string = 1
                     scope_multiline_string = 0
                     scope_raw_hashes = 0
+                    continue
+                }
+                if (c == "/" && regex_can_start(line, i)) {
+                    scope_in_regex = 1
+                    scope_regex_hashes = 0
+                    scope_regex_escaped = 0
                     continue
                 }
                 if (c == "{") {
@@ -713,6 +750,11 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 name = clean_identifier(name)
                 return name
             }
+            function regex_can_start(line, pos,    prefix) {
+                prefix = substr(line, 1, pos - 1)
+                sub(/[[:space:]]*$/, "", prefix)
+                return prefix == "" || prefix ~ /[=(:,[{!&|?+*%<>~^-]$/
+            }
             function scope_delta(line,    i, c, hashes, j, closing, delta) {
                 delta = 0
                 for (i = 1; i <= length(line); i++) {
@@ -770,6 +812,26 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         }
                         continue
                     }
+                    if (scope_in_regex) {
+                        if (scope_regex_escaped) {
+                            scope_regex_escaped = 0
+                        } else if (c == "\\") {
+                            scope_regex_escaped = 1
+                        } else if (c == "/") {
+                            closing = 1
+                            for (j = 1; j <= scope_regex_hashes; j++) {
+                                if (substr(line, i + j, 1) != "#") {
+                                    closing = 0
+                                }
+                            }
+                            if (closing) {
+                                scope_in_regex = 0
+                                i += scope_regex_hashes
+                                scope_regex_hashes = 0
+                            }
+                        }
+                        continue
+                    }
                     if (c == "/" && substr(line, i + 1, 1) == "/") {
                         break
                     }
@@ -782,6 +844,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         hashes = 0
                         for (j = i; substr(line, j, 1) == "#"; j++) {
                             hashes++
+                        }
+                        if (hashes > 0 && substr(line, i + hashes, 1) == "/") {
+                            scope_in_regex = 1
+                            scope_regex_hashes = hashes
+                            i += hashes
+                            continue
                         }
                         if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
                             scope_in_string = 1
@@ -809,6 +877,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         scope_in_string = 1
                         scope_multiline_string = 0
                         scope_raw_hashes = 0
+                        continue
+                    }
+                    if (c == "/" && regex_can_start(line, i)) {
+                        scope_in_regex = 1
+                        scope_regex_hashes = 0
+                        scope_regex_escaped = 0
                         continue
                     }
                     if (c == "{") {
