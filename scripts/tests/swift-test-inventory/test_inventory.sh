@@ -288,6 +288,11 @@ import Testing
 
 @Suite struct SameLineTests { @Test func runs() {} }
 SWIFT
+cat > "${sandbox}/AlasTests/EscapedIdentifierSuite.swift" <<'SWIFT'
+import Testing
+
+struct `EscapedTests` { @Test func works() {} }
+SWIFT
 cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
 import Testing
 
@@ -381,7 +386,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=43 scheduled=42 ordinary=24 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=44 scheduled=43 ordinary=25 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -393,6 +398,7 @@ grep -qx 'AllmanProcessNamespace.AllmanWorkerTests' "${inventory_cache}/subproce
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'EscapedTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ExtensionNamespace.ExtensionParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'FollowingTopLevelTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'globalBehavior' "${inventory_cache}/ordinary.txt"
@@ -447,6 +453,7 @@ grep -qx -- '-only-testing AlasTests/AllmanNamespace.AllmanParserTests' <<<"${se
 grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/EscapedTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ExtensionNamespace.ExtensionParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/FollowingTopLevelTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/globalBehavior' <<<"${selectors}"
@@ -492,6 +499,10 @@ if grep -q 'globalProcessBehavior' <<<"${selectors}"; then
 fi
 if grep -q 'AlasTests/runs' <<<"${selectors}"; then
     echo 'modified suite test was scheduled as a free-standing test' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/works' <<<"${selectors}"; then
+    echo 'escaped identifier suite test was scheduled as a free-standing test' >&2
     exit 1
 fi
 if grep -q 'RuntimeBehaviorTests' <<<"${selectors}"; then

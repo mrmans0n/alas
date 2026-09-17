@@ -325,6 +325,20 @@ while IFS= read -r source; do
             }
             return result == "" ? name : result "." name
         }
+        function clean_identifier(name) {
+            if (name ~ /^`/) {
+                sub(/^`/, "", name)
+                sub(/`.*/, "", name)
+            } else {
+                sub(/[^A-Za-z0-9_].*/, "", name)
+            }
+            return name
+        }
+        function clean_qualified_identifier(name) {
+            gsub(/`/, "", name)
+            sub(/[^A-Za-z0-9_.].*/, "", name)
+            return name
+        }
         function push_scope(name, depth, previous_suite) {
             scope_count++
             scope_name[scope_count] = name
@@ -363,10 +377,10 @@ while IFS= read -r source; do
                 pending_test = 1
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_].*/, "", name)
+            name = clean_identifier(name)
             previous_suite = suite
             suite = qualified(name)
             if (candidate ~ /[{]/) {
@@ -375,10 +389,10 @@ while IFS= read -r source; do
                 remember_scope(name, previous_suite)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_].*/, "", name)
+            name = clean_identifier(name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, suite)
             } else if (name !~ /Tests$/) {
@@ -388,7 +402,7 @@ while IFS= read -r source; do
         candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_.].*/, "", name)
+            name = clean_qualified_identifier(name)
             previous_suite = suite
             suite = qualified(name)
             if (candidate ~ /[{]/) {
@@ -400,7 +414,7 @@ while IFS= read -r source; do
         candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_.].*/, "", name)
+            name = clean_qualified_identifier(name)
             if (name !~ /Tests$/ && candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, suite)
             } else if (name !~ /Tests$/) {
@@ -727,6 +741,20 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 }
                 return result == "" ? name : result "." name
             }
+            function clean_identifier(name) {
+                if (name ~ /^`/) {
+                    sub(/^`/, "", name)
+                    sub(/`.*/, "", name)
+                } else {
+                    sub(/[^A-Za-z0-9_].*/, "", name)
+                }
+                return name
+            }
+            function clean_qualified_identifier(name) {
+                gsub(/`/, "", name)
+                sub(/[^A-Za-z0-9_.].*/, "", name)
+                return name
+            }
             function push_scope(name, depth) {
                 scope_count++
                 scope_name[scope_count] = name
@@ -757,10 +785,10 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/^[[:space:]]*/, "", candidate)
                 maybe_push_pending_scope(candidate)
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_].*/, "", name)
+                name = clean_identifier(name)
                 print qualified(name)
                 if (candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
@@ -768,10 +796,10 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_].*/, "", name)
+                name = clean_identifier(name)
                 if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
                 } else if (name !~ /Tests$/) {
@@ -781,7 +809,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_.].*/, "", name)
+                name = clean_qualified_identifier(name)
                 print qualified(name)
                 if (candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
@@ -792,7 +820,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_.].*/, "", name)
+                name = clean_qualified_identifier(name)
                 if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
                 } else if (name !~ /Tests$/) {
