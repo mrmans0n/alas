@@ -6,10 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-09-17
+
+### ✨ Features
+
+- Redesign the mobile PWA with a searchable repository list, bottom tab bar, and restyled session UI (#1285).
+- Prefill attached issue links from the clipboard when creating a worktree (#1287).
+- Show live reconnect status and recovery actions in ACP transcripts after an agent disconnects (#1290).
+- Refine overflow badges for worktree agents in the sidebar (#1295).
+
+### 🚀 Performance
+
+- Improve worktree switching responsiveness (#1289).
+
 ### 🐛 Fixes
 
-- Show live reconnect status and actions in ACP transcripts after an agent disconnects.
-- Restore window dragging from empty regions in the workspace chrome.
+- Drain pending run-history writes before purging history (#1284).
+- Prevent commit header chips from being truncated (#1288).
+- Preserve compacted file-tree expansion state (#1291).
+- Restore window dragging from empty regions in the workspace chrome (#1299).
+
+### 🏗️ Internal
+
+- Run the missing Rust, shell, and remote-web test harnesses in CI (#1286).
+- Refresh the README screenshots and product artwork (#1294).
 
 ## [0.18.2] - 2026-09-16
 
