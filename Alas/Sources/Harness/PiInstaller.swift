@@ -4,8 +4,8 @@ struct PiInstaller: AgentInstaller, Sendable {
     let agent = AgentKind.pi
     let extensionURL: URL
 
-    private static let managedMarker = "alas-managed-pi-hook-v2"
-    private static let legacyManagedMarker = "// alas-managed-pi-hook\n"
+    private static let managedMarker = "alas-managed-pi-hook-v3"
+    private static let legacyManagedMarkers = ["alas-managed-pi-hook-v2", "// alas-managed-pi-hook\n"]
 
     init(
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -49,11 +49,11 @@ struct PiInstaller: AgentInstaller, Sendable {
     }
 
     private static func isManaged(_ contents: String) -> Bool {
-        contents.contains(managedMarker) || contents.contains(legacyManagedMarker)
+        contents.contains(managedMarker) || legacyManagedMarkers.contains { contents.contains($0) }
     }
 
     private static let extensionContent = #"""
-    // alas-managed-pi-hook-v2
+    // alas-managed-pi-hook-v3
     import * as childProcess from "node:child_process";
 
     declare const process: any;
@@ -92,6 +92,7 @@ struct PiInstaller: AgentInstaller, Sendable {
         event: eventName,
         session_id: sessionIdFrom(event, ctx),
         pid: parentPid(),
+        ts: new Date().toISOString(),
         ...(activityId ? { activity_id: activityId } : {})
       });
     }

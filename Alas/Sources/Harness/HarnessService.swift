@@ -52,6 +52,7 @@ final class HarnessService {
     private var completedBackgroundActivityIdsBySession: [String: Set<String>] = [:]
     private var deferredForegroundIdleBySession: [String: DeferredForegroundIdle] = [:]
     private var detachedSocketSessions: Set<String> = []
+    private var latestSocketAttachAtBySession: [String: Date] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
     init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
@@ -131,10 +132,32 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
-        if event.event == .attached {
+        switch event.event {
+        case .attached:
+            if let timestamp = event.timestamp,
+               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
+               timestamp < latestAttach {
+                return
+            }
+            if let timestamp = event.timestamp {
+                latestSocketAttachAtBySession[event.sessionId] = timestamp
+            }
             detachedSocketSessions.remove(event.sessionId)
-        } else if detachedSocketSessions.contains(event.sessionId) {
-            return
+        case .detached:
+            if let timestamp = event.timestamp,
+               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
+               timestamp < latestAttach {
+                return
+            }
+        default:
+            if detachedSocketSessions.contains(event.sessionId) {
+                return
+            }
+            if let timestamp = event.timestamp,
+               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
+               timestamp < latestAttach {
+                return
+            }
         }
         emitWorktreeActivityEventIfNeeded(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
         let previousState = activityBySession[event.sessionId]?.state
@@ -370,6 +393,7 @@ final class HarnessService {
         completedBackgroundActivityIdsBySession.removeAll()
         deferredForegroundIdleBySession.removeAll()
         detachedSocketSessions.removeAll()
+        latestSocketAttachAtBySession.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {
@@ -393,6 +417,7 @@ final class HarnessService {
         agent: AgentKind,
         recordIdleTransition: Bool
     ) {
+        let existingDeferredIdle = deferredForegroundIdleBySession[sessionId]
         let idleEvent = AgentHookEvent(
             version: 1, event: .idle, agent: agent, sessionId: sessionId,
             pid: nil, timestamp: nil, body: nil
@@ -401,7 +426,7 @@ final class HarnessService {
             setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .busy)
             deferredForegroundIdleBySession[sessionId] = DeferredForegroundIdle(
                 event: idleEvent,
-                shouldNotifyOnCommit: true
+                shouldNotifyOnCommit: existingDeferredIdle?.shouldNotifyOnCommit ?? true
             )
             return
         }
@@ -415,7 +440,7 @@ final class HarnessService {
         }
         deferredForegroundIdleBySession[sessionId] = DeferredForegroundIdle(
             event: idleEvent,
-            shouldNotifyOnCommit: true
+            shouldNotifyOnCommit: existingDeferredIdle?.shouldNotifyOnCommit ?? true
         )
     }
 

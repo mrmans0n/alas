@@ -61,10 +61,10 @@ struct HarnessServiceTests {
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
         sessionId: String = "session-1", body: String? = nil,
-        activityId: String? = nil
+        activityId: String? = nil, timestamp: Date? = nil
     ) -> AgentHookEvent {
         AgentHookEvent(version: 1, event: event, agent: agent,
-                       sessionId: sessionId, pid: nil, timestamp: nil, body: body,
+                       sessionId: sessionId, pid: nil, timestamp: timestamp, body: body,
                        activityId: activityId)
     }
 
@@ -385,6 +385,29 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"]?.agent == .pi)
     }
 
+    @Test func staleDetachDoesNotOverrideNewerAttach() {
+        let (service, _) = makeService()
+        let oldDetachTime = Date(timeIntervalSince1970: 100)
+        let newAttachTime = Date(timeIntervalSince1970: 200)
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .pi, timestamp: newAttachTime),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi, timestamp: oldDetachTime),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "run-1", timestamp: newAttachTime.addingTimeInterval(1)
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(
@@ -593,6 +616,34 @@ struct HarnessServiceTests {
         )
 
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+        #expect(collector.requests.count == 1)
+    }
+
+    @Test func externalIdlePreservesEarlierSocketNotificationSuppression() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
         #expect(collector.requests.count == 1)
     }
 
