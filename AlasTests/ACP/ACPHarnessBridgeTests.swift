@@ -167,6 +167,23 @@ struct ACPHarnessBridgeTests {
 
         #expect(harness.summary(forSessionIds: ["s1"])?.state == .running)
         #expect(harness.summary(forSessionIds: ["s1"])?.agent == .pi)
+
+        harness.handleSocketEvent(
+            AgentHookEvent(
+                version: 1,
+                event: .backgroundEnded,
+                agent: .pi,
+                sessionId: "s1",
+                pid: nil,
+                timestamp: nil,
+                body: nil,
+                activityId: "run-1"
+            ),
+            stateLookup: { _ in nil },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(harness.summary(forSessionIds: ["s1"]) == nil)
     }
 
     @Test("cursor-agent agentId maps to .cursor AgentKind")

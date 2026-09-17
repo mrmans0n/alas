@@ -513,10 +513,6 @@ struct HarnessServiceTests {
             makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-2"),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
-        service.handleSocketEvent(
-            makeEvent(event: .idle, agent: .pi),
-            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
-        )
 
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
     }
