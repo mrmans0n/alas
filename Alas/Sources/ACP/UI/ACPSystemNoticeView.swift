@@ -30,6 +30,7 @@ struct ACPSystemNoticeView: View {
     private var iconName: String {
         let lower = text.lowercased()
         if lower.hasPrefix("interrupted") { return "stop.circle" }
+        if lower.contains("reconnected") { return "checkmark.circle" }
         if lower.contains("disconnected") { return "bolt.slash" }
         return "info.circle"
     }

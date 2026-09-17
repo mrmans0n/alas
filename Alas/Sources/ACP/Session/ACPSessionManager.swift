@@ -188,6 +188,7 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
@@ -235,6 +236,11 @@ final class ACPSessionManager: ObservableObject {
 
     func retainedCleanupHasAutoReconnectWork(for id: ACPSession.ID) -> Bool {
         autoReconnectTasks[id] != nil
+    }
+
+    private func cancelAutoReconnect(sessionId: ACPSession.ID) {
+        autoReconnectTaskGenerations.removeValue(forKey: sessionId)
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
     }
 
     /// Permission policy for a session that currently has an attached runner.
@@ -1224,7 +1230,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func closeSession(id: ACPSession.ID) {
-        autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
@@ -1286,7 +1292,7 @@ final class ACPSessionManager: ObservableObject {
     private func forgetSession(id: ACPSession.ID) {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
-        autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
@@ -2881,10 +2887,11 @@ extension ACPSessionManager {
             await runner.flushPersistence()
             await runner.connection.detach()
         }
-        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        cancelAutoReconnect(sessionId: sessionId)
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         if let session = sessions[sessionId] {
             session.agentState = .idle
+            session.clearConnectionRecovery()
             session.transcript.streamingState = .idle
         }
         // Only begin mirroring when the session is still open. A takeover
@@ -3228,6 +3235,7 @@ extension ACPSessionManager {
         // live instance owns this session, stay a read-only mirror.
         guard await acquireWriterLease(sessionId: sessionId) else {
             session.agentState = .idle
+            session.clearConnectionRecovery()
             beginMirroring(sessionId: sessionId)
             return
         }
@@ -4203,6 +4211,7 @@ extension ACPSessionManager {
                     } else {
                         await runner.connection.detach()
                         session.agentState = .idle
+                        session.clearConnectionRecovery()
                         beginMirroring(sessionId: sessionId)
                     }
                     await releaseWriterLease(sessionId: sessionId)
@@ -4210,12 +4219,16 @@ extension ACPSessionManager {
                 return
             }
             session.agentState = .ready
+            let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if session.queue.contains(where: { $0.status == .sending }) {
                 session.restoreQueue(session.queue)
             }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
+            }
+            if completedRecovery {
+                runner.appendAndPersistSystemNotice("Agent reconnected.")
             }
             if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
                 if !sendPendingQueueForceSend(sessionId: sessionId) {
@@ -4283,16 +4296,37 @@ extension ACPSessionManager {
         }
     }
 
-    /// Idempotent recovery entry point. Called by the composer when the
-    /// user submits into a pane whose agent isn't `.ready`. A no-op for
+    /// Idempotent recovery entry point. Called by the composer and explicit
+    /// recovery actions when the pane's agent isn't `.ready`. A no-op for
     /// states that already represent in-flight or live agents.
     func reattach(to sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
         switch session.agentState {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed:
+            let isRecovering = session.connectionRecoveryState != nil
+            if isRecovering {
+                session.beginConnectionRecoveryAttempt()
+            }
             await attach(to: sessionId, freshlyCreated: false)
+            if isRecovering, session.agentState != .ready {
+                session.exhaustConnectionRecovery()
+            }
         }
+    }
+
+    /// Bypasses the automatic retry delay without racing its sleeping task.
+    /// Remote failures resume the bounded retry policy after the immediate
+    /// attempt; local adapter exits remain manual.
+    func reconnectNow(to sessionId: ACPSession.ID) async {
+        cancelAutoReconnect(sessionId: sessionId)
+        onQueueChanged?(sessionId, false)
+        await reattach(to: sessionId)
+        guard sessions[sessionId]?.agentState != .ready,
+              effectiveRemoteHost() != nil
+        else { return }
+        scheduleAutoReconnect(sessionId: sessionId)
+        onQueueChanged?(sessionId, retainedCleanupHasAutoReconnectWork(for: sessionId))
     }
 
     func bootstrapScheduledQueueSessions(
@@ -4335,41 +4369,50 @@ extension ACPSessionManager {
     /// reattach path so restoration and queued-prompt handling stay identical.
     func scheduleAutoReconnect(sessionId: ACPSession.ID) {
         scheduleScheduledQueueReconnect(sessionId: sessionId)
-        guard sessions[sessionId] != nil,
+        guard let session = sessions[sessionId],
               effectiveRemoteHost() != nil
         else { return }
 
-        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
-        autoReconnectTasks[sessionId] = Task { @MainActor [weak self] in
+        cancelAutoReconnect(sessionId: sessionId)
+        let generation = UUID()
+        autoReconnectTaskGenerations[sessionId] = generation
+        autoReconnectTasks[sessionId] = Task { @MainActor [weak self, weak session] in
             defer {
-                self?.autoReconnectTasks.removeValue(forKey: sessionId)
-                self?.sessions[sessionId]?.autoReconnecting = false
-                self?.scheduleScheduledQueueReconnect(sessionId: sessionId)
-                self?.onQueueChanged?(sessionId, false)
+                if let self, self.autoReconnectTaskGenerations[sessionId] == generation {
+                    self.autoReconnectTaskGenerations.removeValue(forKey: sessionId)
+                    self.autoReconnectTasks.removeValue(forKey: sessionId)
+                    self.scheduleScheduledQueueReconnect(sessionId: sessionId)
+                    self.onQueueChanged?(sessionId, false)
+                }
             }
-            self?.sessions[sessionId]?.autoReconnecting = true
-            var attempt = 0
-            while let delay = ACPReconnectPolicy.delay(forAttempt: attempt), !Task.isCancelled {
-                attempt += 1
+
+            let maxAttempts = ACPReconnectPolicy.delays.count
+            var attemptIndex = 0
+            while let delay = ACPReconnectPolicy.delay(forAttempt: attemptIndex),
+                  !Task.isCancelled {
+                attemptIndex += 1
+                session?.scheduleConnectionRecoveryAttempt(
+                    attemptIndex,
+                    maxAttempts: maxAttempts,
+                    retryAt: Date().addingTimeInterval(delay)
+                )
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard let self, !Task.isCancelled,
                       let session = self.sessions[sessionId]
                 else { return }
-                switch session.agentState {
-                case .ready:
-                    return
-                case .disconnected, .failed:
-                    break
-                case .idle, .spawning:
-                    continue
-                }
                 if let host = self.effectiveRemoteHost(),
                    RemoteHostStatusStore.shared.isOffline(host) {
                     continue
                 }
                 await self.reattach(to: sessionId)
-                if self.sessions[sessionId]?.agentState == .ready { return }
+                if session.agentState == .ready { return }
             }
+
+            guard !Task.isCancelled,
+                  let session = self?.sessions[sessionId],
+                  session.agentState != .ready
+            else { return }
+            session.exhaustConnectionRecovery(attempts: maxAttempts)
         }
     }
 
@@ -4957,7 +5000,7 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
-        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        cancelAutoReconnect(sessionId: sessionId)
         let session = sessions[sessionId]
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
@@ -4976,6 +5019,7 @@ extension ACPSessionManager {
             // .idle (user-initiated teardown), not .disconnected — the latter
             // is reserved for the runner's unexpected stream-end branch.
             session.agentState = .idle
+            session.clearConnectionRecovery()
             session.transcript.streamingState = .idle
             // Normalize any in-flight queue head: the sendNow task that
             // owned it is gone with the runner, so the next attach must

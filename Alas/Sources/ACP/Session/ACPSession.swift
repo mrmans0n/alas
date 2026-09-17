@@ -33,6 +33,13 @@ struct ACPRetryStatus: Equatable {
     let detail: String?
 }
 
+enum ACPConnectionRecoveryState: Equatable {
+    case disconnected
+    case waiting(attempt: Int, maxAttempts: Int, retryAt: Date)
+    case reconnecting(attempt: Int?, maxAttempts: Int?)
+    case exhausted(attempts: Int?)
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -84,8 +91,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
     @Published var agentState: AgentState = .idle
-    /// Runtime-only state for bounded remote SSH reconnection attempts.
-    @Published var autoReconnecting: Bool = false
+    /// Runtime-only state for the current unexpected connection loss.
+    /// Nil outside a recovery incident.
+    @Published private(set) var connectionRecoveryState: ACPConnectionRecoveryState?
     /// Prompt content capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
@@ -2097,6 +2105,60 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func clearRetryStatus() {
         retryStatus = nil
+    }
+
+    /// Starts one recovery incident. Returns false when the same disconnect
+    /// was already recorded, so callers can avoid duplicate transcript events.
+    @discardableResult
+    func beginConnectionRecovery() -> Bool {
+        guard connectionRecoveryState == nil else { return false }
+        connectionRecoveryState = .disconnected
+        return true
+    }
+
+    func scheduleConnectionRecoveryAttempt(
+        _ attempt: Int,
+        maxAttempts: Int,
+        retryAt: Date
+    ) {
+        guard connectionRecoveryState != nil else { return }
+        connectionRecoveryState = .waiting(
+            attempt: attempt,
+            maxAttempts: maxAttempts,
+            retryAt: retryAt
+        )
+    }
+
+    func beginConnectionRecoveryAttempt() {
+        switch connectionRecoveryState {
+        case .waiting(let attempt, let maxAttempts, _):
+            connectionRecoveryState = .reconnecting(
+                attempt: attempt,
+                maxAttempts: maxAttempts
+            )
+        case .disconnected, .exhausted:
+            connectionRecoveryState = .reconnecting(attempt: nil, maxAttempts: nil)
+        case .reconnecting, nil:
+            break
+        }
+    }
+
+    func exhaustConnectionRecovery(attempts: Int? = nil) {
+        guard connectionRecoveryState != nil else { return }
+        connectionRecoveryState = .exhausted(attempts: attempts)
+    }
+
+    /// Consumes the active incident exactly once. A true result tells the
+    /// successful attach path to append the compact "reconnected" event.
+    @discardableResult
+    func completeConnectionRecovery() -> Bool {
+        guard connectionRecoveryState != nil else { return false }
+        connectionRecoveryState = nil
+        return true
+    }
+
+    func clearConnectionRecovery() {
+        connectionRecoveryState = nil
     }
 
     private func applyRetryMetadata(_ metadata: AnyCodable?) {

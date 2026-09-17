@@ -224,7 +224,20 @@ struct ACPTranscriptScrollerRowSpecsTests {
             #expect(byId[id]?.keepsMountedOffscreen == false, "\(id) unexpectedly opted into keepsMountedOffscreen")
         }
     }
+
+    @Test("active connection recovery is rendered at the transcript tail")
+    func connectionRecoveryRowAppearsAtTail() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        #expect(session.beginConnectionRecovery())
+        let host = makeHost(session: session)
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+
+        #expect(ids == ["__connection_recovery__", "__composer_spacer__"])
+    }
+
 }
+
 
 /// Regression coverage for the review's fix-round-2 finding: the queued-
 /// bubble spec's `build` closure captures `host.contentMaxWidth`,
