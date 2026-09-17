@@ -596,10 +596,13 @@ function renderSessionRow(s) {
 
   const head = el("div", "session-head");
   const worktree = s.worktree;
-  const branchIcon = el("span", "card-branch-icon", worktree && RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch) ? "⌂" : "⑂");
   const title = el("span", "session-title card-branch", s.title);
   const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
-  head.append(branchIcon, title, state);
+  if (worktree) {
+    const branchIcon = el("span", "card-branch-icon", RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch) ? "⌂" : "⑂");
+    head.append(branchIcon);
+  }
+  head.append(title, state);
   open.append(head);
 
   const meta = el("div", "session-row-meta");

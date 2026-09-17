@@ -1056,4 +1056,17 @@ struct RemoteWebAssetTests {
             js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
     }
+
+    // Regression (PR #1285 review): worktree-less sessions (the "Other"
+    // section) always fell through to the non-primary-branch glyph, falsely
+    // presenting them as belonging to a branch when they have no worktree
+    // at all. The icon must only render when worktree metadata exists.
+    @Test func sessionCardOmitsTheBranchIconWhenThereIsNoWorktree() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function renderSessionRow(s) {").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(body.contains("if (worktree) {"))
+        #expect(body.contains("head.append(branchIcon);"))
+        #expect(body.contains("head.append(title, state);"))
+    }
 }
