@@ -235,9 +235,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
 
         #expect(ids == ["__connection_recovery__", "__composer_spacer__"])
     }
-
 }
-
 
 /// Regression coverage for the review's fix-round-2 finding: the queued-
 /// bubble spec's `build` closure captures `host.contentMaxWidth`,
