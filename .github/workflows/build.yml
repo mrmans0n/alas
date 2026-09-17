@@ -35,7 +35,6 @@ jobs:
       # forever waiting for stdin. Observed hanging WorktreeServiceTests'
       # `git branch --list` after `git branch -d`.
       GIT_PAGER: "cat"
-      SWIFT_TEST_INVENTORY_DIR: ".build/ci-swift-test-inventory"
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
@@ -279,65 +278,79 @@ jobs:
             -showBuildTimingSummary \
             build-for-testing
 
-      # The inventory discovers suites from source, validates every one is
-      # scheduled or explicitly quarantined, and assigns ordinary suites to
-      # bounded batches. New ordinary suites therefore join PR CI without a
-      # workflow edit; quarantines live beside their current rationale.
-      - name: Validate Swift test inventory
-        run: bash scripts/ci-swift-test-inventory.sh --validate --write-dir "$SWIFT_TEST_INVENTORY_DIR"
+      # Xcode enumerates the compiled tests. Unlisted tests run automatically;
+      # explicit execution requirements and exclusions are validated against it.
+      - name: Discover and assign Swift tests
+        id: swift-inventory
+        timeout-minutes: 3
+        run: python3 scripts/ci_swift_tests.py plan
 
       - name: Test — ordinary Swift batch 1/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 0 6
+        run: python3 scripts/ci_swift_tests.py run --batch 0 --lane ordinary
 
       - name: Test — ordinary Swift batch 2/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 1 6
+        run: python3 scripts/ci_swift_tests.py run --batch 1 --lane ordinary
 
       - name: Test — ordinary Swift batch 3/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 2 6
+        run: python3 scripts/ci_swift_tests.py run --batch 2 --lane ordinary
 
       - name: Test — ordinary Swift batch 4/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 3 6
+        run: python3 scripts/ci_swift_tests.py run --batch 3 --lane ordinary
 
       - name: Test — ordinary Swift batch 5/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 4 6
+        run: python3 scripts/ci_swift_tests.py run --batch 4 --lane ordinary
 
       - name: Test — ordinary Swift batch 6/6
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
         timeout-minutes: 8
-        run: bash scripts/ci-run-swift-test-batch.sh 5 6
+        run: python3 scripts/ci_swift_tests.py run --batch 5 --lane ordinary
 
-      # Keep ordinary batches free of suites that spawn child processes.
-      # macos-26 can hang when four subprocess-heavy suites share an
-      # xcodebuild teardown cycle; the runner keeps this lane to at most
-      # three suites per invocation. Each workflow step owns several isolated
-      # invocations, so its timeout covers aggregate startup and teardown time.
+      # Preserve the conservative subprocess-isolation baseline from #1277.
+      # The explicit policy caps these invocations at three suites. Each step
+      # owns several invocations, including bounded startup and teardown time.
       - name: Test — subprocess-sensitive Swift batch 1/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 0 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 0 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 2/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 1 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 1 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 3/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 2 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 2 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 4/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 3 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 3 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 5/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 4 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 4 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 6/6
-        timeout-minutes: 20
-        run: bash scripts/ci-run-swift-test-batch.sh 5 6 subprocess
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        timeout-minutes: 25
+        run: python3 scripts/ci_swift_tests.py run --batch 5 --lane subprocess
+
+      - name: Reconcile Swift coverage and publish timings
+        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
+        run: python3 scripts/ci_swift_tests.py summary
 
       - name: Upload Swift test result bundles
         if: always()

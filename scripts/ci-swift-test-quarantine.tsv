@@ -1,8 +1,0 @@
-AlasGhosttySmokeTests	Ghostty runtime smoke is manual; hosted test runners do not provide a stable display runtime.
-ACPGeminiE2ETests	Requires a locally installed and authenticated Gemini CLI; run explicitly outside PR CI.
-LiveLanguageServerVerificationTests	Opt-in evidence collector requiring a locally installed language server; see docs/plans/2026-09-13-code-editor-lsp-verification.md.
-WorkspaceEditUndoTests	Restored CI coverage hits the 60s per-test limit in ordinary batch 2/6; result bundle swift-batch-2-of-6.xcresult from PR #1277 preserves diagnostics for follow-up.
-SSHIntegrationTests	Requires a key-authenticated SSH localhost fixture; run explicitly with ALAS_SSH_INTEGRATION=1.
-GitServiceTests	macos-26 subprocess/git hang quarantine; reassess under #23.
-WorktreeServiceTests	macos-26 subprocess/git hang quarantine; reassess under #23.
-ProjectsManagerTests	macos-26 subprocess/git hang quarantine; reassess under #23.

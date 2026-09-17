@@ -2,8 +2,6 @@
 set -euo pipefail
 
 this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for test_script in "${this_dir}"/test_*.sh; do
-    bash "${test_script}"
-done
+python3 -B -m unittest discover -s "${this_dir}" -p 'test_*.py'
 
 echo "swift test inventory tests passed"
