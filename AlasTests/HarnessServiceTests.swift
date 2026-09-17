@@ -61,11 +61,12 @@ struct HarnessServiceTests {
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
         sessionId: String = "session-1", body: String? = nil,
-        activityId: String? = nil, timestamp: Date? = nil
+        activityId: String? = nil, timestamp: Date? = nil,
+        lifecycleId: String? = nil
     ) -> AgentHookEvent {
         AgentHookEvent(version: 1, event: event, agent: agent,
                        sessionId: sessionId, pid: nil, timestamp: timestamp, body: body,
-                       activityId: activityId)
+                       activityId: activityId, lifecycleId: lifecycleId)
     }
 
     private final class RequestCollector {
@@ -387,21 +388,58 @@ struct HarnessServiceTests {
 
     @Test func staleDetachDoesNotOverrideNewerAttach() {
         let (service, _) = makeService()
-        let oldDetachTime = Date(timeIntervalSince1970: 100)
-        let newAttachTime = Date(timeIntervalSince1970: 200)
         service.handleSocketEvent(
-            makeEvent(event: .attached, agent: .pi, timestamp: newAttachTime),
+            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .detached, agent: .pi, timestamp: oldDetachTime),
+            makeEvent(event: .detached, agent: .pi, lifecycleId: "old"),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
-                activityId: "run-1", timestamp: newAttachTime.addingTimeInterval(1)
+                activityId: "run-1", lifecycleId: "new"
             ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func newerBackgroundActivityCanArriveBeforeAttach() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi, lifecycleId: "old"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "run-1", lifecycleId: "new"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, lifecycleId: "new"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func timestampFreeNonPiEventsAreNotTombstoned() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .claude),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .claude),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 

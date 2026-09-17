@@ -54,6 +54,7 @@ struct PiInstallerTests {
             "background_started",
             "background_ended",
             "activity_id",
+            "lifecycle_id",
             "new Date().toISOString()",
             #"pi.on("session_start""#,
             #"pi.on("session_end""#,

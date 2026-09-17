@@ -52,7 +52,8 @@ final class HarnessService {
     private var completedBackgroundActivityIdsBySession: [String: Set<String>] = [:]
     private var deferredForegroundIdleBySession: [String: DeferredForegroundIdle] = [:]
     private var detachedSocketSessions: Set<String> = []
-    private var latestSocketAttachAtBySession: [String: Date] = [:]
+    private var activeSocketLifecycleBySession: [String: String] = [:]
+    private var retiredSocketLifecycleIdsBySession: [String: Set<String>] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
     init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
@@ -132,30 +133,27 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
-        switch event.event {
-        case .attached:
-            if let timestamp = event.timestamp,
-               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
-               timestamp < latestAttach {
+        if let lifecycleId = event.lifecycleId {
+            if retiredSocketLifecycleIdsBySession[event.sessionId]?.contains(lifecycleId) == true {
                 return
             }
-            if let timestamp = event.timestamp {
-                latestSocketAttachAtBySession[event.sessionId] = timestamp
+            let activeLifecycleId = activeSocketLifecycleBySession[event.sessionId]
+            if event.event == .detached {
+                retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
+                if let activeLifecycleId, activeLifecycleId != lifecycleId {
+                    return
+                }
+                activeSocketLifecycleBySession.removeValue(forKey: event.sessionId)
+            } else if activeLifecycleId != lifecycleId {
+                if let activeLifecycleId {
+                    retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(activeLifecycleId)
+                }
+                activeSocketLifecycleBySession[event.sessionId] = lifecycleId
             }
-            detachedSocketSessions.remove(event.sessionId)
-        case .detached:
-            if let timestamp = event.timestamp,
-               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
-               timestamp < latestAttach {
-                return
-            }
-        default:
-            if detachedSocketSessions.contains(event.sessionId) {
-                return
-            }
-            if let timestamp = event.timestamp,
-               let latestAttach = latestSocketAttachAtBySession[event.sessionId],
-               timestamp < latestAttach {
+        } else if event.agent == .pi {
+            if event.event == .attached {
+                detachedSocketSessions.remove(event.sessionId)
+            } else if event.event != .detached, detachedSocketSessions.contains(event.sessionId) {
                 return
             }
         }
@@ -308,7 +306,9 @@ final class HarnessService {
             }
 
         case .detached:
-            detachedSocketSessions.insert(event.sessionId)
+            if event.agent == .pi, event.lifecycleId == nil {
+                detachedSocketSessions.insert(event.sessionId)
+            }
             cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
             pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
             backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
@@ -393,7 +393,8 @@ final class HarnessService {
         completedBackgroundActivityIdsBySession.removeAll()
         deferredForegroundIdleBySession.removeAll()
         detachedSocketSessions.removeAll()
-        latestSocketAttachAtBySession.removeAll()
+        activeSocketLifecycleBySession.removeAll()
+        retiredSocketLifecycleIdsBySession.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {

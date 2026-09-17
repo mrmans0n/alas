@@ -28,6 +28,7 @@ struct AgentHookEvent: Equatable, Sendable {
     let timestamp: Date?
     let body: String?
     let activityId: String?
+    let lifecycleId: String?
 
     init(
         version: Int,
@@ -37,7 +38,8 @@ struct AgentHookEvent: Equatable, Sendable {
         pid: pid_t?,
         timestamp: Date?,
         body: String?,
-        activityId: String? = nil
+        activityId: String? = nil,
+        lifecycleId: String? = nil
     ) {
         self.version = version
         self.event = event
@@ -47,6 +49,7 @@ struct AgentHookEvent: Equatable, Sendable {
         self.timestamp = timestamp
         self.body = body
         self.activityId = activityId
+        self.lifecycleId = lifecycleId
     }
 }
 
@@ -78,10 +81,11 @@ extension AgentHookEvent {
         let ts: Date? = (json["ts"] as? String).flatMap { try? Date($0, strategy: .iso8601) }
         let body = json["body"] as? String
         let activityId = (json["activity_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let lifecycleId = (json["lifecycle_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return AgentHookEvent(
             version: v, event: event, agent: agent,
             sessionId: sessionId, pid: pid, timestamp: ts, body: body,
-            activityId: activityId
+            activityId: activityId, lifecycleId: lifecycleId
         )
     }
 }
