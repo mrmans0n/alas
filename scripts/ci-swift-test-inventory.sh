@@ -180,6 +180,9 @@ while IFS= read -r source; do
                 sub(/^[[:space:]]*/, "", line)
             }
             while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
+                if (line ~ /^[[:space:]]*@Test([[:space:](]|$)/) {
+                    pending_test = 1
+                }
                 sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                 sub(/^[[:space:]]*/, "", line)
                 if (substr(line, 1, 1) == "(") {
@@ -197,6 +200,15 @@ while IFS= read -r source; do
                 sub(/^[[:space:]]*/, "", line)
             }
             return line
+        }
+        function test_function_selector(line,    name) {
+            if (line !~ /(^|[[:space:]])func[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+                return ""
+            }
+            name = line
+            sub(/.*(^|[[:space:]])func[[:space:]]+/, "", name)
+            sub(/[^A-Za-z0-9_].*/, "", name)
+            return name
         }
         function scope_delta(line,    i, c, hashes, j, closing, delta) {
             delta = 0
@@ -367,7 +379,17 @@ while IFS= read -r source; do
                 push_scope(name, brace_depth + 1, suite)
             }
         }
-        /@Test([[:space:](]|$)/ && suite != "" { print suite }
+        pending_test && suite != "" {
+            print suite
+            pending_test = 0
+        }
+        pending_test && suite == "" {
+            test_selector = test_function_selector(candidate)
+            if (test_selector != "") {
+                print test_selector
+                pending_test = 0
+            }
+        }
         { update_scope(candidate) }
     ' "${source}"
 done < <(find "${tests_root}" -type f -name '*.swift' -print | sort) | sort -u > "${suite_file}"
@@ -534,6 +556,9 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     sub(/^[[:space:]]*/, "", line)
                 }
                 while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
+                    if (line ~ /^[[:space:]]*@Test([[:space:](]|$)/) {
+                        pending_test = 1
+                    }
                     sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                     sub(/^[[:space:]]*/, "", line)
                     if (substr(line, 1, 1) == "(") {
@@ -551,6 +576,15 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     sub(/^[[:space:]]*/, "", line)
                 }
                 return line
+            }
+            function test_function_selector(line,    name) {
+                if (line !~ /(^|[[:space:]])func[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+                    return ""
+                }
+                name = line
+                sub(/.*(^|[[:space:]])func[[:space:]]+/, "", name)
+                sub(/[^A-Za-z0-9_].*/, "", name)
+                return name
             }
             function scope_delta(line,    i, c, hashes, j, closing, delta) {
                 delta = 0
@@ -711,6 +745,15 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/[^A-Za-z0-9_.].*/, "", name)
                 if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
+                }
+            }
+            pending_test {
+                test_selector = test_function_selector(candidate)
+                if (test_selector != "") {
+                    if (scope_count == 0) {
+                        print test_selector
+                    }
+                    pending_test = 0
                 }
             }
             { update_scope(candidate) }

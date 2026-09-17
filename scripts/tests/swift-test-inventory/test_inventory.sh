@@ -17,6 +17,19 @@ struct UnitTests {
 
 struct HelperTests {}
 SWIFT
+cat > "${sandbox}/AlasTests/GlobalBehavior.swift" <<'SWIFT'
+import Testing
+
+@Test func globalBehavior() {}
+SWIFT
+cat > "${sandbox}/AlasTests/GlobalProcessBehavior.swift" <<'SWIFT'
+import Foundation
+import Testing
+
+@Test func globalProcessBehavior() {
+    _ = Process()
+}
+SWIFT
 cat > "${sandbox}/AlasTests/Nested/SecondTests.swift" <<'SWIFT'
 import Testing
 
@@ -312,7 +325,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=35 scheduled=34 ordinary=18 subprocess=16 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=37 scheduled=36 ordinary=19 subprocess=17 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -324,6 +337,8 @@ grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ExtensionNamespace.ExtensionParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'FollowingTopLevelTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'globalBehavior' "${inventory_cache}/ordinary.txt"
+grep -qx 'globalProcessBehavior' "${inventory_cache}/subprocess.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
@@ -371,6 +386,7 @@ grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ExtensionNamespace.ExtensionParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/FollowingTopLevelTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/globalBehavior' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
@@ -397,6 +413,10 @@ if grep -q 'ProcessFixtureTests' <<<"${selectors}"; then
 fi
 if grep -q 'BehaviorFixtureTests' <<<"${selectors}"; then
     echo 'behavior-detected subprocess suite was scheduled with ordinary suites' >&2
+    exit 1
+fi
+if grep -q 'globalProcessBehavior' <<<"${selectors}"; then
+    echo 'free-standing subprocess test was scheduled with ordinary suites' >&2
     exit 1
 fi
 if grep -q 'RuntimeBehaviorTests' <<<"${selectors}"; then
@@ -427,6 +447,7 @@ subprocess_selectors="$(
 grep -qx -- '-only-testing AlasTests/AgentRunnerInvocationTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/ACPStdioClientFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/JSONRPCStdioFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/globalProcessBehavior' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/LSPInstallerTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/LSPTransportFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
@@ -455,6 +476,7 @@ grep -qx -- '-only-testing' "${ordinary_log}"
 grep -qx -- 'AlasTests/BraceOwnerTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/EscapedDelimiterTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/FollowingTopLevelTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/globalBehavior' "${ordinary_log}"
 grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/MultilineStringTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/OuterTests' "${ordinary_log}"
@@ -479,6 +501,7 @@ grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/InlineNestedAttributeTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/JSONRPCStdioFixtureTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/globalProcessBehavior' "${subprocess_log}"
 grep -qx -- 'AlasTests/LSPInstallerTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/LSPTransportFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
