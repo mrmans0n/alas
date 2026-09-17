@@ -68,7 +68,7 @@ struct FileTreeListView: View {
                 ? (displayName: node.name, chainPaths: [node.path], terminal: node)
                 : Self.compactChain(from: node)
             let terminal = chain.terminal
-            let open = openPaths.contains(terminal.path)
+            let open = Self.isOpen(chainPaths: chain.chainPaths, openPaths: openPaths)
             let canExpand = !terminal.isSubmodule
             let isBookmarkRoot = bookmarkRootPaths.contains(node.path)
             return AnyView(
@@ -374,6 +374,13 @@ struct FileTreeListView: View {
             current = next
         }
         return (displayParts.joined(separator: "/"), chainPaths, current)
+    }
+
+    /// A compacted row may gain a deeper terminal as lazy child listings
+    /// arrive. Its expansion belongs to the displayed chain, not only to
+    /// whichever directory is currently the terminal.
+    nonisolated static func isOpen(chainPaths: [String], openPaths: Set<String>) -> Bool {
+        chainPaths.contains { openPaths.contains($0) }
     }
 
     private func isOffGit(_ node: FileTreeNode) -> Bool {
