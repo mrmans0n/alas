@@ -144,6 +144,46 @@ enum WorkspaceMemberWorktreeResolver {
     }
 }
 
+/// Presentation data for a concrete worktree's membership in a Workspace
+/// checkout. It intentionally keeps Workspace state out of the Git `Worktree`
+/// model: membership is owned by the persisted checkout snapshot.
+struct WorktreeWorkspaceCheckoutPresentation: Equatable {
+    let name: String
+    let isActive: Bool
+
+    var accessibilityLabel: String {
+        "Workspace checkout: \(name)"
+    }
+}
+
+enum WorkspaceCheckoutWorktreeResolver {
+    static func presentation(
+        for worktree: Worktree,
+        checkouts: [WorkspaceCheckout]
+    ) -> WorktreeWorkspaceCheckoutPresentation? {
+        let matchingCheckouts = checkouts.filter { checkout in
+            checkout.members.contains { member in
+                member.projectID == worktree.projectId
+                    && URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+                        == worktree.path.standardizedFileURL.path
+            }
+        }
+        guard let checkout = matchingCheckouts.sorted(by: isPreferred).first else { return nil }
+        return .init(
+            name: checkout.fallbackWorkspaceName,
+            isActive: checkout.archivedAt == nil && checkout.workspaceID != nil
+        )
+    }
+
+    private static func isPreferred(_ lhs: WorkspaceCheckout, _ rhs: WorkspaceCheckout) -> Bool {
+        let lhsIsActive = lhs.archivedAt == nil && lhs.workspaceID != nil
+        let rhsIsActive = rhs.archivedAt == nil && rhs.workspaceID != nil
+        if lhsIsActive != rhsIsActive { return lhsIsActive }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
 /// Pure presentation plan for the full sidebar tree. Views own disclosure
 /// state; this type only protects ordering and archive visibility.
 enum WorkspaceSidebarLayout {

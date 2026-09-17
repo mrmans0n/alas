@@ -77,3 +77,118 @@ struct WorkspaceSidebarLayoutTests {
         #expect(ids == [visibleCheckout.id])
     }
 }
+
+struct WorkspaceCheckoutWorktreeResolverTests {
+    @Test func resolvesExactProjectAndCanonicalPathMatch() throws {
+        let worktree = makeWorktree(projectID: "project-a", path: "/tmp/workspace/repo")
+        let matching = makeCheckout(
+            name: "Release",
+            members: [.init(
+                workspaceMemberID: UUID(),
+                projectID: "project-a",
+                fallbackProjectName: "Repo",
+                fallbackRepositoryRoot: "/tmp/repo",
+                worktreePath: "/tmp/workspace/./repo"
+            )]
+        )
+        let differentProject = makeCheckout(
+            name: "Other",
+            members: [.init(
+                workspaceMemberID: UUID(),
+                projectID: "project-b",
+                fallbackProjectName: "Repo",
+                fallbackRepositoryRoot: "/tmp/repo",
+                worktreePath: "/tmp/workspace/repo"
+            )]
+        )
+
+        let presentation = try #require(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: worktree,
+            checkouts: [differentProject, matching]
+        ))
+
+        #expect(presentation == .init(name: "Release", isActive: true))
+    }
+
+    @Test func prefersActiveCheckoutOverNewerArchivedMatch() throws {
+        let worktree = makeWorktree()
+        let archived = makeCheckout(name: "Archived", createdAt: .now, archivedAt: .now)
+        let active = makeCheckout(name: "Active", createdAt: .distantPast)
+
+        let presentation = try #require(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: worktree,
+            checkouts: [archived, active]
+        ))
+
+        #expect(presentation == .init(name: "Active", isActive: true))
+    }
+
+    @Test func showsFormerWorkspaceUsingPersistedName() throws {
+        let worktree = makeWorktree()
+        let former = makeCheckout(
+            name: "Former Release",
+            workspaceID: nil,
+            members: [makeMember()]
+        )
+
+        let presentation = try #require(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: worktree,
+            checkouts: [former]
+        ))
+
+        #expect(presentation == .init(name: "Former Release", isActive: false))
+    }
+
+    @Test func returnsNoPresentationForUnlinkedWorktree() {
+        let worktree = makeWorktree(path: "/tmp/other")
+
+        #expect(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: worktree,
+            checkouts: [makeCheckout()]
+        ) == nil)
+    }
+
+    private func makeWorktree(
+        projectID: String = "project-a",
+        path: String = "/tmp/workspace/repo"
+    ) -> Worktree {
+        .init(
+            id: path,
+            projectId: projectID,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: path),
+            status: .clean,
+            lastActivity: .now
+        )
+    }
+
+    private func makeCheckout(
+        name: String = "Release",
+        workspaceID: UUID? = UUID(),
+        createdAt: Date = .now,
+        archivedAt: Date? = nil,
+        members: [WorkspaceCheckoutMember]? = nil
+    ) -> WorkspaceCheckout {
+        .init(
+            workspaceID: workspaceID,
+            fallbackWorkspaceName: name,
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: "/tmp/workspace",
+            createdAt: createdAt,
+            archivedAt: archivedAt,
+            members: members ?? [makeMember()]
+        )
+    }
+
+    private func makeMember() -> WorkspaceCheckoutMember {
+        .init(
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "Repo",
+            fallbackRepositoryRoot: "/tmp/repo",
+            worktreePath: "/tmp/workspace/repo"
+        )
+    }
+}

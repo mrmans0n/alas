@@ -18,6 +18,7 @@ struct RepoGroupView: View {
     let selectedWorktreeId: String?
     let isMain: (Worktree) -> Bool
     let upstreamStatus: (Worktree) -> WorktreeUpstreamStatus?
+    let workspaceCheckout: (Worktree) -> WorktreeWorkspaceCheckoutPresentation?
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
@@ -164,7 +165,8 @@ struct RepoGroupView: View {
                             onRemoveFailed: { onRemoveFailed(wt) },
                             onRetryCreate: { onRetryCreate(wt) },
                             onRetryDelete: { onRetryDelete(wt) },
-                            onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) }
+                            onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
+                            workspaceCheckout: workspaceCheckout(wt)
                         )
                         .draggable(wt.id)
                         .dropDestination(for: String.self) { ids, _ in
