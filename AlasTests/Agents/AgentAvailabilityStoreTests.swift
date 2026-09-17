@@ -104,6 +104,21 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev-b"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
     }
 
+    @Test func invalidationClearsEveryWorktreeCacheKeyForTheHost() async {
+        let store = AgentAvailabilityStore { _, _, _ in
+            ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+        }
+        let candidates = [TestAgents.custom(id: "repo-agent", binary: "tools/agent")]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/one", candidates: candidates)
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/two", candidates: candidates)
+
+        store.invalidate(target: .ssh(host: "dev"), worktreePath: "/srv/one")
+
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/one", localAgents: []) == .loading)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/two", localAgents: []) == .loading)
+    }
+
     @Test func invalidationAdvancesGenerationForMountedViewTasks() async {
         let store = AgentAvailabilityStore { _, _, _ in
             ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")

@@ -91,8 +91,10 @@ final class AgentAvailabilityStore {
 
     func invalidate(target: AgentExecutionTarget, worktreePath: String) {
         guard case .ssh(let host) = target else { return }
-        invalidate(Key(host: host, worktreePath: nil))
-        invalidate(Key(host: host, worktreePath: worktreePath))
+        let keys = Set(states.keys.filter { $0.host == host } + inFlight.keys.filter { $0.host == host })
+        for key in keys {
+            invalidate(key)
+        }
         generation += 1
     }
 
