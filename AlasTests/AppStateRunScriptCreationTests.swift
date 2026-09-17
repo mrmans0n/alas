@@ -249,9 +249,9 @@ struct AppStateRunScriptCreationTests {
         scripts.agentSelection = .agent(agentID)
         state.updateProject(id: project.id, name: project.name, icon: project.icon, startupScripts: scripts, mcpServers: [])
 
-        #expect(state.defaultAgentID(projectID: project.id) == agentID)
-        #expect(state.defaultAgentID(projectID: "another-project") == "global-agent")
-        #expect(state.defaultAgentID(projectID: nil) == "global-agent")
+        let worktreeRoot = URL(fileURLWithPath: project.path, isDirectory: true)
+        #expect(state.defaultAgentID(projectId: project.id, worktreeRoot: worktreeRoot) == agentID)
+        #expect(state.defaultAgentID(projectId: "another-project", worktreeRoot: worktreeRoot) == "global-agent")
         #expect(try state.runScriptWritingHelpAgent(in: worktree) == agentID)
 
         scripts.agentSelection = .none

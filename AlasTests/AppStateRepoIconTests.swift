@@ -39,6 +39,14 @@ struct AppStateRepoIconTests {
             try FileManager.default.createDirectory(at: alas, withIntermediateDirectories: true)
             try bytes.write(to: alas.appendingPathComponent(name), options: .atomic)
         }
+
+        func writeConfig(_ json: String) throws {
+            let config = checkout.appendingPathComponent(RepoConfig.relativePath)
+            try FileManager.default.createDirectory(
+                at: config.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(json.utf8).write(to: config, options: .atomic)
+        }
     }
 
     private func state(staging: URL) -> AppState {
@@ -174,5 +182,30 @@ struct AppStateRepoIconTests {
 
         #expect(replaced.mode == .image)
         #expect(replaced.imagePath != first.imagePath)
+    }
+
+    @Test("an unknown repo default agent falls through to the global one")
+    func unknownRepoDefaultAgentFallsThroughToGlobal() throws {
+        let fixture = try Fixture()
+        try fixture.writeConfig(#"{"version": 1, "defaultAgent": "unknown-agent"}"#)
+        let local = project(path: fixture.checkout.path)
+        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [local])))
+        state.repoIconStagingRoot = fixture.staging
+        state.config.agents.worktreeAutoLaunch.agentId = "global-agent"
+
+        #expect(
+            state.defaultAgentID(projectId: local.id, worktreeRoot: fixture.checkout) == "global-agent"
+        )
+    }
+
+    /// Store stub whose read returns the seeded projects file, so an
+    /// AppState boots with the projects under test without touching disk.
+    private struct SeededStore: PersistenceStoreProtocol {
+        let projects: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? (projects as? T) : nil
+        }
     }
 }

@@ -3847,15 +3847,6 @@ final class AppState {
         return overrides
     }
 
-    func defaultAgentID(projectID: String?) -> String? {
-        guard let project = projects.first(where: { $0.id == projectID }) else {
-            return ProjectStartupScripts.defaults.defaultAgentID(
-                globalAgentID: config.agents.worktreeAutoLaunch.agentId
-            )
-        }
-        return defaultAgentID(projectId: project.id, worktreeRoot: URL(fileURLWithPath: project.path, isDirectory: true))
-    }
-
     /// Three-layer resolution against a concrete worktree: an explicit
     /// project override, then the repo's `.alas/config.json` default (local
     /// projects only, and only when the id names an installed, enabled
