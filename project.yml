@@ -14,9 +14,6 @@ settings:
     ENABLE_APPINTENTS_METADATA_EXTRACTION: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
-  configs:
-    Debug:
-      COMPILATION_CACHE_ENABLE_CACHING: YES
 
 packages:
   # Only the tree-sitter *runtime* and Swift API come from SwiftPM. The
