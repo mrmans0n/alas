@@ -3,6 +3,8 @@ import Foundation
 
 enum ActivityEvent: String, Sendable {
     case busy
+    case backgroundStarted = "background_started"
+    case backgroundEnded = "background_ended"
     case awaitingInput = "awaiting_input"
     case permissionRequest = "permission_request"
     case idle
@@ -25,6 +27,27 @@ struct AgentHookEvent: Equatable, Sendable {
     let pid: pid_t?
     let timestamp: Date?
     let body: String?
+    let activityId: String?
+
+    init(
+        version: Int,
+        event: ActivityEvent,
+        agent: AgentKind,
+        sessionId: String,
+        pid: pid_t?,
+        timestamp: Date?,
+        body: String?,
+        activityId: String? = nil
+    ) {
+        self.version = version
+        self.event = event
+        self.agent = agent
+        self.sessionId = sessionId
+        self.pid = pid
+        self.timestamp = timestamp
+        self.body = body
+        self.activityId = activityId
+    }
 }
 
 extension AgentHookEvent {
@@ -54,9 +77,11 @@ extension AgentHookEvent {
         let pid: pid_t? = (json["pid"] as? Int).flatMap { $0 > 0 ? pid_t(exactly: $0) : nil }
         let ts: Date? = (json["ts"] as? String).flatMap { try? Date($0, strategy: .iso8601) }
         let body = json["body"] as? String
+        let activityId = (json["activity_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return AgentHookEvent(
             version: v, event: event, agent: agent,
-            sessionId: sessionId, pid: pid, timestamp: ts, body: body
+            sessionId: sessionId, pid: pid, timestamp: ts, body: body,
+            activityId: activityId
         )
     }
 }

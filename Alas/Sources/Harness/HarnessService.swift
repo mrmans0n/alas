@@ -43,6 +43,7 @@ final class HarnessService {
     /// work has actually settled.
     private var cursorIdleDebouncers: [String: DebounceTimer] = [:]
     private var pendingCursorIdleEvents: [String: AgentHookEvent] = [:]
+    private var backgroundActivityIdsBySession: [String: Set<String>] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
     init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
@@ -144,6 +145,21 @@ final class HarnessService {
                 lastBody: nil, updatedAt: Date()
             )
 
+        case .backgroundStarted:
+            guard let activityId = event.activityId else { return }
+            backgroundActivityIdsBySession[event.sessionId, default: []].insert(activityId)
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .busy, pid: event.pid,
+                lastBody: nil, updatedAt: Date()
+            )
+
+        case .backgroundEnded:
+            guard let activityId = event.activityId else { return }
+            backgroundActivityIdsBySession[event.sessionId]?.remove(activityId)
+            if backgroundActivityIdsBySession[event.sessionId]?.isEmpty == true {
+                backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+            }
+
         case .awaitingInput:
             // Hooks also report idle prompts here, so they cannot establish input intent.
             // Cancel pending cursor-idle debounce; awaiting is a real state change.
@@ -223,6 +239,7 @@ final class HarnessService {
         case .detached:
             cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
             pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
+            backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
             activityBySession.removeValue(forKey: event.sessionId)
         }
     }
@@ -233,6 +250,14 @@ final class HarnessService {
         ownerLookup: @escaping (String) -> SessionOwnerID?
     ) {
         let previous = activityBySession[event.sessionId]
+        if backgroundActivityIdsBySession[event.sessionId]?.isEmpty == false {
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .busy, pid: event.pid,
+                lastBody: nil, updatedAt: Date()
+            )
+            emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
+            return
+        }
         activityBySession[event.sessionId] = HarnessActivityState(
             agent: event.agent, state: .idle, pid: event.pid,
             lastBody: event.body, updatedAt: Date()
@@ -261,7 +286,7 @@ final class HarnessService {
 
     nonisolated static func shouldRefreshWorktreeStatus(after event: ActivityEvent) -> Bool {
         switch event {
-        case .busy, .idle, .awaitingInput, .permissionRequest, .detached:
+        case .busy, .backgroundStarted, .backgroundEnded, .idle, .awaitingInput, .permissionRequest, .detached:
             return true
         case .attached:
             return false
@@ -281,6 +306,7 @@ final class HarnessService {
         for debouncer in cursorIdleDebouncers.values { debouncer.cancel() }
         cursorIdleDebouncers.removeAll()
         pendingCursorIdleEvents.removeAll()
+        backgroundActivityIdsBySession.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {
@@ -290,7 +316,26 @@ final class HarnessService {
         activityBySession.removeValue(forKey: sessionId)
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
         pendingCursorIdleEvents.removeValue(forKey: sessionId)
+        backgroundActivityIdsBySession.removeValue(forKey: sessionId)
         emitActivityTransition(sessionID: sessionId, previous: previous, owner: nil)
+    }
+
+    /// Clear ACP foreground activity without dropping a hook-reported
+    /// background workflow owned by the same session.
+    func finishExternalActivity(
+        sessionId: String,
+        owner: SessionOwnerID?,
+        agent: AgentKind,
+        recordIdleTransition: Bool
+    ) {
+        if backgroundActivityIdsBySession[sessionId]?.isEmpty == false {
+            setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .busy)
+            return
+        }
+        if recordIdleTransition {
+            setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .idle)
+        }
+        forgetSession(sessionId)
     }
 
     /// Peer-write entry point alongside socket events. Lets non-hook sources

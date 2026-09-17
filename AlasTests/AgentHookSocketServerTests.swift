@@ -92,6 +92,15 @@ struct AgentHookSocketServerTests {
         #expect(event.pid == nil)
     }
 
+    @Test func backgroundActivityEnvelopeDecodesActivityIdentifier() throws {
+        let json = #"{"v":1,"event":"background_started","agent":"pi","session_id":"s1","activity_id":"run-1"}"#
+
+        let event = try AgentHookEvent.decode(from: Data(json.utf8))
+
+        #expect(event.event == .backgroundStarted)
+        #expect(event.activityId == "run-1")
+    }
+
     @Test func unknownEvent_acksOkButDoesNotDispatch() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }

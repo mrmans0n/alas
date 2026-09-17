@@ -42,12 +42,18 @@ struct PiInstallerTests {
 
         let content = try String(contentsOf: url, encoding: .utf8)
         for required in [
-            "alas-managed-pi-hook",
+            "alas-managed-pi-hook-v2",
             "export default function (pi)",
             "ALAS_SOCKET_PATH",
             "/usr/bin/nc",
             #"agent: "pi""#,
-            "ctx.hasUI === false",
+            #"envValue("ALAS_SESSION_ID") || ctx?.session_id"#,
+            #"envValue("PI_SUBAGENT_CHILD") === "1""#,
+            #"pi.events?.on?.("subagent:async-started""#,
+            #"pi.events?.on?.("subagent:async-complete""#,
+            "background_started",
+            "background_ended",
+            "activity_id",
             #"pi.on("session_start""#,
             #"pi.on("session_end""#,
             #"pi.on("before_agent_start""#,
@@ -75,6 +81,21 @@ struct PiInstallerTests {
         let installer = PiInstaller(extensionURL: url)
 
         #expect(installer.installState() == .outdated)
+    }
+
+    @Test func legacyManagedExtensionIsOutdatedAndCanBeUpgraded() async throws {
+        let (url, cleanup) = tmpExtensionURL()
+        defer { cleanup() }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "// alas-managed-pi-hook\nexport default function () {}\n"
+            .write(to: url, atomically: true, encoding: .utf8)
+        let installer = PiInstaller(extensionURL: url)
+
+        #expect(installer.installState() == .outdated)
+        try await installer.install()
+
+        #expect(installer.installState() == .installed)
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("alas-managed-pi-hook-v2"))
     }
 
     @Test func installPreservesUnmanagedExtensionAndThrows() async throws {

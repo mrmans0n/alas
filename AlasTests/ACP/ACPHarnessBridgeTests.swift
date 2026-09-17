@@ -139,6 +139,36 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"] == nil)
     }
 
+    @Test("ACP idle preserves a Pi background workflow")
+    func idlePreservesBackgroundWorkflow() async {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "pi", worktreeId: "wt", title: "t")
+        bridge.observe(session: session)
+        harness.handleSocketEvent(
+            AgentHookEvent(
+                version: 1,
+                event: .backgroundStarted,
+                agent: .pi,
+                sessionId: "s1",
+                pid: nil,
+                timestamp: nil,
+                body: nil,
+                activityId: "run-1"
+            ),
+            stateLookup: { _ in nil },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        session.transcript.streamingState = .streaming
+        await Task.yield()
+        session.transcript.streamingState = .idle
+        await Task.yield()
+
+        #expect(harness.summary(forSessionIds: ["s1"])?.state == .running)
+        #expect(harness.summary(forSessionIds: ["s1"])?.agent == .pi)
+    }
+
     @Test("cursor-agent agentId maps to .cursor AgentKind")
     func cursorAgentMaps() async {
         let harness = makeHarness()

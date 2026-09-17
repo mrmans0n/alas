@@ -60,10 +60,12 @@ struct HarnessServiceTests {
 
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
-        sessionId: String = "session-1", body: String? = nil
+        sessionId: String = "session-1", body: String? = nil,
+        activityId: String? = nil
     ) -> AgentHookEvent {
         AgentHookEvent(version: 1, event: event, agent: agent,
-                       sessionId: sessionId, pid: nil, timestamp: nil, body: body)
+                       sessionId: sessionId, pid: nil, timestamp: nil, body: body,
+                       activityId: activityId)
     }
 
     private final class RequestCollector {
@@ -473,11 +475,73 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["s1"]) == nil)
     }
 
+    @Test func backgroundActivityKeepsSessionRunningAcrossForegroundIdle() {
+        let (service, _) = makeService()
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+        #expect(service.summary(forSessionIds: ["session-1"])?.agent == .pi)
+    }
+
+    @Test func finalForegroundIdleClearsCompletedBackgroundActivity() {
+        let (service, _) = makeService()
+        for id in ["run-1", "run-2"] {
+            service.handleSocketEvent(
+                makeEvent(event: .backgroundStarted, agent: .pi, activityId: id),
+                stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+            )
+        }
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-2"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
     @Test func forgetSession_clearsAllState() {
         let (service, _) = makeService()
         service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
         service.forgetSession("s1")
         #expect(service.activityBySession["s1"] == nil)
+    }
+
+    @Test func forgetSession_clearsBackgroundActivity() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, sessionId: "s1", activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        service.forgetSession("s1")
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, sessionId: "s1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["s1"]) == nil)
     }
 
     /// Codex review (#102): when the process detector finds a harness before
