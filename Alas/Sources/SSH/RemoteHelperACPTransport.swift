@@ -16,6 +16,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let onFreshProcSpawn: @MainActor @Sendable () async -> Void
     private let onOutputOffsetsChanged: @MainActor @Sendable (OutputOffsets) -> Void
     private let outputConsumption: OutputConsumptionTracker
+    private let initializationRecovery = InitializationRecoveryTracker()
     private let attachmentId = UUID().uuidString
     private let state = State()
     private var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation?
@@ -71,6 +72,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     }
 
     private func enqueue(_ data: Data, onWritten: (@Sendable () -> Void)?) throws {
+        initializationRecovery.observeOutbound(data)
         guard state.enqueue(data, onWritten: onWritten) else { throw ACPClientError.notRunning }
         Task { [weak self] in
             await self?.flushPendingWrites()
@@ -98,7 +100,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         var didSpawn = false
         var attachFreshSpawnFromStart = false
         var attempt = 0
-        while !Task.isCancelled && !state.isTerminated {
+        attachLoop: while !Task.isCancelled && !state.isTerminated {
             do {
                 state.setWritesEnabled(false)
                 let client = await RemoteHelperClientPool.shared.client(for: host)
@@ -160,6 +162,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     return
                 }
                 attempt = 0
+                let attachedToFreshSpawn = attachFreshSpawnFromStart
                 attachFreshSpawnFromStart = false
                 var didBecomeAvailable = false
                 for await event in handle.events {
@@ -183,6 +186,33 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                            ) {
                             acknowledgeStdout(consumptionToken)
                             continue
+                        }
+                        switch initializationRecovery.action(
+                            forInbound: data,
+                            attachedToFreshSpawn: attachedToFreshSpawn
+                        ) {
+                        case .forward:
+                            break
+                        case .recycleAndReplay(let initializeRequest):
+                            acknowledgeStdout(consumptionToken)
+                            state.setWritesEnabled(false)
+                            let offsets = outputConsumption.snapshot()
+                            await client.detachProc(
+                                procId: procId,
+                                attachmentId: attachmentId,
+                                stdoutOffset: offsets.stdout ?? 0,
+                                stderrOffset: offsets.stderr ?? 0
+                            )
+                            do {
+                                try await client.killProc(procId: procId)
+                            } catch {
+                                continuation?.yield(.frame(data))
+                                continuation?.finish()
+                                return
+                            }
+                            state.prepareForFreshProcess(replaying: initializeRequest)
+                            didSpawn = false
+                            continue attachLoop
                         }
                         continuation?.yield(.frame(data, onConsumed: { [weak self] in
                             self?.acknowledgeStdout(consumptionToken)
@@ -233,6 +263,64 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             return false
         }
         return object["id"] != nil && object["method"] == nil
+    }
+
+    enum InitializationRecoveryAction: Equatable {
+        case forward
+        case recycleAndReplay(Data)
+    }
+
+    final class InitializationRecoveryTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var initializeRequest: (id: String, data: Data)?
+        private var attemptedRecovery = false
+
+        func observeOutbound(_ data: Data) {
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["method"] as? String == "initialize",
+                  let id = object["id"] as? String
+            else {
+                return
+            }
+            lock.lock()
+            defer { lock.unlock() }
+            if initializeRequest == nil {
+                initializeRequest = (id, data)
+            }
+        }
+
+        func action(forInbound data: Data, attachedToFreshSpawn: Bool) -> InitializationRecoveryAction {
+            guard !attachedToFreshSpawn,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = object["id"] as? String,
+                  let error = object["error"] as? [String: Any],
+                  Self.isRecoverableStaleAdapterError(error)
+            else {
+                return .forward
+            }
+            lock.lock()
+            defer { lock.unlock() }
+            guard !attemptedRecovery,
+                  let initializeRequest,
+                  initializeRequest.id == id
+            else {
+                return .forward
+            }
+            attemptedRecovery = true
+            return .recycleAndReplay(initializeRequest.data)
+        }
+
+        private static func isRecoverableStaleAdapterError(_ error: [String: Any]) -> Bool {
+            let code = (error["code"] as? NSNumber)?.intValue
+            let message = error["message"] as? String ?? ""
+            if code == 1001, message.hasPrefix("Codex process has exited with code 0:") {
+                return true
+            }
+            let data = error["data"] as? [String: Any]
+            let details = data?["details"] as? String ?? ""
+            return code == -32603
+                && (message.contains("Already initialized") || details.contains("Already initialized"))
+        }
     }
 
     private func flushPendingWrites() async {
@@ -489,6 +577,19 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             defer { lock.unlock() }
             guard !terminated else { return }
             pendingWrites.insert(write, at: 0)
+        }
+
+        func prepareForFreshProcess(replaying data: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !terminated else { return }
+            canWrite = false
+            mayHaveDurableInput = false
+            pendingWrites.insert(PendingProcWrite(
+                data: data,
+                expectedStdinOffset: nil,
+                onWritten: nil
+            ), at: 0)
         }
     }
 
