@@ -60,10 +60,14 @@ struct HarnessServiceTests {
 
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
-        sessionId: String = "session-1", body: String? = nil
+        sessionId: String = "session-1", body: String? = nil,
+        activityId: String? = nil, timestamp: Date? = nil,
+        lifecycleId: String? = nil, lifecycleOrder: UInt64? = nil
     ) -> AgentHookEvent {
         AgentHookEvent(version: 1, event: event, agent: agent,
-                       sessionId: sessionId, pid: nil, timestamp: nil, body: body)
+                       sessionId: sessionId, pid: nil, timestamp: timestamp, body: body,
+                       activityId: activityId, lifecycleId: lifecycleId,
+                       lifecycleOrder: lifecycleOrder)
     }
 
     private final class RequestCollector {
@@ -353,6 +357,218 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"] == nil)
     }
 
+    @Test func lateBackgroundStartDoesNotRestoreDetachedSession() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"] == nil)
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func attachedStartsNewLifecycleAfterDetach() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(service.activityBySession["session-1"]?.agent == .pi)
+    }
+
+    @Test func staleDetachDoesNotOverrideNewerAttach() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
+                lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func newerBackgroundActivityCanArriveBeforeAttach() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
+                lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 220), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func timestampFreeNonPiEventsAreNotTombstoned() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .detached, agent: .claude),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .claude),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func newLifecycleDiscardsOldBackgroundActivity() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "old-run", timestamp: Date(timeIntervalSince1970: 100),
+                lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 210), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func unseenOlderLifecycleCannotDisplaceActiveLifecycle() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+    }
+
+    @Test func unseenOlderLifecycleCannotResurrectDetachedSession() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi, activityId: "old-run",
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func newerLifecycleDetachClearsOldAttentionTransition() {
+        let (service, _) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .permissionRequest, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 110), lifecycleId: "old", lifecycleOrder: 100
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(transitions.last?.previousState == .permissionRequest)
+        #expect(transitions.last?.state == nil)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(
@@ -473,11 +689,211 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["s1"]) == nil)
     }
 
+    @Test func backgroundActivityKeepsSessionRunningAcrossForegroundIdle() {
+        let (service, _) = makeService()
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+        #expect(service.summary(forSessionIds: ["session-1"])?.agent == .pi)
+    }
+
+    @Test func finalForegroundIdleClearsCompletedBackgroundActivity() {
+        let (service, _) = makeService()
+        for id in ["run-1", "run-2"] {
+            service.handleSocketEvent(
+                makeEvent(event: .backgroundStarted, agent: .pi, activityId: id),
+                stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+            )
+        }
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-2"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func lateBackgroundStartPreservesEarlierForegroundIdle() {
+        let (service, _) = makeService()
+
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func lateBackgroundStartPreservesEarlierSocketIdle() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(collector.requests.count == 1)
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+        #expect(collector.requests.count == 1)
+    }
+
+    @Test func externalIdlePreservesEarlierSocketNotificationSuppression() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(collector.requests.count == 1)
+    }
+
+    @Test func earlyBackgroundEndReconcilesWithLaterStart() {
+        let (service, _) = makeService()
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func lateBackgroundStartPreservesForegroundAttention() {
+        let (service, _) = makeService()
+        service.setExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            state: .permissionRequest
+        )
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .permissionRequest)
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .awaiting)
+    }
+
+    @Test func finalBackgroundCompletionSendsDeferredFinishedNotification() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, body: "Finished"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(collector.requests.isEmpty)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(collector.requests.count == 1)
+        #expect(collector.requests[0].content.title == "Pi finished")
+        #expect(collector.requests[0].content.body == "Finished")
+    }
+
     @Test func forgetSession_clearsAllState() {
         let (service, _) = makeService()
         service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
         service.forgetSession("s1")
         #expect(service.activityBySession["s1"] == nil)
+    }
+
+    @Test func forgetSession_clearsBackgroundActivity() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, sessionId: "s1", activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        service.forgetSession("s1")
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, sessionId: "s1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["s1"]) == nil)
     }
 
     /// Codex review (#102): when the process detector finds a harness before

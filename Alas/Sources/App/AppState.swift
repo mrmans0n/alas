@@ -5319,23 +5319,10 @@ final class AppState {
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
         harness.start(
             stateLookup: { [weak self] sessionId in
-                guard let self else { return nil }
-                for s in self.terminal.registry.all where s.id == sessionId {
-                    return (projectId: s.projectId, worktreeId: s.worktreeId)
-                }
-                // Registry miss can happen for zmx-persisted leaves the
-                // user hasn't displayed yet (restoreTerminalTabIfNeeded
-                // is driven by TerminalTabView.task). Fall back to a
-                // persisted-tab scan so background agents still get
-                // notifications routed to the right worktree.
-                return self.persistedLeafLocation(leafId: sessionId)
+                self?.harnessSessionLocation(sessionId: sessionId)
             },
             ownerLookup: { [weak self] sessionId in
-                guard let self else { return nil }
-                if let session = self.terminal.registry.session(for: sessionId) {
-                    return session.owner
-                }
-                return self.persistedLeafOwner(leafId: sessionId)
+                self?.sessionOwnerForCLI(sessionId)
             },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
@@ -5435,6 +5422,29 @@ final class AppState {
         return acpManagers.first { _, manager in
             manager.liveSession(for: sessionId) != nil
         }?.key
+    }
+
+    func harnessSessionLocation(sessionId: String) -> (projectId: String, worktreeId: String)? {
+        if let session = terminal.registry.session(for: sessionId) {
+            return (projectId: session.projectId, worktreeId: session.worktreeId)
+        }
+        // Registry miss can happen for zmx-persisted leaves the user hasn't
+        // displayed yet (restoreTerminalTabIfNeeded is driven by
+        // TerminalTabView.task).
+        if let persisted = persistedLeafLocation(leafId: sessionId) {
+            return persisted
+        }
+        guard let owner = acpManagers.first(where: { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        })?.key else { return nil }
+        switch owner {
+        case .worktree(let worktreeId):
+            guard let (project, _) = projectAndWorktree(withWorktreeId: worktreeId) else { return nil }
+            return (projectId: project.id, worktreeId: worktreeId)
+        case .workspaceCheckout(let checkoutId, _):
+            let workspaceId = workspacesManager.checkout(id: checkoutId)?.workspaceID?.uuidString ?? ""
+            return (projectId: workspaceId, worktreeId: owner.storageKey)
+        }
     }
 
     private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {

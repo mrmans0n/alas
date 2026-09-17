@@ -4,7 +4,8 @@ struct PiInstaller: AgentInstaller, Sendable {
     let agent = AgentKind.pi
     let extensionURL: URL
 
-    private static let managedMarker = "alas-managed-pi-hook"
+    private static let managedMarker = "alas-managed-pi-hook-v3"
+    private static let legacyManagedMarkers = ["alas-managed-pi-hook-v2", "// alas-managed-pi-hook\n"]
 
     init(
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -26,7 +27,7 @@ struct PiInstaller: AgentInstaller, Sendable {
     func install() async throws {
         if FileManager.default.fileExists(atPath: extensionURL.path) {
             let contents = (try? String(contentsOf: extensionURL, encoding: .utf8)) ?? ""
-            guard contents.contains(Self.managedMarker) else {
+            guard Self.isManaged(contents) else {
                 throw PiInstallerError.unmanagedExtensionExists(extensionURL.path)
             }
         }
@@ -40,18 +41,33 @@ struct PiInstaller: AgentInstaller, Sendable {
     func uninstall() throws {
         guard FileManager.default.fileExists(atPath: extensionURL.path),
               let contents = try? String(contentsOf: extensionURL, encoding: .utf8),
-              contents.contains(Self.managedMarker)
+              Self.isManaged(contents)
         else {
             return
         }
         try FileManager.default.removeItem(at: extensionURL)
     }
 
+    private static func isManaged(_ contents: String) -> Bool {
+        contents.contains(managedMarker) || legacyManagedMarkers.contains { contents.contains($0) }
+    }
+
     private static let extensionContent = #"""
-    // alas-managed-pi-hook
+    // alas-managed-pi-hook-v3
     import * as childProcess from "node:child_process";
 
     declare const process: any;
+
+    function makeLifecycle(): { id: string; order: string } {
+      const order = process.hrtime.bigint().toString();
+      return {
+        id: `${order}-${process?.pid || 0}-${Math.random().toString(36).slice(2)}`,
+        order
+      };
+    }
+
+    const initialLifecycle = makeLifecycle();
+    const lifecycles = new Map<string, { id: string; order: string }>();
 
     const eventMap: Record<string, string> = {
       session_start: "attached",
@@ -70,7 +86,7 @@ struct PiInstaller: AgentInstaller, Sendable {
     }
 
     function sessionIdFrom(event: any, ctx: any): string {
-      return ctx?.session_id || ctx?.sessionId || ctx?.session?.id || event?.session_id || event?.sessionId || event?.session?.id || envValue("ALAS_SESSION_ID") || "pi";
+      return envValue("ALAS_SESSION_ID") || ctx?.session_id || ctx?.sessionId || ctx?.session?.id || event?.session_id || event?.sessionId || event?.session?.id || "pi";
     }
 
     function parentPid(): number {
@@ -80,27 +96,31 @@ struct PiInstaller: AgentInstaller, Sendable {
       return 0;
     }
 
-    function envelope(eventName: string, event: any, ctx: any): string {
+    function envelope(eventName: string, event: any, ctx: any, activityId?: string): string {
+      const sessionId = sessionIdFrom(event, ctx);
+      if (eventName === "attached") lifecycles.set(sessionId, makeLifecycle());
+      const lifecycle = lifecycles.get(sessionId) || initialLifecycle;
       return JSON.stringify({
         v: 1,
         agent: "pi",
         event: eventName,
-        session_id: sessionIdFrom(event, ctx),
-        pid: parentPid()
+        session_id: sessionId,
+        pid: parentPid(),
+        ts: new Date().toISOString(),
+        lifecycle_id: lifecycle.id,
+        lifecycle_order: lifecycle.order,
+        ...(activityId ? { activity_id: activityId } : {})
       });
     }
 
-    function notify(eventName: string, event: any, ctx: any): void {
+    function send(eventName: string, event: any, ctx: any, activityId?: string): void {
       try {
-        if (ctx && ctx.hasUI === false) return;
         const socketPath = envValue("ALAS_SOCKET_PATH");
         if (!socketPath) return;
-        const mappedEvent = eventMap[eventName];
-        if (!mappedEvent) return;
         const child = childProcess.spawn("/usr/bin/nc", ["-U", "-w1", socketPath], {
           stdio: ["pipe", "ignore", "ignore"]
         });
-        const body = envelope(mappedEvent, event, ctx) + "\n";
+        const body = envelope(eventName, event, ctx, activityId) + "\n";
         try {
           if (child?.stdin?.end) {
             child.on?.("error", () => {});
@@ -110,6 +130,17 @@ struct PiInstaller: AgentInstaller, Sendable {
           }
         } catch (_) {}
       } catch (_) {}
+    }
+
+    function notify(eventName: string, event: any, ctx: any): void {
+      if (ctx?.hasUI === false && envValue("PI_SUBAGENT_CHILD") === "1") return;
+      const mappedEvent = eventMap[eventName];
+      if (mappedEvent) send(mappedEvent, event, ctx);
+    }
+
+    function notifyBackground(eventName: string, event: any): void {
+      const activityId = event?.id || event?.runId;
+      if (activityId) send(eventName, event, undefined, activityId);
     }
 
     function register(pi: any, eventName: string): void {
@@ -124,6 +155,12 @@ struct PiInstaller: AgentInstaller, Sendable {
 
     export default function (pi) {
       try {
+        pi.events?.on?.("subagent:async-started", (event: any) => {
+          notifyBackground("background_started", event);
+        });
+        pi.events?.on?.("subagent:async-complete", (event: any) => {
+          notifyBackground("background_ended", event);
+        });
         pi.on("session_start", async (event: any, ctx: any) => {
           try {
             notify("session_start", event, ctx);

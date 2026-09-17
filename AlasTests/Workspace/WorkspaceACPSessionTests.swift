@@ -170,6 +170,34 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func harnessSessionLocationResolvesLiveCheckoutACPSession() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: []
+        )
+        try writeManifest(for: checkout)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let state = AppState(store: MemoryStore())
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let session = manager.createSession(agentId: "pi")
+
+        let location = state.harnessSessionLocation(sessionId: session.id)
+
+        #expect(location?.projectId == "")
+        #expect(location?.worktreeId == owner.storageKey)
+    }
+
+    @MainActor
     @Test func closingCheckoutACPTabDisposesTheOwnedSession() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

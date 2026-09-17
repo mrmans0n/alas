@@ -309,6 +309,18 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func harnessSessionLocationResolvesLiveACPSession() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "live-acp-harness-location")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let manager = try #require(state.acpManager(for: worktree))
+        let session = manager.createSession(agentId: "pi")
+
+        let location = state.harnessSessionLocation(sessionId: session.id)
+
+        #expect(location?.projectId == project.id)
+        #expect(location?.worktreeId == worktree.id)
+    }
+
     @Test func routeTerminalOpenURLResolvesRelativePathAgainstShellCwd() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-relative")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
