@@ -46,6 +46,13 @@ respond when it needs you.
 
   ![Persistent terminal pane alongside the worktree sidebar](art/alas-terminal.png)
 
+- **Repo-defined MCP servers, shared through the repo.** Commit an
+  `.alas/config.json` to your repository and every teammate's Alas picks it
+  up: MCP servers, the repo's logo, and a default agent for new worktrees.
+  Repo servers merge with your personal ones by name and are gated behind a
+  one-time trust prompt, so a random repo can't attach commands without you
+  approving it.
+
 - **Remote machines, same workspace.** Add a project on an SSH host. A
   connection assistant reads `~/.ssh/config` and bootstraps a helper on the
   other side. Terminals, agents, file editing, search, and git all work over the
@@ -105,6 +112,61 @@ respond when it needs you.
 
 Install and authenticate the agents you want to use. GitHub and GitLab features
 use the `gh` and `glab` CLIs respectively, with their existing authentication.
+
+## Repo-local configuration (`.alas/`)
+
+A repository can ship shared Alas configuration in `.alas/`. Only **local**
+projects read it in v1; projects on SSH hosts keep their existing behavior.
+Everything in `.alas/config.json` is a *default*: anything you set per project
+in the app wins, and nothing is written back into the repo.
+
+MCP servers merge by name. A server defined in the repo is never attached
+until you approve it - the first time a repo defines (or edits) a server, a
+banner offers Review / Approve All / Decline. Decisions are per-user and
+stored in the app, so a re-clone stays silent once you've decided. An
+app-level server with the same name replaces the repo one, and any repo
+server can be disabled per project from the MCP status control.
+
+The file is versioned JSON in the same shape the app stores internally -
+note the `kind` discriminator and the `id` on each env/header entry:
+
+```json
+{
+  "version": 1,
+  "defaultAgent": "pi",
+  "icon": { "image": "logo.png" },
+  "mcpServers": [
+    {
+      "name": "linear",
+      "transport": { "kind": "http", "url": "https://mcp.linear.app/mcp", "headers": [] }
+    },
+    {
+      "name": "db",
+      "transport": {
+        "kind": "stdio",
+        "command": "npx",
+        "args": ["-y", "db-mcp"],
+        "environment": [
+          { "id": "env-db", "name": "DB_URL", "value": "${DB_URL}" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+- **`defaultAgent`** is the agent preselected when creating worktrees. It
+  applies when the project has no explicit override, and only if the agent
+  is installed and enabled on your machine.
+- **`icon.image`** is a path relative to `.alas/`. A `.alas/icon.png` (also
+  `jpg`, `jpeg`, `gif`, `webp`) is picked up with no config at all; SVG is
+  not supported. An icon you set in the app always wins.
+- **`mcpServers`** support `stdio`, `http`, and `sse` transports with
+  `${VAR}` interpolation in commands, args, URLs, headers, and environment
+  values.
+
+`.alas/scripts/` run scripts live in the same directory and are shared the
+same way.
 
 ## Develop
 
