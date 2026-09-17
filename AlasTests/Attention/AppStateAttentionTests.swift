@@ -979,10 +979,15 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 
-    @Test func sidebarSelectionClearsOfflineHostAttentionWhileStillOffline() throws {
+    @Test func sidebarSelectionClearsOfflineHostAttentionWhileStillOffline() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let state = fixture.makeState()
+        let state = AppState(
+            store: MemoryStore(),
+            remoteAccelerationPreparer: { _ in },
+            attentionStore: AttentionStore(url: fixture.url),
+            harnessAttentionSettleInterval: 0
+        )
         RemoteHostStatusStore.shared.reportSuccess(host: "buildbox")
         RemoteHostStatusStore.shared.reportConnectionFailure(host: "buildbox")
         RemoteHostStatusStore.shared.reportConnectionFailure(host: "buildbox")
@@ -999,6 +1004,8 @@ struct AppStateAttentionTests {
         state.selectWorktreeFromSidebar(id: worktree.id)
 
         #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+        await state.waitForWorktreeSelectionFollowUp()
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 

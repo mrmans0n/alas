@@ -3,6 +3,22 @@ import Testing
 @testable import Alas
 
 struct GGConfigReaderTests {
+    @Test func sidebarSnapshotsRefreshConfigWithoutReadingDuringLookup() async throws {
+        let repo = try makeRepo(configJSON: #"{"defaults":{"branch_username":"first"}}"#)
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let initial = await GGConfigReader.sidebarSnapshots(repoPaths: [repo, repo])
+        #expect(initial.count == 1)
+        #expect(initial[repo]?.hasConfig == true)
+        #expect(initial[repo]?.branchUsername == "first")
+
+        try #"{"defaults":{"branch_username":"second"}}"#.write(
+            toFile: repo + "/.git/gg/config.json", atomically: true, encoding: .utf8
+        )
+        #expect(initial[repo]?.branchUsername == "first")
+        let refreshed = await GGConfigReader.sidebarSnapshots(repoPaths: [repo])
+        #expect(refreshed[repo]?.branchUsername == "second")
+    }
+
     private func makeRepo(configJSON: String?) throws -> String {
         let dir = NSTemporaryDirectory() + "gg-cfg-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: dir + "/.git/gg", withIntermediateDirectories: true)

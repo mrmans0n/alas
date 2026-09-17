@@ -6,6 +6,25 @@ import Foundation
 /// disable the dependent feature with a hint) rather than re-implementing
 /// gg's gh/glab whoami resolution.
 enum GGConfigReader {
+    struct SidebarSnapshot: Equatable, Sendable {
+        var hasConfig = false
+        var branchUsername: String?
+    }
+
+    /// Read once per project off the main actor, never while building a row.
+    static func sidebarSnapshots(repoPaths: [String]) async -> [String: SidebarSnapshot] {
+        await Task.detached(priority: .utility) {
+            var snapshots: [String: SidebarSnapshot] = [:]
+            for path in Set(repoPaths) {
+                snapshots[path] = SidebarSnapshot(
+                    hasConfig: GGStackGate.repoHasGGConfig(repoPath: path),
+                    branchUsername: branchUsername(repoPath: path)
+                )
+            }
+            return snapshots
+        }.value
+    }
+
     static var defaultGlobalConfigPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".config/gg/config.json")
     }

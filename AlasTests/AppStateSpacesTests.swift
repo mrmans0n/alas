@@ -5,6 +5,12 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AppStateSpacesTests {
+    @MainActor
+    private final class SelectionScans {
+        var paths: [[URL]] = []
+        func record(_ paths: [URL]) { self.paths.append(paths) }
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         var projectsFile: ProjectsFile = ProjectsFile(projects: [])
         var spacesFile: SpacesFile?
@@ -110,6 +116,60 @@ struct AppStateSpacesTests {
 
         #expect(state.selectedWorktreeId == "wt1")
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt1")
+    }
+
+    @Test func selectionRefreshesOnlyLatestDestinationAfterReturning() async {
+        let scans = SelectionScans()
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1"), project("p2")])),
+            worktreeStatusScan: { await scans.record($0) }
+        )
+        let first = worktree("wt1", projectId: "p1")
+        let second = worktree("wt2", projectId: "p2")
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+
+        state.selectWorktreeFromSidebar(id: first.id)
+        state.selectWorktreeFromSidebar(id: second.id)
+
+        #expect(state.selectedWorktreeId == second.id)
+        #expect(scans.paths.isEmpty)
+        await state.waitForWorktreeSelectionFollowUp()
+        #expect(scans.paths == [[second.path]])
+    }
+
+    @Test func clearingSelectionDiscardsPendingRefresh() async {
+        let scans = SelectionScans()
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1")])),
+            worktreeStatusScan: { await scans.record($0) }
+        )
+        let destination = worktree("wt1", projectId: "p1")
+        state.projectsManager.insertOptimisticWorktree(destination)
+        state.selectWorktree(id: destination.id)
+        state.selectWorktree(id: nil)
+
+        await state.waitForWorktreeSelectionFollowUp()
+        #expect(state.selectedWorktreeId == nil)
+        #expect(scans.paths.isEmpty)
+    }
+
+    @Test func returningToSameIDThroughAnotherNavigationDoesNotRunOldFollowUp() async {
+        let scans = SelectionScans()
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1")])),
+            worktreeStatusScan: { await scans.record($0) }
+        )
+        let destination = worktree("wt1", projectId: "p1")
+        state.projectsManager.insertOptimisticWorktree(destination)
+        state.selectWorktreeFromSidebar(id: destination.id)
+        // Workspace navigation also writes selection directly. Matching the ID
+        // again must not revive work belonging to the earlier sidebar click.
+        state.selectedWorktreeId = nil
+        state.selectedWorktreeId = destination.id
+
+        await state.waitForWorktreeSelectionFollowUp()
+        #expect(scans.paths.isEmpty)
     }
 
     @Test func selectingWorktreeDefersAndCoalescesSpacePersistence() async throws {
