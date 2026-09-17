@@ -571,16 +571,20 @@ extension AppState {
 
 Add `let repoConfigStore = RepoConfigStore()` to `AppState` near its other stored services (search `final class AppState` for an appropriate grouping).
 
-**Caching is required here, not optional.** `ProjectIconImageStaging.stage` reads
-and SHA-256s the image on every call, and `effectiveIcon(for:)` runs on sidebar
-render paths, so resolving uncached would re-read the icon bytes per render
-pass. Keep a small per-project cache in this extension keyed by
-`project.id` plus the resolved repo icon's `(path, modificationDate, fileSize)`:
-on a key match return the previously resolved `ProjectIcon` without touching
-disk, otherwise resolve and store. Entries are tiny and bounded by the number
-of projects on screen; no eviction API is needed in v1, but drop the entry when
-the project has no repo icon (so a later-added `icon.png` is picked up). This is
-the seam the design promised ("icons resolve to absolute path + mtime").
+**Caching is required here, not optional.** `resolve(...)` reads a repo icon and
+stages it (full `Data` read + SHA-256) on every call, and `effectiveIcon(for:)`
+runs on sidebar render paths, so resolving uncached would re-read and re-hash
+icon bytes per render pass. Call `RepoIconResolver.resolve(...)` (not
+`effectiveIcon`) and keep a small per-project cache in this extension keyed by
+`project.id` plus the resolution's `(sourceURL.path, sourceModificationDate,
+fileSize)`: return the cached `ProjectIcon` on a key match without touching
+disk, otherwise resolve and store. When `sourceURL` is nil (app icon used
+unchanged) cache only the negative result keyed by `project.id` and the
+checkout's mtime-free identity — and drop that entry whenever the project's
+repo config or icon file appears, so a later-added `icon.png` is picked up.
+Entries are tiny and bounded by the number of projects on screen; no eviction
+API is needed in v1. This is the seam the design promised ("icons resolve to
+absolute path + mtime").
 
 **Step 2: Update the call sites.** At each of the 8 locations, `ProjectIconView(icon: project.icon, ...)` becomes `ProjectIconView(icon: appState.effectiveIcon(for: project), ...)`. Every listed view already has `AppState` in scope (`@EnvironmentObject` or parameter) — verify per file; if one lacks it, add `@EnvironmentObject var appState: AppState`. Do NOT touch `NewProjectDialog.swift:484-487` (creation draft) or worktree-level icons.
 
