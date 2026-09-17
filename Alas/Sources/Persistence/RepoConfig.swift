@@ -14,8 +14,11 @@ struct RepoConfig: Equatable {
     var icon: Icon?
     var defaultAgent: String?
     /// Servers get deterministic `repo:<name>` ids, so a server keeps its
-    /// identity across reloads instead of a fresh UUID on every load.
+    /// status identity across reloads. The trust-hash flow depends on the
+    /// config, not this id; the presentation layer keys off the prefix.
     var mcpServers: [ProjectMCPServer]
+
+    static let repoServerIDPrefix = "repo:"
 
     var isEmpty: Bool { icon == nil && defaultAgent == nil && mcpServers.isEmpty }
 
@@ -82,7 +85,11 @@ struct RepoConfig: Equatable {
             guard let server = entry.server else { return nil }
             let name = server.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, seen.insert(name).inserted else { return nil }
-            return ProjectMCPServer(id: "repo:\(name)", name: name, transport: server.transport)
+            return ProjectMCPServer(
+                id: Self.repoServerIDPrefix + name,
+                name: name,
+                transport: server.transport
+            )
         }
     }
 
