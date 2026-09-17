@@ -32,7 +32,9 @@ enum RepoMCPResolver {
 
     /// Rule order per repo server: shadowed by an app-level name first, then
     /// the disable list, then the trust state. Assumes the repo list is
-    /// already deduplicated upstream; duplicates are processed independently.
+    /// already deduplicated upstream and carries no empty names - `RepoConfig`
+    /// decoding drops both, and the planner's validation pass flags any
+    /// hand-built ones. Duplicates are processed independently.
     static func merge(
         appServers: [ProjectMCPServer],
         repoServers: [ProjectMCPServer],

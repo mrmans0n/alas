@@ -206,6 +206,10 @@ struct ACPMCPStatusState: Equatable {
             return "Skipped: invalid configuration"
         case .unavailableMember:
             return "Skipped: checkout member unavailable"
+        case .repoNotApproved:
+            return "Skipped: not enabled (repo)"
+        case .repoDisabled:
+            return "Skipped: disabled (repo)"
         }
     }
 }

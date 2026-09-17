@@ -311,6 +311,168 @@ struct MCPAttachmentPlannerTests {
         ])
     }
 
+    // MARK: Repo-defined servers
+
+    private func repoServer(_ name: String, url: String = "https://mcp.example.com") -> ProjectMCPServer {
+        ProjectMCPServer(
+            id: "repo:\(name)",
+            name: name,
+            transport: .http(url: url, headers: [])
+        )
+    }
+
+    private func planWithRepo(
+        configuredServers: [ProjectMCPServer] = [.stdio(name: "local", command: "npx")],
+        repoServers: [ProjectMCPServer],
+        disabledNames: Set<String> = [],
+        trust: [String: RepoMCPTrustState] = [:],
+        capabilities: ACPMCPServerCapabilities = .init(http: true),
+        frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil
+    ) -> MCPAttachmentPlan {
+        MCPAttachmentPlanner.plan(.init(
+            configuredServers: configuredServers,
+            projectDirectory: "/project",
+            worktreeDirectory: "/worktree",
+            environment: [:],
+            capabilities: capabilities,
+            frozenServerDescriptors: frozenServerDescriptors,
+            unavailableFrozenDescriptorIDs: [],
+            repoServers: repoServers,
+            disabledRepoServerNames: disabledNames,
+            repoTrust: trust
+        ))
+    }
+
+    @Test("an approved repo server joins the wire servers and statuses")
+    func approvedRepoServerAttaches() {
+        let repo = repoServer("linear")
+        let plan = planWithRepo(
+            repoServers: [repo],
+            trust: [RepoMCPTrust.hash(for: repo): .approved]
+        )
+
+        #expect(plan.wireServers == [
+            .stdio(name: "local", command: "npx", args: [], env: []),
+            .http(name: "linear", url: "https://mcp.example.com", headers: []),
+        ])
+        #expect(plan.statuses.map(\.id) == ["0", "repo:linear"])
+        #expect(Set(plan.statuses.map(\.id)).count == plan.statuses.count)
+        #expect(plan.statuses.map(\.disposition) == [.requested, .requested])
+    }
+
+    @Test("repo servers without a trust decision are skipped but surfaced")
+    func untrustedRepoServerIsSkippedAndSurfaced() {
+        let repo = repoServer("linear")
+        let plan = planWithRepo(
+            configuredServers: [],
+            repoServers: [repo]
+        )
+
+        #expect(plan.wireServers.isEmpty)
+        #expect(plan.statuses == [
+            .init(
+                id: "repo:linear",
+                name: "linear",
+                transport: .http,
+                disposition: .skipped(.repoNotApproved)
+            ),
+        ])
+    }
+
+    @Test("a declined repo server is skipped like an unapproved one")
+    func declinedRepoServerIsSkipped() {
+        let repo = repoServer("linear")
+        let plan = planWithRepo(
+            configuredServers: [],
+            repoServers: [repo],
+            trust: [RepoMCPTrust.hash(for: repo): .declined]
+        )
+
+        #expect(plan.wireServers.isEmpty)
+        #expect(plan.statuses.map(\.disposition) == [.skipped(.repoNotApproved)])
+    }
+
+    @Test("a disabled repo server is skipped with its own reason")
+    func disabledRepoServerIsSkipped() {
+        let repo = repoServer("linear")
+        let plan = planWithRepo(
+            configuredServers: [],
+            repoServers: [repo],
+            disabledNames: ["linear"],
+            trust: [RepoMCPTrust.hash(for: repo): .approved]
+        )
+
+        #expect(plan.wireServers.isEmpty)
+        #expect(plan.statuses.map(\.disposition) == [.skipped(.repoDisabled)])
+    }
+
+    @Test("an app-level server shadows the repo one without a status row")
+    func appServerShadowsRepoServer() {
+        let repo = repoServer("local", url: "https://repo.example.com")
+        let plan = planWithRepo(
+            configuredServers: [.stdio(name: "local", command: "mine")],
+            repoServers: [repo],
+            trust: [RepoMCPTrust.hash(for: repo): .approved]
+        )
+
+        // The app-level server wins, and the shadowed repo server adds no
+        // row: its slot is already represented by the app-level status.
+        #expect(plan.wireServers.map(serverName) == ["local"])
+        #expect(plan.statuses.count == 1)
+        #expect(plan.statuses.first?.disposition == .requested)
+    }
+
+    @Test("repo servers participate in validation like app servers")
+    func invalidRepoServerIsSkippedAsInvalid() {
+        let broken = ProjectMCPServer(
+            id: "repo:broken",
+            name: "broken",
+            transport: .stdio(command: "   ", args: [], environment: [])
+        )
+        let plan = planWithRepo(
+            configuredServers: [],
+            repoServers: [broken],
+            trust: [RepoMCPTrust.hash(for: broken): .approved]
+        )
+
+        #expect(plan.wireServers.isEmpty)
+        guard case .skipped(.invalidConfiguration) = plan.statuses.first?.disposition else {
+            Issue.record("expected invalid configuration skip, got \(String(describing: plan.statuses.first?.disposition))")
+            return
+        }
+    }
+
+    @Test("frozen checkout snapshots never gain repo servers")
+    func frozenPathIgnoresRepoServers() {
+        let frozen = WorkspaceMCPServerDescriptor(
+            id: "frozen",
+            server: .stdio(name: "frozen", command: "npx"),
+            projectDirectory: "/project",
+            worktreeDirectory: "/worktree"
+        )
+        let repo = repoServer("linear")
+        let plan = planWithRepo(
+            repoServers: [repo],
+            trust: [RepoMCPTrust.hash(for: repo): .approved],
+            frozenServerDescriptors: [frozen]
+        )
+
+        #expect(plan.wireServers.map(serverName) == ["frozen"])
+        #expect(plan.statuses.map(\.name) == ["frozen"])
+    }
+
+    @Test("the configuration fingerprint covers repo servers")
+    func fingerprintCoversRepoServers() {
+        let repo = repoServer("linear")
+        let without = planWithRepo(repoServers: [])
+        let with = planWithRepo(
+            repoServers: [repo],
+            trust: [RepoMCPTrust.hash(for: repo): .approved]
+        )
+
+        #expect(with.configurationFingerprint != without.configurationFingerprint)
+    }
+
     private func plan(
         _ servers: [ProjectMCPServer],
         environment: [String: String] = [:],

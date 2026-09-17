@@ -3489,7 +3489,10 @@ extension ACPSessionManager {
                 environment: agentEnvironment,
                 capabilities: initialized.mcpCapabilities,
                 frozenServerDescriptors: frozenAttachments?.descriptors,
-                unavailableFrozenDescriptorIDs: frozenAttachments?.unavailableDescriptorIDs ?? []
+                unavailableFrozenDescriptorIDs: frozenAttachments?.unavailableDescriptorIDs ?? [],
+                repoServers: projectContext.repoServers,
+                disabledRepoServerNames: projectContext.disabledRepoServerNames,
+                repoTrust: projectContext.repoTrust
             ))
             // The built-in alas server composes after planning (it is not
             // user configuration). It is local-only by construction — its
