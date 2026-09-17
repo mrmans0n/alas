@@ -198,14 +198,111 @@ while IFS= read -r source; do
             }
             return line
         }
-        function count_char(line, ch,    i, count) {
-            count = 0
+        function scope_delta(line,    i, c, hashes, j, closing, delta) {
+            delta = 0
             for (i = 1; i <= length(line); i++) {
-                if (substr(line, i, 1) == ch) {
-                    count++
+                c = substr(line, i, 1)
+                if (scope_block_comment_depth > 0) {
+                    if (c == "/" && substr(line, i + 1, 1) == "*") {
+                        scope_block_comment_depth++
+                        i++
+                    } else if (c == "*" && substr(line, i + 1, 1) == "/") {
+                        scope_block_comment_depth--
+                        i++
+                    }
+                    continue
+                }
+                if (scope_in_string) {
+                    if (scope_multiline_string) {
+                        if (scope_raw_hashes == 0 && scope_escaped) {
+                            scope_escaped = 0
+                        } else if (scope_raw_hashes == 0 && c == "\\") {
+                            scope_escaped = 1
+                        } else if (substr(line, i, 3) == "\"\"\"") {
+                            closing = 1
+                            for (j = 1; j <= scope_raw_hashes; j++) {
+                                if (substr(line, i + 2 + j, 1) != "#") {
+                                    closing = 0
+                                }
+                            }
+                            if (closing) {
+                                scope_in_string = 0
+                                scope_multiline_string = 0
+                                i += 2 + scope_raw_hashes
+                                scope_raw_hashes = 0
+                            }
+                        }
+                    } else if (scope_raw_hashes > 0) {
+                        if (c == "\"") {
+                            closing = 1
+                            for (j = 1; j <= scope_raw_hashes; j++) {
+                                if (substr(line, i + j, 1) != "#") {
+                                    closing = 0
+                                }
+                            }
+                            if (closing) {
+                                scope_in_string = 0
+                                i += scope_raw_hashes
+                                scope_raw_hashes = 0
+                            }
+                        }
+                    } else if (scope_escaped) {
+                        scope_escaped = 0
+                    } else if (c == "\\") {
+                        scope_escaped = 1
+                    } else if (c == "\"") {
+                        scope_in_string = 0
+                    }
+                    continue
+                }
+                if (c == "/" && substr(line, i + 1, 1) == "/") {
+                    break
+                }
+                if (c == "/" && substr(line, i + 1, 1) == "*") {
+                    scope_block_comment_depth = 1
+                    i++
+                    continue
+                }
+                if (c == "#") {
+                    hashes = 0
+                    for (j = i; substr(line, j, 1) == "#"; j++) {
+                        hashes++
+                    }
+                    if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
+                        scope_in_string = 1
+                        scope_multiline_string = 1
+                        scope_raw_hashes = hashes
+                        i += hashes + 2
+                        continue
+                    }
+                    if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
+                        scope_in_string = 1
+                        scope_multiline_string = 0
+                        scope_raw_hashes = hashes
+                        i += hashes
+                        continue
+                    }
+                }
+                if (substr(line, i, 3) == "\"\"\"") {
+                    scope_in_string = 1
+                    scope_multiline_string = 1
+                    scope_raw_hashes = 0
+                    i += 2
+                    continue
+                }
+                if (c == "\"") {
+                    scope_in_string = 1
+                    scope_multiline_string = 0
+                    scope_raw_hashes = 0
+                    continue
+                }
+                if (c == "{") {
+                    delta++
+                } else if (c == "}") {
+                    delta--
                 }
             }
-            return count
+            return delta
         }
         function qualified(name,    i, result) {
             result = ""
@@ -220,7 +317,7 @@ while IFS= read -r source; do
             scope_depth[scope_count] = depth
         }
         function update_scope(line) {
-            brace_depth += count_char(line, "{") - count_char(line, "}")
+            brace_depth += scope_delta(line)
             while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
                 delete scope_name[scope_count]
                 delete scope_depth[scope_count]
@@ -439,14 +536,111 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 }
                 return line
             }
-            function count_char(line, ch,    i, count) {
-                count = 0
+            function scope_delta(line,    i, c, hashes, j, closing, delta) {
+                delta = 0
                 for (i = 1; i <= length(line); i++) {
-                    if (substr(line, i, 1) == ch) {
-                        count++
+                    c = substr(line, i, 1)
+                    if (scope_block_comment_depth > 0) {
+                        if (c == "/" && substr(line, i + 1, 1) == "*") {
+                            scope_block_comment_depth++
+                            i++
+                        } else if (c == "*" && substr(line, i + 1, 1) == "/") {
+                            scope_block_comment_depth--
+                            i++
+                        }
+                        continue
+                    }
+                    if (scope_in_string) {
+                        if (scope_multiline_string) {
+                            if (scope_raw_hashes == 0 && scope_escaped) {
+                                scope_escaped = 0
+                            } else if (scope_raw_hashes == 0 && c == "\\") {
+                                scope_escaped = 1
+                            } else if (substr(line, i, 3) == "\"\"\"") {
+                                closing = 1
+                                for (j = 1; j <= scope_raw_hashes; j++) {
+                                    if (substr(line, i + 2 + j, 1) != "#") {
+                                        closing = 0
+                                    }
+                                }
+                                if (closing) {
+                                    scope_in_string = 0
+                                    scope_multiline_string = 0
+                                    i += 2 + scope_raw_hashes
+                                    scope_raw_hashes = 0
+                                }
+                            }
+                        } else if (scope_raw_hashes > 0) {
+                            if (c == "\"") {
+                                closing = 1
+                                for (j = 1; j <= scope_raw_hashes; j++) {
+                                    if (substr(line, i + j, 1) != "#") {
+                                        closing = 0
+                                    }
+                                }
+                                if (closing) {
+                                    scope_in_string = 0
+                                    i += scope_raw_hashes
+                                    scope_raw_hashes = 0
+                                }
+                            }
+                        } else if (scope_escaped) {
+                            scope_escaped = 0
+                        } else if (c == "\\") {
+                            scope_escaped = 1
+                        } else if (c == "\"") {
+                            scope_in_string = 0
+                        }
+                        continue
+                    }
+                    if (c == "/" && substr(line, i + 1, 1) == "/") {
+                        break
+                    }
+                    if (c == "/" && substr(line, i + 1, 1) == "*") {
+                        scope_block_comment_depth = 1
+                        i++
+                        continue
+                    }
+                    if (c == "#") {
+                        hashes = 0
+                        for (j = i; substr(line, j, 1) == "#"; j++) {
+                            hashes++
+                        }
+                        if (hashes > 0 && substr(line, i + hashes, 3) == "\"\"\"") {
+                            scope_in_string = 1
+                            scope_multiline_string = 1
+                            scope_raw_hashes = hashes
+                            i += hashes + 2
+                            continue
+                        }
+                        if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
+                            scope_in_string = 1
+                            scope_multiline_string = 0
+                            scope_raw_hashes = hashes
+                            i += hashes
+                            continue
+                        }
+                    }
+                    if (substr(line, i, 3) == "\"\"\"") {
+                        scope_in_string = 1
+                        scope_multiline_string = 1
+                        scope_raw_hashes = 0
+                        i += 2
+                        continue
+                    }
+                    if (c == "\"") {
+                        scope_in_string = 1
+                        scope_multiline_string = 0
+                        scope_raw_hashes = 0
+                        continue
+                    }
+                    if (c == "{") {
+                        delta++
+                    } else if (c == "}") {
+                        delta--
                     }
                 }
-                return count
+                return delta
             }
             function qualified(name,    i, result) {
                 result = ""
@@ -461,7 +655,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 scope_depth[scope_count] = depth
             }
             function update_scope(line) {
-                brace_depth += count_char(line, "{") - count_char(line, "}")
+                brace_depth += scope_delta(line)
                 while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
                     delete scope_name[scope_count]
                     delete scope_depth[scope_count]

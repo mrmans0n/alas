@@ -241,17 +241,32 @@ enum ParserNamespace {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/BraceScopeTests.swift" <<'SWIFT'
+import Testing
+
+struct BraceOwnerTests {
+    @Test func malformedJsonIsUnknown() {
+        _ = "not json {{"
+    }
+}
+
+struct FollowingTopLevelTests {
+    @Test func ordinary() {}
+}
+SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=27 scheduled=26 ordinary=13 subprocess=13 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=29 scheduled=28 ordinary=15 subprocess=13 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
 grep -qx 'AgentRunnerInvocationTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'FollowingTopLevelTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
@@ -290,8 +305,10 @@ selectors="$(
         --batch 0 --batch-count 1
 )"
 grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/FollowingTopLevelTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
@@ -368,7 +385,8 @@ ordinary_log="${sandbox}/ordinary-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
     bash "${batch_runner}" 0 2
 grep -qx -- '-only-testing' "${ordinary_log}"
-grep -qx -- 'AlasTests/CommentAttributeTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/BraceOwnerTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/EscapedDelimiterTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/MultilineAttributeTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/NestedCommentTests' "${ordinary_log}"
