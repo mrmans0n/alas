@@ -299,9 +299,17 @@ Note: if the mtime cache flakily misses the "b" rewrite on fast filesystems, com
 
 **Step 3: Implement** `Alas/Sources/Persistence/RepoConfigStore.swift`.
 
-Report a tri-state load result alongside the convenience accessor, and log
-malformed files the way the rest of the app does
-(`Logger(subsystem: "io.nlopez.alas", category: "repo-config")`):
+- File does not exist -> `.missing` (not logged).
+- File exists but cannot be read (permissions, I/O) -> `.malformed`, logged.
+- File readable but undecodable -> `.malformed`, logged.
+- File readable and valid -> `.loaded` (never logged).
+
+Log malformed files the way the rest of the app does
+(`Logger(subsystem: "io.nlopez.alas", category: "repo-config")`), once per
+distinct load and never on a cache hit, with the repo path interpolated as
+`privacy: .public` — the diagnostic is only useful if it names the repo whose
+config is broken. Classifying an unreadable file as "no config" was rejected in
+review: a permissions problem must not look like an absent file.
 
 ```swift
 import Foundation
@@ -352,6 +360,14 @@ final class RepoConfigStore {
 ```
 
 **Step 4: `xcodegen`, run `AlasTests/RepoConfigStoreTests`.** Expected: PASS.
+
+> **Superseded by implementation (commit 3ad0aeac + review fixes):** the snippet
+> above shows the pre-review single-value shape. The shipped store exposes
+> `RepoConfigLoadResult` (`missing` / `loaded` / `malformed`) through
+> `load(worktreeRoot:)`, plus the `config(worktreeRoot:)` convenience; reads
+> present-but-unreadable files as `.malformed` and logs them; and pins cache
+> invalidation on both modification date and file size. Read
+> `Alas/Sources/Persistence/RepoConfigStore.swift` as the source of truth.
 
 **Step 5: Commit** — `feat(config): add mtime-cached RepoConfigStore with icon discovery`.
 
@@ -554,6 +570,17 @@ extension AppState {
 ```
 
 Add `let repoConfigStore = RepoConfigStore()` to `AppState` near its other stored services (search `final class AppState` for an appropriate grouping).
+
+**Caching is required here, not optional.** `ProjectIconImageStaging.stage` reads
+and SHA-256s the image on every call, and `effectiveIcon(for:)` runs on sidebar
+render paths, so resolving uncached would re-read the icon bytes per render
+pass. Keep a small per-project cache in this extension keyed by
+`project.id` plus the resolved repo icon's `(path, modificationDate, fileSize)`:
+on a key match return the previously resolved `ProjectIcon` without touching
+disk, otherwise resolve and store. Entries are tiny and bounded by the number
+of projects on screen; no eviction API is needed in v1, but drop the entry when
+the project has no repo icon (so a later-added `icon.png` is picked up). This is
+the seam the design promised ("icons resolve to absolute path + mtime").
 
 **Step 2: Update the call sites.** At each of the 8 locations, `ProjectIconView(icon: project.icon, ...)` becomes `ProjectIconView(icon: appState.effectiveIcon(for: project), ...)`. Every listed view already has `AppState` in scope (`@EnvironmentObject` or parameter) — verify per file; if one lacks it, add `@EnvironmentObject var appState: AppState`. Do NOT touch `NewProjectDialog.swift:484-487` (creation draft) or worktree-level icons.
 
