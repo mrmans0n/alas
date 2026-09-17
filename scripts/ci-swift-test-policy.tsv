@@ -38,7 +38,7 @@ AlasTests/BeautifulMermaidSmokeTests	subprocess	Conservative subprocess isolatio
 AlasTests/CheckpointCoordinationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/CheckpointDiffLoaderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/CheckpointRestoreIntegrationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CheckpointRestoreInterruptionTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
+AlasTests/CheckpointRestoreInterruptionTests	slow-subprocess	Parameterized restore fault scenarios exceed the default aggregate deadline while making progress; allow 360 seconds per invocation.	#23
 AlasTests/CheckpointRestorePreparationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/CheckpointRestorePreviewTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/ClosedTabAppStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
@@ -167,3 +167,30 @@ AlasTests/SSHIntegrationTests	quarantine	Requires a key-authenticated SSH localh
 AlasTests/GitServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
 AlasTests/WorktreeServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
 AlasTests/ProjectsManagerTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
+AlasTests/ACPSessionDiscoveryTests/concurrentDeletionsSerializeRefreshes()	quarantine	Concurrent deletion refresh test traps on the macOS CI runner. Evidence: run 35216158495.	#1297
+AlasTests/ACPSessionManagerReattachTests/localDisconnectSchedulesDueQueueReattach()	quarantine	Disconnect queue test retains a live session and pending prompt after its expected detach. Evidence: run 35216158495.	#1297
+AlasTests/AgentHookSocketServerTests/aliasEnvelope_dispatchesMappedEvent()	quarantine	Socket fixture receives no JSON acknowledgement despite event dispatch. Evidence: run 35216158495.	#1297
+AlasTests/AgentHookSocketServerTests/malformedJSON_returnsError()	quarantine	Socket fixture receives no JSON acknowledgement despite event dispatch. Evidence: run 35216158495.	#1297
+AlasTests/AgentHookSocketServerTests/unknownEvent_acksOkButDoesNotDispatch()	quarantine	Socket fixture receives no JSON acknowledgement despite event dispatch. Evidence: run 35216158495.	#1297
+AlasTests/AgentHookSocketServerTests/wellFormedEnvelope_dispatchesEvent()	quarantine	Socket fixture receives no JSON acknowledgement despite event dispatch. Evidence: run 35216158495.	#1297
+AlasTests/AppStateKeepSessionsAliveTests/workspaceCheckoutSearchActivationPreservesCheckoutFocus()	quarantine	Checkout search activation retains an active tab where the fixture expects none. Evidence: run 35216158495.	#1297
+AlasTests/EditorDisplayIntegrationTests/reusedCoordinatorRebindsCaptureMutationRootAndExternalRequests()	quarantine	Coordinator rebinding test exceeds the 60-second test allowance. Evidence: run 35216158495.	#1297
+AlasTests/LanguageRegistryTests/newGrammarsHighlightRealSource()	quarantine	Svelte source captures punctuation but the regression requires a keyword capture. Evidence: run 35216158495.	#1297
+AlasTests/RemoteAppStateAccessTests/createRemoteSessionRejectsDisabledOrNonACPAgent()	quarantine	Remote-session fixture is blocked by checkpoint recovery admission or fails to create the expected ACP tab. Evidence: run 35216158495.	#1297
+AlasTests/RemoteAppStateAccessTests/createRemoteSessionRejectsMissingAgent()	quarantine	Remote-session fixture is blocked by checkpoint recovery admission or fails to create the expected ACP tab. Evidence: run 35216158495.	#1297
+AlasTests/RemoteAppStateAccessTests/createRemoteSessionSelectsWorktreeAppendsTabAndReturnsSummary()	quarantine	Remote-session fixture is blocked by checkpoint recovery admission or fails to create the expected ACP tab. Evidence: run 35216158495.	#1297
+AlasTests/RemoteAppStateAccessTests/createRemoteSessionSwitchesSpaceBeforeSelectingWorktree()	quarantine	Remote-session fixture is blocked by checkpoint recovery admission or fails to create the expected ACP tab. Evidence: run 35216158495.	#1297
+AlasTests/RemoteAppStateAccessTests/openingUncachedStoredSessionUsesPersistedTitleForTab()	quarantine	Remote-session fixture is blocked by checkpoint recovery admission or fails to create the expected ACP tab. Evidence: run 35216158495.	#1297
+AlasTests/RenameFeatureTests/oversizedPreparationNeverCreatesPreviewOrJournal(tooManyTargets:)	quarantine	Oversized rename preparation exceeds the 60-second test allowance. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStateDiscardTests/confirmDiscardAllClearsWorktree()	quarantine	Standalone pane fixture never admits the discard; pending state and worktree changes remain unchanged. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStateDiscardTests/confirmDiscardFileRunsGitAndClearsPending()	quarantine	Standalone pane fixture never admits the discard; pending state and worktree changes remain unchanged. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStateDiscardTests/confirmDiscardFolderHonoursPrefix()	quarantine	Standalone pane fixture never admits the discard; pending state and worktree changes remain unchanged. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStateDiscardTests/requestDiscardFileSetsPendingFromChanges()	quarantine	Standalone pane fixture never admits the discard; pending state and worktree changes remain unchanged. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStatePullTests/pullFastForwardsAndClearsInFlight()	quarantine	Pull fixture leaves HEAD unchanged and never enters the expected conflict operation. Evidence: run 35216158495.	#1297
+AlasTests/RightPaneStatePullTests/pullRoutesConflictIntoMergeOp()	quarantine	Pull fixture leaves HEAD unchanged and never enters the expected conflict operation. Evidence: run 35216158495.	#1297
+AlasTests/SelfUpdaterTests/echoSucceeds()	quarantine	Process reports finished before the expected echo output appears in logLines. Evidence: run 35216158495.	#1297
+AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRecreatesACompletedMemberWhoseFrozenWorktreeIsMissing()	quarantine	Resume fixture lineage-check count no longer matches its expected three calls. Evidence: run 35216158495.	#1297
+AlasTests/AppStateCleanupTests	quarantine	Repeated creation/deletion operation waits fail before the invocation deadline; checkpoint-aware fixtures need repair. Evidence: subprocess-2-2 in run 35216158495.	#1297
+AlasTests/RightPaneGGStackTests	quarantine	Mutation admission returns operationInFlight and skips runner calls before the invocation deadline. Evidence: subprocess-2-7 in run 35216158495.	#1297
+AlasTests/WorkspaceTerminalSessionTests/archivingCheckoutStopsRegisteredSessionEvenWithoutPersistedTabs()	quarantine	Checkout archival stops making progress at this test until the invocation deadline. Evidence: subprocess-2-9 in run 35216158495.	#1297
+AlasTests/PairedPrimaryComposerSurfaceTests/reviewRequestTitleAndBodyUsePairedBindings()	quarantine	Body insertion does not update the bound model; reproduced locally after an additional UI drain. Evidence: run 35216158495 and focused local verification.	#1297

@@ -20,7 +20,7 @@ jobs:
     runs-on: macos-26
     # Cover every sequential batch even on timeout, leaving time for preparation,
     # the final coverage audit, and diagnostic upload. Invocations stay bounded.
-    timeout-minutes: 300
+    timeout-minutes: 330
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -73,7 +73,7 @@ jobs:
       - name: Install xcodegen + zig@0.15 + SwiftFormat
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
-        run: brew install xcodegen zig@0.15 swiftformat
+        run: brew install xcodegen zig@0.15 swiftformat ripgrep
 
       - name: Check formatting
         run: swiftformat Alas AlasTests --lint --reporter github-actions-log
@@ -323,32 +323,32 @@ jobs:
       # owns several invocations, including bounded startup and teardown time.
       - name: Test — subprocess-sensitive Swift batch 1/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 0 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 2/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 1 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 3/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 2 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 4/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 3 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 5/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 4 --lane subprocess
 
       - name: Test — subprocess-sensitive Swift batch 6/6
         if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: python3 scripts/ci_swift_tests.py run --batch 5 --lane subprocess
 
       - name: Reconcile Swift coverage and publish timings

@@ -100,8 +100,9 @@ struct IssueAutocompleteModelTests {
 
         model.referenceChanged("#42", projectID: "alas")
         #expect(model.selectedIndex == 0)
+        #expect(model.filteredSuggestions.map(\.number) == [42])
         model.moveSelection(1)
-        #expect(model.selectedIndex == 1)
+        #expect(model.selectedIndex == 0)
         model.referenceChanged("#missing", projectID: "alas")
         model.moveSelection(1)
         #expect(model.selectedIndex == 0)

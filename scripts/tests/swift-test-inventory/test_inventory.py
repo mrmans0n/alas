@@ -63,8 +63,15 @@ class InventoryTests(unittest.TestCase):
     def test_overlapping_policy_is_rejected(self):
         with self.assertRaises(ValueError):
             self.module.make_plan(enumeration("AlasTests/A/a()"), [
-                ("AlasTests/A", "subprocess", "isolation", "#23"),
+                ("AlasTests/A", "quarantine", "hang", "#23"),
                 ("AlasTests/A/a()", "quarantine", "hang", "#23")], 2)
+
+    def test_one_quarantined_test_preserves_subprocess_isolation_for_its_siblings(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/A/b()", "AlasTests/A/c()"), [
+            ("AlasTests/A", "subprocess", "isolation", "#23"),
+            ("AlasTests/A/b()", "quarantine", "hang", "#23")], 1)
+        self.assertEqual(plan["excluded"], ["AlasTests/A/b()"])
+        self.assertEqual(plan["batches"][1]["invocations"], [["AlasTests/A/a()", "AlasTests/A/c()"]])
 
     def test_disabled_tests_need_explicit_exclusion(self):
         document = enumeration("AlasTests/A/a()", disabled=["AlasTests/B/b()"])
@@ -81,6 +88,17 @@ class InventoryTests(unittest.TestCase):
         chunks = [chunk for batch in plan["batches"] for chunk in batch["invocations"]]
         self.assertTrue(all(len(chunk) <= 3 for chunk in chunks))
         self.assertCountEqual([test for batch in plan["batches"] for test in batch["tests"]], ids)
+
+    def test_measured_slow_suite_gets_a_bounded_larger_invocation_budget(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [
+            ("AlasTests/A", "slow-subprocess", "measured restore scenarios", "#23")], 1)
+        self.assertEqual(plan["batches"][1]["timeouts"], [360])
+
+    def test_plan_rejects_more_work_than_a_subprocess_step_can_finish(self):
+        ids = [f"AlasTests/S{i}/test()" for i in range(16)]
+        policy = [(f"AlasTests/S{i}", "slow-subprocess", "measured", "#23") for i in range(16)]
+        with self.assertRaisesRegex(ValueError, "budget"):
+            self.module.make_plan(enumeration(*ids), policy, 1)
 
     def test_partial_exclusion_never_selects_its_parent_suite(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/A/b()"),

@@ -8,7 +8,7 @@ test identifiers.
 
 `scripts/ci_swift_tests.py plan` rejects enumeration errors even if Xcode returns
 zero, empty inventories, duplicate identifiers, stale policy selectors, overlapping
-policies, and disabled tests without an explicit exclusion. Every discovered test
+policies of the same kind, and disabled tests without an explicit exclusion. Every discovered test
 is assigned once to execution or an exclusion in `scripts/ci-swift-test-policy.tsv`.
 New tests default to ordinary execution without editing that file or the workflow.
 
@@ -22,8 +22,25 @@ individually reproduced a hang. Shrink it using measured runs, not source heuris
 Six ordinary batches run sequentially on one runner. The subprocess lane also has
 six batches, each containing invocations of at most three suites. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
-120 seconds subprocess. Tests retain Xcode's 60-second execution allowance.
+120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
+for measured longer-running suites: the checkpoint fault-injection suite passed
+locally in 229 seconds (286 seconds for its three-suite invocation). Planning
+checks that invocation limits plus termination and result-extraction allowances
+fit each 30-minute subprocess step. Tests retain Xcode's 60-second execution allowance.
 Failures do not prevent later invocations or batches from collecting evidence.
+
+Quarantine overrides execution requirements independently of policy order. For
+partially excluded suites, Xcode receives individual runnable test identifiers;
+the remaining tests retain their suite's subprocess isolation. Known failures
+exposed by the expanded baseline are tracked in #1297, and the earlier workspace
+undo timeout in #1292. Removing an exclusion restores automatic execution.
+
+The first native-discovery run, [35216158495](https://github.com/mrmans0n/alas/actions/runs/35216158495),
+discovered 10,657 definitions, excluded 189, and executed 10,255 with no runtime
+skips. It reported 34 failed definitions and 213 unaccounted definitions in four
+timed-out invocations. All twelve batches ran and their diagnostics were uploaded.
+These are baseline measurements, not a passing result; subsequent runs publish
+their own counts and per-invocation durations in the job summary and artifacts.
 
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,

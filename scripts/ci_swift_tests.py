@@ -33,15 +33,23 @@ def make_plan(document, policy, batch_count):
     if not tests or len(tests) != len(set(tests)):
         raise ValueError("Empty or duplicate Xcode inventory; use one test configuration")
     tests.sort()
-    assignments = {}
+    policies = {"quarantine": set(), "subprocess": set()}
+    slow_tests = set()
     for selector, lane, reason, issue in policy:
-        if (lane not in ("quarantine", "subprocess") or not reason.strip()
+        if (lane not in ("quarantine", "subprocess", "slow-subprocess") or not reason.strip()
                 or not issue.startswith("#") or not issue[1:].isdigit()):
             raise ValueError(f"Invalid execution policy: {selector}")
         matches = {test for test in tests if test == selector or test.startswith(selector + "/")}
-        if not matches or matches & assignments.keys():
+        if lane == "slow-subprocess":
+            slow_tests.update(matches)
+            lane = "subprocess"
+        if not matches or matches & policies[lane]:
             raise ValueError(f"Stale or overlapping execution policy: {selector}")
-        assignments.update(dict.fromkeys(matches, lane))
+        policies[lane].update(matches)
+    # Exclusions and execution requirements are separate: one excluded method
+    # must not remove subprocess isolation from the rest of its suite.
+    assignments = dict.fromkeys(policies["subprocess"], "subprocess")
+    assignments.update(dict.fromkeys(policies["quarantine"], "quarantine"))
     excluded = [test for test in tests if assignments.get(test) == "quarantine"]
     if disabled - set(excluded):
         unassigned = sorted(disabled - set(excluded))
@@ -57,8 +65,6 @@ def make_plan(document, policy, batch_count):
             if assignments.get(test, "ordinary") == lane:
                 # Canonical Xcode identifiers, not Swift source or display names.
                 selector = test.rsplit("/", 1)[0] if test.count("/") > 1 else test
-                if len(suite_lanes[selector]) > 1:
-                    selector = test
                 groups.setdefault(selector, []).append(test)
         selectors = sorted(groups)
         chunks = ([selectors[i:i + 3] for i in range(0, len(selectors), 3)]
@@ -67,8 +73,19 @@ def make_plan(document, policy, batch_count):
             invocations = chunks[index::batch_count] if lane == "subprocess" else [chunks[index]]
             invocations = [chunk for chunk in invocations if chunk]
             selected = [test for chunk in invocations for selector in chunk for test in groups[selector]]
+            # Keep partial suites together, but pass only their runnable test
+            # identifiers to Xcode so an excluded sibling cannot execute.
+            arguments = [[selector for suite in chunk
+                          for selector in ([suite] if len(suite_lanes[suite]) == 1 else groups[suite])]
+                         for chunk in invocations]
+            timeouts = [360 if lane == "ordinary" or any(test in slow_tests for suite in chunk for test in groups[suite])
+                        else 120 for chunk in invocations]
+            # The workflow reserves 30 minutes per subprocess step. Include
+            # termination/result extraction and leave a minute for reporting.
+            if lane == "subprocess" and sum(timeout + 40 for timeout in timeouts) > 1740:
+                raise ValueError(f"Subprocess batch {index + 1} exceeds its time budget; increase the batch count")
             batches.append({"id": f"{lane}-{index + 1}", "lane": lane, "index": index,
-                            "invocations": invocations, "tests": selected})
+                            "invocations": arguments, "timeouts": timeouts, "tests": selected})
     scheduled = [test for batch in batches for test in batch["tests"]]
     if len(scheduled) != len(set(scheduled)) or set(scheduled) | set(excluded) != set(tests):
         raise ValueError("Inventory is not assigned exactly once")
@@ -168,7 +185,7 @@ def run_batch(plan, directory, lane, index):
                 "-default-test-execution-time-allowance", "60", "-maximum-test-execution-time-allowance", "60"]
             for selector in selectors:
                 command.extend(["-only-testing", selector])
-            status = bounded(command, directory / f"{name}.log", 120 if lane == "subprocess" else 360)
+            status = bounded(command, directory / f"{name}.log", batch["timeouts"][number - 1])
             report["exit_status"] = status
             result = subprocess.run(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)],
                                     capture_output=True, text=True, timeout=30, check=True)
