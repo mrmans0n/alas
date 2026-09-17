@@ -171,46 +171,66 @@ struct CodeActionsFeatureTests {
 
     @Test(arguments: ["none", "untouchedBefore", "untouchedAfter", "editedAfter"])
     @MainActor func postPreviewRebindingValidatesCapturedBuffers(change: String) async throws {
-        final class BufferOwner {}
-        let ownerA = BufferOwner()
-        let ownerB = BufferOwner()
-        let a = EditorDocumentID(host: nil, worktreeID: "w", uri: "file:///fixture/a")
-        let b = EditorDocumentID(host: nil, worktreeID: "w", uri: "file:///fixture/b")
-        let captured: [EditorDocumentID: WorkspaceEditBufferGeneration] = [
-            a: WorkspaceEditBufferGeneration(identity: ObjectIdentifier(ownerA), edit: 0, watch: 0),
-            b: WorkspaceEditBufferGeneration(identity: ObjectIdentifier(ownerB), edit: 0, watch: 0),
-        ]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("code-action-generation-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("old".utf8).write(to: root.appendingPathComponent("a"))
+        try Data("side".utf8).write(to: root.appendingPathComponent("b"))
+        let tabs = TabsManager(tabsDirectory: root.appendingPathComponent("tabs"))
+        func open(_ relativePath: String) async -> EditorBuffer {
+            let tab = tabs.openEditor(worktreeId: "w", relativePath: relativePath, revealLine: nil, revealCharacter: nil)
+            let buffer = tabs.buffer(worktreeId: "w", tabId: tab.id, worktreeRoot: root, relativePath: relativePath)
+            await buffer.awaitLoadForTesting()
+            buffer.stopWatching()
+            return buffer
+        }
+        let bufferA = await open("a")
+        let bufferB = await open("b")
+        defer {
+            bufferA.close(persistDirtySnapshot: false)
+            bufferB.close(persistDirtySnapshot: false)
+        }
+        let a = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("a").lspURI)
+        let b = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("b").lspURI)
+        let captured = tabs.workspaceEditGenerations(host: nil, worktreeID: "w")
         let range = LSPRange(start: .init(line: 0, character: 0), end: .init(line: 0, character: 3))
         let edit = LSPWorkspaceEdit(changes: [a.uri: [.init(range: range, newText: "new")]])
         let action = try LSPCodeAction(wireValue: .object([
             "title": .string("Fix"), "edit": LSPJSONValue.decode(from: JSONEncoder().encode(edit)),
             "command": .object(["title": .string("Run"), "command": .string("run")])
         ]))
-        func generation(_ owner: BufferOwner, edit: Int) -> WorkspaceEditBufferGeneration {
-            WorkspaceEditBufferGeneration(identity: ObjectIdentifier(owner), edit: edit, watch: 0)
+        if change == "untouchedBefore" {
+            bufferB.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "changed ")
         }
-        func snapshot(_ document: EditorDocumentID, edit: Int) -> WorkspaceFileSnapshot {
-            WorkspaceFileSnapshot(
-                document: document,
-                content: Data("new".utf8),
-                isOpen: true,
-                bufferGeneration: edit,
-                fileWatchGeneration: 0
-            )
-        }
+        let access = HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { _ in root })
+        let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
+        let executor = WorkspaceEditExecutor(access: access, journal: journal)
+        let context = EditorRequestContext(document: b, version: 1, serverGeneration: UUID(), range: range)
         var commandRan = false
         let result = try await CodeActionsFeature.perform(action, isCurrent: { true }, apply: { _ in
-            let applied = [a: snapshot(a, edit: 1)]
-            let currentAEdit = change == "editedAfter" ? 2 : 1
-            let currentBEdit = change == "untouchedBefore" || change == "untouchedAfter" ? 1 : 0
-            let current = [
-                a: generation(ownerA, edit: currentAEdit),
-                b: generation(ownerB, edit: currentBEdit),
-            ]
-            let actual = [a: snapshot(a, edit: currentAEdit)]
             do {
-                _ = try CodeActionsFeature.validatedGenerations(captured: captured,
-                    current: current, applied: applied, actual: actual)
+                let before = try await access.snapshot(a)
+                let plan = try WorkspaceEditPlanner.plan(edit: edit, context: context, snapshots: [a: before])
+                guard case .applied(let operationID) = await executor.apply(plan) else {
+                    return .init(applied: false, failureReason: "Workspace edit was not applied")
+                }
+                if change == "untouchedAfter" {
+                    bufferB.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "changed ")
+                } else if change == "editedAfter" {
+                    bufferA.storage.replaceCharacters(in: NSRange(location: 0, length: bufferA.storage.length), with: "later")
+                }
+                let record = try journal.record(operationID)
+                var applied: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
+                for entry in record.entries {
+                    guard entry.state == .confirmed, let observed = entry.observedAfter else {
+                        return .init(applied: false, failureReason: "Workspace edit observations were not recorded")
+                    }
+                    for snapshot in observed { applied[snapshot.document] = snapshot }
+                }
+                let current = tabs.workspaceEditGenerations(host: nil, worktreeID: "w")
+                var actual: [EditorDocumentID: WorkspaceFileSnapshot] = [:]
+                for document in applied.keys { actual[document] = try await access.snapshot(document) }
+                _ = try CodeActionsFeature.validatedGenerations(captured: captured, current: current, applied: applied, actual: actual)
                 return .init(applied: true)
             } catch { return .init(applied: false, failureReason: "Captured buffer changed") }
         }, execute: { _ in commandRan = true })
