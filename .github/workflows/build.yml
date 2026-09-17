@@ -449,3 +449,98 @@ jobs:
       # plumbing — and re-enable once the macos-26 Process+git interaction
       # is properly understood. Build-for-testing above still validates
       # they compile.
+
+  ci-workflow-contract:
+    name: CI workflow contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Test CI workflow contract
+        run: bash scripts/tests/ci-workflow/run.sh
+
+  rust-tests:
+    name: Rust tests (${{ matrix.project }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: AlasCLI
+            toolchain: "1.98.1"
+          - project: AlasHelper
+            toolchain: "1.98.1"
+          # tree-sitter-pack's build script declares this toolchain until the
+          # crate owns a rust-toolchain.toml like the other first-party crates.
+          - project: ThirdParty/treesitter-pack
+            toolchain: "1.97.1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ matrix.project }}/target
+          key: rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-${{ hashFiles('AlasCLI/Cargo.lock', 'AlasHelper/Cargo.lock', 'ThirdParty/treesitter-pack/Cargo.lock') }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-
+
+      - name: Install declared Rust toolchain
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+
+      - name: Run locked Rust tests
+        working-directory: ${{ matrix.project }}
+        run: rustup run ${{ matrix.toolchain }} cargo test --locked
+
+  remote-web-tests:
+    name: Remote web tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Test remote web changes
+        run: bash scripts/tests/remote-web-changes/run.sh
+
+      - name: Test remote web session ordering
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-session-ordering/run.sh
+
+      - name: Test remote web worktree creation
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-worktree-creation/run.sh
+
+  shell-harness-tests:
+    name: macOS shell harness tests
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      # These runners exercise Apple-target selection, lipo/install-name
+      # behavior, resource signing, and Xcode DerivedData metadata.
+      - name: Test build-zmx harness
+        run: bash scripts/tests/build-zmx/run.sh
+
+      - name: Test build-fff harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/build-fff/run.sh
+
+      - name: Test build-treesitter-pack harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/build-treesitter-pack/run.sh
+
+      - name: Test embed-ghostty-resources harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/embed-ghostty-resources/run.sh
+
+      - name: Test Xcode state harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/xcode-state/run.sh
