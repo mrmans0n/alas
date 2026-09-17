@@ -45,6 +45,10 @@ struct DraftReviewRequestTabView: View {
         appState.agentAvailability(worktreePath: worktreePath)
     }
 
+    private var agentAvailabilityTaskKey: String {
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath))"
+    }
+
     private enum Field: Hashable { case title, body }
 
     private var snapshot: ReviewLoopSnapshot? {
@@ -121,7 +125,7 @@ struct DraftReviewRequestTabView: View {
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }
-        .task(id: executionTarget) {
+        .task(id: agentAvailabilityTaskKey) {
             await appState.loadAgentAvailability(worktreePath: worktreePath)
         }
         .onDisappear {

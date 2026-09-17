@@ -41,6 +41,10 @@ struct DraftCommitTabView: View {
         appState.agentAvailability(worktreePath: worktreePath)
     }
 
+    private var agentAvailabilityTaskKey: String {
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath))"
+    }
+
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
             appState: appState,
@@ -287,7 +291,7 @@ struct DraftCommitTabView: View {
         // HEAD-changing event (external commit, rebase, reset, etc.). On
         // mount the key is "" → "<sha>" so the task fires once.
         .task(id: amendProbeKey) { await refreshCanAmend() }
-        .task(id: executionTarget) {
+        .task(id: agentAvailabilityTaskKey) {
             await appState.loadAgentAvailability(worktreePath: worktreePath)
         }
         .task(id: publicationProbeKey) {

@@ -45,6 +45,10 @@ struct CommitEditorTabView: View {
         appState.agentAvailability(worktreePath: worktreePath)
     }
 
+    private var agentAvailabilityTaskKey: String {
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath))"
+    }
+
     private static let minPaneWidth: CGFloat = 140
     private var checkpointLeaseActive: Bool {
         appState.checkpointFileWritesDisabled(worktreeId: worktreeId)
@@ -134,7 +138,7 @@ struct CommitEditorTabView: View {
         .task(id: worktreeId) {
             _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
         }
-        .task(id: executionTarget) {
+        .task(id: agentAvailabilityTaskKey) {
             await appState.loadAgentAvailability(worktreePath: worktreePath)
         }
         .task(id: diffTaskKey) {

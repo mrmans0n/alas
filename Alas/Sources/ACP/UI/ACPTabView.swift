@@ -31,9 +31,13 @@ struct ACPTabView: View {
                 unavailable
             }
         }
-        .task(id: worktree.path) {
+        .task(id: agentAvailabilityTaskKey) {
             await state.loadAgentAvailability(worktreePath: worktree.path)
         }
+    }
+
+    private var agentAvailabilityTaskKey: String {
+        "\(worktree.path.path):\(state.agentAvailabilityGeneration(worktreePath: worktree.path))"
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {

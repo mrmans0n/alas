@@ -740,6 +740,15 @@ final class AppState {
         )
     }
 
+    func agentAvailabilityGeneration(
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> Int {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        guard case .ssh = target else { return 0 }
+        return agentAvailabilityStore.generation
+    }
+
     func loadAgentAvailability(
         worktreePath: URL,
         remoteHost: String? = nil,
@@ -778,7 +787,10 @@ final class AppState {
     ///   - per-project `worktreeAgentMode` → `.useGlobal` if it referenced
     ///     a vanished agent
     private func snapInvalidatedAgentSelections() {
-        let enabledIds = Set(agentRegistry.enabled().map(\.id))
+        let enabledIds = Set(AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        ).map(\.id))
         var changed = false
         let currentTool = config.changes.aiToolId
         if currentTool != "none", !enabledIds.contains(currentTool) {

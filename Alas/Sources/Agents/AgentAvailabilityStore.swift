@@ -22,6 +22,7 @@ final class AgentAvailabilityStore {
     }
 
     private(set) var states: [Key: AgentAvailabilityState] = [:]
+    private(set) var generation = 0
     @ObservationIgnored private var inFlight: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private let probe: Probe
 
@@ -92,12 +93,14 @@ final class AgentAvailabilityStore {
         guard case .ssh(let host) = target else { return }
         invalidate(Key(host: host, worktreePath: nil))
         invalidate(Key(host: host, worktreePath: worktreePath))
+        generation += 1
     }
 
     func invalidateAll() {
         inFlight.values.forEach { $0.cancel() }
         inFlight = [:]
         states = [:]
+        generation += 1
     }
 
     private func invalidate(_ key: Key) {

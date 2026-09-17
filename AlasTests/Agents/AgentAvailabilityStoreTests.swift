@@ -103,6 +103,22 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev-a"), worktreePath: "/srv/repo", localAgents: []) == .loading)
         #expect(store.state(target: .ssh(host: "dev-b"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
     }
+
+    @Test func invalidationAdvancesGenerationForMountedViewTasks() async {
+        let store = AgentAvailabilityStore { _, _, _ in
+            ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+        }
+        let candidates = [TestAgents.custom(id: "one", binary: "one")]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        let loadedGeneration = store.generation
+
+        store.invalidate(target: .ssh(host: "dev"), worktreePath: "/srv/repo")
+        #expect(store.generation == loadedGeneration + 1)
+
+        store.invalidateAll()
+        #expect(store.generation == loadedGeneration + 2)
+    }
 }
 
 private actor ProbeCounter {

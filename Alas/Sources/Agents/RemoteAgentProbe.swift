@@ -8,7 +8,7 @@ enum RemoteAgentProbe {
             }
             return "if \(check); then printf '%s\\n' '\(index)'; fi"
         }
-        .joined(separator: " ")
+        .joined(separator: "\n")
     }
 
     static func availableAgentIDs(stdout: String, agents: [AgentDefinition]) -> Set<String> {

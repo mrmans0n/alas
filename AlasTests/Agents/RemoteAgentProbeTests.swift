@@ -17,6 +17,8 @@ struct RemoteAgentProbeTests {
         #expect(command.contains("'/opt/tools/codex'"))
         #expect(command.contains("$HOME/"))
         #expect(command.contains("cd '/srv/repo with space'"))
+        #expect(command.contains("; fi\nif "))
+        #expect(!command.contains("; fi if "))
         #expect(!command.contains("hostile-'-$()-id"))
         #expect(!command.contains("touch /tmp/nope;  &&"))
     }
