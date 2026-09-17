@@ -93,7 +93,7 @@ struct ACPTerminalTests {
         var reaped = false
         for _ in 0..<100 {
             try await Task.sleep(nanoseconds: 40_000_000)
-            if Darwin.kill(sleepPid, 0) != 0 {
+            if !processIsRunning(sleepPid) {
                 reaped = true
                 break
             }
@@ -130,7 +130,7 @@ struct ACPTerminalTests {
         var reaped = false
         for _ in 0..<100 {
             try await Task.sleep(nanoseconds: 40_000_000)
-            if Darwin.kill(trappedPid, 0) != 0 {
+            if !processIsRunning(trappedPid) {
                 reaped = true
                 break
             }
@@ -142,8 +142,8 @@ struct ACPTerminalTests {
     func killReachesGrandchildren() async throws {
         // Shell forks a `sleep 30` background child, prints its PID,
         // then waits. After we kill the shell's process group, the
-        // grandchild sleep should also exit — verified by polling
-        // kill(grandchildPid, 0) until it returns ESRCH.
+        // grandchild sleep should also exit — verified by polling the
+        // process table until it is gone or has reached the zombie state.
         let t = try ACPTerminal(
             id: "tpgkill",
             command: "/bin/sh",
@@ -169,12 +169,24 @@ struct ACPTerminalTests {
         var reaped = false
         for _ in 0..<50 {
             try await Task.sleep(nanoseconds: 40_000_000)
-            if Darwin.kill(grandchildPid, 0) != 0 {
+            if !processIsRunning(grandchildPid) {
                 reaped = true
                 break
             }
         }
         #expect(reaped)
+    }
+
+    private func processIsRunning(_ pid: pid_t) -> Bool {
+        var info = proc_bsdinfo()
+        let size = MemoryLayout<proc_bsdinfo>.stride
+        let read = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: UInt8.self, capacity: size) {
+                proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, Int32(size))
+            }
+        }
+        guard read == Int32(size) else { return false }
+        return info.pbi_status != UInt32(SZOMB)
     }
 
     @Test("kill terminates a long-running process within 3 s")

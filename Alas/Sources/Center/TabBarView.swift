@@ -271,7 +271,7 @@ private struct AccessibilityMarkerView: NSViewRepresentable {
     }
 }
 
-private struct TabButton: View {
+struct TabButton: View {
     private static let maxTitleWidth: CGFloat = 220
 
     let titleLookup: (TabID) -> String?
