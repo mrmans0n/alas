@@ -61,9 +61,12 @@ while IFS= read -r source; do
         function consume_attribute_arguments(line,    i, c) {
             for (i = 1; i <= length(line); i++) {
                 c = substr(line, i, 1)
-                if (attribute_block_comment) {
-                    if (c == "*" && substr(line, i + 1, 1) == "/") {
-                        attribute_block_comment = 0
+                if (attribute_block_comment_depth > 0) {
+                    if (c == "/" && substr(line, i + 1, 1) == "*") {
+                        attribute_block_comment_depth++
+                        i++
+                    } else if (c == "*" && substr(line, i + 1, 1) == "/") {
+                        attribute_block_comment_depth--
                         i++
                     }
                     continue
@@ -82,7 +85,7 @@ while IFS= read -r source; do
                     return ""
                 }
                 if (c == "/" && substr(line, i + 1, 1) == "*") {
-                    attribute_block_comment = 1
+                    attribute_block_comment_depth = 1
                     i++
                     continue
                 }
@@ -97,7 +100,7 @@ while IFS= read -r source; do
                     if (attribute_depth == 0) {
                         attribute_in_string = 0
                         attribute_escaped = 0
-                        attribute_block_comment = 0
+                        attribute_block_comment_depth = 0
                         return substr(line, i + 1)
                     }
                 }
@@ -119,7 +122,7 @@ while IFS= read -r source; do
                     attribute_depth = 0
                     attribute_in_string = 0
                     attribute_escaped = 0
-                    attribute_block_comment = 0
+                    attribute_block_comment_depth = 0
                     line = consume_attribute_arguments(line)
                     if (attribute_depth > 0) {
                         return ""
@@ -185,9 +188,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             function consume_attribute_arguments(line,    i, c) {
                 for (i = 1; i <= length(line); i++) {
                     c = substr(line, i, 1)
-                    if (attribute_block_comment) {
-                        if (c == "*" && substr(line, i + 1, 1) == "/") {
-                            attribute_block_comment = 0
+                    if (attribute_block_comment_depth > 0) {
+                        if (c == "/" && substr(line, i + 1, 1) == "*") {
+                            attribute_block_comment_depth++
+                            i++
+                        } else if (c == "*" && substr(line, i + 1, 1) == "/") {
+                            attribute_block_comment_depth--
                             i++
                         }
                         continue
@@ -206,7 +212,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         return ""
                     }
                     if (c == "/" && substr(line, i + 1, 1) == "*") {
-                        attribute_block_comment = 1
+                        attribute_block_comment_depth = 1
                         i++
                         continue
                     }
@@ -221,7 +227,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         if (attribute_depth == 0) {
                             attribute_in_string = 0
                             attribute_escaped = 0
-                            attribute_block_comment = 0
+                            attribute_block_comment_depth = 0
                             return substr(line, i + 1)
                         }
                     }
@@ -243,7 +249,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         attribute_depth = 0
                         attribute_in_string = 0
                         attribute_escaped = 0
-                        attribute_block_comment = 0
+                        attribute_block_comment_depth = 0
                         line = consume_attribute_arguments(line)
                         if (attribute_depth > 0) {
                             return ""
