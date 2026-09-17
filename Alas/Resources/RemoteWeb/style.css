@@ -81,6 +81,7 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .session-section-title { margin: 4px 4px 0; color: var(--fg-muted); font-size: 13px; font-weight: 700; }
 .repo-header { display: flex; align-items: center; gap: 9px; padding: 9px 6px; border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .repo-header:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -2px; }
+.repo-header.repo-header-static { cursor: default; }
 .repo-chev { width: 14px; flex: 0 0 14px; text-align: center; color: var(--fg-faint); font-size: 11px; }
 .repo-tile { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: oklch(0.98 0 0 / 0.95); letter-spacing: -0.02em; }
 .repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; letter-spacing: -0.015em; color: var(--fg); }
@@ -398,6 +399,4 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 }
 @media (max-width: 520px) {
   #detail-title { display: none; }
-  #detail-title-block { display: none; }
-  #detail-tabs { margin-right: auto; }
 }
