@@ -64,6 +64,13 @@ a fixed refresh sleep with a bounded condition wait. Measured batch totals:
 | subprocess-5 | 379 | 146.56 |
 | subprocess-6 | 451 | 175.63 |
 
+The following run, [35228291381](https://github.com/mrmans0n/alas/actions/runs/35228291381),
+again assigned every definition, produced no runtime skips or missing results,
+and passed all six subprocess batches. Its sole failure was
+`RenameFeatureTests/unopenedPreviewTargetsHaveNormalUndoInInitiatingEditor(resourceOnly:)`:
+it passed focused execution but failed in ordinary batch 3. That exact parameterized
+definition is quarantined under #1297; its sibling rename tests remain scheduled.
+
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
 unexpected tests, failed tests, unapproved runtime skips, and incomplete invocations.
