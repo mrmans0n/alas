@@ -517,6 +517,55 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
     }
 
+    @Test func lateBackgroundStartPreservesEarlierForegroundIdle() {
+        let (service, _) = makeService()
+
+        service.finishExternalActivity(
+            sessionId: "session-1",
+            owner: .worktree("w1"),
+            agent: .pi,
+            recordIdleTransition: false
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func finalBackgroundCompletionSendsDeferredFinishedNotification() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, body: "Finished"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(collector.requests.isEmpty)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(collector.requests.count == 1)
+        #expect(collector.requests[0].content.title == "Pi finished")
+        #expect(collector.requests[0].content.body == "Finished")
+    }
+
     @Test func forgetSession_clearsAllState() {
         let (service, _) = makeService()
         service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
