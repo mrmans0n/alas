@@ -23,8 +23,11 @@ struct GGStackChipModelTests {
         #expect(GGStackChipModel.model(for: entry(), kind: nil)?.label == "#840")
     }
 
-    @Test func approvedAddsCheckmark() {
-        #expect(GGStackChipModel.model(for: entry(approved: true), kind: .github)?.label == "#840 ✓")
+    @Test func approvedIsFlaggedNotSuffixed() {
+        let model = GGStackChipModel.model(for: entry(approved: true), kind: .github)
+        #expect(model?.label == "#840")
+        #expect(model?.approved == true)
+        #expect(GGStackChipModel.model(for: entry(), kind: .github)?.approved == false)
     }
 
     @Test func stateMapsToColorToken() {
