@@ -2942,7 +2942,10 @@ final class AppState {
             workspaceConfiguration: workspace.configuration,
             members: members,
             availableLauncherModes: Set(AppConfig.LauncherMode.allCases),
-            enabledAgentIDs: Set(agentRegistry.enabled().map(\.id))
+            enabledAgentIDs: Set(AgentConfiguredCatalog.enabled(
+                builtinState: config.agents.builtinState,
+                customs: config.agents.custom
+            ).map(\.id))
         ))
     }
 
@@ -10597,9 +10600,22 @@ final class AppState {
         if let existing = acpManagers[owner] { return .ready(existing) }
 
         let launchSpecRemoteHome: String?
-        if let pinnedRemoteHost,
-           let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost) {
-            launchSpecRemoteHome = remoteHome
+        if let pinnedRemoteHost {
+            let configuredAgents = AgentConfiguredCatalog.enabled(
+                builtinState: config.agents.builtinState,
+                customs: config.agents.custom
+            )
+            let needsRemoteHome = configuredAgents.contains {
+                $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true
+            }
+            if let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost),
+               remoteHome.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                launchSpecRemoteHome = remoteHome
+            } else if needsRemoteHome {
+                return .pendingRootOrLocation
+            } else {
+                launchSpecRemoteHome = nil
+            }
         } else {
             launchSpecRemoteHome = nil
         }
@@ -10672,6 +10688,7 @@ final class AppState {
                 return self.workspaceACPLaunchSpec(
                     from: spec,
                     remoteHome: launchSpecRemoteHome,
+                    treatsHomeAsRemote: pinnedRemoteHost != nil,
                     useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
                 )
             },
@@ -10810,6 +10827,7 @@ final class AppState {
         from spec: ACPLaunchSpec,
         configuredAgents: [AgentDefinition]? = nil,
         remoteHome: String? = nil,
+        treatsHomeAsRemote: Bool = false,
         useBypassPermissions: Bool
     ) -> ACPLaunchSpec {
         let agents = configuredAgents ?? AgentConfiguredCatalog.enabled(
@@ -10820,7 +10838,11 @@ final class AppState {
         var launchSpec = spec
         if let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
            !binaryOverride.isEmpty,
-           let command = Self.normalizedACPBinaryOverride(binaryOverride, remoteHome: remoteHome),
+           let command = Self.normalizedACPBinaryOverride(
+            binaryOverride,
+            remoteHome: remoteHome,
+            treatsHomeAsRemote: treatsHomeAsRemote
+           ),
            command != spec.command {
             launchSpec = launchSpec.overridingCommandAndSetupCheck(command)
         }
@@ -10832,14 +10854,20 @@ final class AppState {
         return launchSpec
     }
 
-    nonisolated static func normalizedACPBinaryOverride(_ override: String, remoteHome: String?) -> String? {
+    nonisolated static func normalizedACPBinaryOverride(
+        _ override: String,
+        remoteHome: String?,
+        treatsHomeAsRemote: Bool = false
+    ) -> String? {
         let trimmed = override.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
-        if let remoteHome,
-           trimmed.hasPrefix("~/") {
-            let home = remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard !home.isEmpty else { return trimmed }
-            return "/\(home)/\(trimmed.dropFirst(2))"
+        if trimmed.hasPrefix("~/") {
+            if let remoteHome {
+                let home = remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                guard !home.isEmpty else { return treatsHomeAsRemote ? nil : trimmed }
+                return "/\(home)/\(trimmed.dropFirst(2))"
+            }
+            guard treatsHomeAsRemote == false else { return nil }
         }
         return (trimmed as NSString).expandingTildeInPath
     }

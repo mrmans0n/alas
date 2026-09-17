@@ -95,6 +95,22 @@ struct WorkspaceConfigurationResolverTests {
         #expect(snapshot.members[memberID]?.mcpServers.map(\.server.name) == ["before"])
     }
 
+    @Test("configured enabled agent remains valid even when not locally installed")
+    func keepsConfiguredEnabledAgentPreference() {
+        let memberID = UUID()
+        let snapshot = WorkspaceConfigurationResolver.resolve(.init(
+            globalTerminal: terminal(startup: "", create: ""),
+            globalLaunchPreference: .init(openAfterCreate: true, launcherMode: .acp, agentID: "remote-only"),
+            workspaceConfiguration: .init(),
+            members: [.init(id: memberID, project: project(), checkoutRoot: "/checkout", worktreePath: "/checkout/repo")],
+            availableLauncherModes: [.terminal, .acp],
+            enabledAgentIDs: ["remote-only"]
+        ))
+
+        #expect(snapshot.shared.creationLaunchPreference.agentID == "remote-only")
+        #expect(snapshot.warnings.contains(where: { $0.message.contains("remote-only") }) == false)
+    }
+
     private func project(
         startupScripts: ProjectStartupScripts = .defaults,
         ggMode: GGProjectMode = .auto,

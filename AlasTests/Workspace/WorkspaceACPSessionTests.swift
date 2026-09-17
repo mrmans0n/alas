@@ -237,6 +237,27 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutLaunchSpecDoesNotLocallyExpandMissingRemoteHomeOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/claude-agent-acp",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(
+            from: spec,
+            remoteHome: nil,
+            treatsHomeAsRemote: true,
+            useBypassPermissions: false
+        )
+
+        #expect(transformed.command == spec.command)
+        #expect(transformed.setupCheck == spec.setupCheck)
+    }
+
+    @MainActor
     @Test func appStateCreatesCheckoutManagerAtTheFrozenRootAndKeepsMissingRootPending() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
