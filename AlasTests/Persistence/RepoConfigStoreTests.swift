@@ -87,6 +87,56 @@ struct RepoConfigStoreTests {
         #expect(store.config(worktreeRoot: worktree.root) == nil)
     }
 
+    @Test func symlinkedConfigOutsideTheCheckoutIsRefused() throws {
+        let worktree = try WorktreeFixture()
+        let outside = worktree.root.deletingLastPathComponent()
+            .appendingPathComponent("outside-config.json")
+        try Data(#"{"version": 1, "defaultAgent": "pi"}"#.utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(
+            atPath: worktree.configFile.path,
+            withDestinationPath: outside.path
+        )
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        // The read must not follow the link out of the repo, even though the
+        // target is a perfectly loadable config: confinement is by location,
+        // not by what happens to be at the destination.
+        let store = RepoConfigStore()
+        #expect(store.load(worktreeRoot: worktree.root) == .malformed)
+        #expect(store.config(worktreeRoot: worktree.root) == nil)
+    }
+
+    @Test func symlinkedConfigInsideTheAlasDirectoryIsFollowed() throws {
+        let worktree = try WorktreeFixture()
+        let real = worktree.alas.appendingPathComponent("config-real.json")
+        try Data(#"{"version": 1, "defaultAgent": "pi"}"#.utf8).write(to: real)
+        try FileManager.default.createSymbolicLink(
+            atPath: worktree.configFile.path,
+            withDestinationPath: real.path
+        )
+
+        // A link that stays inside the repo is a normal way to organize
+        // config files and keeps working.
+        let store = RepoConfigStore()
+        #expect(store.load(worktreeRoot: worktree.root) == .loaded(RepoConfig(jsonData: Data(#"{"version": 1, "defaultAgent": "pi"}"#.utf8))!))
+    }
+
+    @Test func configPointingAtACharacterDeviceIsRefused() throws {
+        // /dev/zero exists on macOS and Linux CI alike; reading it never
+        // returns, so the confinement must reject the target before any read.
+        guard FileManager.default.fileExists(atPath: "/dev/zero") else { return }
+
+        let worktree = try WorktreeFixture()
+        try FileManager.default.createSymbolicLink(
+            atPath: worktree.configFile.path,
+            withDestinationPath: "/dev/zero"
+        )
+
+        let store = RepoConfigStore()
+        #expect(store.load(worktreeRoot: worktree.root) == .malformed)
+        #expect(store.config(worktreeRoot: worktree.root) == nil)
+    }
+
     @Test func configAccessorReturnsLoadedConfig() throws {
         let worktree = try WorktreeFixture()
         try worktree.writeConfig(#"{"version": 1, "icon": {"image": "logo.png"}}"#)
@@ -194,23 +244,39 @@ struct RepoConfigStoreTests {
     @Test func discoversNoIconWhenNoneExists() throws {
         let worktree = try WorktreeFixture()
 
-        #expect(RepoConfigStore().discoveredIconURL(worktreeRoot: worktree.root) == nil)
+        #expect(RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root).isEmpty)
     }
 
-    @Test func discoversIconInExtensionOrder() throws {
+    @Test func discoversIconsInExtensionOrder() throws {
         let worktree = try WorktreeFixture()
-        let store = RepoConfigStore()
 
         #expect(RepoConfigStore.discoveredIconExtensions == ["png", "jpg", "jpeg", "gif", "webp"])
 
         try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.webp"))
-        #expect(store.discoveredIconURL(worktreeRoot: worktree.root)?.lastPathComponent == "icon.webp")
+        #expect(RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root) == [
+            worktree.alas.appendingPathComponent("icon.webp")
+        ])
 
         try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.jpg"))
-        #expect(store.discoveredIconURL(worktreeRoot: worktree.root)?.lastPathComponent == "icon.jpg")
+        // Extension order wins: jpg sorts before webp in the result.
+        #expect(RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root) == [
+            worktree.alas.appendingPathComponent("icon.jpg"),
+            worktree.alas.appendingPathComponent("icon.webp"),
+        ])
 
         try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.png"))
-        #expect(store.discoveredIconURL(worktreeRoot: worktree.root)?.lastPathComponent == "icon.png")
+        #expect(RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root).first?.lastPathComponent == "icon.png")
+    }
+
+    @Test func discoversEveryConventionalIconNotJustTheFirst() throws {
+        let worktree = try WorktreeFixture()
+        try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.png"))
+        try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.jpg"))
+
+        // A broken or oversized head entry is skipped by the resolver, so the
+        // store must still name the later candidates instead of hiding them.
+        let discovered = RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root)
+        #expect(discovered.map(\.lastPathComponent) == ["icon.png", "icon.jpg"])
     }
 
     @Test func discoversIconUnderTheWorktreeRoot() throws {
@@ -218,7 +284,7 @@ struct RepoConfigStoreTests {
         try Data([0x00]).write(to: worktree.alas.appendingPathComponent("icon.png"))
 
         #expect(
-            RepoConfigStore().discoveredIconURL(worktreeRoot: worktree.root)
+            RepoConfigStore.discoveredIconCandidates(worktreeRoot: worktree.root).first
                 == worktree.alas.appendingPathComponent("icon.png")
         )
     }

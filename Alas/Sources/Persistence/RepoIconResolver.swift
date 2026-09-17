@@ -212,9 +212,8 @@ enum RepoIconResolver {
                 source: .configKey
             ))
         }
-        if let discovered = store.discoveredIconURL(worktreeRoot: primaryCheckout) {
-            candidates.append(Candidate(url: discovered, source: .discovered))
-        }
+        candidates.append(contentsOf: RepoConfigStore.discoveredIconCandidates(worktreeRoot: primaryCheckout)
+            .map { Candidate(url: $0, source: .discovered) })
         return candidates
     }
 
@@ -234,24 +233,16 @@ enum RepoIconResolver {
     /// same way: if it escaped the checkout, canonicalizing both sides would
     /// make the prefix check pass against the outside directory.
     private static func confinedTarget(of candidate: Candidate, checkout: URL) -> URL? {
-        let canonicalCheckout = checkout.standardizedFileURL.resolvingSymlinksInPath()
-        let resolved = candidate.url.standardizedFileURL.resolvingSymlinksInPath()
-        let root = checkout
-            .appendingPathComponent(".alas", isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        // The `.alas` root must exist and stay inside the checkout it belongs
-        // to; an escaping root contributes no usable candidates at all.
-        guard root.path.hasPrefix(canonicalCheckout.path + "/"),
-              resolved.path.hasPrefix(root.path + "/") else {
-            return nil
-        }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else {
-            return nil
-        }
-        return resolved
+        // RepoConfigStore.confinedRegularFile requires a regular file whose
+        // canonical path stays inside the canonical `.alas` directory, and
+        // that the directory itself stays inside the canonical checkout —
+        // which is what rejects a symlinked `.alas` root that escapes the
+        // repo: outside both sides agree and a naive prefix check would pass.
+        RepoConfigStore.confinedRegularFile(
+            candidate.url,
+            under: checkout.appendingPathComponent(".alas", isDirectory: true),
+            checkout: checkout
+        )
     }
 
     /// The configured file is a deliberate team decision, so one that is

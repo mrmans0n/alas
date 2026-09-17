@@ -29,7 +29,16 @@ final class RepoConfigStore {
 
     func load(worktreeRoot: URL) -> RepoConfigLoadResult {
         let file = worktreeRoot.appendingPathComponent(RepoConfig.relativePath)
-        let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        // A committed symlink can point anywhere — including a character
+        // device whose read would never return, on the main actor, before the
+        // MCP trust prompt offers any protection. Only a bounded regular file
+        // inside the repo's `.alas/` directory is ever read.
+        let target = Self.confinedRegularFile(
+            file,
+            under: worktreeRoot.appendingPathComponent(".alas", isDirectory: true),
+            checkout: worktreeRoot
+        )
+        let values = target.flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) }
 
         if let entry = cache[file.path],
            entry.modificationDate == values?.contentModificationDate,
@@ -37,7 +46,14 @@ final class RepoConfigStore {
             return entry.result
         }
 
-        let result = Self.classify(file)
+        let result: RepoConfigLoadResult
+        if let target {
+            result = Self.classify(target)
+        } else {
+            // Present but not a bounded regular file inside `.alas/`: treat it
+            // exactly like a malformed config so the repo contributes nothing.
+            result = FileManager.default.fileExists(atPath: file.path) ? .malformed : .missing
+        }
         // Logged on reparse only, so a broken or unreadable file in a project
         // on screen reports once per change instead of once per render.
         if case .malformed = result {
@@ -68,15 +84,53 @@ final class RepoConfigStore {
     /// identify by magic bytes; SVG is deliberately not discovered.
     static let discoveredIconExtensions = ["png", "jpg", "jpeg", "gif", "webp"]
 
-    /// The repo's conventional icon file, if it committed one. The explicit
-    /// `icon.image` key in `config.json` takes precedence over this.
-    func discoveredIconURL(worktreeRoot: URL) -> URL? {
-        let fileManager = FileManager.default
-        for ext in Self.discoveredIconExtensions {
+    /// The repo's conventional icon files, in extension order. The explicit
+    /// `icon.image` key in `config.json` takes precedence over these. All
+    /// existing candidates are returned, not just the first: a broken or
+    /// oversized head entry must not mask a usable one behind it, and the
+    /// resolver decides usability by staging.
+    static func discoveredIconCandidates(worktreeRoot: URL) -> [URL] {
+        Self.discoveredIconExtensions.compactMap { ext in
             let url = worktreeRoot.appendingPathComponent(".alas/icon.\(ext)")
-            if fileManager.fileExists(atPath: url.path) { return url }
+            return Self.confinedRegularFile(
+                url,
+                under: worktreeRoot.appendingPathComponent(".alas", isDirectory: true),
+                checkout: worktreeRoot
+            )
         }
-        return nil
+    }
+
+    /// Resolves a path through any symlink components and only accepts it when
+    /// it names a regular, non-device file inside the confinement root. A repo
+    /// can commit a symlink pointing at anything — including a character
+    /// device such as `/dev/zero`, whose read would never return — so the
+    /// canonical target is validated before any caller reads bytes.
+    ///
+    /// When `checkout` is given, the canonical confinement root must itself
+    /// stay inside the canonical checkout: a symlinked `.alas` pointing
+    /// outside the repo would otherwise canonicalize both sides to the outside
+    /// directory and pass a naive prefix check. Returns the canonical URL to
+    /// read from, or nil.
+    static func confinedRegularFile(
+        _ file: URL,
+        under root: URL,
+        checkout: URL? = nil
+    ) -> URL? {
+        let resolved = file.standardizedFileURL.resolvingSymlinksInPath()
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        guard resolved.path.hasPrefix(canonicalRoot.path + "/") else { return nil }
+        if let checkout {
+            let canonicalCheckout = checkout.standardizedFileURL.resolvingSymlinksInPath()
+            guard canonicalRoot.path.hasPrefix(canonicalCheckout.path + "/") else { return nil }
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path),
+              let type = attributes[.type] as? FileAttributeType,
+              type == .typeRegular
+        else { return nil }
+        return resolved
     }
 
     /// A path that does not exist reads as missing. Anything else that cannot
