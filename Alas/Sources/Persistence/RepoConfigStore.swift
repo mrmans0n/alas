@@ -18,6 +18,11 @@ enum RepoConfigLoadResult: Equatable {
 /// Local repos only: callers treat a remote project as having no repo config.
 final class RepoConfigStore {
     private struct Entry {
+        /// Canonical path of the file the result was parsed from. Part of the
+        /// identity because two distinct files can share size and modification
+        /// date: a symlink repointed between them would otherwise keep serving
+        /// the previous file's config.
+        let targetPath: String?
         let modificationDate: Date?
         let fileSize: Int?
         let result: RepoConfigLoadResult
@@ -41,6 +46,7 @@ final class RepoConfigStore {
         let values = target.flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) }
 
         if let entry = cache[file.path],
+           entry.targetPath == target?.path,
            entry.modificationDate == values?.contentModificationDate,
            entry.fileSize == values?.fileSize {
             return entry.result
@@ -64,6 +70,7 @@ final class RepoConfigStore {
             )
         }
         cache[file.path] = Entry(
+            targetPath: target?.path,
             modificationDate: values?.contentModificationDate,
             fileSize: values?.fileSize,
             result: result

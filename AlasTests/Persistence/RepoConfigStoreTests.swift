@@ -182,6 +182,37 @@ struct RepoConfigStoreTests {
         #expect(store.config(worktreeRoot: worktree.root)?.defaultAgent == "ab")
     }
 
+    @Test func reloadsWhenASymlinkIsRepointedBetweenEqualFiles() throws {
+        let worktree = try WorktreeFixture()
+        let first = worktree.alas.appendingPathComponent("config-a.json")
+        let second = worktree.alas.appendingPathComponent("config-b.json")
+        // Byte-identical length, different content; both stamped to the same
+        // modification date so only the resolved target path distinguishes
+        // them in the cache.
+        try Data(#"{"version": 1, "defaultAgent": "a"}"#.utf8).write(to: first)
+        try Data(#"{"version": 1, "defaultAgent": "b"}"#.utf8).write(to: second)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        for file in [first, second] {
+            try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: file.path)
+        }
+        try FileManager.default.createSymbolicLink(
+            atPath: worktree.configFile.path,
+            withDestinationPath: first.path
+        )
+
+        let store = RepoConfigStore()
+        #expect(store.config(worktreeRoot: worktree.root)?.defaultAgent == "a")
+
+        // Repoint the symlink at an equal-stamp, different-content file.
+        try FileManager.default.removeItem(at: worktree.configFile)
+        try FileManager.default.createSymbolicLink(
+            atPath: worktree.configFile.path,
+            withDestinationPath: second.path
+        )
+
+        #expect(store.config(worktreeRoot: worktree.root)?.defaultAgent == "b")
+    }
+
     @Test func reloadsFromMalformedToLoaded() throws {
         let worktree = try WorktreeFixture()
         let store = RepoConfigStore()
