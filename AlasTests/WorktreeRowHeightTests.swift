@@ -176,7 +176,6 @@ struct WorktreeRowHeightTests {
         #expect(withoutWorkspaceCheckout == withWorkspaceCheckout)
     }
 
-
     private func renderHeight(
         harnessSummary: HarnessService.WorktreeHarnessSummary?,
         ggMenuModel: GGWorktreeMenuModel = GGWorktreeMenuModel(

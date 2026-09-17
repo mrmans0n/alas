@@ -152,7 +152,7 @@ struct WorktreeWorkspaceCheckoutPresentation: Equatable {
     let isActive: Bool
 
     var accessibilityLabel: String {
-        "Workspace checkout: \(name)"
+        isActive ? "Workspace checkout: \(name)" : "Former workspace checkout: \(name)"
     }
 }
 
@@ -163,7 +163,8 @@ enum WorkspaceCheckoutWorktreeResolver {
     ) -> WorktreeWorkspaceCheckoutPresentation? {
         let matchingCheckouts = checkouts.filter { checkout in
             checkout.members.contains { member in
-                member.projectID == worktree.projectId
+                member.availability == .available
+                    && member.projectID == worktree.projectId
                     && URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
                         == worktree.path.standardizedFileURL.path
             }

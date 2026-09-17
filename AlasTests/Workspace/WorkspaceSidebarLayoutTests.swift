@@ -88,7 +88,8 @@ struct WorkspaceCheckoutWorktreeResolverTests {
                 projectID: "project-a",
                 fallbackProjectName: "Repo",
                 fallbackRepositoryRoot: "/tmp/repo",
-                worktreePath: "/tmp/workspace/./repo"
+                worktreePath: "/tmp/workspace/./repo",
+                availability: .available
             )]
         )
         let differentProject = makeCheckout(
@@ -98,7 +99,8 @@ struct WorkspaceCheckoutWorktreeResolverTests {
                 projectID: "project-b",
                 fallbackProjectName: "Repo",
                 fallbackRepositoryRoot: "/tmp/repo",
-                worktreePath: "/tmp/workspace/repo"
+                worktreePath: "/tmp/workspace/repo",
+                availability: .available
             )]
         )
 
@@ -137,6 +139,17 @@ struct WorkspaceCheckoutWorktreeResolverTests {
         ))
 
         #expect(presentation == .init(name: "Former Release", isActive: false))
+
+        #expect(presentation.accessibilityLabel == "Former workspace checkout: Former Release")
+    }
+
+    @Test func ignoresUnavailableCheckoutMember() {
+        let unavailable = makeCheckout(members: [makeMember(availability: .identityConflict)])
+
+        #expect(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: makeWorktree(),
+            checkouts: [unavailable]
+        ) == nil)
     }
 
     @Test func returnsNoPresentationForUnlinkedWorktree() {
@@ -182,13 +195,16 @@ struct WorkspaceCheckoutWorktreeResolverTests {
         )
     }
 
-    private func makeMember() -> WorkspaceCheckoutMember {
+    private func makeMember(
+        availability: WorkspaceCheckoutMemberAvailability = .available
+    ) -> WorkspaceCheckoutMember {
         .init(
             workspaceMemberID: UUID(),
             projectID: "project-a",
             fallbackProjectName: "Repo",
             fallbackRepositoryRoot: "/tmp/repo",
-            worktreePath: "/tmp/workspace/repo"
+            worktreePath: "/tmp/workspace/repo",
+            availability: availability
         )
     }
 }
