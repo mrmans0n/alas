@@ -54,13 +54,21 @@ function changeSections(state) {
   return sections;
 }
 
-function formatSummary(state) {
+function changedFiles(state) {
   const staged = (state && state.staged) || [];
   const unstaged = (state && state.unstaged) || [];
   const allFiles = (state && state.files) || [];
-  const files = allFiles.length
+  return allFiles.length
     ? allFiles
     : Array.from(new Map(staged.concat(unstaged).map((file) => [file.path, file])).values());
+}
+
+function changedFileCount(state) {
+  return changedFiles(state).length;
+}
+
+function formatSummary(state) {
+  const files = changedFiles(state);
   let add = 0;
   let del = 0;
   for (const file of files) {
@@ -117,6 +125,7 @@ globalThis.RemoteChangesView = {
   splitPath,
   fileRows,
   changeSections,
+  changedFileCount,
   formatSummary,
   formatFileCounts,
   diffRows,

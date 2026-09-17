@@ -11,24 +11,34 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=46" />
+  <link rel="stylesheet" href="/style.css?v=47" />
 </head>
 <body>
   <header id="bar">
     <button id="back" class="hidden" aria-label="Back to sessions">‹</button>
-    <span id="detail-title" class="hidden"></span>
-    <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
-    <div id="detail-tabs" class="tabs hidden" role="tablist">
-      <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-label="Chat" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.3-.7L4 20l1.5-3.6A7 7 0 1 1 20 11.5Z"/></svg></button>
-      <button id="tab-changes" class="tab" role="tab" type="button" aria-label="Changes" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 3-4 4 4 4M3 7h12a6 6 0 0 1 6 6v1M17 21l4-4-4-4M21 17H9a6 6 0 0 1-6-6V10"/></svg></button>
-      <button id="tab-files" class="tab" role="tab" type="button" aria-label="Files" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/></svg></button>
+    <div id="detail-title-block" class="hidden">
+      <span id="detail-title"></span>
+      <span id="detail-subtitle"></span>
     </div>
+    <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
     <span id="nav-title">Alas Remote</span>
-    <button id="new-session" aria-label="New session">+ New</button>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
+  <div id="detail-tabs" class="tabs hidden" role="tablist">
+    <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-label="Chat" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.3-.7L4 20l1.5-3.6A7 7 0 1 1 20 11.5Z"/></svg></button>
+    <button id="tab-changes" class="tab" role="tab" type="button" aria-label="Changes" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 3-4 4 4 4M3 7h12a6 6 0 0 1 6 6v1M17 21l4-4-4-4M21 17H9a6 6 0 0 1-6-6V10"/></svg><span id="tab-changes-count" class="tab-count hidden"></span></button>
+    <button id="tab-files" class="tab" role="tab" type="button" aria-label="Files" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/></svg></button>
+  </div>
   <main>
-    <section id="sessions" class="view"><h1>Sessions</h1><div id="session-list"></div></section>
+    <section id="sessions" class="view">
+      <div id="repo-search"><span class="repo-search-icon">⌕</span><input id="repo-search-input" type="search" autocomplete="off" placeholder="Search repos and worktrees" aria-label="Search repos and worktrees" /></div>
+      <div id="repo-filters" role="group" aria-label="Filter repos">
+        <button type="button" class="filter-chip is-active" data-filter="all">All<span class="filter-chip-n"></span></button>
+        <button type="button" class="filter-chip" data-filter="active">Active<span class="filter-chip-n"></span></button>
+        <button type="button" class="filter-chip" data-filter="dirty">Dirty<span class="filter-chip-n"></span></button>
+      </div>
+      <div id="session-list"></div>
+    </section>
     <section id="transcript" class="view hidden">
       <div id="messages"></div>
       <div id="queued" class="hidden"></div>
@@ -86,7 +96,24 @@
         <div id="file-view-body"></div>
       </div>
     </section>
+    <section id="settings" class="view hidden">
+      <h1>Settings</h1>
+      <p class="placeholder-card">Settings are coming soon.</p>
+    </section>
   </main>
+  <nav id="bottom-tabbar">
+    <button type="button" id="tab-repos" class="bt-tab is-active" aria-label="Repos">
+      <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M5 2.5v11M5 6h9M5 10h9"/></svg>
+      <span>Repos</span>
+    </button>
+    <div class="bt-fabwrap"><button type="button" id="fab-new-session" aria-label="New session">
+      <svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+    </button></div>
+    <button type="button" id="tab-settings" class="bt-tab" aria-label="Settings" disabled>
+      <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
   <div id="permission" class="sheet hidden">
     <div class="sheet-card">
       <p id="perm-tool"></p>
@@ -194,11 +221,12 @@
   </div>
   <script src="/marked.min.js?v=28"></script>
   <script src="/purify.min.js?v=28"></script>
+  <script src="/repo-filter.js?v=1"></script>
   <script src="/session-ordering.js?v=2"></script>
   <script src="/worktree-creation.js?v=1"></script>
-  <script src="/changes-view.js?v=7"></script>
+  <script src="/changes-view.js?v=8"></script>
   <script src="/file-browser.js?v=3"></script>
-  <script src="/app.js?v=81"></script>
+  <script src="/app.js?v=82"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

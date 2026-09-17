@@ -194,6 +194,60 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-closed"))
     }
 
+    @Test func sessionCardsShowDiffBarAndRelativeTime() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())"))
+        #expect(js.contains("RemoteRepoFilter.diffBarSegments("))
+        #expect(js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch("))
+        #expect(js.contains("function sessionRecencyMs(session)"))
+        #expect(css.contains(".card-diffbar"))
+        #expect(css.contains(".card-when"))
+        #expect(css.contains(".card-branch"))
+    }
+
+    @Test func repoFilterModuleExposesPureHelpers() throws {
+        let js = try asset("repo-filter.js")
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(js.contains("function repoTileColor(name)"))
+        #expect(js.contains("function repoInitials(name)"))
+        #expect(js.contains("function worktreeIsPrimaryBranch(name)"))
+        #expect(js.contains("function worktreeIsActive(worktree)"))
+        #expect(js.contains("function worktreeIsDirty(worktree)"))
+        #expect(js.contains("function relativeTimeShort(updatedAtMs, nowMs)"))
+        #expect(js.contains("function diffBarSegments(added, deleted)"))
+        #expect(js.contains("function sectionMatchesFilter(section, filter)"))
+        #expect(js.contains("function sectionMatchesQuery(section, query)"))
+        #expect(js.contains("function sectionCounts(sections)"))
+        #expect(js.contains("globalThis.RemoteRepoFilter ="))
+        // Pure module: no DOM access.
+        #expect(!js.contains("document."))
+        #expect(!js.contains("window."))
+
+        try expectLoadsBeforeApp("/repo-filter.js", in: html)
+        try expectReferencedAndPrecached("/repo-filter.js", html: html, sw: sw)
+    }
+
+    @Test func repoHeadersAreCollapsibleWithColorTiles() throws {
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(js.contains("let repoOverrides = new Map();"))
+        #expect(js.contains("function defaultSectionExpanded(section)"))
+        #expect(js.contains("function renderRepoHeader(section, expanded, forceExpanded)"))
+        #expect(js.contains("RemoteRepoFilter.repoTileColor(section.title)"))
+        #expect(js.contains("RemoteRepoFilter.repoInitials(section.title)"))
+        #expect(js.contains("repoOverrides.has(section.id)"))
+        #expect(js.contains("repoOverrides.set(section.id, !expanded);"))
+        #expect(css.contains(".repo-header"))
+        #expect(css.contains(".repo-chev"))
+        #expect(css.contains(".repo-tile"))
+        #expect(css.contains(".repo-count"))
+    }
+
     @Test func remoteWebExposesSessionRenameControls() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
@@ -217,6 +271,18 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#detail-title { display: none; }"))
         #expect(!css.contains("#detail-title, #detail-rename { display: none; }"))
         #expect(css.contains(".sheet-input"))
+    }
+
+    @Test func sessionNavBarShowsStreamingStateAndBranch() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="detail-subtitle""#))
+        #expect(js.contains("function setDetailSubtitle(sessionId)"))
+        #expect(js.contains(#"lastStreamingState === "idle" ? "idle" : "streaming""#))
+        #expect(js.contains("setDetailSubtitle(id)"))
+        #expect(css.contains("#detail-subtitle"))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -243,9 +309,32 @@ struct RemoteWebAssetTests {
 
     @Test func remoteWebIncludesNewSessionControls() throws {
         let html = try asset("index.html")
-        #expect(html.contains(#"id="new-session""#))
+        #expect(html.contains(#"id="fab-new-session""#))
         #expect(html.contains(#"id="new-session-sheet""#))
         #expect(html.contains(#"id="worktree-search""#))
+    }
+
+    @Test func bottomTabBarSwitchesRepoAndSettingsWithFAB() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="bottom-tabbar""#))
+        #expect(html.contains(#"id="tab-repos""#))
+        #expect(html.contains(#"id="tab-settings""#))
+        #expect(html.contains(#"id="fab-new-session""#))
+        #expect(html.contains(#"<section id="settings" class="view hidden">"#))
+        #expect(!html.contains(#"id="new-session" aria-label"#))
+
+        #expect(js.contains(#"let topLevelTab = "repos";"#))
+        #expect(js.contains("function showRepos()"))
+        #expect(js.contains("function showSettings()"))
+        #expect(js.contains(#"$("fab-new-session").onclick = showCreateSheet;"#))
+        #expect(js.contains(#"$("tab-repos").addEventListener("click", showRepos);"#))
+        #expect(js.contains(#"$("tab-settings").addEventListener("click", showSettings);"#))
+
+        #expect(css.contains("#bottom-tabbar"))
+        #expect(css.contains("#fab-new-session"))
     }
 
     @Test func remoteWebIncludesNewSessionMessageTypes() throws {
@@ -381,8 +470,6 @@ struct RemoteWebAssetTests {
         let css = try asset("style.css")
 
         #expect(css.contains("@media (max-width: 360px)"))
-        #expect(css.contains(#"#new-session { font-size: 0;"#))
-        #expect(css.contains(#"#new-session::before { content: "+";"#))
         #expect(css.contains("#status.chip { font-size: 0;"))
         #expect(css.contains("#status.chip::before"))
     }
@@ -658,7 +745,7 @@ struct RemoteWebAssetTests {
             js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(idleBody.contains(#"activeTab !== "files""#))
         let scheduleBody = try #require(
-            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(400) })
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(700) })
         #expect(scheduleBody.contains("refreshFileTree()"))
     }
 
@@ -777,5 +864,227 @@ struct RemoteWebAssetTests {
         #expect(js.contains("const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;"))
         #expect(js.contains(#"RemoteChangesView.truncationNotice(linesTruncated, "lines")"#))
         #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
+    }
+
+    @Test func detailTabsShowChangesCountBadge() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="tab-changes-count""#))
+        #expect(js.contains("function updateChangesTabBadge()"))
+        #expect(js.contains(#"$("tab-changes-count")"#))
+        #expect(css.contains(".tab-count"))
+    }
+
+    @Test func repoListHasSearchAndFilterChips() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"id="repo-search""#))
+        #expect(html.contains(#"id="repo-filters""#))
+        #expect(html.contains(#"data-filter="all""#))
+        #expect(html.contains(#"data-filter="active""#))
+        #expect(html.contains(#"data-filter="dirty""#))
+
+        #expect(js.contains(#"let repoSearchQuery = "";"#))
+        #expect(js.contains(#"let repoActiveFilter = "all";"#))
+        #expect(js.contains("function filterVisibleSections(sections)"))
+        #expect(js.contains("RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)"))
+        #expect(js.contains("RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery)"))
+        #expect(js.contains("function renderRepoFilterCounts(sections)"))
+        #expect(js.contains("RemoteRepoFilter.sectionCounts(sections)"))
+        #expect(js.contains(#"$("repo-search").addEventListener("input""#))
+
+        #expect(css.contains("#repo-search"))
+        #expect(css.contains("#repo-filters"))
+        #expect(css.contains(".filter-chip"))
+    }
+
+    @Test func composerUsesModTokenAndRedesignedRadii() throws {
+        let css = try asset("style.css")
+
+        #expect(css.contains("--mod:"))
+        #expect(css.contains("#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 6px 6px 6px 14px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 18px; }"))
+    }
+
+    // Regression (PR #1285 review): `session.updatedAt` is Unix
+    // seconds on the wire (matches RemoteSessionSummary /
+    // Date().timeIntervalSince1970 elsewhere in the app), but
+    // RemoteRepoFilter.relativeTimeShort and Date.now() are milliseconds —
+    // every session appeared ~53 years old until this converted units.
+    @Test func sessionRecencyConvertsWireSecondsToMilliseconds() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();"))
+    }
+
+    // Regression (PR #1285 review): the primary-branch (home) icon
+    // was keyed off `worktree.worktreeName` (a display name that can differ
+    // from the actual checked-out branch) instead of `worktree.branch`.
+    @Test func sessionCardIconChecksTheActualBranchField() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch)"))
+        #expect(!js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.worktreeName)"))
+    }
+
+    // Regression (PR #1285 review): the Changes tab badge was sourced
+    // only from the session-list snapshot's `worktree.changedFileCount`,
+    // which the gateway does not repush after an idle-turn edit — so the
+    // badge could stay stale (including stuck hidden at zero) while the
+    // Changes tab itself showed fresh files. It must prefer the loaded,
+    // live `changesState` (kept current by every listChanges response) and
+    // only fall back to the snapshot before that first load.
+    @Test func changesTabBadgePrefersLiveChangeStateOverStaleSnapshot() throws {
+        let js = try asset("app.js")
+        let changesView = try asset("changes-view.js")
+
+        #expect(js.contains("changesState.loaded && changesState.metricsAvailable"))
+        #expect(js.contains("RemoteChangesView.changedFileCount(changesState)"))
+        #expect(changesView.contains("function changedFileCount(state)"))
+        #expect(changesView.contains("changedFileCount,"))
+    }
+
+    // Regression (PR #1285 review): a heavy add/delete imbalance
+    // (e.g. 999 added, 1 deleted) rounded to 5 add-colored segments,
+    // dropping the sole deleted line's segment entirely and contradicting
+    // the function's own "each present side gets a segment" guarantee.
+    @Test func diffBarSegmentsReservesASegmentForEachNonzeroSide() throws {
+        let js = try asset("repo-filter.js")
+        #expect(js.contains("const cap = deleted > 0 ? 4 : 5;"))
+        #expect(js.contains("const addSegments = Math.min(cap, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));"))
+    }
+
+    // Regression (PR #1285 review): the synthetic "Other" section
+    // (sessions with no project/worktree) unconditionally bypassed search
+    // and filter chips, so it stayed visible for any query and under the
+    // Active/Dirty chips even when none of its sessions matched.
+    @Test func otherSectionIsSubjectToSearchAndFilters() throws {
+        let js = try asset("app.js")
+        #expect(!js.contains("if (section.isOther) return true;"))
+        let body = try #require(
+            js.range(of: "function filterVisibleSections(sections) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)"))
+        #expect(body.contains("RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery)"))
+    }
+
+    // Regression (PR #1285 review): the idle-transition list refresh only
+    // ran while the Changes or Files tab was open, so the Changes badge
+    // (visible on every tab) kept showing the stale pre-turn count whenever
+    // an agent edited files while the default Chat tab was selected.
+    @Test func idleRefreshAlsoCoversTheChatTabForTheBadge() throws {
+        let js = try asset("app.js")
+
+        let noteBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(noteBody.contains(#"activeTab !== "changes" && activeTab !== "files" && activeTab !== "chat""#))
+
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(scheduleBody.contains(#"activeTab === "changes" || activeTab === "chat""#))
+    }
+
+    // Regression (PR #1285 review): session cards' relative timestamps
+    // ("21 min", "4 hr") were computed once at render time with no timer,
+    // so a session could read "now" for hours until an unrelated re-render.
+    @Test func repoListRefreshesRelativeTimestampsPeriodically() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;"))
+        let body = try #require(
+            js.range(of: "const REPO_LIST_RELATIVE_TIME_REFRESH_MS").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(body.contains("setInterval("))
+        #expect(body.contains(#"if ($("sessions").classList.contains("hidden")) return;"#))
+        #expect(body.contains(#".session-row[data-session-id]"#))
+        #expect(body.contains(#".querySelector(".card-when")"#))
+        #expect(body.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now)"))
+    }
+
+    // Regression (PR #1285 review): a truncated changesState (worktrees
+    // over the server's changed-file cap) made the badge show the capped
+    // array length as if it were the exact total. changedFileCount is the
+    // server's untruncated unique-path count and must win once truncated.
+    // Regression (PR #1285 review): the worktree summary (working-tree
+    // status) and the change list (diff against the comparison ref) are
+    // different git computations, so swapping in the summary's count when
+    // changesState.truncated is set could show a number from an unrelated
+    // scope — including zero on an otherwise clean branch with hundreds of
+    // committed changes. A truncated live count must stay in its own scope,
+    // marked "N+" rather than presented as exact or replaced outright.
+    @Test func changesTabBadgeMarksATruncatedCountRatherThanSubstitutingAnUnrelatedTotal() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1450) })
+        #expect(body.contains("count = RemoteChangesView.changedFileCount(changesState);"))
+        #expect(body.contains(#"suffix = changesState.truncated ? "+" : "";"#))
+        #expect(body.contains("badge.textContent = String(count) + suffix;"))
+    }
+
+    // Regression (PR #1285 review): reconnecting while Chat was the active
+    // tab left changesState at its stale pre-disconnect value — the reconnect
+    // replay only requested changes for the Changes tab, so edits made
+    // during the outage never reached the badge until another turn or a
+    // manual tab switch.
+    @Test func reconnectReplayAlsoCoversTheChatTab() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function replayActiveListRequest() {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains(#"activeTab === "changes" || activeTab === "chat""#))
+    }
+
+    // Regression (PR #1285 review): an acknowledged rename only updated
+    // sessionTitles and the live DOM, leaving the cached listedSessions
+    // entry (renderSessions()'s only source of truth) on the old title —
+    // any full rerender before the gateway's own sessionList refresh
+    // landed would visibly revert the rename.
+    @Test func sessionRenameUpdatesTheCachedListedSessionsEntry() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function applySessionRenamed(sessionId, title) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("const cached = listedSessions.get(sessionId);"))
+        #expect(body.contains("if (cached) cached.title = title;"))
+    }
+
+    // Regression (PR #1285 review): opening a session straight to the
+    // default Chat tab never requested the change list, so the badge
+    // stayed sourced from the session summary's working-tree-only count
+    // (a different scope from what the Changes tab itself shows) until
+    // some other trigger — a turn, a reconnect, a tab switch — refreshed it.
+    @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
+        #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
+    }
+
+    // Regression (PR #1285 review): worktree-less sessions (the "Other"
+    // section) always fell through to the non-primary-branch glyph, falsely
+    // presenting them as belonging to a branch when they have no worktree
+    // at all. The icon must only render when worktree metadata exists.
+    @Test func sessionCardOmitsTheBranchIconWhenThereIsNoWorktree() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function renderSessionRow(s) {").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(body.contains("if (worktree) {"))
+        #expect(body.contains("head.append(branchIcon);"))
+        #expect(body.contains("head.append(title, state);"))
+    }
+
+    // Regression (PR #1285 review): a failed listChanges request set
+    // changesState.loaded = true (correctly, to stop showing "Loading
+    // changes…") while leaving files/staged/unstaged at their initialized
+    // empty arrays — the badge then read that as a genuine zero and
+    // replaced a valid worktree-summary count with a hidden badge. Track
+    // failure separately so the badge keeps using the summary fallback.
+    @Test func changesTabBadgeKeepsTheSummaryFallbackAfterAFailedLoad() throws {
+        let js = try asset("app.js")
+
+        let failedBody = try #require(
+            js.range(of: #"case "changeListFailed":"#).map { js[$0.lowerBound...].prefix(250) })
+        #expect(failedBody.contains("changesState.failed = true;"))
+
+        let badgeBody = try #require(
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(badgeBody.contains("changesState.loaded && changesState.metricsAvailable && !changesState.failed"))
     }
 }

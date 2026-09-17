@@ -333,6 +333,7 @@ function handle(msg) {
     case "changeListFailed":
       if (msg.sessionId !== currentSession) break;
       changesState.loaded = true;
+      changesState.failed = true;
       showChangesError(fileAccessMessage(msg.reason, null));
       break;
     case "fileDiffResult":
@@ -419,18 +420,122 @@ function handle(msg) {
   }
 }
 
+let repoOverrides = new Map();   // projectId → explicit true(expanded)/false(collapsed) from a user tap; absent = use the computed default
+
+let repoSearchQuery = "";
+let repoActiveFilter = "all";
+
+function filterVisibleSections(sections) {
+  // The synthetic "Other" section's worktree entries are safe to run
+  // through the same predicates as a real repo's: worktreeIsActive/
+  // worktreeIsDirty/sectionMatchesQuery all guard on the fields Other's
+  // entry doesn't have (no `.summary`), so it narrows like everything else
+  // instead of always bypassing search and filters.
+  return sections.filter(section =>
+    RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
+      && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery));
+}
+
+function renderRepoFilterCounts(sections) {
+  sections = sections.filter(s => !s.isOther);
+  const counts = RemoteRepoFilter.sectionCounts(sections);
+  $("repo-filters").querySelectorAll(".filter-chip").forEach(chip => {
+    const key = chip.dataset.filter;
+    chip.querySelector(".filter-chip-n").textContent = String(counts[key] ?? 0);
+  });
+}
+
+function sectionSearchOrFilterActive() {
+  return repoSearchQuery.trim() !== "" || repoActiveFilter !== "all";
+}
+
+function sectionMatchesActiveSearchAndFilter(section) {
+  return RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
+    && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery);
+}
+
+// Default: expanded only if the repo has at least one active session — a
+// quiet repo starts collapsed so the list stays glanceable. `repoOverrides`
+// remembers an explicit tap so it survives re-renders even while a
+// search/filter is temporarily forcing everything open.
+function defaultSectionExpanded(section) {
+  return section.worktrees.some(RemoteRepoFilter.worktreeIsActive);
+}
+
+$("repo-search").addEventListener("input", (event) => {
+  repoSearchQuery = event.target.value;
+  renderSessions([...listedSessions.values()]);
+});
+
+$("repo-filters").addEventListener("click", (event) => {
+  const chip = event.target.closest(".filter-chip");
+  if (!chip) return;
+  repoActiveFilter = chip.dataset.filter;
+  $("repo-filters").querySelectorAll(".filter-chip").forEach(c => c.classList.toggle("is-active", c === chip));
+  renderSessions([...listedSessions.values()]);
+});
+
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
   listedSessions.clear();
   sessions.forEach(s => listedSessions.set(s.id, s));
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  RemoteSessionOrdering.groupSessions(sessions).forEach(section => {
-    const element = el("section", "session-section");
+  const allSections = RemoteSessionOrdering.groupSessions(sessions);
+  const sections = filterVisibleSections(allSections);
+  renderRepoFilterCounts(allSections);
+  sections.forEach(section => list.appendChild(renderSection(section)));
+  if (currentSession) { setDetailTitle(currentSession); updateChangesTabBadge(); }
+}
+
+function renderSection(section) {
+  const element = el("section", "session-section");
+  if (section.isOther) {
     element.append(el("h2", "session-section-title", section.title));
     section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
-    list.appendChild(element);
-  });
-  if (currentSession) setDetailTitle(currentSession);
+    return element;
+  }
+
+  const forceExpanded = sectionSearchOrFilterActive() && sectionMatchesActiveSearchAndFilter(section);
+  const ownExpanded = repoOverrides.has(section.id) ? repoOverrides.get(section.id) : defaultSectionExpanded(section);
+  const expanded = forceExpanded || ownExpanded;
+  element.append(renderRepoHeader(section, expanded, forceExpanded));
+  if (expanded) {
+    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
+  }
+  return element;
+}
+
+function renderRepoHeader(section, expanded, forceExpanded) {
+  const header = el("div", "repo-header");
+  if (forceExpanded) header.classList.add("repo-header-static");
+
+  const chev = el("span", "repo-chev", expanded ? "▾" : "▸");
+  const tile = el("span", "repo-tile", RemoteRepoFilter.repoInitials(section.title));
+  tile.style.background = RemoteRepoFilter.repoTileColor(section.title);
+  const name = el("span", "repo-name", section.title);
+
+  header.append(chev, tile, name);
+  if (!expanded) {
+    header.append(el("span", "repo-count", String(section.worktrees.length)));
+  }
+
+  if (!forceExpanded) {
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+    header.setAttribute("aria-expanded", String(expanded));
+    header.addEventListener("click", () => {
+      repoOverrides.set(section.id, !expanded);
+      renderSessions([...listedSessions.values()]);
+    });
+    header.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        header.click();
+      }
+    });
+  }
+
+  return header;
 }
 
 function renderWorktreeGroup(section, worktree) {
@@ -470,6 +575,14 @@ function renderWorktreeGroup(section, worktree) {
   return group;
 }
 
+function sessionRecencyMs(session) {
+  const updatedAt = Number(session.updatedAt);
+  // The wire's `updatedAt` is Unix seconds (matches RemoteSessionSummary /
+  // the app's general Date().timeIntervalSince1970 convention) — convert to
+  // milliseconds to match Date.now() and RemoteRepoFilter.relativeTimeShort.
+  return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();
+}
+
 function renderSessionRow(s) {
   const row = document.createElement("div");
   row.dataset.sessionId = s.id;
@@ -483,11 +596,29 @@ function renderSessionRow(s) {
   open.onclick = () => openSession(s.id);
 
   const head = el("div", "session-head");
-  const title = el("span", "session-title", s.title);
+  const worktree = s.worktree;
+  const title = el("span", "session-title card-branch", s.title);
   const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
-  const status = el("span", "status", s.status);
-  head.append(title, state, status);
+  if (worktree) {
+    const branchIcon = el("span", "card-branch-icon", RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch) ? "⌂" : "⑂");
+    head.append(branchIcon);
+  }
+  head.append(title, state);
   open.append(head);
+
+  const meta = el("div", "session-row-meta");
+  meta.append(el("span", "card-when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())));
+  if (worktree && (worktree.addedLines > 0 || worktree.deletedLines > 0)) {
+    const bar = el("span", "card-diffbar");
+    RemoteRepoFilter.diffBarSegments(worktree.addedLines, worktree.deletedLines).forEach(isAdd => {
+      bar.append(el("i", isAdd ? "seg seg-add" : "seg seg-del"));
+    });
+    const counts = el("span", "meta-lines");
+    counts.append(el("span", "meta-add", "+" + worktree.addedLines), el("span", "meta-del", "-" + worktree.deletedLines));
+    meta.append(bar, counts);
+  }
+  meta.append(el("span", "status", s.status));
+  open.append(meta);
 
   const rename = el("button", "rename-btn", "✎");
   rename.type = "button";
@@ -504,6 +635,25 @@ function renderSessionRow(s) {
   row.append(open, rename);
   return row;
 }
+
+const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;
+
+// Session cards show a relative timestamp ("21 min", "4 hr") computed once,
+// at the moment renderSessions() runs — with no live timer it freezes there
+// until the next full re-render (a search keystroke, a filter tap, a fresh
+// sessionList push). Refresh just the `.card-when` text in place instead of
+// re-rendering the whole list, which would blow away scroll position,
+// search focus, and collapse state.
+setInterval(() => {
+  if ($("sessions").classList.contains("hidden")) return;
+  const now = Date.now();
+  document.querySelectorAll(".session-row[data-session-id]").forEach(row => {
+    const session = listedSessions.get(row.dataset.sessionId);
+    const when = row.querySelector(".card-when");
+    if (!session || !when) return;
+    when.textContent = RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now);
+  });
+}, REPO_LIST_RELATIVE_TIME_REFRESH_MS);
 
 function sessionMetaParts(worktree) {
   if (!worktree.metricsAvailable) return [el("span", "", "changes unavailable")];
@@ -544,9 +694,11 @@ function openSession(id) {
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
+  lastStreamingState = "idle";
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
-  $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
+  $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
+  $("bottom-tabbar").classList.add("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
@@ -561,6 +713,13 @@ function openSession(id) {
   pendingExpandedPathsRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  // The session summary's changedFileCount is working-tree status only —
+  // request the actual change list (comparison-ref scope, what the Changes
+  // tab itself shows) so a freshly opened session's badge isn't stuck
+  // showing/hiding based on a different scope until some other trigger
+  // (a turn, a reconnect, a tab switch) happens to refresh it.
+  if (summary && summary.worktree) requestChanges();
+  updateChangesTabBadge();
   showTab("chat");
 }
 
@@ -629,6 +788,7 @@ $("tab-files").addEventListener("click", () => showTab("files"));
 $("changes-refresh").addEventListener("click", requestChanges);
 
 function renderChanges() {
+  updateChangesTabBadge();
   const list = $("changes-list");
   list.innerHTML = "";
   $("changes-summary").textContent = changesState.loaded
@@ -680,6 +840,32 @@ function renderChanges() {
   const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
   if (notice) list.append(el("p", "placeholder-card", notice));
   if (changesState.commitsTruncated) list.append(el("p", "placeholder-card", "Commit list truncated — showing the first 100 commits."));
+}
+
+function updateChangesTabBadge() {
+  const badge = $("tab-changes-count");
+  // Prefer the loaded, live changesState (kept fresh by every listChanges
+  // response, including the idle-transition refresh while a session is
+  // open) — it reflects edits the session-list snapshot below doesn't get
+  // repushed for. Fall back to the worktree summary before that first
+  // successful load (which includes a failed request: `loaded` becomes true
+  // on failure too, so `changeListFailed` also sets `failed` — otherwise the
+  // untouched, empty-by-default files/staged/unstaged would read as zero and
+  // wipe out a perfectly good summary count). It's also a different git
+  // computation (working-tree status) from the change list (diff against
+  // the comparison ref), so once truncated it's not a valid substitute for
+  // the capped count — show "N+" instead of pretending the capped array
+  // length is exact or swapping in an unrelated number.
+  let count, suffix;
+  if (changesState.loaded && changesState.metricsAvailable && !changesState.failed) {
+    count = RemoteChangesView.changedFileCount(changesState);
+    suffix = changesState.truncated ? "+" : "";
+  } else {
+    count = (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
+    suffix = "";
+  }
+  badge.textContent = String(count) + suffix;
+  badge.classList.toggle("hidden", count === 0);
 }
 
 function openDiff(path, stage = null) {
@@ -741,7 +927,11 @@ function replayActiveDetailRequest() {
 // `detailStack` is empty in both.
 function replayActiveListRequest() {
   if (!currentSession || detailStack.length > 0) return;
-  if (activeTab === "changes") {
+  // Chat shares this on reconnect for the same reason it shares the
+  // idle-transition refresh: a dropped connection can hide edits made
+  // during the outage, and requestChanges() only touches hidden DOM plus
+  // the badge when Chat is the active tab.
+  if (activeTab === "changes" || activeTab === "chat") {
     requestChanges();
   } else if (activeTab === "files") {
     refreshFileTree();
@@ -889,7 +1079,10 @@ function scheduleListRefresh() {
   if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
   changesRefreshDebounceTimer = setTimeout(() => {
     changesRefreshDebounceTimer = null;
-    if (activeTab === "changes") requestChanges();
+    // Chat shares this refresh (unlike Files) purely to keep the Changes
+    // tab's count badge current — requestChanges() only updates changesState
+    // and the hidden #changes DOM, nothing visible changes on Chat itself.
+    if (activeTab === "changes" || activeTab === "chat") requestChanges();
     else if (activeTab === "files") refreshFileTree();
   }, CHANGES_REFRESH_DEBOUNCE_MS);
 }
@@ -908,7 +1101,7 @@ function noteStreamingStateForChanges(state) {
   const wasIdle = previousChangesStreamingState === "idle";
   previousChangesStreamingState = state;
   if (state !== "idle" || wasIdle) return;
-  if (activeTab !== "changes" && activeTab !== "files") return;
+  if (activeTab !== "changes" && activeTab !== "files" && activeTab !== "chat") return;
   if (detailStack.length !== 0) {
     pendingListRefresh = true;
     return;
@@ -932,9 +1125,10 @@ function showSessions() {
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
-  $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
+  $("detail-title-block").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  $("bottom-tabbar").classList.remove("hidden");
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
   fileTreeTruncatedPaths = new Set();
@@ -951,8 +1145,46 @@ function showSessions() {
   send({ type: "listSessions" });
 }
 
+let topLevelTab = "repos";
+
+function showRepos() {
+  topLevelTab = "repos";
+  $("tab-repos").classList.add("is-active");
+  $("tab-settings").classList.remove("is-active");
+  $("sessions").classList.remove("hidden");
+  $("settings").classList.add("hidden");
+  $("bottom-tabbar").classList.remove("hidden");
+}
+
+function showSettings() {
+  if (currentSession) return;   // tab bar is hidden during session detail; guard anyway
+  topLevelTab = "settings";
+  $("tab-settings").classList.add("is-active");
+  $("tab-repos").classList.remove("is-active");
+  $("sessions").classList.add("hidden");
+  $("settings").classList.remove("hidden");
+}
+
+$("tab-repos").addEventListener("click", showRepos);
+$("tab-settings").addEventListener("click", showSettings);
+$("fab-new-session").onclick = showCreateSheet;
+
 function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
+}
+
+function setDetailSubtitle(sessionId) {
+  const summary = listedSessions.get(sessionId);
+  const branch = summary && summary.worktree ? summary.worktree.branch : null;
+  const streamState = lastStreamingState === "idle" ? "idle" : "streaming";
+  const el2 = $("detail-subtitle");
+  el2.innerHTML = "";
+  const dot = el("span", `subtitle-dot ${streamState}`);
+  const label = el("span", "", streamState);
+  el2.append(dot, label);
+  if (branch) {
+    el2.append(el("span", "subtitle-sep", "·"), el("span", "subtitle-branch", branch));
+  }
 }
 
 function handlePromptRequest(kind, sessionId, payload) {
@@ -1010,6 +1242,12 @@ function submitRename() {
 
 function applySessionRenamed(sessionId, title) {
   sessionTitles.set(sessionId, title);
+  // listedSessions is renderSessions()'s only source of truth — without this,
+  // the next full rerender (a search keystroke, a filter tap) rebuilds rows
+  // from the pre-rename snapshot and visibly reverts the acknowledged rename
+  // until the gateway's own sessionList refresh eventually lands.
+  const cached = listedSessions.get(sessionId);
+  if (cached) cached.title = title;
   const row = Array.from(document.querySelectorAll("[data-session-id]"))
     .find(candidate => candidate.dataset.sessionId === sessionId);
   const rowTitle = row && row.querySelector(".session-title");
@@ -2898,6 +3136,7 @@ function renderDriveBar(streamingState) {
   // the awaiting states, dismissing a prompt sheet would strand the user on
   // Send with no way to cancel the running turn.
   lastStreamingState = streamingState;
+  if (currentSession) setDetailSubtitle(currentSession);
   const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
   const action = composerAction(streamingState, hasText);
   $("send").classList.toggle("hidden", action !== "send");
@@ -3078,7 +3317,6 @@ async function onFilesPicked(files) {
   }
 }
 
-$("new-session").onclick = showCreateSheet;
 $("create-cancel").onclick = hideCreateSheet;
 $("create-next").onclick = advanceCreateSheet;
 $("create-back").onclick = backCreateSheet;

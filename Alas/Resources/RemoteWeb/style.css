@@ -17,6 +17,7 @@
   --line-soft: oklch(0.32 0.020 220 / 0.35);
   --add: oklch(0.78 0.14 155);
   --del: oklch(0.72 0.16 25);
+  --mod: oklch(0.80 0.13 85);
 }
 * { box-sizing: border-box; }
 /* Fixed-height app shell: header + scrolling body + pinned footer, sized to the
@@ -32,10 +33,13 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 #bar { flex: 0 0 auto; z-index: 5; display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); border-bottom: 0.5px solid var(--line-soft); }
 #nav-title { flex: 1 1 auto; min-width: 0; font-size: 16px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#detail-title { min-width: 0; flex: 1; font-size: 15px; font-weight: 650; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#new-session { margin-left: auto; flex: 0 0 auto; padding: 6px 11px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 999px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-#new-session:active { background: color-mix(in oklab, var(--accent) 24%, transparent); }
-#new-session + #status.chip { margin-left: 0; }
+#detail-title-block { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+#detail-title { font-size: 15px; font-weight: 650; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail-subtitle { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-dim); min-width: 0; overflow: hidden; }
+#detail-subtitle .subtitle-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--fg-faint); }
+#detail-subtitle .subtitle-dot.streaming { background: var(--add); }
+#detail-subtitle .subtitle-sep { color: var(--fg-faint); flex: 0 0 auto; }
+#detail-subtitle .subtitle-branch { font-family: ui-monospace, monospace; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Connection chip: dot + label, color driven by [data-state]. */
 #status.chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--fg-muted); background: color-mix(in oklab, var(--bg-3) 70%, transparent); border: 0.5px solid var(--line); white-space: nowrap; }
 #status.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
@@ -44,8 +48,6 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #status[data-state="connecting"]::before { background: oklch(0.82 0.13 90); }
 @media (max-width: 360px) {
   #bar { gap: 7px; padding-left: 9px; padding-right: 9px; }
-  #new-session { font-size: 0; width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-  #new-session::before { content: "+"; font-size: 18px; line-height: 1; }
   #status.chip { font-size: 0; gap: 0; padding: 7px; }
   #status.chip::before { width: 8px; height: 8px; }
 }
@@ -53,11 +55,37 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .view { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 12px calc(28px + env(safe-area-inset-bottom)); }
 .hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */
 
+/* Bottom tab bar: Repos / FAB / Settings. Docks to the bottom because it's a
+   sibling of <main> (flex: 1 1 auto) in the column-flex body. */
+#bottom-tabbar { flex: 0 0 auto; display: flex; align-items: flex-start; padding: 6px 8px calc(4px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1) 92%, transparent); backdrop-filter: blur(18px); box-shadow: inset 0 0.5px 0 var(--line-soft); }
+.bt-tab { flex: 1; height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: none; background: none; font-size: 10.5px; font-weight: 600; color: var(--fg-faint); border-radius: 12px; -webkit-tap-highlight-color: transparent; }
+.bt-tab.is-active { color: var(--accent); }
+.bt-tab:disabled { opacity: 0.45; }
+.bt-fabwrap { flex: 1; display: flex; align-items: center; justify-content: center; }
+#fab-new-session { width: 50px; height: 50px; border: none; border-radius: 16px; display: flex; align-items: center; justify-content: center; color: var(--bg-0); background: var(--accent); box-shadow: 0 4px 14px color-mix(in oklab, var(--accent) 35%, transparent); -webkit-tap-highlight-color: transparent; }
+#fab-new-session:active { transform: scale(0.94); }
+
 /* Sessions list */
 h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
+#repo-search { display: flex; align-items: center; gap: 8px; margin: 10px 4px 8px; height: 38px; border-radius: 11px; background: color-mix(in oklab, var(--bg-0) 80%, transparent); padding: 0 11px; color: var(--fg-faint); }
+#repo-search .repo-search-icon { font-size: 14px; flex: 0 0 auto; }
+#repo-search-input { flex: 1; min-width: 0; border: none; background: none; outline: none; color: var(--fg); font: inherit; font-size: 14px; }
+#repo-search-input::placeholder { color: var(--fg-faint); }
+#repo-filters { display: flex; gap: 6px; margin: 0 4px 10px; overflow-x: auto; }
+.filter-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 7px 13px; border: none; border-radius: 999px; background: color-mix(in oklab, var(--bg-3) 60%, transparent); color: var(--fg-dim); font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+.filter-chip.is-active { color: var(--bg-0); background: var(--accent); }
+.filter-chip-n { opacity: 0.65; font-variant-numeric: tabular-nums; }
+.filter-chip.is-active .filter-chip-n { opacity: 0.75; }
 #session-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 18px; }
 .session-section { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .session-section-title { margin: 4px 4px 0; color: var(--fg-muted); font-size: 13px; font-weight: 700; }
+.repo-header { display: flex; align-items: center; gap: 9px; padding: 9px 6px; border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.repo-header:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -2px; }
+.repo-header.repo-header-static { cursor: default; }
+.repo-chev { width: 14px; flex: 0 0 14px; text-align: center; color: var(--fg-faint); font-size: 11px; }
+.repo-tile { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: oklch(0.98 0 0 / 0.95); letter-spacing: -0.02em; }
+.repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; letter-spacing: -0.015em; color: var(--fg); }
+.repo-count { margin-left: auto; flex: 0 0 auto; font-size: 11.5px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .session-worktree-group { display: flex; flex-direction: column; gap: 8px; }
 .session-worktree-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 4px; min-width: 0; }
 .session-worktree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 12px; font-weight: 650; }
@@ -85,10 +113,18 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .session-state-inactive::before { background: var(--fg-faint); }
 .session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
 .session-row-inactive .status { color: var(--fg-dim); }
+.session-row-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 11.5px; color: var(--fg-dim); }
+.card-branch-icon { flex: 0 0 auto; color: var(--fg-faint); font-size: 12px; }
+.card-branch { font-family: ui-monospace, monospace; letter-spacing: -0.02em; }
+.card-when { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.card-diffbar { display: inline-flex; gap: 2px; align-items: center; flex: 0 0 auto; }
+.card-diffbar .seg { display: block; width: 2.5px; height: 9px; border-radius: 1px; background: color-mix(in oklab, var(--fg) 14%, transparent); }
+.card-diffbar .seg-add { background: var(--add); }
+.card-diffbar .seg-del { background: var(--del); }
 .meta-lines { display: inline-flex; gap: 5px; }
 .meta-add { color: var(--add); }
 .meta-del { color: var(--del); }
-.meta-conflict { color: oklch(0.82 0.13 90); }
+.meta-conflict { color: var(--mod); }
 .session-row-minimal { justify-content: space-between; align-items: center; gap: 10px; padding: 15px 10px; border-bottom: 0.5px solid var(--line-soft); background: none; }
 .session-row-minimal .session-head { flex: 1; }
 .session-row-active.session-row-minimal { background: color-mix(in oklab, var(--accent) 8%, transparent); }
@@ -160,7 +196,7 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 #takeover:active { background: color-mix(in oklab, var(--accent) 24%, transparent); }
 /* One rounded field; the action button docks bottom-right and the textarea
    grows above it. align-items:flex-end keeps the button pinned to the last line. */
-#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 5px 5px 5px 5px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 22px; }
+#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 6px 6px 6px 14px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 18px; }
 #composer-row:focus-within { border-color: color-mix(in oklab, var(--accent) 60%, var(--line)); }
 /* Thumbnail row above the composer — horizontal, scrollable small previews. */
 #chips { display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 2px 4px 8px; }
@@ -298,13 +334,15 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .qa-retry { color: oklch(0.80 0.14 85); }
 .qa-edit, .qa-remove { color: var(--fg-muted); }
 
-.tabs { display: flex; gap: 2px; padding: 3px; border: 0.5px solid var(--line); border-radius: 9px; background: color-mix(in oklab, var(--bg-2) 84%, transparent); }
+.tabs { display: flex; gap: 2px; margin: 0 12px 10px; padding: 3px; background: color-mix(in oklab, var(--bg-0) 80%, transparent); border-radius: 13px; }
 .tab {
-  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px;
-  background: none; border: none; padding: 0; color: var(--fg-muted); border-radius: 6px;
+  flex: 1; height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: none; border: none; padding: 0; color: var(--fg-dim); border-radius: 10px; position: relative;
 }
 .tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.tab.is-active { color: var(--fg); background: var(--bg-1); box-shadow: 0 1px 2px color-mix(in oklab, black 35%, transparent); }
+.tab.is-active { color: var(--fg); background: color-mix(in oklab, var(--fg) 9%, transparent); box-shadow: inset 0 0 0 0.5px var(--line-soft), 0 1px 3px rgba(0,0,0,.3); }
+.tab-count { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--fg-faint); background: color-mix(in oklab, var(--fg) 8%, transparent); border-radius: 999px; padding: 2px 6px; }
+.tab.is-active .tab-count { color: var(--bg-0); background: var(--accent); }
 
 #changes-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -361,5 +399,4 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 }
 @media (max-width: 520px) {
   #detail-title { display: none; }
-  #detail-tabs { margin-right: auto; }
 }
