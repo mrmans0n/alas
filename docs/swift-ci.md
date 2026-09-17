@@ -19,33 +19,15 @@ suites retain #23 as their follow-up. The subprocess list preserves the conserva
 isolation baseline gathered during #1277; it does not assert every listed suite
 individually reproduced a hang. Shrink it using measured runs, not source heuristics.
 
-The planner retains six ordinary batches and six subprocess batches. Subprocess
-batches contain invocations of at most three suites. Each invocation has a
-wall-clock deadline, including startup and teardown: 360 seconds ordinary and
+Six ordinary batches run sequentially on one runner. The subprocess lane also has
+six batches, each containing invocations of at most three suites. Each invocation
+has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
 locally in 229 seconds (286 seconds for its three-suite invocation). Planning
 checks that invocation limits plus termination and result-extraction allowances
-fit each batch. Tests retain Xcode's 60-second execution allowance. Failures do
-not prevent later invocations or batches from collecting evidence.
-
-`scripts/ci-swift-test-timings.json` records the full-suite batch durations from
-run 35222266640. Longest-processing-time assignment balances complete batches
-across two runners without splitting a suite or subprocess invocation. The two
-measured loads are 913.47 and 958.47 seconds. New or removed batches fail planning
-until the timing inventory is updated, so an unmeasured batch cannot silently land
-on an arbitrary shard.
-
-The `swift-build` job builds once, enumerates the compiled inventory, and archives
-`DerivedData/Build/Products` as a tarball. Tar preserves executable permissions and
-symlinks that a direct artifact upload would discard. Each `macos-26` shard checks
-out the same commit, verifies its Xcode, macOS, and architecture against the build
-job, restores the products, and runs `test-without-building` from the packaged
-`.xctestrun`. It does not resolve packages or rebuild the application. Each shard
-uploads its own result bundles, logs, structured outcomes, and reports with
-`if: always()`. The final Ubuntu audit merges both artifacts and applies the same
-exact-once coverage check used by the sequential workflow. Matrix fail-fast is
-disabled, so one failing shard cannot suppress the other's diagnostics.
+fit each 30-minute subprocess step. Tests retain Xcode's 60-second execution allowance.
+Failures do not prevent later invocations or batches from collecting evidence.
 
 Quarantine overrides execution requirements independently of policy order. For
 partially excluded suites, Xcode receives individual runnable test identifiers;
@@ -96,13 +78,33 @@ runner time. Checkout, preparation, the single build, and discovery took 13m57s.
 The twelve sequential test steps took 24m02s: 7m35s ordinary and 16m27s
 subprocess-sensitive. Uploading 625 MB of result diagnostics took another 43s.
 
-The first two-shard run is the portability and adoption measurement. Keep the
-distributed workflow only if it saves at least five minutes of end-to-end wall
-time while increasing total macOS runner time by no more than 25%. The comparison
-must include build-product packaging and upload, both shard downloads and setup,
-queue delay, result uploads, and the final audit. A failed toolchain check,
-missing resource, permission error, discovery mismatch, or smaller measured gain
-means reverting to sequential execution while retaining this evidence.
+Run [35241461269](https://github.com/mrmans0n/alas/actions/runs/35241461269)
+validated a build-once, two-shard prototype against the same runner image. The
+compiled products restored and passed toolchain validation on fresh shard
+runners, but the end-to-end run took 1h21m55s from workflow creation to the final
+coverage audit failure. The build job took 21m51s, including 30s to package the
+compiled products and 6s to upload them. Shard queue delay dominated the result:
+shard 1 started 16m46s after the build job completed, and shard 0 started 33m
+after the build job completed. The shard test steps then ran 14m26s and 17m25s.
+This does not meet the adoption bar of saving at least five minutes of wall time.
+
+That same prototype also failed because of existing flaky tests, not because the
+compiled products were non-portable. `TabActivityIconTintTests/
+acpTabAddsAgentLogoWhenAgentIsResolved()` and
+`ACPTerminalTests/releaseReachesOrphans()` failed in both the sharded prototype
+and unrelated PR #1293's ordinary `build-test` run
+[35244403629](https://github.com/mrmans0n/alas/actions/runs/35244403629).
+PR #1293 also failed
+`AgentTerminalLaunchTests/launchingCopilotForRemoteWorktreeSkipsLocalHookInstall()`.
+The sharded prototype additionally timed out `subprocess-1-3` after 360s before
+Xcode produced a readable result bundle, leaving 28 scheduled definitions
+unaccounted in the final audit.
+
+Because the measured run was slower, consumed more macOS runner time, and exposed
+shared flaky failures already visible in the unsharded workflow, distributed
+execution remains deferred. Revisit sharding only after the flaky failures are
+handled and a new unsharded baseline shows enough queue-adjusted test time to
+justify extra macOS runners and artifact transfer.
 
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
@@ -128,5 +130,5 @@ python3 scripts/ci_swift_tests.py plan --enumeration /path/to/enumeration.json -
 
 Use a fresh output directory per run. `SWIFT_TEST_DERIVED_DATA` can select an
 existing local build for focused verification. CI uses `.build/xcode/DerivedData`.
-The timing file changes only from a complete audited run whose result artifacts
-are still available for inspection.
+Distributed sharding is deferred until reliability improves and the published
+durations justify another prototype.
