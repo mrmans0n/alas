@@ -246,6 +246,9 @@ struct MergeConflictTabView: View {
         if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
             return agent
         }
+        if !id.isEmpty {
+            return nil
+        }
         return agents.first
     }
 

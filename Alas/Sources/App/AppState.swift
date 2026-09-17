@@ -10567,15 +10567,22 @@ final class AppState {
                 )
             },
             launchSpecTransformer: { [weak self] spec in
-                guard let self,
-                      checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
-                      let flag = AgentConfiguredCatalog.enabled(
-                          builtinState: self.config.agents.builtinState,
-                          customs: self.config.agents.custom
-                      ).first(where: { $0.id == spec.agentID })?.bypassPermissionsFlag,
-                      spec.arguments.contains(flag) == false
-                else { return spec }
-                return spec.prependingArguments([flag])
+                guard let self else { return spec }
+                let configuredAgent = AgentConfiguredCatalog.enabled(
+                    builtinState: self.config.agents.builtinState,
+                    customs: self.config.agents.custom
+                ).first(where: { $0.id == spec.agentID })
+                var launchSpec = spec
+                if let configuredBinary = configuredAgent?.configuredBinary,
+                   configuredBinary != spec.command {
+                    launchSpec = launchSpec.overridingCommand(configuredBinary)
+                }
+                if checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
+                   let flag = configuredAgent?.bypassPermissionsFlag,
+                   launchSpec.arguments.contains(flag) == false {
+                    launchSpec = launchSpec.prependingArguments([flag])
+                }
+                return launchSpec
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
