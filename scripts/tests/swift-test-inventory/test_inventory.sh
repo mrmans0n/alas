@@ -283,6 +283,11 @@ import Testing
     @Test static func runs() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/SameLineSuite.swift" <<'SWIFT'
+import Testing
+
+@Suite struct SameLineTests { @Test func runs() {} }
+SWIFT
 cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
 import Testing
 
@@ -339,6 +344,16 @@ extension ExtensionNamespace {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/PackageExtensionSuite.swift" <<'SWIFT'
+import Testing
+
+struct PackageExtensionTests {}
+
+package extension PackageExtensionTests
+{
+    @Test func works() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/NestedSuiteRestoreTests.swift" <<'SWIFT'
 import Testing
 
@@ -366,7 +381,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=41 scheduled=40 ordinary=22 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=43 scheduled=42 ordinary=24 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -391,6 +406,7 @@ grep -qx 'MultilineStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'OuterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'OuterTests.InnerTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'PackageExtensionTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ParserNamespace.ParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
@@ -401,6 +417,7 @@ grep -qx 'SelfUpdaterTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SplitDeclarationTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SplitRuntimeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'StringParenSuiteTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'SameLineTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'BehaviorFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'QuarantinedTests' "${inventory_cache}/quarantined.txt"
 
@@ -443,8 +460,10 @@ grep -qx -- '-only-testing AlasTests/MultilineStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/NestedCommentTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/OuterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/OuterTests.InnerTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/PackageExtensionTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ParserNamespace.ParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/RawStringTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/SameLineTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitDeclarationTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/StringParenSuiteTests' <<<"${selectors}"
 if grep -q 'InlineNestedAttributeTests' <<<"${selectors}"; then
