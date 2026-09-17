@@ -84,7 +84,8 @@ struct NewWorktreeDialog: View {
                     DialogField(label: "Repository") {
                         ProjectPicker(
                             selection: $projectId,
-                            projects: state.projects
+                            projects: state.projects,
+                            icon: { state.effectiveIcon(for: $0) }
                         )
                     }
                 }
@@ -344,9 +345,24 @@ struct NewWorktreeDialog: View {
             globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
             projectMode: project.startupScripts.worktreeAgentMode,
             projectAgentId: project.startupScripts.worktreeAgentId,
-            projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions
+            projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions,
+            repoAgentId: repoDefaultAgentId
         )
         return resolved.flatMap { state.agent(id: $0.agentId) }
+    }
+
+    /// The repo's `.alas/config.json` default agent when it names an
+    /// installed, enabled agent. The worktree being created does not exist
+    /// yet, so this resolves from the primary checkout. Local projects only.
+    private var repoDefaultAgentId: String? {
+        guard let project = state.projects.first(where: { $0.id == projectId }),
+              project.host == nil,
+              let candidate = state.repoConfig(
+                  worktreeRoot: URL(fileURLWithPath: project.path, isDirectory: true)
+              )?.defaultAgent else {
+            return nil
+        }
+        return state.agentRegistry.enabled().contains(where: { $0.id == candidate }) ? candidate : nil
     }
 
     private var currentLaunchPreference: NewWorktreeLaunchPreference {

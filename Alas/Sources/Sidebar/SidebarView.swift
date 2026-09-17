@@ -51,6 +51,7 @@ struct SidebarView: View {
                             ) { project in
                                 RepoGroupView(
                                     project: project,
+                                    icon: { state.effectiveIcon(for: $0) },
                                     worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
                                     collapsed: Binding(
                                         get: { collapsedProjects.contains(project.id) },
@@ -62,6 +63,12 @@ struct SidebarView: View {
                                     selectedWorktreeId: state.selectedWorktreeId,
                                     isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                     upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
+                                    workspaceCheckout: { wt in
+                                        WorkspaceCheckoutWorktreeResolver.presentation(
+                                            for: wt,
+                                            checkouts: state.workspacesManager.checkouts
+                                        )
+                                    },
                                     operationState: { wt in
                                         state.projectsManager.operationState(for: wt.id)
                                     },

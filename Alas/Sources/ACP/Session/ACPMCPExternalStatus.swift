@@ -30,6 +30,10 @@ struct ACPMCPExternalStatus: Equatable {
     let userServerNames: [String]
     /// Project MCP servers skipped by the external adapter's own planning pass.
     let skippedServerStatuses: [MCPAttachmentServerStatus]
+    /// Project MCP servers the plan requested, including approved repo-defined
+    /// ones. Lets the status control show and disable them under `.external`
+    /// injection too, where the attachment rows are replaced wholesale.
+    let requestedServerStatuses: [MCPAttachmentServerStatus]
     /// True when the current host can run the local remediation action for a
     /// missing adapter. Remote worktrees must not offer the local install button.
     let canInstallAdapterLocally: Bool
@@ -41,6 +45,7 @@ struct ACPMCPExternalStatus: Equatable {
         hint: String,
         userServerNames: [String],
         skippedServerStatuses: [MCPAttachmentServerStatus] = [],
+        requestedServerStatuses: [MCPAttachmentServerStatus] = [],
         canInstallAdapterLocally: Bool = true
     ) {
         self.cliActive = cliActive
@@ -49,6 +54,7 @@ struct ACPMCPExternalStatus: Equatable {
         self.hint = hint
         self.userServerNames = userServerNames
         self.skippedServerStatuses = skippedServerStatuses
+        self.requestedServerStatuses = requestedServerStatuses
         self.canInstallAdapterLocally = canInstallAdapterLocally
     }
 

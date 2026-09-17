@@ -144,4 +144,31 @@ struct BuiltInAlasMCPTests {
         #expect(value.contains("script") == false)
         #expect(value.contains("secret") == false)
     }
+
+    @Test("an approved repo-defined server suppresses the built-in")
+    func approvedRepoServerSuppressesBuiltIn() {
+        let repo = ProjectMCPServer(
+            id: "repo:alas",
+            name: BuiltInAlasMCP.serverName,
+            transport: .http(url: "https://example.com/mcp", headers: [])
+        )
+        // The planner puts an approved repo-defined server on the wire; the
+        // built-in must treat it like an app-level same-name override.
+        let plan = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [],
+            projectDirectory: "/repos/proj",
+            worktreeDirectory: "/repos/proj/wt",
+            environment: [:],
+            capabilities: .init(http: true),
+            repoServers: [repo],
+            repoTrust: [RepoMCPTrust.hash(for: repo): .approved]
+        ))
+        #expect(plan.wireServers.contains { $0.name == BuiltInAlasMCP.serverName })
+        #expect(BuiltInAlasMCP.shouldInject(
+            enabled: true,
+            configuredServers: [repo],
+            binaryPath: "/support/bin/alas",
+            socketPath: "/tmp/alas-501/pid-42"
+        ) == false)
+    }
 }

@@ -47,11 +47,13 @@ struct RepoGroupViewLayoutTests {
 
         let view = RepoGroupView(
             project: project,
+            icon: { $0.icon },
             worktrees: worktrees,
             collapsed: .constant(collapsed),
             selectedWorktreeId: nil,
             isMain: { _ in false },
             upstreamStatus: { _ in nil },
+            workspaceCheckout: { _ in nil },
             operationState: { _ in nil },
             harnessSummary: { _ in nil },
             ggMenuModel: { _ in

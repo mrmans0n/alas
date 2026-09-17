@@ -45,8 +45,8 @@ struct WorktreeRowHeightTests {
         let worktree = Worktree(id: "wt1", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/tmp/alas"), status: .clean, lastActivity: Date())
         let view = RepoGroupView(
-            project: project, worktrees: [worktree], collapsed: .constant(collapsed), selectedWorktreeId: nil,
-            isMain: { _ in true }, upstreamStatus: { _ in nil }, operationState: { _ in nil }, harnessSummary: { _ in nil },
+            project: project, icon: { $0.icon }, worktrees: [worktree], collapsed: .constant(collapsed), selectedWorktreeId: nil,
+            isMain: { _ in true }, upstreamStatus: { _ in nil }, workspaceCheckout: { _ in nil }, operationState: { _ in nil }, harnessSummary: { _ in nil },
             ggMenuModel: { _ in .init(selectedMode: .inherit, context: .inactive(reason: .policyOff), hasStackSummary: false) },
             onSelect: { _ in }, onNewWorktree: {}, onEditProject: {}, onRemoveProject: {}, onOpenGGInbox: nil,
             onResetSort: {}, spaces: [], activeSpaceId: "", isProjectInSpace: { _ in true },
@@ -166,6 +166,15 @@ struct WorktreeRowHeightTests {
 
         #expect(withoutStack == withStack)
     }
+    @Test func rowHeightIsStableWithWorkspaceCheckout() throws {
+        let withoutWorkspaceCheckout = try renderHeight(harnessSummary: nil)
+        let withWorkspaceCheckout = try renderHeight(
+            harnessSummary: nil,
+            workspaceCheckout: .init(name: "Workspace Release", state: .active)
+        )
+
+        #expect(withoutWorkspaceCheckout == withWorkspaceCheckout)
+    }
 
     private func renderHeight(
         harnessSummary: HarnessService.WorktreeHarnessSummary?,
@@ -174,7 +183,8 @@ struct WorktreeRowHeightTests {
             context: .inactive(reason: .policyOff),
             hasStackSummary: false
         ),
-        stackSummary: GGStackSummary? = nil
+        stackSummary: GGStackSummary? = nil,
+        workspaceCheckout: WorktreeWorkspaceCheckoutPresentation? = nil
     ) throws -> Int {
         let worktree = Worktree(
             id: "wt-1",
@@ -216,7 +226,8 @@ struct WorktreeRowHeightTests {
             onRemoveFailed: {},
             onRetryCreate: {},
             onRetryDelete: {},
-            onSetGGWorktreeMode: { _ in }
+            onSetGGWorktreeMode: { _ in },
+            workspaceCheckout: workspaceCheckout
         )
         .environment(\.theme, try ThemeStore().current)
 

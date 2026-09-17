@@ -14,6 +14,13 @@ enum MCPAttachmentSkipReason: Equatable {
     /// A checkout snapshot retains the descriptor for diagnostics, but never
     /// retargets it to whichever member currently has focus.
     case unavailableMember
+    /// Repo-defined server the user has not approved.
+    case repoNotApproved
+    /// Repo-defined server the user explicitly declined, kept distinct so the
+    /// status control can offer a way to reconsider it.
+    case repoDeclined
+    /// Repo-defined server the user disabled for this project.
+    case repoDisabled
 }
 
 enum MCPAttachmentDisposition: Equatable {
@@ -27,6 +34,14 @@ enum MCPAttachmentDisposition: Equatable {
 struct MCPProjectContext: Equatable {
     let projectDirectory: String
     let configuredServers: [ProjectMCPServer]
+    /// Team-defined servers from the repo's `.alas/config.json`. Empty for
+    /// remote projects, where repo config is not read in v1.
+    var repoServers: [ProjectMCPServer] = []
+    /// Names of repo-defined servers the user disabled for this project.
+    var disabledRepoServerNames: Set<String> = []
+    /// Per-user trust decisions for repo-defined servers, keyed by
+    /// `RepoMCPTrust.hash(for:)`.
+    var repoTrust: [String: RepoMCPTrustState] = [:]
 }
 
 struct MCPAttachmentServerStatus: Equatable, Identifiable {
@@ -85,6 +100,11 @@ struct MCPAttachmentPlannerInput {
     /// Descriptor identities whose frozen member is currently unavailable.
     /// The IDs are snapshot identities, not live Project or focus identities.
     let unavailableFrozenDescriptorIDs: Set<String>
+    /// Repo-defined servers and their per-user gating. Only consulted on
+    /// live configured paths - frozen snapshots never gain repo servers.
+    var repoServers: [ProjectMCPServer] = []
+    var disabledRepoServerNames: Set<String> = []
+    var repoTrust: [String: RepoMCPTrustState] = [:]
 
     init(
         configuredServers: [ProjectMCPServer],
@@ -93,7 +113,10 @@ struct MCPAttachmentPlannerInput {
         environment: [String: String],
         capabilities: ACPMCPServerCapabilities,
         frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil,
-        unavailableFrozenDescriptorIDs: Set<String> = []
+        unavailableFrozenDescriptorIDs: Set<String> = [],
+        repoServers: [ProjectMCPServer] = [],
+        disabledRepoServerNames: Set<String> = [],
+        repoTrust: [String: RepoMCPTrustState] = [:]
     ) {
         self.configuredServers = configuredServers
         self.projectDirectory = projectDirectory
@@ -102,6 +125,9 @@ struct MCPAttachmentPlannerInput {
         self.capabilities = capabilities
         self.frozenServerDescriptors = frozenServerDescriptors
         self.unavailableFrozenDescriptorIDs = unavailableFrozenDescriptorIDs
+        self.repoServers = repoServers
+        self.disabledRepoServerNames = disabledRepoServerNames
+        self.repoTrust = repoTrust
     }
 }
 
@@ -110,7 +136,26 @@ enum MCPAttachmentPlanner {
         case missingVariable(String)
     }
     static func plan(_ input: MCPAttachmentPlannerInput) -> MCPAttachmentPlan {
-        let descriptors = descriptors(for: input)
+        // Repo-defined servers participate only on live configured paths:
+        // checkout snapshots never gain repo servers retroactively, so the
+        // frozen path is untouched by the merge.
+        let merge: RepoMCPResolver.Result?
+        let configuredServers: [ProjectMCPServer]
+        if input.frozenServerDescriptors == nil {
+            let result = RepoMCPResolver.merge(
+                appServers: input.configuredServers,
+                repoServers: input.repoServers,
+                disabledNames: input.disabledRepoServerNames,
+                trust: input.repoTrust
+            )
+            merge = result
+            configuredServers = result.active
+        } else {
+            merge = nil
+            configuredServers = input.configuredServers
+        }
+
+        let descriptors = descriptors(for: configuredServers, input: input)
         let validationIssues = ProjectMCPValidation.validate(descriptors.map(\.server))
         var wireServers: [ACPMCPServer] = []
         var statuses: [MCPAttachmentServerStatus] = []
@@ -151,6 +196,10 @@ enum MCPAttachmentPlanner {
             ))
         }
 
+        // Repo servers skipped by the merge surface after the app-level rows
+        // so the status control can show why they are not enabled.
+        statuses.append(contentsOf: repoSkipStatuses(from: merge))
+
         return .init(
             wireServers: wireServers,
             statuses: statuses,
@@ -158,10 +207,50 @@ enum MCPAttachmentPlanner {
         )
     }
 
-    private static func descriptors(for input: MCPAttachmentPlannerInput) -> [WorkspaceMCPServerDescriptor] {
+    /// Repo servers the merge declined to attach, mapped to status rows.
+    /// A repo server shadowed by an app-level server of the same name adds no
+    /// row: the app-level server's own status already represents that slot.
+    private static func repoSkipStatuses(from merge: RepoMCPResolver.Result?) -> [MCPAttachmentServerStatus] {
+        guard let skipped = merge?.skipped else { return [] }
+        return skipped.compactMap { entry in
+            switch entry.reason {
+            case .shadowedByApp:
+                return nil
+            case .disabled:
+                return status(for: entry.server, disposition: .skipped(.repoDisabled))
+            case .declined:
+                return status(for: entry.server, disposition: .skipped(.repoDeclined))
+            case .notApproved:
+                return status(for: entry.server, disposition: .skipped(.repoNotApproved))
+            }
+        }
+    }
+
+    private static func status(
+        for server: ProjectMCPServer,
+        disposition: MCPAttachmentDisposition
+    ) -> MCPAttachmentServerStatus {
+        // Repo servers carry deterministic "repo:<name>" ids, which cannot
+        // collide with the index-based ids of the app-level rows above.
+        .init(
+            id: server.id,
+            name: server.name,
+            transport: transportKind(for: server.transport),
+            disposition: disposition
+        )
+    }
+
+    private static func descriptors(
+        for configuredServers: [ProjectMCPServer],
+        input: MCPAttachmentPlannerInput
+    ) -> [WorkspaceMCPServerDescriptor] {
         guard let frozenServerDescriptors = input.frozenServerDescriptors else {
-            return input.configuredServers.enumerated().map { index, server in
-                .init(id: String(index), server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
+            return configuredServers.enumerated().map { index, server in
+                // Repo servers keep their deterministic "repo:<name>" id so
+                // statuses stay stable across reloads; app-level servers keep
+                // the historical index-based ids.
+                let id = server.id.hasPrefix(RepoConfig.repoServerIDPrefix) ? server.id : String(index)
+                return .init(id: id, server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
             }
         }
         return normalizedFrozenServerDescriptors(for: frozenServerDescriptors)

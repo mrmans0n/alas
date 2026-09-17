@@ -5,6 +5,9 @@ struct ProjectAgentSettingsView: View {
     let agents: [AgentDefinition]
     let globalAgentID: String?
     let globalUseBypass: Bool
+    /// Display name of the repo's `.alas/config.json` default agent, when it
+    /// is installed and enabled. Drives the `.global` caption.
+    var repoDefaultAgentName: String? = nil
     @Environment(\.theme) private var theme
 
     private var enabledAgents: [AgentDefinition] { agents.filter(\.isEnabled) }
@@ -34,9 +37,15 @@ struct ProjectAgentSettingsView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 if scripts.agentSelection == .global {
-                    Text("Follows Settings > Agents. Currently \(globalName).")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(theme.color("fg-dim"))
+                    if let repoDefaultAgentName {
+                        Text("Repo default: \(repoDefaultAgentName) (from .alas/config.json). Falls back to Settings > Agents.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(theme.color("fg-dim"))
+                    } else {
+                        Text("Follows Settings > Agents. Currently \(globalName).")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(theme.color("fg-dim"))
+                    }
                 } else if case .agent = scripts.agentSelection, selectedAgent?.isEnabled != true {
                     Text("This agent is unavailable. Enable or install it in Settings > Agents, or choose another agent.")
                         .font(.system(size: 11.5))

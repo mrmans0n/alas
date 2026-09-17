@@ -188,6 +188,7 @@ private struct ACPSessionView: View {
                     onOpenPreview: onOpenPreview
                 )
                 adapterBanner()
+                repoMCPTrustBanner()
                 contextRestoreBanner()
                 if let retry = session.retryStatus {
                     retryBanner(retry)
@@ -656,6 +657,43 @@ private struct ACPSessionView: View {
         }
         .disabled(isMirror)
         .opacity(isMirror ? 0.5 : 1)
+    }
+
+    @ViewBuilder
+    private func repoMCPTrustBanner() -> some View {
+        // Workspace-checkout sessions plan their attachments from frozen
+        // descriptors and never gain repo servers, so a trust decision made
+        // here could not join the displayed session while still affecting
+        // ordinary live sessions later.
+        if !isWorkspaceCheckoutOwner,
+           let project = state.projects.first(where: { $0.id == worktree.projectId }) {
+            let decision = state.repoMCPTrustDecision(
+                worktreeRoot: worktree.path,
+                project: project
+            )
+            if decision.isVisible {
+                RepoMCPTrustBanner(
+                    pendingServers: decision.pendingServers,
+                    onApproveAll: {
+                        state.approveRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
+                    },
+                    onDeclineAll: {
+                        state.declineRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
+                    },
+                    onApproveServer: { server in
+                        state.approveRepoMCPServers(projectId: project.id, servers: [server])
+                    },
+                    onDeclineServer: { server in
+                        state.declineRepoMCPServers(projectId: project.id, servers: [server])
+                    }
+                )
+            }
+        }
+    }
+
+    private var isWorkspaceCheckoutOwner: Bool {
+        guard case .workspaceCheckout = owner else { return false }
+        return true
     }
 
     @ViewBuilder

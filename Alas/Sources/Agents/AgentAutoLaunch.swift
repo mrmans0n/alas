@@ -10,13 +10,19 @@ enum AgentAutoLaunch {
     /// terminal. Pure — call sites pass in everything needed. Returns nil
     /// when no agent should be launched (mode = disabled, no agent picked,
     /// or the picked agent isn't enabled+installed in the registry).
+    ///
+    /// `repoAgentId` is the repo's `.alas/config.json` default (already
+    /// validated as installed+enabled, or nil). It wins over the global pick
+    /// for an inherited agent setting and is ignored entirely when the
+    /// project overrides the agent.
     static func resolve(
         registry: AgentRegistry,
         globalAgentId: String?,
         globalUseBypass: Bool,
         projectMode: ProjectStartupScriptMode,
         projectAgentId: String?,
-        projectUseBypass: Bool
+        projectUseBypass: Bool,
+        repoAgentId: String? = nil
     ) -> Resolved? {
         let agentId: String?
         let useBypass: Bool
@@ -24,8 +30,20 @@ enum AgentAutoLaunch {
         case .disabled:
             return nil
         case .useGlobal:
-            agentId = globalAgentId
-            useBypass = globalUseBypass
+            // The repo default wins over the global pick, but an unknown or
+            // disabled repo agent falls through to the global one.
+            if let repoAgentId,
+               resolveExplicit(
+                   agentId: repoAgentId,
+                   registry: registry,
+                   useBypass: globalUseBypass
+               ) != nil {
+                agentId = repoAgentId
+                useBypass = globalUseBypass
+            } else {
+                agentId = globalAgentId
+                useBypass = globalUseBypass
+            }
         case .overrideGlobal, .appendToGlobal:
             // Agent override has no "append" semantics; we treat them the same.
             agentId = projectAgentId

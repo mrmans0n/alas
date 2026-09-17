@@ -4,6 +4,9 @@ struct RepoSelectorRowView: View {
     let row: RepoSelectorRow
     let isSelected: Bool
     let projectsById: [String: ProjectConfig]
+    /// Resolves each project's icon, which may come from the repo's `.alas/`
+    /// directory when the project has no explicit icon.
+    let icon: (ProjectConfig) -> ProjectIcon
     let onTap: () -> Void
     let onHover: () -> Void
     @Environment(\.theme) private var theme
@@ -79,7 +82,7 @@ struct RepoSelectorRowView: View {
     private func worktreeContent(worktree: Worktree, indices: [Int], isCurrent: Bool) -> some View {
         HStack(spacing: 10) {
             if let project = projectsById[worktree.projectId] {
-                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                ProjectIconView(icon: icon(project), fallbackName: project.name, size: .sidebar)
             }
             if isCurrent {
                 Circle()

@@ -211,4 +211,67 @@ struct AgentAutoLaunchTests {
         let argv = AgentAutoLaunch.buildCommand(agent: agent, useBypass: true)
         #expect(argv == ["claude", "--verbose"])
     }
+
+    @Test func repoDefaultWinsOverGlobalForInheritedAgent() {
+        let repo = mkAgent(id: "test-repo", binary: "repo", bypass: nil)
+        let global = mkAgent(id: "test-global", binary: "global", bypass: nil)
+        let r = registry([repo, global], installed: ["test-repo", "test-global"])
+        let resolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: "test-global",
+            globalUseBypass: false,
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            projectUseBypass: false,
+            repoAgentId: "test-repo"
+        )!
+        #expect(resolved.agentId == "test-repo")
+        #expect(resolved.argv == ["repo"])
+    }
+
+    @Test func unknownRepoDefaultFallsThroughToGlobal() {
+        let global = mkAgent(id: "test-global", binary: "global", bypass: nil)
+        let r = registry([global], installed: ["test-global"])
+        let resolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: "test-global",
+            globalUseBypass: false,
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            projectUseBypass: false,
+            repoAgentId: "unknown-agent"
+        )!
+        #expect(resolved.agentId == "test-global")
+    }
+
+    @Test func repoDefaultIsIgnoredWhenProjectOverrides() {
+        let project = mkAgent(id: "test-project", binary: "project", bypass: nil)
+        let repo = mkAgent(id: "test-repo", binary: "repo", bypass: nil)
+        let r = registry([project, repo], installed: ["test-project", "test-repo"])
+        let resolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: "test-global",
+            globalUseBypass: false,
+            projectMode: .overrideGlobal,
+            projectAgentId: "test-project",
+            projectUseBypass: false,
+            repoAgentId: "test-repo"
+        )!
+        #expect(resolved.agentId == "test-project")
+    }
+
+    @Test func disabledProjectModeStillIgnoresRepoDefault() {
+        let repo = mkAgent(id: "test-repo", binary: "repo", bypass: nil)
+        let r = registry([repo], installed: ["test-repo"])
+        let resolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: "test-global",
+            globalUseBypass: false,
+            projectMode: .disabled,
+            projectAgentId: nil,
+            projectUseBypass: false,
+            repoAgentId: "test-repo"
+        )
+        #expect(resolved == nil)
+    }
 }

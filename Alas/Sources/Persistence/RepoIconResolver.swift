@@ -1,0 +1,279 @@
+import Foundation
+import os
+
+/// Picks the icon a project displays once the repo-local `.alas/` layer is
+/// applied under the per-user project settings. See
+/// docs/plans/2026-09-17-repo-local-config-design.md.
+enum RepoIconResolver {
+    /// Outcome of resolving a project icon, including which repo file supplied
+    /// it, so callers can cache the result on that file's identity instead of
+    /// re-deriving which candidate won.
+    struct RepoIconResolution: Equatable {
+        /// Icon to display: a staged image icon, or the app icon unchanged.
+        let icon: ProjectIcon
+        /// The repo file the icon came from, or nil when the app icon was used.
+        let sourceURL: URL?
+        let sourceModificationDate: Date?
+        let sourceFileSize: Int?
+
+        /// The identity of the file this resolution came from, or nil when the
+        /// app icon was used and there is nothing to cache on.
+        var sourceIdentity: SourceIdentity? {
+            guard let sourceURL else { return nil }
+            return SourceIdentity(
+                url: sourceURL,
+                modificationDate: sourceModificationDate,
+                fileSize: sourceFileSize
+            )
+        }
+    }
+
+    /// The repo file that supplies an icon, with the identity stamp a caller
+    /// keys its cache on. Produced from filesystem stats alone: no reads, no
+    /// staging.
+    struct SourceIdentity: Hashable {
+        let url: URL
+        let modificationDate: Date?
+        let fileSize: Int?
+    }
+
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "repo-config")
+
+    /// An app-level icon counts as explicit when it is anything other than the
+    /// untouched creation default: a letter tile with no chosen label or glyph.
+    /// A colour pick alone is cosmetic, so it never vetoes the repo's logo.
+    static func iconIsExplicit(_ icon: ProjectIcon) -> Bool {
+        icon.mode != .letter
+            || icon.label != nil
+            || icon.symbolName != nil
+            || icon.emoji != nil
+            || icon.imagePath != nil
+    }
+
+    /// The icon alone, for the render path. Callers that need to cache the
+    /// result must use `resolve` and key on the reported source instead.
+    static func effectiveIcon(
+        appIcon: ProjectIcon,
+        projectID: String,
+        repoConfig: RepoConfig?,
+        primaryCheckout: URL,
+        store: RepoConfigStore,
+        stagingRoot: URL = Paths.projectIconsRoot
+    ) -> ProjectIcon {
+        resolve(
+            appIcon: appIcon,
+            projectID: projectID,
+            repoConfig: repoConfig,
+            primaryCheckout: primaryCheckout,
+            store: store,
+            stagingRoot: stagingRoot
+        ).icon
+    }
+
+    /// Stamps for every repo file that could currently supply the icon, in
+    /// `resolve`'s candidate order. Stats only: no reads, no staging, no
+    /// logging.
+    ///
+    /// A caller caching the resolved icon keys on this chain rather than on a
+    /// single winning file: when the head candidate exists but cannot be used
+    /// (unreadable, undecodable), `resolve` falls through to the next one, and
+    /// a key naming only the broken head would keep serving a stale fallback
+    /// while the fallback itself changes. Stamping every usable candidate makes
+    /// any of their edits invalidate the entry.
+    static func sourceChain(
+        repoConfig: RepoConfig?,
+        appIcon: ProjectIcon,
+        primaryCheckout: URL,
+        store: RepoConfigStore
+    ) -> [SourceIdentity] {
+        guard !iconIsExplicit(appIcon) else { return [] }
+        return candidates(
+            repoConfig: repoConfig,
+            primaryCheckout: primaryCheckout,
+            store: store
+        ).compactMap { candidate in
+            // Mirror resolve's confinement so the probe and resolve agree on
+            // which files are usable instead of the caller caching stamps
+            // `resolve` would refuse to use.
+            guard let target = confinedTarget(of: candidate, checkout: primaryCheckout) else {
+                return nil
+            }
+            // An oversized candidate is skipped here too, so the probe and
+            // `resolve` agree on which files are usable instead of the caller
+            // caching stamps `resolve` would refuse to use.
+            guard let values = try? target.resourceValues(
+                forKeys: [.contentModificationDateKey, .fileSizeKey]
+            ), !isOversized(values)
+            else { return nil }
+            return SourceIdentity(
+                url: target,
+                modificationDate: values.contentModificationDate,
+                fileSize: values.fileSize
+            )
+        }
+    }
+
+    /// The icon to display for a project: an explicit app icon wins, else the
+    /// repo config's `icon` key, else the discovered `.alas/icon.<ext>`, else
+    /// the app icon unchanged.
+    ///
+    /// Repo images are staged content-addressed into the icon store instead of
+    /// being referenced where they lie, because `ProjectIcon.imagePath` is
+    /// resolved against that store when it renders. The app icon's colour and
+    /// background preference carry over, so a personal choice survives.
+    ///
+    /// Never throws: a missing or undecodable repo icon is invisible to the
+    /// user beyond falling back to the app icon.
+    ///
+    /// `stagingRoot` is a test seam: it must be `Paths.projectIconsRoot` in the
+    /// app, because the renderer resolves the returned `imagePath` against that
+    /// root. Any other value stages an icon the renderer cannot load.
+    static func resolve(
+        appIcon: ProjectIcon,
+        projectID: String,
+        repoConfig: RepoConfig?,
+        primaryCheckout: URL,
+        store: RepoConfigStore,
+        stagingRoot: URL = Paths.projectIconsRoot
+    ) -> RepoIconResolution {
+        guard !iconIsExplicit(appIcon) else { return appIconResolution(appIcon) }
+
+        for candidate in candidates(
+            repoConfig: repoConfig,
+            primaryCheckout: primaryCheckout,
+            store: store
+        ) {
+            // Symlinks are resolved and confined before anything is statted or
+            // read, so a committed link cannot point the read outside `.alas/`.
+            guard let target = confinedTarget(of: candidate, checkout: primaryCheckout) else {
+                logUnusableConfigIcon(candidate, exists: true)
+                continue
+            }
+            // One stat decides both whether the file is there and whether it is
+            // worth reading: an oversized icon is refused before it is loaded,
+            // so a 10+ MB file never lands in memory on the render path.
+            let values = try? target.resourceValues(
+                forKeys: [.contentModificationDateKey, .fileSizeKey]
+            )
+            guard !isOversized(values) else {
+                logUnusableConfigIcon(candidate, exists: true)
+                continue
+            }
+            guard let data = try? Data(contentsOf: target),
+                  let staged = try? ProjectIconImageStaging.stage(
+                      data: data,
+                      projectId: projectID,
+                      root: stagingRoot
+                  )
+            else {
+                logUnusableConfigIcon(candidate, exists: values != nil)
+                continue
+            }
+            return RepoIconResolution(
+                icon: ProjectIcon(
+                    mode: .image,
+                    color: appIcon.color,
+                    imagePath: staged.imagePath,
+                    transparentBackground: appIcon.transparentBackground
+                ),
+                sourceURL: target,
+                sourceModificationDate: values?.contentModificationDate,
+                sourceFileSize: values?.fileSize
+            )
+        }
+        return appIconResolution(appIcon)
+    }
+
+    /// The app icon was used, so there is no repo file to cache on.
+    private static func appIconResolution(_ icon: ProjectIcon) -> RepoIconResolution {
+        RepoIconResolution(
+            icon: icon,
+            sourceURL: nil,
+            sourceModificationDate: nil,
+            sourceFileSize: nil
+        )
+    }
+
+    /// The repo's own icon files, most explicit first.
+    private static func candidates(
+        repoConfig: RepoConfig?,
+        primaryCheckout: URL,
+        store: RepoConfigStore
+    ) -> [Candidate] {
+        var candidates: [Candidate] = []
+        // Defence in depth: decoding already drops unsafe paths, but a
+        // hand-built `RepoConfig` never went through it.
+        if let image = repoConfig?.icon?.image,
+           let safeImage = RepoConfig.sanitizedIconPath(image) {
+            candidates.append(Candidate(
+                url: primaryCheckout
+                    .appendingPathComponent(".alas", isDirectory: true)
+                    .appendingPathComponent(safeImage),
+                source: .configKey
+            ))
+        }
+        if let discovered = store.discoveredIconURL(worktreeRoot: primaryCheckout) {
+            candidates.append(Candidate(url: discovered, source: .discovered))
+        }
+        return candidates
+    }
+
+    /// A repo icon past the staging limit can never be used, and the file size
+    /// is already known from the stat that decided the candidate was there.
+    private static func isOversized(_ values: URLResourceValues?) -> Bool {
+        guard let size = values?.fileSize else { return false }
+        return size > ProjectIconImageStaging.maxBytes
+    }
+
+    /// A candidate may only be read when it resolves — after following any
+    /// symlink components — to a regular file whose canonical path stays
+    /// inside the repo's `.alas/` directory. A committed `icon.png` that is
+    /// really a symlink to somewhere outside the checkout would otherwise
+    /// defeat both the path confinement and the size check that assume the
+    /// file lives under `.alas/`. A symlinked `.alas` itself is rejected the
+    /// same way: if it escaped the checkout, canonicalizing both sides would
+    /// make the prefix check pass against the outside directory.
+    private static func confinedTarget(of candidate: Candidate, checkout: URL) -> URL? {
+        let canonicalCheckout = checkout.standardizedFileURL.resolvingSymlinksInPath()
+        let resolved = candidate.url.standardizedFileURL.resolvingSymlinksInPath()
+        let root = checkout
+            .appendingPathComponent(".alas", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        // The `.alas` root must exist and stay inside the checkout it belongs
+        // to; an escaping root contributes no usable candidates at all.
+        guard root.path.hasPrefix(canonicalCheckout.path + "/"),
+              resolved.path.hasPrefix(root.path + "/") else {
+            return nil
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return nil
+        }
+        return resolved
+    }
+
+    /// The configured file is a deliberate team decision, so one that is
+    /// present but unusable (`logo.svg`, an oversized image, a broken file) is
+    /// worth a diagnostic. A path that does not exist stays quiet: it would log
+    /// on every render pass instead.
+    private static func logUnusableConfigIcon(_ candidate: Candidate, exists: Bool) {
+        guard candidate.source == .configKey, exists else { return }
+        // `public` on purpose: the useful part of this diagnostic is *which*
+        // repo needs fixing, and a redacted path makes it useless.
+        logger.error(
+            "Repo icon \(candidate.url.path, privacy: .public) from .alas/config.json could not be used; falling back"
+        )
+    }
+
+    private enum CandidateSource {
+        case configKey
+        case discovered
+    }
+
+    private struct Candidate {
+        let url: URL
+        let source: CandidateSource
+    }
+}

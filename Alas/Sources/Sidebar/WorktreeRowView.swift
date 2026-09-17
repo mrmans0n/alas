@@ -184,6 +184,7 @@ struct WorktreeRowView: View {
     let onRetryCreate: () -> Void
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
+    let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
     @Environment(\.theme) var theme
     @State private var hovering = false
 
@@ -325,6 +326,22 @@ struct WorktreeRowView: View {
             // Dot and label render together or not at all. An idle worktree has
             // nothing to report until the git status service lands, and a dot on
             // its own reads as an unexplained decoration.
+            if let workspaceCheckout {
+                HStack(spacing: 4) {
+                    Icon(
+                        name: "square.grid.2x2",
+                        size: 9,
+                        color: theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim")
+                    )
+                    .accessibilityHidden(true)
+                    Text(workspaceCheckout.name)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .foregroundColor(theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim"))
+                .help(workspaceCheckout.accessibilityLabel)
+                .accessibilityLabel(workspaceCheckout.accessibilityLabel)
+            }
             if let status {
                 HStack(spacing: 5) {
                     StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)

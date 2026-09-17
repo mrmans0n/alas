@@ -174,7 +174,8 @@ private struct ProjectDialog: View {
                                 scripts: $agentSettings,
                                 agents: state.agentRegistry.agents,
                                 globalAgentID: state.config.agents.worktreeAutoLaunch.agentId,
-                                globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions
+                                globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
+                                repoDefaultAgentName: repoDefaultAgentName
                             )
                         case .automation:
                             startupScriptsSection
@@ -295,6 +296,24 @@ private struct ProjectDialog: View {
         case .add: "Register a git repository as an Alas project."
         case .edit: "Update this project's settings."
         }
+    }
+
+    /// Display name of the repo's `.alas/config.json` default agent when it
+    /// is installed and enabled, for the agent-settings caption. Only a
+    /// local checkout can carry the config in v1.
+    private var repoDefaultAgentName: String? {
+        let repoPath: String?
+        switch mode {
+        case .edit(let project):
+            repoPath = project.host == nil ? project.path : nil
+        case .add:
+            repoPath = location == .local ? path : nil
+        }
+        guard let repoPath, !repoPath.isEmpty else { return nil }
+        return state.repoDefaultAgentDisplayName(
+            repoPath: repoPath,
+            agents: state.agentRegistry.agents
+        )
     }
 
     private var locationFieldLabel: String {
