@@ -157,6 +157,40 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutLaunchSpecExpandsHomeRelativeLocalOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/claude-agent-acp",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.command == "\(NSHomeDirectory())/bin/claude-agent-acp")
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecExpandsHomeRelativeRemoteOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/claude-agent-acp",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(
+            from: spec,
+            remoteHome: "/home/builder",
+            useBypassPermissions: false
+        )
+
+        #expect(transformed.command == "/home/builder/bin/claude-agent-acp")
+    }
+
+    @MainActor
     @Test func appStateCreatesCheckoutManagerAtTheFrozenRootAndKeepsMissingRootPending() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

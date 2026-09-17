@@ -10596,6 +10596,21 @@ final class AppState {
         guard await workspaceCheckoutManifestMatches(checkout) else { return .pendingRootOrLocation }
         if let existing = acpManagers[owner] { return .ready(existing) }
 
+        let configuredAgents = AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        )
+        let launchSpecRemoteHome: String?
+        if let pinnedRemoteHost,
+           configuredAgents.contains(where: { $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true }) {
+            guard let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost) else {
+                return .pendingRootOrLocation
+            }
+            launchSpecRemoteHome = remoteHome
+        } else {
+            launchSpecRemoteHome = nil
+        }
+
         let dbURL = Paths.acpSessionsDB(for: owner)
         let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
             guard let self else { return nil }
@@ -10662,6 +10677,8 @@ final class AppState {
                 guard let self else { return spec }
                 return self.workspaceACPLaunchSpec(
                     from: spec,
+                    configuredAgents: configuredAgents,
+                    remoteHome: launchSpecRemoteHome,
                     useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
                 )
             },
@@ -10798,17 +10815,21 @@ final class AppState {
 
     func workspaceACPLaunchSpec(
         from spec: ACPLaunchSpec,
+        configuredAgents: [AgentDefinition]? = nil,
+        remoteHome: String? = nil,
         useBypassPermissions: Bool
     ) -> ACPLaunchSpec {
-        let configuredAgent = AgentConfiguredCatalog.enabled(
+        let agents = configuredAgents ?? AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
             customs: config.agents.custom
-        ).first(where: { $0.id == spec.agentID })
+        )
+        let configuredAgent = agents.first(where: { $0.id == spec.agentID })
         var launchSpec = spec
         if let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
            !binaryOverride.isEmpty,
-           binaryOverride != spec.command {
-            launchSpec = launchSpec.overridingCommand(binaryOverride)
+           let command = Self.normalizedACPBinaryOverride(binaryOverride, remoteHome: remoteHome),
+           command != spec.command {
+            launchSpec = launchSpec.overridingCommand(command)
         }
         if useBypassPermissions,
            let flag = configuredAgent?.bypassPermissionsFlag,
@@ -10816,6 +10837,18 @@ final class AppState {
             launchSpec = launchSpec.prependingArguments([flag])
         }
         return launchSpec
+    }
+
+    nonisolated static func normalizedACPBinaryOverride(_ override: String, remoteHome: String?) -> String? {
+        let trimmed = override.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        if let remoteHome,
+           trimmed.hasPrefix("~/") {
+            let home = remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !home.isEmpty else { return trimmed }
+            return "/\(home)/\(trimmed.dropFirst(2))"
+        }
+        return (trimmed as NSString).expandingTildeInPath
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
