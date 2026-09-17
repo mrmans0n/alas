@@ -311,6 +311,22 @@ extension `EscapedExtensionTests` {
     @Test func works() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/UnicodeIdentifierSuite.swift" <<'SWIFT'
+import Testing
+
+struct CaféTests { @Test func works() {} }
+SWIFT
+cat > "${sandbox}/AlasTests/SplitExtensionSuite.swift" <<'SWIFT'
+import Testing
+
+struct SplitExtensionKeywordTests {}
+
+extension
+SplitExtensionKeywordTests
+{
+    @Test func works() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
 import Testing
 
@@ -404,7 +420,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=46 scheduled=45 ordinary=27 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=48 scheduled=47 ordinary=29 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -414,6 +430,7 @@ grep -qx 'ACPStdioClientFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'AllmanNamespace.AllmanParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'AllmanProcessNamespace.AllmanWorkerTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'CaféTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedExtensionTests' "${inventory_cache}/ordinary.txt"
@@ -441,6 +458,7 @@ grep -qx 'LSPInstallerTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'LSPTransportFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SelfUpdaterTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SplitDeclarationTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'SplitExtensionKeywordTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SplitRuntimeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'StringParenSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SameLineTests' "${inventory_cache}/ordinary.txt"
@@ -471,6 +489,7 @@ selectors="$(
 grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/AllmanNamespace.AllmanParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/CaféTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedExtensionTests' <<<"${selectors}"
@@ -494,6 +513,7 @@ grep -qx -- '-only-testing AlasTests/ParserNamespace.ParserTests' <<<"${selector
 grep -qx -- '-only-testing AlasTests/RawStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SameLineTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitDeclarationTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/SplitExtensionKeywordTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/StringParenSuiteTests' <<<"${selectors}"
 if grep -q 'InlineNestedAttributeTests' <<<"${selectors}"; then
     echo 'nested subprocess suite was scheduled with ordinary suites' >&2

@@ -330,13 +330,13 @@ while IFS= read -r source; do
                 sub(/^`/, "", name)
                 sub(/`.*/, "", name)
             } else {
-                sub(/[^A-Za-z0-9_].*/, "", name)
+                sub(/[[:space:]:{(].*/, "", name)
             }
             return name
         }
         function clean_qualified_identifier(name) {
             gsub(/`/, "", name)
-            sub(/[^A-Za-z0-9_.].*/, "", name)
+            sub(/[[:space:]:{(].*/, "", name)
             return name
         }
         function push_scope(name, depth, previous_suite) {
@@ -353,11 +353,14 @@ while IFS= read -r source; do
             pending_nominal_declaration = 1
             pending_nominal_previous_suite = previous_suite
         }
+        function remember_extension_declaration() {
+            pending_extension_declaration = 1
+        }
         function maybe_complete_pending_nominal_declaration(line,    name, previous_suite) {
             if (!pending_nominal_declaration) {
                 return 0
             }
-            if (line !~ /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/) {
+            if (line !~ /^(`[^`]+`|[^[:space:]:{(]+)([[:space:]:{(]|$)/) {
                 return 0
             }
             name = clean_identifier(line)
@@ -376,6 +379,30 @@ while IFS= read -r source; do
             }
             pending_nominal_declaration = 0
             pending_nominal_previous_suite = ""
+            return 1
+        }
+        function maybe_complete_pending_extension_declaration(line,    name, previous_suite) {
+            if (!pending_extension_declaration) {
+                return 0
+            }
+            if (line !~ /^(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/) {
+                return 0
+            }
+            name = clean_qualified_identifier(line)
+            if (name ~ /Tests$/) {
+                previous_suite = suite
+                suite = qualified(name)
+                if (line ~ /[{]/) {
+                    push_scope(name, brace_depth + 1, previous_suite)
+                } else {
+                    remember_scope(name, previous_suite)
+                }
+            } else if (line ~ /[{]/) {
+                push_scope(name, brace_depth + 1, suite)
+            } else {
+                remember_scope(name, suite)
+            }
+            pending_extension_declaration = 0
             return 1
         }
         function maybe_push_pending_scope(line) {
@@ -406,11 +433,12 @@ while IFS= read -r source; do
                 pending_test = 1
             }
             maybe_complete_pending_nominal_declaration(candidate)
+            maybe_complete_pending_extension_declaration(candidate)
         }
         candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]*$/ {
             remember_nominal_declaration(suite)
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[^[:space:]:{(]*Tests)([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             name = clean_identifier(name)
@@ -422,7 +450,7 @@ while IFS= read -r source; do
                 remember_scope(name, previous_suite)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[^[:space:]:{(]+)([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             name = clean_identifier(name)
@@ -432,7 +460,10 @@ while IFS= read -r source; do
                 remember_scope(name, suite)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]*$/ {
+            remember_extension_declaration()
+        }
+        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             name = clean_qualified_identifier(name)
@@ -446,7 +477,7 @@ while IFS= read -r source; do
                 }
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             name = clean_qualified_identifier(name)
@@ -781,13 +812,13 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     sub(/^`/, "", name)
                     sub(/`.*/, "", name)
                 } else {
-                    sub(/[^A-Za-z0-9_].*/, "", name)
+                    sub(/[[:space:]:{(].*/, "", name)
                 }
                 return name
             }
             function clean_qualified_identifier(name) {
                 gsub(/`/, "", name)
-                sub(/[^A-Za-z0-9_.].*/, "", name)
+                sub(/[[:space:]:{(].*/, "", name)
                 return name
             }
             function push_scope(name, depth) {
@@ -801,11 +832,14 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             function remember_nominal_declaration() {
                 pending_nominal_declaration = 1
             }
+            function remember_extension_declaration() {
+                pending_extension_declaration = 1
+            }
             function maybe_complete_pending_nominal_declaration(line,    name) {
                 if (!pending_nominal_declaration) {
                     return 0
                 }
-                if (line !~ /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/) {
+                if (line !~ /^(`[^`]+`|[^[:space:]:{(]+)([[:space:]:{(]|$)/) {
                     return 0
                 }
                 name = clean_identifier(line)
@@ -818,6 +852,25 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
                 pending_nominal_declaration = 0
+                return 1
+            }
+            function maybe_complete_pending_extension_declaration(line,    name) {
+                if (!pending_extension_declaration) {
+                    return 0
+                }
+                if (line !~ /^(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/) {
+                    return 0
+                }
+                name = clean_qualified_identifier(line)
+                if (name ~ /Tests$/) {
+                    print qualified(name)
+                }
+                if (line ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                } else {
+                    remember_scope(name)
+                }
+                pending_extension_declaration = 0
                 return 1
             }
             function maybe_push_pending_scope(line) {
@@ -842,11 +895,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/^[[:space:]]*/, "", candidate)
                 maybe_push_pending_scope(candidate)
                 maybe_complete_pending_nominal_declaration(candidate)
+                maybe_complete_pending_extension_declaration(candidate)
             }
             candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]*$/ {
                 remember_nominal_declaration()
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[^[:space:]:{(]*Tests)([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 name = clean_identifier(name)
@@ -857,7 +911,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]+`|[^[:space:]:{(]+)([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 name = clean_identifier(name)
@@ -867,7 +921,10 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]*$/ {
+                remember_extension_declaration()
+            }
+            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
                 name = clean_qualified_identifier(name)
@@ -880,7 +937,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     }
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(\.(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))*([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open|package)[[:space:]]+)*extension[[:space:]]+(`[^`]+`|[^[:space:].:{(]+)(\.(`[^`]+`|[^[:space:].:{(]+))*([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
                 name = clean_qualified_identifier(name)
