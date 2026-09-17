@@ -345,11 +345,19 @@ while IFS= read -r source; do
                 push_scope(name, brace_depth + 1)
             }
         }
-        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_].*/, "", name)
+            sub(/[^A-Za-z0-9_.].*/, "", name)
             suite = qualified(name)
+        }
+        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
+            name = candidate
+            sub(/.*extension[[:space:]]+/, "", name)
+            sub(/[^A-Za-z0-9_.].*/, "", name)
+            if (name !~ /Tests$/ && candidate ~ /[{]/) {
+                push_scope(name, brace_depth + 1)
+            }
         }
         /@Test([[:space:](]|$)/ && suite != "" { print suite }
         { update_scope(candidate) }
@@ -683,11 +691,19 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     push_scope(name, brace_depth + 1)
                 }
             }
-            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
+            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_].*/, "", name)
+                sub(/[^A-Za-z0-9_.].*/, "", name)
                 print qualified(name)
+            }
+            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*([[:space:]:{(]|$)/ {
+                name = candidate
+                sub(/.*extension[[:space:]]+/, "", name)
+                sub(/[^A-Za-z0-9_.].*/, "", name)
+                if (name !~ /Tests$/ && candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                }
             }
             { update_scope(candidate) }
         ' "${source}"

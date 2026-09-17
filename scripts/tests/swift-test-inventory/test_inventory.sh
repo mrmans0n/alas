@@ -241,6 +241,16 @@ enum ParserNamespace {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/ExtensionNamespaceSuite.swift" <<'SWIFT'
+import Testing
+
+extension ExtensionNamespace {
+    @Suite
+    struct ExtensionParserTests {
+        @Test func ordinary() {}
+    }
+}
+SWIFT
 cat > "${sandbox}/AlasTests/BraceScopeTests.swift" <<'SWIFT'
 import Testing
 
@@ -257,7 +267,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=29 scheduled=28 ordinary=15 subprocess=13 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=30 scheduled=29 ordinary=16 subprocess=13 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -266,6 +276,7 @@ grep -qx 'AgentRunnerInvocationTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'ExtensionNamespace.ExtensionParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'FollowingTopLevelTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
@@ -308,6 +319,7 @@ grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/ExtensionNamespace.ExtensionParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/FollowingTopLevelTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
@@ -387,17 +399,17 @@ env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_IN
 grep -qx -- '-only-testing' "${ordinary_log}"
 grep -qx -- 'AlasTests/BraceOwnerTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/EscapedDelimiterTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/MultilineAttributeTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/NestedCommentTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/RawStringTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/SplitDeclarationTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/UnitTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/FollowingTopLevelTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/MultilineStringTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/ParserNamespace.ParserTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/StringParenSuiteTests' "${ordinary_log}"
 if grep -q 'AlasTests/InlineNestedAttributeTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
-if grep -q 'AlasTests/InlineSuiteTests' "${ordinary_log}"; then
+if grep -q 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
