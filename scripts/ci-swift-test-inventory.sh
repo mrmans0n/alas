@@ -194,22 +194,64 @@ while IFS= read -r source; do
             }
             return line
         }
+        function count_char(line, ch,    i, count) {
+            count = 0
+            for (i = 1; i <= length(line); i++) {
+                if (substr(line, i, 1) == ch) {
+                    count++
+                }
+            }
+            return count
+        }
+        function qualified(name,    i, result) {
+            result = ""
+            for (i = 1; i <= scope_count; i++) {
+                result = result (result == "" ? "" : ".") scope_name[i]
+            }
+            return result == "" ? name : result "." name
+        }
+        function push_scope(name, depth) {
+            scope_count++
+            scope_name[scope_count] = name
+            scope_depth[scope_count] = depth
+        }
+        function update_scope(line) {
+            brace_depth += count_char(line, "{") - count_char(line, "}")
+            while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
+                delete scope_name[scope_count]
+                delete scope_depth[scope_count]
+                scope_count--
+            }
+        }
         {
             candidate = strip_attributes($0)
+            sub(/^[[:space:]]*/, "", candidate)
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
-            suite = name
+            suite = qualified(name)
+            if (candidate ~ /[{]/) {
+                push_scope(name, brace_depth + 1)
+            }
+        }
+        candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+            name = candidate
+            sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
+            sub(/[^A-Za-z0-9_].*/, "", name)
+            if (name !~ /Tests$/ && candidate ~ /[{]/) {
+                push_scope(name, brace_depth + 1)
+            }
         }
         candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
             name = candidate
             sub(/.*extension[[:space:]]+/, "", name)
             sub(/[^A-Za-z0-9_].*/, "", name)
-            suite = name
+            suite = qualified(name)
         }
         /@Test([[:space:](]|$)/ && suite != "" { print suite }
+        { update_scope(candidate) }
     ' "${source}"
 done < <(find "${tests_root}" -type f -name '*.swift' -print | sort) | sort -u > "${suite_file}"
 
@@ -389,21 +431,63 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 }
                 return line
             }
+            function count_char(line, ch,    i, count) {
+                count = 0
+                for (i = 1; i <= length(line); i++) {
+                    if (substr(line, i, 1) == ch) {
+                        count++
+                    }
+                }
+                return count
+            }
+            function qualified(name,    i, result) {
+                result = ""
+                for (i = 1; i <= scope_count; i++) {
+                    result = result (result == "" ? "" : ".") scope_name[i]
+                }
+                return result == "" ? name : result "." name
+            }
+            function push_scope(name, depth) {
+                scope_count++
+                scope_name[scope_count] = name
+                scope_depth[scope_count] = depth
+            }
+            function update_scope(line) {
+                brace_depth += count_char(line, "{") - count_char(line, "}")
+                while (scope_count > 0 && scope_depth[scope_count] > brace_depth) {
+                    delete scope_name[scope_count]
+                    delete scope_depth[scope_count]
+                    scope_count--
+                }
+            }
             {
                 candidate = strip_attributes($0)
+                sub(/^[[:space:]]*/, "", candidate)
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_].*/, "", name)
-                print name
+                print qualified(name)
+                if (candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                }
+            }
+            candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?(final[[:space:]]+)?(struct|class|actor|enum)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]:{(]|$)/ {
+                name = candidate
+                sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
+                sub(/[^A-Za-z0-9_].*/, "", name)
+                if (name !~ /Tests$/ && candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                }
             }
             candidate ~ /^((public|private|internal|fileprivate|open)[[:space:]]+)?extension[[:space:]]+[A-Za-z_][A-Za-z0-9_]*Tests([[:space:]:{(]|$)/ {
                 name = candidate
                 sub(/.*extension[[:space:]]+/, "", name)
                 sub(/[^A-Za-z0-9_].*/, "", name)
-                print name
+                print qualified(name)
             }
+            { update_scope(candidate) }
         ' "${source}"
     done < <(find "${tests_root}" -type f -name '*.swift' -print | sort)
 } | sort -u > "${subprocess_candidates_file}"
