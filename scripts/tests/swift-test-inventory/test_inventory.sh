@@ -316,6 +316,20 @@ import Testing
 
 struct CaféTests { @Test func works() {} }
 SWIFT
+cat > "${sandbox}/AlasTests/UnicodeFreeTests.swift" <<'SWIFT'
+import Testing
+
+@Test func café() {}
+
+@Test func `repeat`() {}
+SWIFT
+cat > "${sandbox}/AlasTests/AttributedSpecSuite.swift" <<'SWIFT'
+import Testing
+
+@Suite struct ParserSpec {
+    @Test func parses() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/SplitExtensionSuite.swift" <<'SWIFT'
 import Testing
 
@@ -420,7 +434,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=48 scheduled=47 ordinary=29 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=51 scheduled=50 ordinary=32 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -431,6 +445,7 @@ grep -qx 'AllmanNamespace.AllmanParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'AllmanProcessNamespace.AllmanWorkerTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CaféTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'café' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedExtensionTests' "${inventory_cache}/ordinary.txt"
@@ -450,8 +465,10 @@ grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'OuterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'OuterTests.InnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'PackageExtensionTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'ParserSpec' "${inventory_cache}/ordinary.txt"
 grep -qx 'ParserNamespace.ParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'repeat' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'JSONRPCStdioFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'LSPInstallerTests' "${inventory_cache}/subprocess.txt"
@@ -490,6 +507,7 @@ grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/AllmanNamespace.AllmanParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/BraceOwnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CaféTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/café' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/EscapedExtensionTests' <<<"${selectors}"
@@ -509,8 +527,10 @@ grep -qx -- '-only-testing AlasTests/NestedCommentTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/OuterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/OuterTests.InnerTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/PackageExtensionTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/ParserSpec' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ParserNamespace.ParserTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/RawStringTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/repeat' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SameLineTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitDeclarationTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitExtensionKeywordTests' <<<"${selectors}"
@@ -545,6 +565,10 @@ if grep -q 'AlasTests/runs' <<<"${selectors}"; then
 fi
 if grep -q 'AlasTests/works' <<<"${selectors}"; then
     echo 'modified suite test was scheduled as a free-standing test' >&2
+    exit 1
+fi
+if grep -q 'AlasTests/parses' <<<"${selectors}"; then
+    echo 'attributed suite test was scheduled as a free-standing test' >&2
     exit 1
 fi
 if grep -q 'RuntimeBehaviorTests' <<<"${selectors}"; then

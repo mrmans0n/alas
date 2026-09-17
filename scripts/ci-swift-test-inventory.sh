@@ -182,6 +182,9 @@ while IFS= read -r source; do
                 sub(/^[[:space:]]*/, "", line)
             }
             while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
+                if (line ~ /^[[:space:]]*@Suite([[:space:](]|$)/) {
+                    pending_suite_attribute = 1
+                }
                 if (line ~ /^[[:space:]]*@Test([[:space:](]|$)/) {
                     pending_test = 1
                 }
@@ -204,12 +207,12 @@ while IFS= read -r source; do
             return line
         }
         function test_function_selector(line,    name) {
-            if (line !~ /(^|[[:space:]])func[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+            if (line !~ /(^|[[:space:]])func[[:space:]]+(`[^`]+`|[^[:space:]({]+)/) {
                 return ""
             }
             name = line
             sub(/.*(^|[[:space:]])func[[:space:]]+/, "", name)
-            sub(/[^A-Za-z0-9_].*/, "", name)
+            name = clean_identifier(name)
             return name
         }
         function scope_delta(line,    i, c, hashes, j, closing, delta) {
@@ -352,6 +355,8 @@ while IFS= read -r source; do
         function remember_nominal_declaration(previous_suite) {
             pending_nominal_declaration = 1
             pending_nominal_previous_suite = previous_suite
+            pending_nominal_is_suite = pending_suite_attribute
+            pending_suite_attribute = 0
         }
         function remember_extension_declaration() {
             pending_extension_declaration = 1
@@ -364,7 +369,7 @@ while IFS= read -r source; do
                 return 0
             }
             name = clean_identifier(line)
-            if (name ~ /Tests$/) {
+            if (name ~ /Tests$/ || pending_nominal_is_suite) {
                 previous_suite = pending_nominal_previous_suite
                 suite = qualified(name)
                 if (line ~ /[{]/) {
@@ -378,6 +383,7 @@ while IFS= read -r source; do
                 remember_scope(name, pending_nominal_previous_suite)
             }
             pending_nominal_declaration = 0
+            pending_nominal_is_suite = 0
             pending_nominal_previous_suite = ""
             return 1
         }
@@ -444,6 +450,7 @@ while IFS= read -r source; do
             name = clean_identifier(name)
             previous_suite = suite
             suite = qualified(name)
+            pending_suite_attribute = 0
             if (candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, previous_suite)
             } else {
@@ -454,7 +461,16 @@ while IFS= read -r source; do
             name = candidate
             sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
             name = clean_identifier(name)
-            if (name !~ /Tests$/ && candidate ~ /[{]/) {
+            if (name !~ /Tests$/ && pending_suite_attribute) {
+                previous_suite = suite
+                suite = qualified(name)
+                pending_suite_attribute = 0
+                if (candidate ~ /[{]/) {
+                    push_scope(name, brace_depth + 1, previous_suite)
+                } else {
+                    remember_scope(name, previous_suite)
+                }
+            } else if (name !~ /Tests$/ && candidate ~ /[{]/) {
                 push_scope(name, brace_depth + 1, suite)
             } else if (name !~ /Tests$/) {
                 remember_scope(name, suite)
@@ -664,6 +680,9 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     sub(/^[[:space:]]*/, "", line)
                 }
                 while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
+                    if (line ~ /^[[:space:]]*@Suite([[:space:](]|$)/) {
+                        pending_suite_attribute = 1
+                    }
                     if (line ~ /^[[:space:]]*@Test([[:space:](]|$)/) {
                         pending_test = 1
                     }
@@ -686,12 +705,12 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 return line
             }
             function test_function_selector(line,    name) {
-                if (line !~ /(^|[[:space:]])func[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+                if (line !~ /(^|[[:space:]])func[[:space:]]+(`[^`]+`|[^[:space:]({]+)/) {
                     return ""
                 }
                 name = line
                 sub(/.*(^|[[:space:]])func[[:space:]]+/, "", name)
-                sub(/[^A-Za-z0-9_].*/, "", name)
+                name = clean_identifier(name)
                 return name
             }
             function scope_delta(line,    i, c, hashes, j, closing, delta) {
@@ -831,6 +850,8 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             }
             function remember_nominal_declaration() {
                 pending_nominal_declaration = 1
+                pending_nominal_is_suite = pending_suite_attribute
+                pending_suite_attribute = 0
             }
             function remember_extension_declaration() {
                 pending_extension_declaration = 1
@@ -843,7 +864,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     return 0
                 }
                 name = clean_identifier(line)
-                if (name ~ /Tests$/) {
+                if (name ~ /Tests$/ || pending_nominal_is_suite) {
                     print qualified(name)
                 }
                 if (line ~ /[{]/) {
@@ -852,6 +873,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                     remember_scope(name)
                 }
                 pending_nominal_declaration = 0
+                pending_nominal_is_suite = 0
                 return 1
             }
             function maybe_complete_pending_extension_declaration(line,    name) {
@@ -905,6 +927,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 name = clean_identifier(name)
                 print qualified(name)
+                pending_suite_attribute = 0
                 if (candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
                 } else {
@@ -915,7 +938,15 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 name = candidate
                 sub(/.*(struct|class|actor|enum)[[:space:]]+/, "", name)
                 name = clean_identifier(name)
-                if (name !~ /Tests$/ && candidate ~ /[{]/) {
+                if (name !~ /Tests$/ && pending_suite_attribute) {
+                    print qualified(name)
+                    pending_suite_attribute = 0
+                    if (candidate ~ /[{]/) {
+                        push_scope(name, brace_depth + 1)
+                    } else {
+                        remember_scope(name)
+                    }
+                } else if (name !~ /Tests$/ && candidate ~ /[{]/) {
                     push_scope(name, brace_depth + 1)
                 } else if (name !~ /Tests$/) {
                     remember_scope(name)
