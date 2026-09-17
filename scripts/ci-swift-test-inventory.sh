@@ -58,42 +58,54 @@ trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
 # types cannot become stale xcodebuild selectors.
 while IFS= read -r source; do
     awk '
-        function strip_attributes(line,    i, c, depth, in_string, escaped) {
+        function consume_attribute_arguments(line,    i, c) {
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (attribute_in_string) {
+                    if (attribute_escaped) {
+                        attribute_escaped = 0
+                    } else if (c == "\\") {
+                        attribute_escaped = 1
+                    } else if (c == "\"") {
+                        attribute_in_string = 0
+                    }
+                    continue
+                }
+                if (c == "\"") {
+                    attribute_in_string = 1
+                    continue
+                }
+                if (c == "(") {
+                    attribute_depth++
+                } else if (c == ")") {
+                    attribute_depth--
+                    if (attribute_depth == 0) {
+                        attribute_in_string = 0
+                        attribute_escaped = 0
+                        return substr(line, i + 1)
+                    }
+                }
+            }
+            return ""
+        }
+        function strip_attributes(line) {
+            if (attribute_depth > 0) {
+                line = consume_attribute_arguments(line)
+                if (attribute_depth > 0) {
+                    return ""
+                }
+                sub(/^[[:space:]]*/, "", line)
+            }
             while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
                 sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                 sub(/^[[:space:]]*/, "", line)
                 if (substr(line, 1, 1) == "(") {
-                    depth = 0
-                    in_string = 0
-                    escaped = 0
-                    for (i = 1; i <= length(line); i++) {
-                        c = substr(line, i, 1)
-                        if (in_string) {
-                            if (escaped) {
-                                escaped = 0
-                            } else if (c == "\\") {
-                                escaped = 1
-                            } else if (c == "\"") {
-                                in_string = 0
-                            }
-                            continue
-                        }
-                        if (c == "\"") {
-                            in_string = 1
-                            continue
-                        }
-                        if (c == "(") {
-                            depth++
-                        } else if (c == ")") {
-                            depth--
-                            if (depth == 0) {
-                                line = substr(line, i + 1)
-                                break
-                            }
-                        }
-                    }
-                    if (depth != 0) {
-                        break
+                    attribute_depth = 0
+                    attribute_in_string = 0
+                    attribute_escaped = 0
+                    line = consume_attribute_arguments(line)
+                    if (attribute_depth > 0) {
+                        return ""
                     }
                 }
                 sub(/^[[:space:]]*/, "", line)
@@ -149,46 +161,58 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 # so a newly added process-facing suite joins the protected lane without a
 # workflow edit.
 {
-    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid|WorkspaceEditExecutor' "${scheduled_file}"
+    grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid|WorkspaceEditExecutor' "${scheduled_file}" || true
     while IFS= read -r source; do
         grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture' "${source}" || continue
         awk '
-            function strip_attributes(line,    i, c, depth, in_string, escaped) {
+            function consume_attribute_arguments(line,    i, c) {
+                for (i = 1; i <= length(line); i++) {
+                    c = substr(line, i, 1)
+                    if (attribute_in_string) {
+                        if (attribute_escaped) {
+                            attribute_escaped = 0
+                        } else if (c == "\\") {
+                            attribute_escaped = 1
+                        } else if (c == "\"") {
+                            attribute_in_string = 0
+                        }
+                        continue
+                    }
+                    if (c == "\"") {
+                        attribute_in_string = 1
+                        continue
+                    }
+                    if (c == "(") {
+                        attribute_depth++
+                    } else if (c == ")") {
+                        attribute_depth--
+                        if (attribute_depth == 0) {
+                            attribute_in_string = 0
+                            attribute_escaped = 0
+                            return substr(line, i + 1)
+                        }
+                    }
+                }
+                return ""
+            }
+            function strip_attributes(line) {
+                if (attribute_depth > 0) {
+                    line = consume_attribute_arguments(line)
+                    if (attribute_depth > 0) {
+                        return ""
+                    }
+                    sub(/^[[:space:]]*/, "", line)
+                }
                 while (line ~ /^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/) {
                     sub(/^[[:space:]]*@[A-Za-z_][A-Za-z0-9_]*/, "", line)
                     sub(/^[[:space:]]*/, "", line)
                     if (substr(line, 1, 1) == "(") {
-                        depth = 0
-                        in_string = 0
-                        escaped = 0
-                        for (i = 1; i <= length(line); i++) {
-                            c = substr(line, i, 1)
-                            if (in_string) {
-                                if (escaped) {
-                                    escaped = 0
-                                } else if (c == "\\") {
-                                    escaped = 1
-                                } else if (c == "\"") {
-                                    in_string = 0
-                                }
-                                continue
-                            }
-                            if (c == "\"") {
-                                in_string = 1
-                                continue
-                            }
-                            if (c == "(") {
-                                depth++
-                            } else if (c == ")") {
-                                depth--
-                                if (depth == 0) {
-                                    line = substr(line, i + 1)
-                                    break
-                                }
-                            }
-                        }
-                        if (depth != 0) {
-                            break
+                        attribute_depth = 0
+                        attribute_in_string = 0
+                        attribute_escaped = 0
+                        line = consume_attribute_arguments(line)
+                        if (attribute_depth > 0) {
+                            return ""
                         }
                     }
                     sub(/^[[:space:]]*/, "", line)
