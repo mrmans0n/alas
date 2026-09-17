@@ -139,29 +139,30 @@ final class HarnessService {
                 return
             }
             let activeLifecycleId = activeSocketLifecycleBySession[event.sessionId]
-            if let activeLifecycleId, activeLifecycleId != lifecycleId {
-                guard let eventTimestamp = event.timestamp,
-                      let activeTimestamp = activeSocketLifecycleLatestEventAtBySession[event.sessionId],
-                      eventTimestamp >= activeTimestamp else {
-                    retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
-                    return
+            if activeLifecycleId != lifecycleId {
+                if let watermark = activeSocketLifecycleLatestEventAtBySession[event.sessionId] {
+                    guard let timestamp = event.timestamp, timestamp >= watermark else {
+                        retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
+                        return
+                    }
                 }
-                retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(activeLifecycleId)
-                backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
-                completedBackgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
-                deferredForegroundIdleBySession.removeValue(forKey: event.sessionId)
-                activityBySession.removeValue(forKey: event.sessionId)
+                if let activeLifecycleId {
+                    retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(activeLifecycleId)
+                    backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+                    completedBackgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+                    deferredForegroundIdleBySession.removeValue(forKey: event.sessionId)
+                    activityBySession.removeValue(forKey: event.sessionId)
+                }
+            }
+            if let timestamp = event.timestamp,
+               timestamp > (activeSocketLifecycleLatestEventAtBySession[event.sessionId] ?? .distantPast) {
+                activeSocketLifecycleLatestEventAtBySession[event.sessionId] = timestamp
             }
             if event.event == .detached {
                 retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
                 activeSocketLifecycleBySession.removeValue(forKey: event.sessionId)
-                activeSocketLifecycleLatestEventAtBySession.removeValue(forKey: event.sessionId)
             } else {
                 activeSocketLifecycleBySession[event.sessionId] = lifecycleId
-                if let timestamp = event.timestamp,
-                   timestamp > (activeSocketLifecycleLatestEventAtBySession[event.sessionId] ?? .distantPast) {
-                    activeSocketLifecycleLatestEventAtBySession[event.sessionId] = timestamp
-                }
             }
         } else if event.agent == .pi {
             if event.event == .attached {

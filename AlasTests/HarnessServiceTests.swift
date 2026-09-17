@@ -511,6 +511,33 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
     }
 
+    @Test func unseenOlderLifecycleCannotResurrectDetachedSession() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 300), lifecycleId: "new"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi, activityId: "old-run",
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(
