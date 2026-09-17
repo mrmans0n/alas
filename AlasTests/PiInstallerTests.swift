@@ -55,6 +55,8 @@ struct PiInstallerTests {
             "background_ended",
             "activity_id",
             "lifecycle_id",
+            "lifecycle_order",
+            "process.hrtime.bigint()",
             "new Date().toISOString()",
             #"pi.on("session_start""#,
             #"pi.on("session_end""#,

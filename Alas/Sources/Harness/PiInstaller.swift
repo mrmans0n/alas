@@ -58,12 +58,16 @@ struct PiInstaller: AgentInstaller, Sendable {
 
     declare const process: any;
 
-    function makeLifecycleId(): string {
-      return `${Date.now()}-${process?.pid || 0}-${Math.random().toString(36).slice(2)}`;
+    function makeLifecycle(): { id: string; order: string } {
+      const order = process.hrtime.bigint().toString();
+      return {
+        id: `${order}-${process?.pid || 0}-${Math.random().toString(36).slice(2)}`,
+        order
+      };
     }
 
-    let initialLifecycleId = makeLifecycleId();
-    let lifecycleIds = new Map<string, string>();
+    const initialLifecycle = makeLifecycle();
+    const lifecycles = new Map<string, { id: string; order: string }>();
 
     const eventMap: Record<string, string> = {
       session_start: "attached",
@@ -94,8 +98,8 @@ struct PiInstaller: AgentInstaller, Sendable {
 
     function envelope(eventName: string, event: any, ctx: any, activityId?: string): string {
       const sessionId = sessionIdFrom(event, ctx);
-      if (eventName === "attached") lifecycleIds.set(sessionId, makeLifecycleId());
-      const lifecycleId = lifecycleIds.get(sessionId) || initialLifecycleId;
+      if (eventName === "attached") lifecycles.set(sessionId, makeLifecycle());
+      const lifecycle = lifecycles.get(sessionId) || initialLifecycle;
       return JSON.stringify({
         v: 1,
         agent: "pi",
@@ -103,7 +107,8 @@ struct PiInstaller: AgentInstaller, Sendable {
         session_id: sessionId,
         pid: parentPid(),
         ts: new Date().toISOString(),
-        lifecycle_id: lifecycleId,
+        lifecycle_id: lifecycle.id,
+        lifecycle_order: lifecycle.order,
         ...(activityId ? { activity_id: activityId } : {})
       });
     }

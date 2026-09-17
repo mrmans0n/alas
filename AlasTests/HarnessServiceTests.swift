@@ -62,11 +62,12 @@ struct HarnessServiceTests {
         event: ActivityEvent, agent: AgentKind = .claude,
         sessionId: String = "session-1", body: String? = nil,
         activityId: String? = nil, timestamp: Date? = nil,
-        lifecycleId: String? = nil
+        lifecycleId: String? = nil, lifecycleOrder: UInt64? = nil
     ) -> AgentHookEvent {
         AgentHookEvent(version: 1, event: event, agent: agent,
                        sessionId: sessionId, pid: nil, timestamp: timestamp, body: body,
-                       activityId: activityId, lifecycleId: lifecycleId)
+                       activityId: activityId, lifecycleId: lifecycleId,
+                       lifecycleOrder: lifecycleOrder)
     }
 
     private final class RequestCollector {
@@ -391,14 +392,14 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .detached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -406,7 +407,7 @@ struct HarnessServiceTests {
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
                 activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
-                lifecycleId: "new"
+                lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -419,7 +420,7 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .detached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -427,21 +428,21 @@ struct HarnessServiceTests {
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
                 activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
-                lifecycleId: "new"
+                lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .idle, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 220), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 220), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -469,21 +470,21 @@ struct HarnessServiceTests {
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
                 activityId: "old-run", timestamp: Date(timeIntervalSince1970: 100),
-                lifecycleId: "old"
+                lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .idle, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 210), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 210), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -496,14 +497,14 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .idle, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -516,21 +517,21 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .detached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 300), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .backgroundStarted, agent: .pi, activityId: "old-run",
-                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -545,21 +546,21 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .attached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .permissionRequest, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 110), lifecycleId: "old"
+                timestamp: Date(timeIntervalSince1970: 110), lifecycleId: "old", lifecycleOrder: 100
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .detached, agent: .pi,
-                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new", lifecycleOrder: 200
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )

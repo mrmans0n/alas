@@ -53,7 +53,7 @@ final class HarnessService {
     private var deferredForegroundIdleBySession: [String: DeferredForegroundIdle] = [:]
     private var detachedSocketSessions: Set<String> = []
     private var activeSocketLifecycleBySession: [String: String] = [:]
-    private var activeSocketLifecycleLatestEventAtBySession: [String: Date] = [:]
+    private var latestSocketLifecycleOrderBySession: [String: UInt64] = [:]
     private var retiredSocketLifecycleIdsBySession: [String: Set<String>] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
@@ -142,8 +142,8 @@ final class HarnessService {
             }
             let activeLifecycleId = activeSocketLifecycleBySession[event.sessionId]
             if activeLifecycleId != lifecycleId {
-                if let watermark = activeSocketLifecycleLatestEventAtBySession[event.sessionId] {
-                    guard let timestamp = event.timestamp, timestamp >= watermark else {
+                if let watermark = latestSocketLifecycleOrderBySession[event.sessionId] {
+                    guard let lifecycleOrder = event.lifecycleOrder, lifecycleOrder > watermark else {
                         retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
                         return
                     }
@@ -156,9 +156,9 @@ final class HarnessService {
                     activityBySession.removeValue(forKey: event.sessionId)
                 }
             }
-            if let timestamp = event.timestamp,
-               timestamp > (activeSocketLifecycleLatestEventAtBySession[event.sessionId] ?? .distantPast) {
-                activeSocketLifecycleLatestEventAtBySession[event.sessionId] = timestamp
+            if let lifecycleOrder = event.lifecycleOrder,
+               lifecycleOrder > (latestSocketLifecycleOrderBySession[event.sessionId] ?? 0) {
+                latestSocketLifecycleOrderBySession[event.sessionId] = lifecycleOrder
             }
             if event.event == .detached {
                 retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(lifecycleId)
@@ -408,7 +408,7 @@ final class HarnessService {
         deferredForegroundIdleBySession.removeAll()
         detachedSocketSessions.removeAll()
         activeSocketLifecycleBySession.removeAll()
-        activeSocketLifecycleLatestEventAtBySession.removeAll()
+        latestSocketLifecycleOrderBySession.removeAll()
         retiredSocketLifecycleIdsBySession.removeAll()
     }
 
