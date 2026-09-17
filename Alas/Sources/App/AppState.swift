@@ -10569,7 +10569,10 @@ final class AppState {
             launchSpecTransformer: { [weak self] spec in
                 guard let self,
                       checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
-                      let flag = self.agentRegistry.enabled().first(where: { $0.id == spec.agentID })?.bypassPermissionsFlag,
+                      let flag = AgentConfiguredCatalog.enabled(
+                          builtinState: self.config.agents.builtinState,
+                          customs: self.config.agents.custom
+                      ).first(where: { $0.id == spec.agentID })?.bypassPermissionsFlag,
                       spec.arguments.contains(flag) == false
                 else { return spec }
                 return spec.prependingArguments([flag])

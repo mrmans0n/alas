@@ -4323,7 +4323,8 @@ final class RightPaneState: GGSplitCommitServicing {
     func resolveAllConflicts(
         using agent: AgentDefinition,
         prompt: String,
-        target: AgentExecutionTarget = .local
+        target: AgentExecutionTarget = .local,
+        agentBinaryUnavailable: ((AgentExecutionTarget) async -> Void)? = nil
     ) {
         guard !checkpointMutationsDisabled else { return }
         guard bulkResolveTask == nil else { return }
@@ -4354,6 +4355,19 @@ final class RightPaneState: GGSplitCommitServicing {
                     remainingConflicts: remaining,
                     summary: headline,
                     details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            } catch let runError as AgentRunError {
+                if case .binaryNotFound = runError,
+                   case .ssh = target {
+                    await agentBinaryUnavailable?(target)
+                }
+                await self.refresh()
+                let remaining = self.changes.filter { $0.conflict != nil }.count
+                report = BulkConflictResolveReport(
+                    success: false,
+                    remainingConflicts: remaining,
+                    summary: "Agent failed: \(runError.localizedDescription)",
+                    details: ""
                 )
             } catch {
                 await self.refresh()

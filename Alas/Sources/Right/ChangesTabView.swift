@@ -352,7 +352,14 @@ struct ChangesTabView: View {
                         rps.resolveAllConflicts(
                             using: agent,
                             prompt: appState.config.changes.mergeBulkResolvePrompt,
-                            target: appState.agentExecutionTarget(for: rps.worktree)
+                            target: appState.agentExecutionTarget(for: rps.worktree),
+                            agentBinaryUnavailable: { target in
+                                appState.agentAvailabilityStore.invalidate(
+                                    target: target,
+                                    worktreePath: rps.worktree.path.path
+                                )
+                                await appState.loadAgentAvailability(for: rps.worktree)
+                            }
                         )
                     },
                     onCancelBulkResolve: { rps.cancelBulkResolve() },
