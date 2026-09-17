@@ -58,7 +58,7 @@ trap 'rm -f "${suite_file}" "${quarantine_file}"' EXIT
 # types cannot become stale xcodebuild selectors.
 while IFS= read -r source; do
     awk '
-        function consume_attribute_arguments(line,    i, c) {
+        function consume_attribute_arguments(line,    i, c, hashes, j, closing) {
             for (i = 1; i <= length(line); i++) {
                 c = substr(line, i, 1)
                 if (attribute_block_comment_depth > 0) {
@@ -72,7 +72,21 @@ while IFS= read -r source; do
                     continue
                 }
                 if (attribute_in_string) {
-                    if (attribute_escaped) {
+                    if (attribute_raw_hashes > 0) {
+                        if (c == "\"") {
+                            closing = 1
+                            for (j = 1; j <= attribute_raw_hashes; j++) {
+                                if (substr(line, i + j, 1) != "#") {
+                                    closing = 0
+                                }
+                            }
+                            if (closing) {
+                                attribute_in_string = 0
+                                i += attribute_raw_hashes
+                                attribute_raw_hashes = 0
+                            }
+                        }
+                    } else if (attribute_escaped) {
                         attribute_escaped = 0
                     } else if (c == "\\") {
                         attribute_escaped = 1
@@ -89,8 +103,21 @@ while IFS= read -r source; do
                     i++
                     continue
                 }
+                if (c == "#") {
+                    hashes = 0
+                    for (j = i; substr(line, j, 1) == "#"; j++) {
+                        hashes++
+                    }
+                    if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
+                        attribute_in_string = 1
+                        attribute_raw_hashes = hashes
+                        i += hashes
+                        continue
+                    }
+                }
                 if (c == "\"") {
                     attribute_in_string = 1
+                    attribute_raw_hashes = 0
                     continue
                 }
                 if (c == "(") {
@@ -100,6 +127,7 @@ while IFS= read -r source; do
                     if (attribute_depth == 0) {
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_raw_hashes = 0
                         attribute_block_comment_depth = 0
                         return substr(line, i + 1)
                     }
@@ -122,6 +150,7 @@ while IFS= read -r source; do
                     attribute_depth = 0
                     attribute_in_string = 0
                     attribute_escaped = 0
+                    attribute_raw_hashes = 0
                     attribute_block_comment_depth = 0
                     line = consume_attribute_arguments(line)
                     if (attribute_depth > 0) {
@@ -191,7 +220,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
     while IFS= read -r source; do
         grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture' "${source}" || continue
         awk '
-            function consume_attribute_arguments(line,    i, c) {
+            function consume_attribute_arguments(line,    i, c, hashes, j, closing) {
                 for (i = 1; i <= length(line); i++) {
                     c = substr(line, i, 1)
                     if (attribute_block_comment_depth > 0) {
@@ -205,7 +234,21 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         continue
                     }
                     if (attribute_in_string) {
-                        if (attribute_escaped) {
+                        if (attribute_raw_hashes > 0) {
+                            if (c == "\"") {
+                                closing = 1
+                                for (j = 1; j <= attribute_raw_hashes; j++) {
+                                    if (substr(line, i + j, 1) != "#") {
+                                        closing = 0
+                                    }
+                                }
+                                if (closing) {
+                                    attribute_in_string = 0
+                                    i += attribute_raw_hashes
+                                    attribute_raw_hashes = 0
+                                }
+                            }
+                        } else if (attribute_escaped) {
                             attribute_escaped = 0
                         } else if (c == "\\") {
                             attribute_escaped = 1
@@ -222,8 +265,21 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         i++
                         continue
                     }
+                    if (c == "#") {
+                        hashes = 0
+                        for (j = i; substr(line, j, 1) == "#"; j++) {
+                            hashes++
+                        }
+                        if (hashes > 0 && substr(line, i + hashes, 1) == "\"") {
+                            attribute_in_string = 1
+                            attribute_raw_hashes = hashes
+                            i += hashes
+                            continue
+                        }
+                    }
                     if (c == "\"") {
                         attribute_in_string = 1
+                        attribute_raw_hashes = 0
                         continue
                     }
                     if (c == "(") {
@@ -233,6 +289,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         if (attribute_depth == 0) {
                             attribute_in_string = 0
                             attribute_escaped = 0
+                            attribute_raw_hashes = 0
                             attribute_block_comment_depth = 0
                             return substr(line, i + 1)
                         }
@@ -255,6 +312,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         attribute_depth = 0
                         attribute_in_string = 0
                         attribute_escaped = 0
+                        attribute_raw_hashes = 0
                         attribute_block_comment_depth = 0
                         line = consume_attribute_arguments(line)
                         if (attribute_depth > 0) {

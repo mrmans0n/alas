@@ -185,10 +185,17 @@ extension SplitRuntimeTests {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/RawStringTests.swift" <<'SWIFT'
+import Testing
+
+@Suite(#"He said "go)" now"#) struct RawStringTests {
+    @Test func ordinary() {}
+}
+SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=20 scheduled=19 ordinary=9 subprocess=10 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=21 scheduled=20 ordinary=10 subprocess=10 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -198,6 +205,7 @@ grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SplitDeclarationTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SplitRuntimeTests' "${inventory_cache}/subprocess.txt"
@@ -233,6 +241,7 @@ grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/NestedCommentTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/RawStringTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SplitDeclarationTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/StringParenSuiteTests' <<<"${selectors}"
 if grep -q 'InlineNestedAttributeTests' <<<"${selectors}"; then
@@ -297,8 +306,8 @@ grep -qx -- '-only-testing' "${ordinary_log}"
 grep -qx -- 'AlasTests/CommentAttributeTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
 grep -qx -- 'AlasTests/NestedCommentTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/SplitDeclarationTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/UnitTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/StringParenSuiteTests' "${ordinary_log}"
 if grep -q 'AlasTests/InlineNestedAttributeTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
