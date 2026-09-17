@@ -483,4 +483,36 @@ struct RepoIconResolverTests {
         #expect(resolution.icon.mode == .image)
         #expect(chain.first == resolution.sourceIdentity)
     }
+
+    @Test func symlinkedAlasRootEscapingTheCheckoutIsRefused() throws {
+        // If .alas itself is a symlink to a directory outside the checkout,
+        // canonicalizing both sides would agree on the outside location and
+        // pass a naive prefix check. The root must stay inside the canonical
+        // checkout for any candidate under it to be usable.
+        let fixture = try Fixture()
+        let outside = fixture.container.appendingPathComponent("alas-elsewhere")
+        try FileManager.default.createDirectory(
+            at: outside.appendingPathComponent(".alas"), withIntermediateDirectories: true
+        )
+        try Self.pngBytes.write(to: outside.appendingPathComponent(".alas/icon.png"))
+        // The fixture pre-created .alas as a real directory; replace it with
+        // the escaping symlink.
+        try FileManager.default.removeItem(at: fixture.alas)
+        try FileManager.default.createSymbolicLink(
+            atPath: fixture.alas.path,
+            withDestinationPath: outside.appendingPathComponent(".alas").path
+        )
+        let config = RepoConfig(icon: .init(image: "icon.png"))
+
+        let resolution = resolution(
+            appIcon: .default(),
+            repoConfig: config,
+            in: fixture
+        )
+
+        // The escaping root contributes nothing: fall back to the app icon.
+        #expect(resolution.icon.mode == .letter)
+        #expect(resolution.sourceURL == nil)
+        #expect(probe(appIcon: .default(), repoConfig: config, in: fixture).isEmpty)
+    }
 }

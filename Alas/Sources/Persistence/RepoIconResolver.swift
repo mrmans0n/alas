@@ -230,14 +230,22 @@ enum RepoIconResolver {
     /// inside the repo's `.alas/` directory. A committed `icon.png` that is
     /// really a symlink to somewhere outside the checkout would otherwise
     /// defeat both the path confinement and the size check that assume the
-    /// file lives under `.alas/`.
+    /// file lives under `.alas/`. A symlinked `.alas` itself is rejected the
+    /// same way: if it escaped the checkout, canonicalizing both sides would
+    /// make the prefix check pass against the outside directory.
     private static func confinedTarget(of candidate: Candidate, checkout: URL) -> URL? {
+        let canonicalCheckout = checkout.standardizedFileURL.resolvingSymlinksInPath()
         let resolved = candidate.url.standardizedFileURL.resolvingSymlinksInPath()
         let root = checkout
             .appendingPathComponent(".alas", isDirectory: true)
             .standardizedFileURL
             .resolvingSymlinksInPath()
-        guard resolved.path.hasPrefix(root.path + "/") else { return nil }
+        // The `.alas` root must exist and stay inside the checkout it belongs
+        // to; an escaping root contributes no usable candidates at all.
+        guard root.path.hasPrefix(canonicalCheckout.path + "/"),
+              resolved.path.hasPrefix(root.path + "/") else {
+            return nil
+        }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {

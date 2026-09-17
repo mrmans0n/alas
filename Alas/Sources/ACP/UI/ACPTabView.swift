@@ -629,7 +629,12 @@ private struct ACPSessionView: View {
 
     @ViewBuilder
     private func repoMCPTrustBanner() -> some View {
-        if let project = state.projects.first(where: { $0.id == worktree.projectId }) {
+        // Workspace-checkout sessions plan their attachments from frozen
+        // descriptors and never gain repo servers, so a trust decision made
+        // here could not join the displayed session while still affecting
+        // ordinary live sessions later.
+        if !isWorkspaceCheckoutOwner,
+           let project = state.projects.first(where: { $0.id == worktree.projectId }) {
             let decision = state.repoMCPTrustDecision(
                 worktreeRoot: worktree.path,
                 project: project
@@ -652,6 +657,11 @@ private struct ACPSessionView: View {
                 )
             }
         }
+    }
+
+    private var isWorkspaceCheckoutOwner: Bool {
+        guard case .workspaceCheckout = owner else { return false }
+        return true
     }
 
     @ViewBuilder

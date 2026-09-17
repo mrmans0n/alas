@@ -254,6 +254,10 @@ struct ACPMCPStatusPolicyTests {
         let approvedRow = rows[2]
         #expect(approvedRow.isRequested == true)
         #expect(approvedRow.repoToggle == .disable)
+        // The prefixed id must not be required for the toggle: the control
+        // offers Disable off `repoToggle` alone, since external row ids carry
+        // the "external-requested-" presentation prefix.
+        #expect(approvedRow.id.hasPrefix(RepoConfig.repoServerIDPrefix) == false)
         // A pending repo server stays banner-owned; a declined one offers
         // re-approval from here.
         #expect(rows[3].repoToggle == nil)

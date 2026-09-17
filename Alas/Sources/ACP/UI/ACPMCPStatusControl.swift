@@ -165,9 +165,8 @@ private struct ACPMCPStatusPopover: View {
                         }
                         Spacer(minLength: 0)
                         if row.isRequested,
-                           row.id.hasPrefix(RepoConfig.repoServerIDPrefix),
-                           let onToggleRepoServer,
-                           row.repoToggle == .disable {
+                           row.repoToggle == .disable,
+                           let onToggleRepoServer {
                             Button("Disable") {
                                 onToggleRepoServer(row.name, .disable)
                             }
