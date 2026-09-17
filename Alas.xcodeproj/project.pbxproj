@@ -1261,6 +1261,7 @@
 		AEB565CDE2F5AEAE088A1A79 /* ACPChatLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */; };
 		AF071864CA8C882F74753E39 /* ACPToolCallPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D710BC995453481F445E2ECF /* ACPToolCallPresentation.swift */; };
 		AF2263B61D95A8BFF0972E93 /* AgentHookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */; };
+		AF8B192B3B321E98F62D2CAF /* RepoConfigStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293C5591F69E90BFD629F73D /* RepoConfigStoreTests.swift */; };
 		AFC4DE3093E404E4D338E6EF /* AppState+RunScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89D180B7FCAA9DD1F7D7D2E4 /* AppState+RunScripts.swift */; };
 		AFD24C0A5D5625A1843751C1 /* ACPFirstRunConnectingPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73539FDFE4BDBD4D3B4DE546 /* ACPFirstRunConnectingPhase.swift */; };
 		B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */; };
@@ -1400,6 +1401,7 @@
 		C1E18B4441216AB7D7E9E2CA /* CheckpointRestorePreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */; };
 		C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A35E05B1FB7CC5229ACCB065 /* LSPClient.swift */; };
 		C1F16BAC9C4B9A0457208816 /* RemoteContentSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C24D126BC74FF514F19E5D /* RemoteContentSearch.swift */; };
+		C1FE524BAD5B8EFB3B406BE3 /* RepoConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA229AAD313284B119581F3D /* RepoConfigStore.swift */; };
 		C1FF6E6CE6AF5ABCF5C62115 /* ACPSessionOrchestrationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728F8E1DBF9DA86092C10AD0 /* ACPSessionOrchestrationCoordinator.swift */; };
 		C245B74D0083CE00B6CD392C /* ACPAdapterVersionChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15630570F849AC577CA0D379 /* ACPAdapterVersionChecker.swift */; };
 		C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2942AD875C0E7AB71E8E3CAD /* VerdictSheet.swift */; };
@@ -2192,6 +2194,7 @@
 		28E0789D49881A17137010D0 /* ACPRemoteAdapterInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteAdapterInstallerTests.swift; sourceTree = "<group>"; };
 		292B5DA9EC17ED07588C48FD /* OpenCodeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInstallerTests.swift; sourceTree = "<group>"; };
 		29313DDC46A0CCA2FA42CDE9 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
+		293C5591F69E90BFD629F73D /* RepoConfigStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoConfigStoreTests.swift; sourceTree = "<group>"; };
 		2942AD875C0E7AB71E8E3CAD /* VerdictSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerdictSheet.swift; sourceTree = "<group>"; };
 		295319DB8544C170DDD6328D /* PathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathsTests.swift; sourceTree = "<group>"; };
 		2975A1465CA308E9766521F2 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
@@ -3228,6 +3231,7 @@
 		B98658E85103DE518E9A5561 /* GGSplitCommitModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGSplitCommitModel.swift; sourceTree = "<group>"; };
 		B98E7424CBFF07A59BCB703A /* DiffPaneDocumentCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneDocumentCacheTests.swift; sourceTree = "<group>"; };
 		B9A252BAD78A56343D68E782 /* RemoteFileAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileAccessTests.swift; sourceTree = "<group>"; };
+		BA229AAD313284B119581F3D /* RepoConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoConfigStore.swift; sourceTree = "<group>"; };
 		BA5820BB012E55F3A0C1272B /* RightPaneGGStackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneGGStackTests.swift; sourceTree = "<group>"; };
 		BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingServiceTests.swift; sourceTree = "<group>"; };
 		BA6B1D3B6A09D9298B55F76B /* TabBarToolbarPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarToolbarPresentationTests.swift; sourceTree = "<group>"; };
@@ -5604,6 +5608,7 @@
 				CDEB760B98A1482CF30140A4 /* ProjectIcon.swift */,
 				81E981C10B13C43CE65DA74D /* ProjectMCPServer.swift */,
 				2FD0D894F87B8DF38E5662C0 /* RepoConfig.swift */,
+				BA229AAD313284B119581F3D /* RepoConfigStore.swift */,
 				7963D4DD10B67EB683510FF6 /* SpaceConfig.swift */,
 			);
 			path = Persistence;
@@ -6465,6 +6470,7 @@
 				5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */,
 				4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */,
 				792BD8DAE4AAED201252C9E2 /* ProjectMCPServerTests.swift */,
+				293C5591F69E90BFD629F73D /* RepoConfigStoreTests.swift */,
 				A9E4D587EA61446373FB3F82 /* RepoConfigTests.swift */,
 				EEB33BFC223CB0A5C6CBC4AF /* WorktreeCleanupConfigTests.swift */,
 			);
@@ -7832,6 +7838,7 @@
 				1F860C66D658B0DA5A0599F6 /* RemoteZmxInstaller.swift in Sources */,
 				955012C67C92F58BD629056F /* RenameFeature.swift in Sources */,
 				2EDE5CBEA09CAF5831AB81D6 /* RepoConfig.swift in Sources */,
+				C1FE524BAD5B8EFB3B406BE3 /* RepoConfigStore.swift in Sources */,
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
 				A2B0E4C1D80EB12F7BECE7FC /* RepoSelectorDialog.swift in Sources */,
@@ -8728,6 +8735,7 @@
 				9666162EC5BE3445EEBCDEA1 /* RemoteWorktreeSummaryBuilderTests.swift in Sources */,
 				FCC6BC72DF062AA572F5535F /* RemoteZmxInstallerTests.swift in Sources */,
 				19D328C014D3B09F2BC331A3 /* RenameFeatureTests.swift in Sources */,
+				AF8B192B3B321E98F62D2CAF /* RepoConfigStoreTests.swift in Sources */,
 				B302771A4A89D6383726D290 /* RepoConfigTests.swift in Sources */,
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
 				737EC7C9A35C9ED61ED67B83 /* RepoSelectorModelTests.swift in Sources */,

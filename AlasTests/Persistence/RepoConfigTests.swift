@@ -33,6 +33,7 @@ struct RepoConfigTests {
 
     @Test func rejectsMissingAndWrongVersion() {
         #expect(decode(#"{"defaultAgent": "pi"}"#) == nil)
+        #expect(decode(#"{"version": "1", "defaultAgent": "pi"}"#) == nil)
         #expect(decode(#"{"version": 2, "defaultAgent": "pi"}"#) == nil)
         #expect(decode("not json at all") == nil)
     }
