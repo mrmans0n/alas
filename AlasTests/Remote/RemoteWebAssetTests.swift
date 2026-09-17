@@ -999,4 +999,28 @@ struct RemoteWebAssetTests {
         #expect(body.contains(#".querySelector(".card-when")"#))
         #expect(body.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now)"))
     }
+
+    // Regression (PR #1285 review): a truncated changesState (worktrees
+    // over the server's changed-file cap) made the badge show the capped
+    // array length as if it were the exact total. changedFileCount is the
+    // server's untruncated unique-path count and must win once truncated.
+    @Test func changesTabBadgeFallsBackToTheUntruncatedSummaryCountWhenTruncated() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(body.contains("changesState.loaded && changesState.metricsAvailable && !changesState.truncated"))
+        #expect(body.contains("summaryCount"))
+    }
+
+    // Regression (PR #1285 review): reconnecting while Chat was the active
+    // tab left changesState at its stale pre-disconnect value — the reconnect
+    // replay only requested changes for the Changes tab, so edits made
+    // during the outage never reached the badge until another turn or a
+    // manual tab switch.
+    @Test func reconnectReplayAlsoCoversTheChatTab() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function replayActiveListRequest() {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains(#"activeTab === "changes" || activeTab === "chat""#))
+    }
 }

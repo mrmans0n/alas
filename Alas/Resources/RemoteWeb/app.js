@@ -837,11 +837,13 @@ function updateChangesTabBadge() {
   // Prefer the loaded, live changesState (kept fresh by every listChanges
   // response, including the idle-transition refresh while a session is
   // open) — it reflects edits the session-list snapshot below doesn't get
-  // repushed for. Before that first load (e.g. right after opening a
-  // session), fall back to the worktree summary so the badge isn't blank.
-  const count = changesState.loaded && changesState.metricsAvailable
+  // repushed for. Fall back to the worktree summary (the server's untruncated
+  // unique-path count) before that first load, or once the list is truncated
+  // — a capped array's .length would otherwise understate the real total.
+  const summaryCount = (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
+  const count = changesState.loaded && changesState.metricsAvailable && !changesState.truncated
     ? RemoteChangesView.changedFileCount(changesState)
-    : (currentSession ? listedSessions.get(currentSession) : null)?.worktree?.changedFileCount || 0;
+    : summaryCount;
   badge.textContent = String(count);
   badge.classList.toggle("hidden", count === 0);
 }
@@ -905,7 +907,11 @@ function replayActiveDetailRequest() {
 // `detailStack` is empty in both.
 function replayActiveListRequest() {
   if (!currentSession || detailStack.length > 0) return;
-  if (activeTab === "changes") {
+  // Chat shares this on reconnect for the same reason it shares the
+  // idle-transition refresh: a dropped connection can hide edits made
+  // during the outage, and requestChanges() only touches hidden DOM plus
+  // the badge when Chat is the active tab.
+  if (activeTab === "changes" || activeTab === "chat") {
     requestChanges();
   } else if (activeTab === "files") {
     refreshFileTree();
