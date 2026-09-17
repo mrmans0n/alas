@@ -540,6 +540,32 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
     }
 
+    @Test func lateBackgroundStartPreservesEarlierSocketIdle() {
+        let (service, collector) = makeService()
+        let lookup: (String) -> (projectId: String, worktreeId: String)? = { _ in
+            (projectId: "p1", worktreeId: "w1")
+        }
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(collector.requests.count == 1)
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
+
+        service.handleSocketEvent(
+            makeEvent(event: .backgroundEnded, agent: .pi, activityId: "run-1"),
+            stateLookup: lookup, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+        #expect(collector.requests.count == 1)
+    }
+
     @Test func earlyBackgroundEndReconcilesWithLaterStart() {
         let (service, _) = makeService()
 

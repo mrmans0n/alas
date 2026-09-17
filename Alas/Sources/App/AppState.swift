@@ -5425,10 +5425,17 @@ final class AppState {
         if let persisted = persistedLeafLocation(leafId: sessionId) {
             return persisted
         }
-        guard let worktreeId = worktreeIdForLiveACPSession(sessionId),
-              let (project, _) = projectAndWorktree(withWorktreeId: worktreeId)
-        else { return nil }
-        return (projectId: project.id, worktreeId: worktreeId)
+        guard let owner = acpManagers.first(where: { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        })?.key else { return nil }
+        switch owner {
+        case .worktree(let worktreeId):
+            guard let (project, _) = projectAndWorktree(withWorktreeId: worktreeId) else { return nil }
+            return (projectId: project.id, worktreeId: worktreeId)
+        case .workspaceCheckout(let checkoutId, _):
+            let workspaceId = workspacesManager.checkout(id: checkoutId)?.workspaceID?.uuidString ?? ""
+            return (projectId: workspaceId, worktreeId: owner.storageKey)
+        }
     }
 
     private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
