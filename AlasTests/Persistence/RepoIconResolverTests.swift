@@ -515,4 +515,24 @@ struct RepoIconResolverTests {
         #expect(resolution.sourceURL == nil)
         #expect(probe(appIcon: .default(), repoConfig: config, in: fixture).isEmpty)
     }
+
+    @Test func brokenDiscoveredIconFallsThroughToTheNextOne() throws {
+        // icon.png wins extension order, but staging rejects a file that is
+        // not an image. Discovery must keep naming icon.jpg so the resolver
+        // can use it instead of giving up on the whole repo icon.
+        let fixture = try Fixture()
+        try Data([0x00]).write(to: fixture.alas.appendingPathComponent("icon.png"))
+        try Self.pngBytes.write(to: fixture.alas.appendingPathComponent("icon.jpg"))
+
+        let resolution = resolution(appIcon: .default(), in: fixture)
+        let expected = try ProjectIconImageStaging.stage(
+            data: Self.pngBytes,
+            projectId: Self.projectID,
+            root: fixture.staging
+        )
+
+        #expect(resolution.icon.imagePath == expected.imagePath)
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.jpg"))
+        #expect(resolution.icon.mode == .image)
+    }
 }
