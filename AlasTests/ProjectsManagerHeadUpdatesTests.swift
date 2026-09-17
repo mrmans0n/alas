@@ -278,7 +278,6 @@ struct ProjectsManagerHeadUpdatesTests {
         )
 
         await GGStackCache.shared.invalidate()
-        defer { Task { await GGStackCache.shared.invalidate() } }
         _ = try await GGStackCache.shared.stack(at: cachePath) {
             await loads.increment()
             return stack
@@ -294,6 +293,7 @@ struct ProjectsManagerHeadUpdatesTests {
         }
         #expect(await loads.count == 2)
         state.stopProjectGitWatcher(projectId: project.id)
+        await GGStackCache.shared.invalidate()
     }
 
     @Test func fetchHeadRevisionDoesNotInvalidateGGStackCache() async throws {
@@ -343,7 +343,6 @@ struct ProjectsManagerHeadUpdatesTests {
         )
 
         await GGStackCache.shared.invalidate()
-        defer { Task { await GGStackCache.shared.invalidate() } }
         _ = try await GGStackCache.shared.stack(at: cachePath) {
             await loads.increment()
             return stack
@@ -360,6 +359,7 @@ struct ProjectsManagerHeadUpdatesTests {
         #expect(state.revisionChangeGeneration(worktreeID: main.id) > 0)
         #expect(await loads.count == 1)
         state.stopProjectGitWatcher(projectId: project.id)
+        await GGStackCache.shared.invalidate()
     }
 
     @Test func localGitWatcherStatusRescanIsScopedToProject() async throws {
