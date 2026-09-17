@@ -624,6 +624,7 @@ struct DraftReviewRequestTabView: View {
                         target: executionTarget,
                         worktreePath: worktreePath.path
                     )
+                    await appState.loadAgentAvailability(worktreePath: worktreePath)
                 }
                 self.error = runError.localizedDescription
             } catch {

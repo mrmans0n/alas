@@ -489,6 +489,7 @@ struct DraftCommitTabView: View {
                         target: executionTarget,
                         worktreePath: wt.path
                     )
+                    await appState.loadAgentAvailability(worktreePath: wt)
                 }
                 self.error = runError.localizedDescription
             } catch {
