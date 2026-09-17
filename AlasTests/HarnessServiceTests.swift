@@ -389,17 +389,24 @@ struct HarnessServiceTests {
     @Test func staleDetachDoesNotOverrideNewerAttach() {
         let (service, _) = makeService()
         service.handleSocketEvent(
-            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .detached, agent: .pi, lifecycleId: "old"),
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
-                activityId: "run-1", lifecycleId: "new"
+                activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
+                lifecycleId: "new"
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
@@ -410,22 +417,32 @@ struct HarnessServiceTests {
     @Test func newerBackgroundActivityCanArriveBeforeAttach() {
         let (service, _) = makeService()
         service.handleSocketEvent(
-            makeEvent(event: .detached, agent: .pi, lifecycleId: "old"),
+            makeEvent(
+                event: .detached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
-                activityId: "run-1", lifecycleId: "new"
+                activityId: "run-1", timestamp: Date(timeIntervalSince1970: 210),
+                lifecycleId: "new"
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .idle, agent: .pi, lifecycleId: "new"),
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 220), lifecycleId: "new"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
@@ -451,20 +468,47 @@ struct HarnessServiceTests {
         service.handleSocketEvent(
             makeEvent(
                 event: .backgroundStarted, agent: .pi,
-                activityId: "old-run", lifecycleId: "old"
+                activityId: "old-run", timestamp: Date(timeIntervalSince1970: 100),
+                lifecycleId: "old"
             ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         service.handleSocketEvent(
-            makeEvent(event: .idle, agent: .pi, lifecycleId: "new"),
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 210), lifecycleId: "new"
+            ),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
         #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
+    @Test func unseenOlderLifecycleCannotDisplaceActiveLifecycle() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .attached, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 200), lifecycleId: "new"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(
+                event: .idle, agent: .pi,
+                timestamp: Date(timeIntervalSince1970: 100), lifecycleId: "old"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
     }
 
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
