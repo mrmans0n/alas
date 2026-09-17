@@ -4320,7 +4320,11 @@ final class RightPaneState: GGSplitCommitServicing {
     /// is the entire point of resolving merges with a coding agent) and
     /// avoids paying CLI startup cost per file.
     @MainActor
-    func resolveAllConflicts(using agent: AgentDefinition, prompt: String) {
+    func resolveAllConflicts(
+        using agent: AgentDefinition,
+        prompt: String,
+        target: AgentExecutionTarget = .local
+    ) {
         guard !checkpointMutationsDisabled else { return }
         guard bulkResolveTask == nil else { return }
         guard changes.contains(where: { $0.conflict != nil }) else { return }
@@ -4334,7 +4338,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 let agentOutput = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
-                    worktreePath: self.worktree.path
+                    worktreePath: self.worktree.path,
+                    target: target
                 )
                 await self.refresh()
                 let remaining = self.changes.filter { $0.conflict != nil }.count

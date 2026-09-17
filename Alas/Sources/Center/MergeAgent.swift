@@ -14,6 +14,8 @@ enum MergeAgent {
         agent: AgentDefinition,
         block: ConflictBlock,
         language: String?,
+        target: AgentExecutionTarget = .local,
+        workingDirectory: String? = nil,
         timeout: TimeInterval = 30
     ) async throws -> String {
         let prompt = explainPrompt(block: block, language: language)
@@ -21,6 +23,8 @@ enum MergeAgent {
             agent: agent,
             input: "",
             prompt: prompt,
+            target: target,
+            workingDirectory: workingDirectory,
             timeout: timeout
         )
         return parseExplainOutput(result.body.isEmpty ? result.subject : result.body)
@@ -50,6 +54,8 @@ enum MergeAgent {
         remote: String,
         mergedWithMarkers: String,
         language: String?,
+        target: AgentExecutionTarget = .local,
+        workingDirectory: String? = nil,
         timeout: TimeInterval = 90
     ) async throws -> String {
         let prompt = resolveFilePrompt(
@@ -65,6 +71,8 @@ enum MergeAgent {
             agent: agent,
             input: "",
             prompt: prompt,
+            target: target,
+            workingDirectory: workingDirectory,
             timeout: timeout
         )
         return parseResolveOutput(result.body.isEmpty ? result.subject : result.body)
@@ -88,6 +96,7 @@ enum MergeAgent {
         agent: AgentDefinition,
         prompt: String,
         worktreePath: URL,
+        target: AgentExecutionTarget = .local,
         timeout: TimeInterval = 600
     ) async throws -> String {
         // Use the raw-stdout variant: `AgentMessageParser` collapses
@@ -100,6 +109,7 @@ enum MergeAgent {
             agent: agent,
             input: "",
             prompt: prompt,
+            target: target,
             workingDirectory: worktreePath.path,
             timeout: timeout,
             bypassPermissions: true

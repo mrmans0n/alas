@@ -740,6 +740,28 @@ final class AppState {
         )
     }
 
+    func agentAvailability(for worktree: Worktree) -> AgentAvailabilityState {
+        agentAvailability(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
+    func agentExecutionTarget(for worktree: Worktree) -> AgentExecutionTarget {
+        AgentExecutionTarget.resolve(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
+    func loadAgentAvailability(for worktree: Worktree, force: Bool = false) async {
+        await loadAgentAvailability(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
+            force: force
+        )
+    }
+
     func agentAvailabilityGeneration(
         worktreePath: URL,
         remoteHost: String? = nil
@@ -2372,15 +2394,16 @@ final class AppState {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
+        let launchRoot = URL(fileURLWithPath: authoritative.rootPath)
         if let remoteHost = authoritative.executionLocation.sshHost {
             await loadAgentAvailability(
-                worktreePath: focusedMemberWorktree.path,
+                worktreePath: launchRoot,
                 remoteHost: remoteHost
             )
         }
         guard let agent = availableAgent(
             id: agentId,
-            for: focusedMemberWorktree,
+            worktreePath: launchRoot,
             remoteHost: authoritative.executionLocation.sshHost
         ) else {
             throw AgentTerminalLaunchError.agentUnavailable
@@ -3840,7 +3863,15 @@ final class AppState {
         for worktree: Worktree,
         remoteHost: String? = nil
     ) -> AgentDefinition? {
-        agentAvailability(worktreePath: worktree.path, remoteHost: remoteHost)
+        availableAgent(id: id, worktreePath: worktree.path, remoteHost: remoteHost)
+    }
+
+    private func availableAgent(
+        id: String,
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> AgentDefinition? {
+        agentAvailability(worktreePath: worktreePath, remoteHost: remoteHost)
             .agents
             .first { $0.id == id }
     }
@@ -5640,10 +5671,13 @@ final class AppState {
                     }
                     return nil
                 },
-                availableAgents: { [weak self] in
+                availableAgents: { [weak self] origin in
                     guard let self else { return [] }
                     let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    return self.agentRegistry.enabled().map {
+                    let agents = self.worktree(withId: origin.worktreeId)
+                        .map { self.agentAvailability(for: $0).agents }
+                        ?? self.agentRegistry.enabled()
+                    return agents.map {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
                 },

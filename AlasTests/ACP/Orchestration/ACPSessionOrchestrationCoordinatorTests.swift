@@ -42,7 +42,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            availableAgents: {
+            availableAgents: { _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
             sessionLocation: { sessionId in
@@ -109,7 +109,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            availableAgents: {
+            availableAgents: { _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
             sessionLocation: { sessionId in

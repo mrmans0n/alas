@@ -983,6 +983,14 @@ final class MergeConflictTabModel {
     /// cached, or a request for the same block is already in flight.
     /// Errors are silent (no UI).
     func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
+        await explainCurrentConflict(using: agent, language: language, target: .local)
+    }
+
+    func explainCurrentConflict(
+        using agent: AgentDefinition,
+        language: String?,
+        target: AgentExecutionTarget
+    ) async {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
@@ -996,7 +1004,9 @@ final class MergeConflictTabModel {
             let sentence = try await MergeAgent.explainConflict(
                 agent: agent,
                 block: block,
-                language: language
+                language: language,
+                target: target,
+                workingDirectory: worktreePath.path
             )
             if !sentence.isEmpty {
                 setAnnotation(sentence, for: block)
@@ -1019,6 +1029,20 @@ final class MergeConflictTabModel {
         template: String,
         language: String?
     ) async {
+        await requestAgentResolveFile(
+            using: agent,
+            template: template,
+            language: language,
+            target: .local
+        )
+    }
+
+    func requestAgentResolveFile(
+        using agent: AgentDefinition,
+        template: String,
+        language: String?,
+        target: AgentExecutionTarget
+    ) async {
         guard let file = conflictedFile else { return }
         let startGeneration = loadGeneration
         agentBusy = true
@@ -1036,7 +1060,9 @@ final class MergeConflictTabModel {
                 base: file.base,
                 remote: file.remote ?? "",
                 mergedWithMarkers: resultText,
-                language: language
+                language: language,
+                target: target,
+                workingDirectory: worktreePath.path
             )
             guard loadGeneration == startGeneration else { return }
             agentProposal = proposal
