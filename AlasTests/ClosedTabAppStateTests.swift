@@ -44,11 +44,22 @@ struct ClosedTabAppStateTests {
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
-    private struct Fixture {
+    private final class Fixture {
         let state: AppState
         let first: Worktree
         let second: Worktree
         let tempRoot: URL
+
+        init(state: AppState, first: Worktree, second: Worktree, tempRoot: URL) {
+            self.state = state
+            self.first = first
+            self.second = second
+            self.tempRoot = tempRoot
+        }
+
+        deinit {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
     }
 
     private func makeFixture(
