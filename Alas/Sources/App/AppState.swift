@@ -220,6 +220,7 @@ final class AppState {
     @ObservationIgnored private var ggSidebarPreparationTask: Task<Void, Never>?
     private var ggSidebarSnapshots: [String: GGConfigReader.SidebarSnapshot] = [:]
     @ObservationIgnored private var worktreeSelectionFollowUp: Task<Void, Never>?
+    @ObservationIgnored private var worktreeSelectionFollowUpGeneration = 0
     @ObservationIgnored private var pendingWorktreeStatusRescanPaths: [URL] = []
     @ObservationIgnored private var remoteWorktreeStatusRescanTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var remoteWorktreeStatusRescanGenerations = RemoteWorktreeStatusRescanGenerations()
@@ -227,6 +228,7 @@ final class AppState {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
             attentionNavigationGeneration += 1
+            worktreeSelectionFollowUpGeneration += 1
             attentionPendingReviewReveal = nil
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
@@ -2167,13 +2169,13 @@ final class AppState {
         id: String?, includeRemoteStatus: Bool = true, acknowledgeSidebar: Bool = false
     ) {
         worktreeSelectionFollowUp?.cancel()
-        let generation = attentionNavigationGeneration
+        let generation = worktreeSelectionFollowUpGeneration
         worktreeSelectionFollowUp = Task { @MainActor [weak self] in
             // Leave the click handler and initial view update free of metadata
             // work. Coalesce rapid selections before starting any refreshes.
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
             guard let self, !Task.isCancelled, self.selectedWorktreeId == id,
-                  self.attentionNavigationGeneration == generation, let id else { return }
+                  self.worktreeSelectionFollowUpGeneration == generation, let id else { return }
             if acknowledgeSidebar {
                 self.acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
             }

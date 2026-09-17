@@ -5,6 +5,12 @@ import Testing
 @Suite("AppState attention", .serialized)
 @MainActor
 struct AppStateAttentionTests {
+    @MainActor
+    private final class SelectionScans {
+        var paths: [[URL]] = []
+        func record(_ paths: [URL]) { self.paths.append(paths) }
+    }
+
     @Test func recoveredHistorySuppressesOnlyInitialRightPaneSnapshot() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -977,6 +983,51 @@ struct AppStateAttentionTests {
         #expect(result == .opened)
         #expect(state.selectedWorktreeId == worktree.id)
         #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func attentionNavigationKeepsDeferredSelectionRefresh() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let scans = SelectionScans()
+        let state = AppState(
+            store: MemoryStore(),
+            worktreeStatusScan: { await scans.record($0) },
+            attentionStore: AttentionStore(url: fixture.url),
+            attentionNavigationEnvironment: AttentionNavigationEnvironment(
+                focusSession: { _, _ in false },
+                presentScriptFailure: { _, _ in false },
+                revealRightPane: { _, _ in true },
+                focusReviewComment: { _, _, _ in false },
+                focusRemoteWorktree: { _ in false }
+            ),
+            harnessAttentionSettleInterval: 0
+        )
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        let owner = AttentionWorktreeIdentity.make(worktree: worktree, project: project)
+        let signal = AttentionSignal(
+            sourceKey: .init(rawValue: "git:\(owner.storageKey):conflicts"),
+            fingerprint: "file.swift",
+            owner: owner,
+            kind: .conflicts,
+            title: "1 unresolved conflict",
+            body: nil,
+            jumpTarget: .conflicts(path: "file.swift"),
+            display: AttentionWorktreeDisplaySnapshot(projectName: project.name, branch: worktree.branch, path: worktree.path.path, host: nil)
+        )
+        state.attentionStore.observe(.active(signal), at: fixture.now)
+        let item = try #require(state.attentionAggregation.items.first)
+
+        let result = await state.openAttentionItem(item)
+
+        #expect(result == .opened)
+        #expect(state.selectedWorktreeId == worktree.id)
+        #expect(scans.paths.isEmpty)
+        await state.waitForWorktreeSelectionFollowUp()
+        #expect(scans.paths == [[worktree.path]])
     }
 
     @Test func sidebarSelectionClearsOfflineHostAttentionWhileStillOffline() async throws {
