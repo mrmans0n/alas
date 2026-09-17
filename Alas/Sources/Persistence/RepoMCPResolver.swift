@@ -5,7 +5,6 @@ import Foundation
 /// approved, staying quiet when declined or disabled. Pure: no filesystem,
 /// no logging, no persisted state.
 enum RepoMCPResolver {
-
     enum SkipReason: Equatable {
         /// An app-level server of the same name replaces the repo one.
         case shadowedByApp
