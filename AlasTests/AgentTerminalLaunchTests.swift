@@ -101,6 +101,30 @@ struct AgentTerminalLaunchTests {
         #expect(command == "'/Applications/Test Agent/bin/agent'")
     }
 
+    @Test func remoteAbsoluteBinaryOverrideIsPreserved() {
+        var custom = agent()
+        custom.binaryOverride = "/opt/Test Agent/bin/agent"
+        var remoteProject = project(mode: .disabled, useBypass: false)
+        remoteProject.host = "build-host"
+        let state = AppState(store: MemoryStore())
+
+        let command = state.agentStartupCommand(for: custom, project: remoteProject)
+
+        #expect(command == "'/opt/Test Agent/bin/agent'")
+    }
+
+    @Test func remoteHomeRelativeBinaryOverrideExpandsOnRemoteShell() {
+        var custom = agent()
+        custom.binaryOverride = "~/bin/Test Agent"
+        var remoteProject = project(mode: .disabled, useBypass: false)
+        remoteProject.host = "build-host"
+        let state = AppState(store: MemoryStore())
+
+        let command = state.agentStartupCommand(for: custom, project: remoteProject)
+
+        #expect(command == "\"$HOME\"/'bin/Test Agent'")
+    }
+
     @Test func missingAgentIdDoesNotLaunch() {
         let state = AppState(store: MemoryStore())
         let project = project(mode: .useGlobal, useBypass: false)

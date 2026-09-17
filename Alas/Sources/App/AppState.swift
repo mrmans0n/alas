@@ -2360,7 +2360,11 @@ final class AppState {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        guard let agent = availableAgent(
+            id: agentId,
+            for: focusedMemberWorktree,
+            remoteHost: authoritative.executionLocation.sshHost
+        ) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         if agent.id == AgentKind.copilot.rawValue, project.host == nil {
@@ -3712,8 +3716,8 @@ final class AppState {
 
     private func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, useBypassPermissions: Bool) -> String {
         let binary = project.host == nil
-            ? agent.resolvedBinary
-            : URL(fileURLWithPath: agent.resolvedBinary).lastPathComponent
+            ? Self.shellQuote(agent.resolvedBinary)
+            : remoteShellBinary(agent.configuredBinary)
         var argv = [binary]
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
             argv.append(contentsOf: extra)
@@ -3722,7 +3726,15 @@ final class AppState {
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
-        return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+        return [binary] + argv.dropFirst().map(Self.shellQuote)
+            .joined(separator: " ")
+    }
+
+    private func remoteShellBinary(_ configuredBinary: String) -> String {
+        guard configuredBinary.hasPrefix("~/") else {
+            return Self.shellQuote(configuredBinary)
+        }
+        return "\"$HOME\"/\(Self.shellQuote(String(configuredBinary.dropFirst(2))))"
     }
 
     enum AgentTerminalLaunchError: LocalizedError, Equatable {
@@ -3766,7 +3778,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -3788,7 +3800,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -3803,6 +3815,16 @@ final class AppState {
             showFileActionError(title: "Launch Agent Failed", message: error.localizedDescription)
             throw error
         }
+    }
+
+    private func availableAgent(
+        id: String,
+        for worktree: Worktree,
+        remoteHost: String? = nil
+    ) -> AgentDefinition? {
+        agentAvailability(worktreePath: worktree.path, remoteHost: remoteHost)
+            .agents
+            .first { $0.id == id }
     }
 
     @discardableResult

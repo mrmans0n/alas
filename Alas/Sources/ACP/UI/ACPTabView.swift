@@ -16,18 +16,20 @@ struct ACPTabView: View {
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
-        if let manager = managerForOwnerBoundary {
-            ACPManagedTabView(
-                sessionId: sessionId,
-                state: state,
-                worktree: worktree,
-                owner: owner,
-                onOpenPreview: onOpenPreview,
-                onStartupRecoveryReady: onStartupRecoveryReady,
-                manager: manager
-            )
-        } else {
-            unavailable
+        Group {
+            if let manager = managerForOwnerBoundary {
+                ACPManagedTabView(
+                    sessionId: sessionId,
+                    state: state,
+                    worktree: worktree,
+                    owner: owner,
+                    onOpenPreview: onOpenPreview,
+                    onStartupRecoveryReady: onStartupRecoveryReady,
+                    manager: manager
+                )
+            } else {
+                unavailable
+            }
         }
         .task(id: worktree.path) {
             await state.loadAgentAvailability(worktreePath: worktree.path)
