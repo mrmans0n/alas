@@ -73,7 +73,11 @@ while IFS= read -r source; do
                 }
                 if (attribute_in_string) {
                     if (attribute_multiline_string) {
-                        if (substr(line, i, 3) == "\"\"\"") {
+                        if (attribute_raw_hashes == 0 && attribute_escaped) {
+                            attribute_escaped = 0
+                        } else if (attribute_raw_hashes == 0 && c == "\\") {
+                            attribute_escaped = 1
+                        } else if (substr(line, i, 3) == "\"\"\"") {
                             closing = 1
                             for (j = 1; j <= attribute_raw_hashes; j++) {
                                 if (substr(line, i + 2 + j, 1) != "#") {
@@ -308,22 +312,26 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                         }
                         continue
                     }
-                    if (attribute_in_string) {
-                        if (attribute_multiline_string) {
-                            if (substr(line, i, 3) == "\"\"\"") {
-                                closing = 1
-                                for (j = 1; j <= attribute_raw_hashes; j++) {
-                                    if (substr(line, i + 2 + j, 1) != "#") {
-                                        closing = 0
-                                    }
-                                }
-                                if (closing) {
-                                    attribute_in_string = 0
-                                    attribute_multiline_string = 0
-                                    i += 2 + attribute_raw_hashes
-                                    attribute_raw_hashes = 0
-                                }
-                            }
+	                    if (attribute_in_string) {
+	                        if (attribute_multiline_string) {
+	                            if (attribute_raw_hashes == 0 && attribute_escaped) {
+	                                attribute_escaped = 0
+	                            } else if (attribute_raw_hashes == 0 && c == "\\") {
+	                                attribute_escaped = 1
+	                            } else if (substr(line, i, 3) == "\"\"\"") {
+	                                closing = 1
+	                                for (j = 1; j <= attribute_raw_hashes; j++) {
+	                                    if (substr(line, i + 2 + j, 1) != "#") {
+	                                        closing = 0
+	                                    }
+	                                }
+	                                if (closing) {
+	                                    attribute_in_string = 0
+	                                    attribute_multiline_string = 0
+	                                    i += 2 + attribute_raw_hashes
+	                                    attribute_raw_hashes = 0
+	                                }
+	                            }
                         } else if (attribute_raw_hashes > 0) {
                             if (c == "\"") {
                                 closing = 1

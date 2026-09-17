@@ -222,6 +222,15 @@ A "quoted ) text"
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/EscapedDelimiterTests.swift" <<'SWIFT'
+import Testing
+
+@Suite("""
+A literal delimiter: \"""
+""") struct EscapedDelimiterTests {
+    @Test func ordinary() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/NestedIndentedSuite.swift" <<'SWIFT'
 import Testing
 
@@ -235,13 +244,14 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=26 scheduled=25 ordinary=12 subprocess=13 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=27 scheduled=26 ordinary=13 subprocess=13 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
 grep -qx 'AgentRunnerInvocationTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
+grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
@@ -281,6 +291,7 @@ selectors="$(
 )"
 grep -qx -- '-only-testing AlasTests/UnitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/CommentAttributeTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/EscapedDelimiterTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
@@ -358,16 +369,17 @@ env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${ordinary_log}" SWIFT_TEST_IN
     bash "${batch_runner}" 0 2
 grep -qx -- '-only-testing' "${ordinary_log}"
 grep -qx -- 'AlasTests/CommentAttributeTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/InlineSuiteTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/MultilineStringTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/ParserNamespace.ParserTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/SecondTests' "${ordinary_log}"
-grep -qx -- 'AlasTests/StringParenSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/MultilineAttributeTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/NestedCommentTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/RawStringTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/SplitDeclarationTests' "${ordinary_log}"
+grep -qx -- 'AlasTests/UnitTests' "${ordinary_log}"
 if grep -q 'AlasTests/InlineNestedAttributeTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
-if grep -q 'AlasTests/InlineNamedSuiteTests' "${ordinary_log}"; then
+if grep -q 'AlasTests/InlineSuiteTests' "${ordinary_log}"; then
     echo 'cached ordinary batch used the wrong modulo assignment' >&2
     exit 1
 fi
