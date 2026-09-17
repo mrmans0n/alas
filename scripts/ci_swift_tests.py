@@ -5,6 +5,7 @@ import argparse
 from contextlib import suppress
 import csv
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -120,6 +121,32 @@ def account(expected, document):
             "executed": executed, "outcomes": observed}
 
 
+def assign_shards(plan, timings):
+    """Keep ordinary work on shard zero; balance isolated invocations on 1 and 2."""
+    weights = {}
+    for entry in timings:
+        key = tuple(entry["selectors"])
+        seconds = entry["seconds"]
+        if key in weights or not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("Invalid or duplicate invocation timing")
+        weights[key] = seconds
+    pending = []
+    for batch in plan["batches"]:
+        batch["shards"] = [0] * len(batch["invocations"])
+        if batch["lane"] == "subprocess":
+            for index, selectors in enumerate(batch["invocations"]):
+                # Exact selector keys survive insertion/reordering of other suites.
+                # New groupings receive a conservative estimate, never exclusion.
+                seconds = weights.get(tuple(selectors), batch["timeouts"][index])
+                pending.append((seconds, batch["id"], index, batch))
+    totals = [0.0, 0.0]
+    for seconds, _, index, batch in sorted(pending, key=lambda row: (-row[0], row[1], row[2])):
+        shard = min(range(2), key=lambda candidate: (totals[candidate], candidate))
+        batch["shards"][index] = shard + 1
+        totals[shard] += seconds
+    plan["shard_seconds"] = totals
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -128,6 +155,9 @@ def write_json(path, value):
 
 
 def xcode_arguments():
+    if os.environ.get("SWIFT_TEST_XCTESTRUN"):
+        return ["xcodebuild", "-xctestrun", os.environ["SWIFT_TEST_XCTESTRUN"],
+                "-destination", "platform=macOS,arch=arm64"]
     return ["xcodebuild", "-project", str(ROOT / "Alas.xcodeproj"), "-scheme", "Alas",
             "-destination", "platform=macOS,arch=arm64", "-derivedDataPath",
             os.environ.get("SWIFT_TEST_DERIVED_DATA", str(ROOT / ".build/xcode/DerivedData")),
@@ -168,10 +198,12 @@ def discover(directory):
     return output
 
 
-def run_batch(plan, directory, lane, index):
+def run_batch(plan, directory, lane, index, shard=None):
     batch = next(batch for batch in plan["batches"] if batch["lane"] == lane and batch["index"] == index)
     success = True
     for number, selectors in enumerate(batch["invocations"], 1):
+        if shard is not None and batch["shards"][number - 1] != shard:
+            continue
         name = f"{batch['id']}-{number}"
         bundle = directory / f"{name}.xcresult"
         expected = [test for test in batch["tests"] if any(test == s or test.startswith(s + "/") for s in selectors)]
@@ -210,19 +242,33 @@ def run_batch(plan, directory, lane, index):
     return success
 
 
+def run_shard(plan, directory, shard):
+    if shard not in (0, 1, 2):
+        raise ValueError("Swift shard must be 0, 1, or 2")
+    success = True
+    for batch in plan["batches"]:
+        # Do not short-circuit: failed invocations must not suppress later work.
+        passed = run_batch(plan, directory, batch["lane"], batch["index"], shard)
+        success = success and passed
+    return success
+
+
 def summarize(plan, directory):
     rows, missing, observed = [], [], set()
+    reports = {}
+    for path in directory.rglob("*.report.json"):
+        reports.setdefault(path.name, []).append(path)
     executed = skipped = 0
     success = True
     for batch in plan["batches"]:
         for number in range(1, len(batch["invocations"]) + 1):
             name = f"{batch['id']}-{number}"
-            path = directory / f"{name}.report.json"
-            if not path.exists():
-                missing.append(name)
+            paths = reports.get(f"{name}.report.json", [])
+            if len(paths) != 1:
+                missing.append(name + (" (duplicate reports)" if paths else ""))
                 success = False
                 continue
-            report = json.loads(path.read_text())
+            report = json.loads(paths[0].read_text())
             if report.get("plan_id") != plan["id"]:
                 missing.append(name + " (stale report)")
                 success = False
@@ -254,14 +300,25 @@ def summarize(plan, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "run", "summary"])
+    parser.add_argument("command", choices=["plan", "run", "run-shard", "wait-products", "summary"])
     parser.add_argument("--directory", type=Path, default=RESULTS)
     parser.add_argument("--enumeration", type=Path)
     parser.add_argument("--policy", type=Path, default=ROOT / "scripts/ci-swift-test-policy.tsv")
     parser.add_argument("--batch-count", type=int, default=6)
     parser.add_argument("--batch", type=int, default=0)
+    parser.add_argument("--shard", type=int, choices=[0, 1, 2], default=0)
+    parser.add_argument("--timings", type=Path, default=ROOT / "scripts/ci-swift-test-timings.json")
     parser.add_argument("--lane", choices=["ordinary", "subprocess"], default="ordinary")
     args = parser.parse_args()
+    if args.command == "wait-products":
+        started = time.monotonic()
+        artifact = wait_for_products(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"],
+                                     os.environ["GITHUB_RUN_ATTEMPT"], 3600)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"artifact_id={artifact}\n")
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+            output.write(f"Waited {time.monotonic() - started:.1f}s for compiled Swift products.\n")
+        return True
     args.directory.mkdir(parents=True, exist_ok=True)
     plan_path = args.directory / "plan.json"
     if args.command == "plan":
@@ -270,13 +327,41 @@ def main():
         with args.policy.open() as policy:
             rows = [row for row in csv.reader(policy, delimiter="\t") if row and not row[0].startswith("#")]
         plan = make_plan(json.loads(source.read_text()), rows, args.batch_count)
+        assign_shards(plan, json.loads(args.timings.read_text())["invocations"])
         write_json(plan_path, plan)
         print(f"Discovered {len(plan['tests'])} tests; excluded {len(plan['excluded'])}; "
               f"scheduled {len(plan['tests']) - len(plan['excluded'])}")
         return True
     plan = json.loads(plan_path.read_text())
+    if args.command == "run-shard":
+        return run_shard(plan, args.directory, args.shard)
     return (run_batch(plan, args.directory, args.lane, args.batch) if args.command == "run"
             else summarize(plan, args.directory))
+
+
+def github_pages(endpoint):
+    result = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
+                            check=True, capture_output=True, text=True, timeout=60)
+    return json.loads(result.stdout)
+
+
+def wait_for_products(repository, run_id, attempt, timeout):
+    deadline = time.monotonic() + timeout
+    name = f"swift-test-products-{attempt}"
+    while time.monotonic() < deadline:
+        pages = github_pages(f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100")
+        artifacts = [artifact for page in pages for artifact in page["artifacts"]
+                     if artifact["name"] == name and not artifact["expired"]]
+        if len(artifacts) == 1:
+            return artifacts[0]["id"]
+        if len(artifacts) > 1:
+            raise ValueError("Duplicate compiled Swift products")
+        pages = github_pages(f"repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        if any(job["name"] == "build-test" and job["status"] == "completed"
+               for page in pages for job in page["jobs"]):
+            raise ValueError("Builder finished without publishing products for this attempt; rerun all jobs")
+        time.sleep(15)
+    raise ValueError("Timed out waiting for compiled Swift products; rerun all jobs")
 
 
 if __name__ == "__main__":

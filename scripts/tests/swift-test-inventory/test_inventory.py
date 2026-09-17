@@ -51,6 +51,85 @@ class InventoryTests(unittest.TestCase):
             with self.subTest(document=document), self.assertRaises(ValueError):
                 self.module.make_plan(document, [], 2)
 
+    def test_shards_balance_invocations_and_keep_ordinary_on_lane_zero(self):
+        ids = [f"AlasTests/S{i}/test()" for i in range(12)]
+        policy = [(f"AlasTests/S{i}", "subprocess", "isolation", "#23") for i in range(12)]
+        plan = self.module.make_plan(enumeration("AlasTests/Ordinary/test()", *ids), policy, 2)
+        chunks = [chunk for batch in plan["batches"] if batch["lane"] == "subprocess"
+                  for chunk in batch["invocations"]]
+        timings = [{"selectors": chunk, "seconds": seconds}
+                   for chunk, seconds in zip(chunks, [90, 60, 40, 10])]
+        self.module.assign_shards(plan, timings)
+        self.assertEqual(plan["shard_seconds"], [100, 100])
+        self.assertTrue(all(shard == 0 for batch in plan["batches"] if batch["lane"] == "ordinary"
+                            for shard in batch["shards"]))
+        self.assertCountEqual([shard for batch in plan["batches"] if batch["lane"] == "subprocess"
+                               for shard in batch["shards"]], [1, 1, 2, 2])
+
+    def test_unknown_invocations_are_assigned_and_bad_timings_rejected(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [
+            ("AlasTests/A", "subprocess", "isolation", "#23")], 1)
+        self.module.assign_shards(plan, [])
+        self.assertEqual(plan["batches"][1]["shards"], [1])
+        for seconds in [0, -1, float("nan"), float("inf")]:
+            with self.subTest(seconds=seconds), self.assertRaises(ValueError):
+                self.module.assign_shards(plan, [{"selectors": ["AlasTests/A"], "seconds": seconds}])
+
+    def test_shards_execute_every_invocation_once_and_propagate_failure(self):
+        ids = [f"AlasTests/S{i}/test()" for i in range(7)]
+        policy = [(f"AlasTests/S{i}", "subprocess", "isolation", "#23") for i in range(7)]
+        plan = self.module.make_plan(enumeration("AlasTests/Ordinary/test()", *ids), policy, 2)
+        self.module.assign_shards(plan, [])
+        selected = []
+
+        def execute(command, log, timeout):
+            selectors = [command[i + 1] for i, value in enumerate(command) if value == "-only-testing"]
+            selected.extend(selectors)
+            execute.selectors = selectors
+            return 65 if "AlasTests/S0" in selectors else 0
+
+        def extract(*args, **kwargs):
+            cases = [(selector.removeprefix("AlasTests/") + "/test()", "Passed")
+                     for selector in execute.selectors]
+            return subprocess.CompletedProcess([], 0, stdout=json.dumps(results(*cases)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            with patch.object(self.module, "bounded", side_effect=execute), patch.object(
+                    self.module.subprocess, "run", side_effect=extract):
+                statuses = [self.module.run_shard(plan, directory, shard) for shard in range(3)]
+            self.assertEqual(statuses, [True, False, True])
+            self.assertCountEqual(selected, ["AlasTests/Ordinary"] + [f"AlasTests/S{i}" for i in range(7)])
+            self.assertEqual(len(selected), len(set(selected)))
+            self.assertEqual(len(list(directory.glob("*.report.json"))), 4)
+            with self.assertRaises(ValueError):
+                self.module.run_shard(plan, directory, 3)
+
+    def test_portable_xctestrun_does_not_resolve_or_build_project(self):
+        with patch.dict("os.environ", {"SWIFT_TEST_XCTESTRUN": "/tmp/products/Alas.xctestrun"}):
+            args = self.module.xcode_arguments()
+        self.assertEqual(args, ["xcodebuild", "-xctestrun", "/tmp/products/Alas.xctestrun",
+                               "-destination", "platform=macOS,arch=arm64"])
+
+    def test_artifact_wait_ignores_previous_attempt_and_returns_current_artifact(self):
+        old = {"id": 1, "name": "swift-test-products-1", "expired": False}
+        current = {"id": 2, "name": "swift-test-products-2", "expired": False}
+        responses = [[{"artifacts": [old]}], [{"jobs": [{"name": "build-test", "status": "in_progress"}]}],
+                     [{"artifacts": [old, current]}]]
+        with patch.object(self.module, "github_pages", side_effect=responses), patch.object(self.module.time, "sleep"):
+            self.assertEqual(self.module.wait_for_products("owner/repo", 123, 2, 30), 2)
+
+    def test_artifact_wait_stops_when_builder_finishes_without_products(self):
+        with patch.object(self.module, "github_pages", side_effect=[
+                [{"artifacts": []}], [{"jobs": [{"name": "build-test", "status": "completed"}]}]]):
+            with self.assertRaisesRegex(ValueError, "without publishing"):
+                self.module.wait_for_products("owner/repo", 123, 1, 30)
+
+    def test_artifact_wait_has_a_deadline(self):
+        with patch.object(self.module.time, "monotonic", side_effect=[0, 31]):
+            with self.assertRaisesRegex(ValueError, "Timed out"):
+                self.module.wait_for_products("owner/repo", 123, 1, 30)
+
     def test_exclusions_require_reason_issue_and_matching_selector(self):
         document = enumeration("AlasTests/A/a()")
         for policy in [[("AlasTests/Missing", "quarantine", "reason", "#23")],
@@ -148,6 +227,18 @@ class InventoryTests(unittest.TestCase):
             report["plan_id"] = "previous-run"
             (directory / "ordinary-1-1.report.json").write_text(json.dumps(report))
             with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertFalse(self.module.summarize(plan, directory))
+
+    def test_summary_rejects_duplicate_invocation_reports_across_shard_artifacts(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
+        report = self.module.account(["AlasTests/A/a()"], results(("A/a()", "Passed")))
+        report["plan_id"] = plan["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            self.module.write_json(directory / "shard-0/ordinary-1-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+                self.module.write_json(directory / "shard-1/ordinary-1-1.report.json", report)
                 self.assertFalse(self.module.summarize(plan, directory))
 
     def test_missing_test_is_a_failure_even_when_other_tests_pass(self):

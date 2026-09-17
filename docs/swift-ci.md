@@ -19,8 +19,9 @@ suites retain #23 as their follow-up. The subprocess list preserves the conserva
 isolation baseline gathered during #1277; it does not assert every listed suite
 individually reproduced a hang. Shrink it using measured runs, not source heuristics.
 
-Six ordinary batches run sequentially on one runner. The subprocess lane also has
-six batches, each containing invocations of at most three suites. Each invocation
+Six ordinary batches run sequentially on the build runner after it publishes the
+compiled products. Two additional runners split the subprocess invocations by
+measured duration, preserving invocations of at most three suites. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
@@ -100,11 +101,40 @@ The sharded prototype additionally timed out `subprocess-1-3` after 360s before
 Xcode produced a readable result bundle, leaving 28 scheduled definitions
 unaccounted in the final audit.
 
-Because the measured run was slower, consumed more macOS runner time, and exposed
-shared flaky failures already visible in the unsharded workflow, distributed
-execution remains deferred. Revisit sharding only after the flaky failures are
-handled and a new unsharded baseline shows enough queue-adjusted test time to
-justify extra macOS runners and artifact transfer.
+After the test reliability fixes in #1302 and #1303, passing run
+[35254121181](https://github.com/mrmans0n/alas/actions/runs/35254121181) provides a
+new baseline: 48m30s of macOS runner time, or 50m39s including initial queue time.
+Preparation and discovery took 2m15s, compilation 18m34s, ordinary tests 8m47s,
+subprocess tests 17m47s, and diagnostics/cleanup about one minute.
+
+The next experiment prioritizes elapsed time with three execution lanes. The
+builder publishes a tar archive of compiled products and runs ordinary tests
+itself. Two workers queue at workflow start and wait up to 60 minutes for that
+attempt's artifact. They stop early if the builder completes without publishing.
+This avoids the second macOS queue that dominated the previous experiment, at
+the cost of paying for idle workers during compilation. With similar runner
+speed and short initial queues, the target is 31–34 minutes elapsed and roughly
+90–100 macOS runner minutes, versus 48m30s in the baseline. These are estimates;
+the old prototype's runner-minute adoption criterion does not fit this deliberate
+tradeoff. Record actual queue, wait, setup, transfer, test, and upload durations
+before declaring the experiment successful.
+
+`scripts/ci-swift-test-timings.json` records exact invocation selectors and elapsed
+seconds from that passing baseline. Planning places the longest subprocess
+invocations first on the least-loaded worker. Baseline estimates are 535.36s and
+530.57s. Changed or new selector groups use their invocation timeout as a
+conservative estimate and remain scheduled. Ordinary work stays on lane zero.
+No global Swift Testing parallelism is enabled. Each worker executes sequentially,
+so host preferences, environment, pasteboard, and process state are not shared
+between simultaneously executing invocations on the same host.
+
+Workers use `test-without-building -xctestrun` with the archived products, including
+embedded runtime resources. The tar archive preserves executable permissions and
+symlinks. Xcode version, macOS version, and architecture must match the builder.
+The coverage audit runs even after a failed lane, requires every Swift job to
+succeed, and reconciles all invocation reports. Every lane uploads diagnostics
+even on failure. Artifact names include the run attempt to reject stale evidence;
+use **Re-run all jobs**, not a partial rerun, for this coordinated experiment.
 
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
@@ -130,5 +160,5 @@ python3 scripts/ci_swift_tests.py plan --enumeration /path/to/enumeration.json -
 
 Use a fresh output directory per run. `SWIFT_TEST_DERIVED_DATA` can select an
 existing local build for focused verification. CI uses `.build/xcode/DerivedData`.
-Distributed sharding is deferred until reliability improves and the published
-durations justify another prototype.
+Local sequential execution remains available through `run --lane … --batch …`.
+CI workers use `run-shard --shard 1` and `run-shard --shard 2` with the shared plan.
