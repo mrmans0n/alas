@@ -179,6 +179,7 @@ enum WorkspaceCheckoutWorktreeResolver {
             checkout.members.contains { member in
                 member.availability == .available
                     && member.projectID == worktree.projectId
+                    && (member.gitLineageID == nil || worktree.lineageID == nil || member.gitLineageID == worktree.lineageID)
                     && URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
                         == worktree.path.standardizedFileURL.path
             }

@@ -164,6 +164,16 @@ struct WorkspaceCheckoutWorktreeResolverTests {
         ) == nil)
     }
 
+    @Test func ignoresWorktreeWithMismatchedLineage() {
+        let checkout = makeCheckout(members: [makeMember(gitLineageID: "workspace-lineage")])
+        let replacement = makeWorktree(lineageID: "replacement-lineage")
+
+        #expect(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: replacement,
+            checkouts: [checkout]
+        ) == nil)
+    }
+
     @Test func returnsNoPresentationForUnlinkedWorktree() {
         let worktree = makeWorktree(path: "/tmp/other")
 
@@ -175,7 +185,8 @@ struct WorkspaceCheckoutWorktreeResolverTests {
 
     private func makeWorktree(
         projectID: String = "project-a",
-        path: String = "/tmp/workspace/repo"
+        path: String = "/tmp/workspace/repo",
+        lineageID: String? = nil
     ) -> Worktree {
         .init(
             id: path,
@@ -184,7 +195,8 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             branch: "feature",
             path: URL(fileURLWithPath: path),
             status: .clean,
-            lastActivity: .now
+            lastActivity: .now,
+            lineageID: lineageID
         )
     }
 
@@ -208,7 +220,8 @@ struct WorkspaceCheckoutWorktreeResolverTests {
     }
 
     private func makeMember(
-        availability: WorkspaceCheckoutMemberAvailability = .available
+        availability: WorkspaceCheckoutMemberAvailability = .available,
+        gitLineageID: String? = nil
     ) -> WorkspaceCheckoutMember {
         .init(
             workspaceMemberID: UUID(),
@@ -216,6 +229,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             fallbackProjectName: "Repo",
             fallbackRepositoryRoot: "/tmp/repo",
             worktreePath: "/tmp/workspace/repo",
+            gitLineageID: gitLineageID,
             availability: availability
         )
     }
