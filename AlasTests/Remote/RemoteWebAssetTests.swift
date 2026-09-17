@@ -954,4 +954,17 @@ struct RemoteWebAssetTests {
         #expect(js.contains("const cap = deleted > 0 ? 4 : 5;"))
         #expect(js.contains("const addSegments = Math.min(cap, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));"))
     }
+
+    // Regression (Codex review, PR #1285): the synthetic "Other" section
+    // (sessions with no project/worktree) unconditionally bypassed search
+    // and filter chips, so it stayed visible for any query and under the
+    // Active/Dirty chips even when none of its sessions matched.
+    @Test func otherSectionIsSubjectToSearchAndFilters() throws {
+        let js = try asset("app.js")
+        #expect(!js.contains("if (section.isOther) return true;"))
+        let body = try #require(
+            js.range(of: "function filterVisibleSections(sections) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)"))
+        #expect(body.contains("RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery)"))
+    }
 }

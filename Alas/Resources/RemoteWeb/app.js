@@ -425,11 +425,14 @@ let repoSearchQuery = "";
 let repoActiveFilter = "all";
 
 function filterVisibleSections(sections) {
-  return sections.filter(section => {
-    if (section.isOther) return true;
-    return RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
-      && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery);
-  });
+  // The synthetic "Other" section's worktree entries are safe to run
+  // through the same predicates as a real repo's: worktreeIsActive/
+  // worktreeIsDirty/sectionMatchesQuery all guard on the fields Other's
+  // entry doesn't have (no `.summary`), so it narrows like everything else
+  // instead of always bypassing search and filters.
+  return sections.filter(section =>
+    RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)
+      && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery));
 }
 
 function renderRepoFilterCounts(sections) {
