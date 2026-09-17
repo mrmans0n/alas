@@ -42,6 +42,28 @@ timed-out invocations. All twelve batches ran and their diagnostics were uploade
 These are baseline measurements, not a passing result; subsequent runs publish
 their own counts and per-invocation durations in the job summary and artifacts.
 
+The next run, [35222266640](https://github.com/mrmans0n/alas/actions/runs/35222266640),
+accounted for all 10,305 scheduled definitions: 355 explicitly excluded, zero
+runtime skips, zero unaccounted results, and zero invocation timeouts. Eleven
+definitions failed assertions or Xcode's individual-test deadline. The follow-up
+policy excludes ten exact definitions under #1297; the remaining fixture replaces
+a fixed refresh sleep with a bounded condition wait. Measured batch totals:
+
+| Batch | Executed definitions | Seconds |
+|---|---:|---:|
+| ordinary-1 | 1414 | 105.43 |
+| ordinary-2 | 1206 | 76.49 |
+| ordinary-3 | 1247 | 181.21 |
+| ordinary-4 | 1253 | 71.22 |
+| ordinary-5 | 1577 | 91.95 |
+| ordinary-6 | 1253 | 63.19 |
+| subprocess-1 | 466 | 448.98 |
+| subprocess-2 | 314 | 125.89 |
+| subprocess-3 | 354 | 209.96 |
+| subprocess-4 | 391 | 175.43 |
+| subprocess-5 | 379 | 146.56 |
+| subprocess-6 | 451 | 175.63 |
+
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
 unexpected tests, failed tests, unapproved runtime skips, and incomplete invocations.

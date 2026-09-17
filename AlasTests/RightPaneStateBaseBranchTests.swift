@@ -248,7 +248,7 @@ struct RightPaneStateBaseBranchTests {
         #expect(state.userOverrodeBaseBranch)
 
         _ = store.state(for: wt, baseBranch: "develop", comparisonMode: .branchUpstream)
-        try await Task.sleep(for: .milliseconds(600))
+        try await waitUntil { state.comparisonRef == "origin/feature" }
 
         #expect(!state.userOverrodeBaseBranch)
         #expect(state.comparisonRef == "origin/feature")
