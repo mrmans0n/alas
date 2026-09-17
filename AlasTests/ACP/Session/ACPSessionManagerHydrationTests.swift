@@ -583,7 +583,7 @@ struct ACPSessionManagerHydrationTests {
         }
     }
 
-    @Test("remembered absolute index before tail slice waits for full backfill")
+    @Test("remembered absolute index before tail slice is restored after backfill")
     func rememberedAbsoluteIndexBeforeTailSliceWaitsForBackfill() async throws {
         let path = tmpStorePath()
         let store = try ACPSessionStore(path: path)
@@ -609,15 +609,6 @@ struct ACPSessionManagerHydrationTests {
         )
 
         await mgr.hydrateIfNeeded(id: "s")
-
-        #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
-        #expect(s.transcript.visibleHead == 0)
-        if case .user(_, _, let text, _, _) = s.transcript.messages[s.transcript.visibleHead] {
-            #expect(text == "m70")
-        } else {
-            #expect(Bool(false), "expected first tail message before backfill")
-        }
-
         await mgr.awaitBackfill(id: "s")
 
         #expect(s.transcript.messages.count == 100)

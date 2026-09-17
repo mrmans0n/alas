@@ -210,13 +210,15 @@ struct EditorBufferTests {
         await availability.enable()
         buffer.reopenLSPDocument()
         let deadline = Date().addingTimeInterval(2)
-        while !manager.isDocumentOpen(fileURL: file, worktreeRoot: root), Date() < deadline {
+        while createdTransport?.sent.contains(where: { $0.contains(#""method":"textDocument/didOpen""#) }) != true,
+              Date() < deadline {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(manager.isDocumentOpen(fileURL: file, worktreeRoot: root))
         let opens = try #require(createdTransport?.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) })
         #expect(opens.count == 1)
-        #expect(opens[0].contains(#""text":"let value = 1\n""#))
+        let open = try #require(opens.first)
+        #expect(open.contains(#""text":"let value = 1\n""#))
     }
 
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
