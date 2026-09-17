@@ -164,6 +164,9 @@ final class AppState {
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
+    /// Where resolved repo icons are staged before rendering. Injectable so
+    /// tests never write into the real project-icon store.
+    @ObservationIgnored var repoIconStagingRoot: URL = Paths.projectIconsRoot
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
     let inAppNotifications = InAppNotificationStore()

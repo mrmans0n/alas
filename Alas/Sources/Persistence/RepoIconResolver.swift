@@ -15,6 +15,26 @@ enum RepoIconResolver {
         let sourceURL: URL?
         let sourceModificationDate: Date?
         let sourceFileSize: Int?
+
+        /// The identity of the file this resolution came from, or nil when the
+        /// app icon was used and there is nothing to cache on.
+        var sourceIdentity: SourceIdentity? {
+            guard let sourceURL else { return nil }
+            return SourceIdentity(
+                url: sourceURL,
+                modificationDate: sourceModificationDate,
+                fileSize: sourceFileSize
+            )
+        }
+    }
+
+    /// The repo file that supplies an icon, with the identity stamp a caller
+    /// keys its cache on. Produced from filesystem stats alone: no reads, no
+    /// staging.
+    struct SourceIdentity: Equatable {
+        let url: URL
+        let modificationDate: Date?
+        let fileSize: Int?
     }
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "repo-config")
@@ -50,6 +70,41 @@ enum RepoIconResolver {
         ).icon
     }
 
+    /// The repo file that would currently supply the icon, with the stamp a
+    /// render-time cache keys on. Stats only: no reads, no staging, no logging.
+    ///
+    /// Returns nil when the app icon is in effect (it is explicit) and when no
+    /// usable candidate exists — the same two cases where `resolve` has nothing
+    /// to read, so a caller that resolves anyway pays no more than this probe.
+    static func sourceIdentity(
+        repoConfig: RepoConfig?,
+        appIcon: ProjectIcon,
+        primaryCheckout: URL,
+        store: RepoConfigStore
+    ) -> SourceIdentity? {
+        guard !iconIsExplicit(appIcon) else { return nil }
+
+        for candidate in candidates(
+            repoConfig: repoConfig,
+            primaryCheckout: primaryCheckout,
+            store: store
+        ) {
+            // An oversized candidate is skipped here too, so the probe and
+            // `resolve` agree on which file wins instead of the caller caching
+            // an identity `resolve` would refuse to use.
+            guard let values = try? candidate.url.resourceValues(
+                forKeys: [.contentModificationDateKey, .fileSizeKey]
+            ), !isOversized(values)
+            else { continue }
+            return SourceIdentity(
+                url: candidate.url,
+                modificationDate: values.contentModificationDate,
+                fileSize: values.fileSize
+            )
+        }
+        return nil
+    }
+
     /// The icon to display for a project: an explicit app icon wins, else the
     /// repo config's `icon` key, else the discovered `.alas/icon.<ext>`, else
     /// the app icon unchanged.
@@ -80,11 +135,16 @@ enum RepoIconResolver {
             primaryCheckout: primaryCheckout,
             store: store
         ) {
-            // One stat on the winning candidate supplies the source identity
-            // the caller caches on; a missing file reports nil here.
+            // One stat decides both whether the file is there and whether it is
+            // worth reading: an oversized icon is refused before it is loaded,
+            // so a 10+ MB file never lands in memory on the render path.
             let values = try? candidate.url.resourceValues(
                 forKeys: [.contentModificationDateKey, .fileSizeKey]
             )
+            guard !isOversized(values) else {
+                logUnusableConfigIcon(candidate, exists: true)
+                continue
+            }
             guard let data = try? Data(contentsOf: candidate.url),
                   let staged = try? ProjectIconImageStaging.stage(
                       data: data,
@@ -142,6 +202,13 @@ enum RepoIconResolver {
             candidates.append(Candidate(url: discovered, source: .discovered))
         }
         return candidates
+    }
+
+    /// A repo icon past the staging limit can never be used, and the file size
+    /// is already known from the stat that decided the candidate was there.
+    private static func isOversized(_ values: URLResourceValues?) -> Bool {
+        guard let size = values?.fileSize else { return false }
+        return size > ProjectIconImageStaging.maxBytes
     }
 
     /// The configured file is a deliberate team decision, so one that is

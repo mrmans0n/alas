@@ -32,6 +32,14 @@ struct RepoIconResolverTests {
             try bytes.write(to: alas.appendingPathComponent(name), options: .atomic)
         }
 
+        /// Past the staging limit, with PNG magic bytes so only its size can
+        /// rule it out — the bytes themselves are readable and stageable.
+        func writeOversizedIcon(_ name: String) throws {
+            var bytes = RepoIconResolverTests.pngBytes
+            bytes.append(Data(repeating: 0, count: ProjectIconImageStaging.maxBytes))
+            try writeIcon(name, bytes: bytes)
+        }
+
         func stagedFileURLs() throws -> [URL] {
             try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)
         }
@@ -63,6 +71,19 @@ struct RepoIconResolverTests {
             primaryCheckout: fixture.checkout,
             store: RepoConfigStore(),
             stagingRoot: fixture.staging
+        )
+    }
+
+    private func probe(
+        appIcon: ProjectIcon,
+        repoConfig: RepoConfig? = nil,
+        in fixture: Fixture
+    ) -> RepoIconResolver.SourceIdentity? {
+        RepoIconResolver.sourceIdentity(
+            repoConfig: repoConfig,
+            appIcon: appIcon,
+            primaryCheckout: fixture.checkout,
+            store: RepoConfigStore()
         )
     }
 
@@ -279,6 +300,86 @@ struct RepoIconResolverTests {
 
         #expect(icon == resolution(appIcon: appIcon, in: fixture).icon)
         #expect(icon.mode == .image)
+    }
+
+    // MARK: - Stats-only probe
+
+    @Test func probeReportsTheWinningFileWithoutStagingAnything() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+
+        let identity = probe(appIcon: .default(), in: fixture)
+
+        #expect(identity?.url == fixture.alas.appendingPathComponent("icon.png"))
+        #expect(identity?.modificationDate != nil)
+        #expect(identity?.fileSize == Self.pngBytes.count)
+        // Stats only: unlike a resolve of the same tree, nothing was staged.
+        #expect(try fixture.stagedFileURLs().isEmpty)
+    }
+
+    @Test func probePrefersTheConfigKeyedFileAndAgreesWithResolve() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        try fixture.writeIcon("logo.png", bytes: Self.otherPNGBytes)
+        let config = RepoConfig(icon: .init(image: "logo.png"))
+
+        let identity = probe(appIcon: .default(), repoConfig: config, in: fixture)
+        let resolution = resolution(appIcon: .default(), repoConfig: config, in: fixture)
+
+        // The probe mirrors resolve's candidate order, which is what lets a
+        // caller cache on it and skip resolve entirely on a hit.
+        #expect(identity?.url == fixture.alas.appendingPathComponent("logo.png"))
+        #expect(identity == resolution.sourceIdentity)
+    }
+
+    @Test func probeIsNilWhenNothingUsableExists() throws {
+        let fixture = try Fixture()
+        #expect(probe(appIcon: .default(), in: fixture) == nil)
+
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let explicit = ProjectIcon(mode: .emoji, color: "#112233", emoji: "🚀")
+        #expect(probe(appIcon: explicit, in: fixture) == nil)
+    }
+
+    @Test func probeSkipsAnOversizedConfiguredIcon() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        try fixture.writeOversizedIcon("huge.png")
+
+        let identity = probe(
+            appIcon: .default(),
+            repoConfig: RepoConfig(icon: .init(image: "huge.png")),
+            in: fixture
+        )
+
+        #expect(identity?.url == fixture.alas.appendingPathComponent("icon.png"))
+    }
+
+    @Test func oversizedConfiguredIconFallsThroughToTheDiscoveredFile() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        try fixture.writeOversizedIcon("huge.png")
+
+        let resolution = resolution(
+            appIcon: .default(),
+            repoConfig: RepoConfig(icon: .init(image: "huge.png")),
+            in: fixture
+        )
+        let expected = try ProjectIconImageStaging.stage(
+            data: Self.pngBytes,
+            projectId: Self.projectID,
+            root: fixture.staging
+        )
+
+        // The oversized file is refused on its size, so the smaller discovered
+        // icon is what ends up staged.
+        #expect(resolution.icon.imagePath == expected.imagePath)
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.png"))
+        #expect(resolution.sourceIdentity == probe(
+            appIcon: .default(),
+            repoConfig: RepoConfig(icon: .init(image: "huge.png")),
+            in: fixture
+        ))
     }
 
     // MARK: - Containment
