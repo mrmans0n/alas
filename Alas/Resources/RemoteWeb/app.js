@@ -419,7 +419,7 @@ function handle(msg) {
   }
 }
 
-let collapsedProjects = new Set();
+let repoOverrides = new Map();   // projectId → explicit true(expanded)/false(collapsed) from a user tap; absent = use the computed default
 
 let repoSearchQuery = "";
 let repoActiveFilter = "all";
@@ -450,6 +450,14 @@ function sectionMatchesActiveSearchAndFilter(section) {
     && RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery);
 }
 
+// Default: expanded only if the repo has at least one active session — a
+// quiet repo starts collapsed so the list stays glanceable. `repoOverrides`
+// remembers an explicit tap so it survives re-renders even while a
+// search/filter is temporarily forcing everything open.
+function defaultSectionExpanded(section) {
+  return section.worktrees.some(RemoteRepoFilter.worktreeIsActive);
+}
+
 $("repo-search").addEventListener("input", (event) => {
   repoSearchQuery = event.target.value;
   renderSessions([...listedSessions.values()]);
@@ -472,7 +480,7 @@ function renderSessions(sessions) {
   const sections = filterVisibleSections(allSections);
   renderRepoFilterCounts(allSections);
   sections.forEach(section => list.appendChild(renderSection(section)));
-  if (currentSession) setDetailTitle(currentSession);
+  if (currentSession) { setDetailTitle(currentSession); updateChangesTabBadge(); }
 }
 
 function renderSection(section) {
@@ -484,19 +492,18 @@ function renderSection(section) {
   }
 
   const forceExpanded = sectionSearchOrFilterActive() && sectionMatchesActiveSearchAndFilter(section);
-  const expanded = forceExpanded || !collapsedProjects.has(section.id);
-  element.append(renderRepoHeader(section, expanded));
+  const ownExpanded = repoOverrides.has(section.id) ? repoOverrides.get(section.id) : defaultSectionExpanded(section);
+  const expanded = forceExpanded || ownExpanded;
+  element.append(renderRepoHeader(section, expanded, forceExpanded));
   if (expanded) {
     section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
   }
   return element;
 }
 
-function renderRepoHeader(section, expanded) {
+function renderRepoHeader(section, expanded, forceExpanded) {
   const header = el("div", "repo-header");
-  header.tabIndex = 0;
-  header.setAttribute("role", "button");
-  header.setAttribute("aria-expanded", String(expanded));
+  if (forceExpanded) header.classList.add("repo-header-static");
 
   const chev = el("span", "repo-chev", expanded ? "▾" : "▸");
   const tile = el("span", "repo-tile", RemoteRepoFilter.repoInitials(section.title));
@@ -508,20 +515,21 @@ function renderRepoHeader(section, expanded) {
     header.append(el("span", "repo-count", String(section.worktrees.length)));
   }
 
-  header.addEventListener("click", () => {
-    if (collapsedProjects.has(section.id)) {
-      collapsedProjects.delete(section.id);
-    } else {
-      collapsedProjects.add(section.id);
-    }
-    renderSessions([...listedSessions.values()]);
-  });
-  header.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      header.click();
-    }
-  });
+  if (!forceExpanded) {
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+    header.setAttribute("aria-expanded", String(expanded));
+    header.addEventListener("click", () => {
+      repoOverrides.set(section.id, !expanded);
+      renderSessions([...listedSessions.values()]);
+    });
+    header.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        header.click();
+      }
+    });
+  }
 
   return header;
 }
@@ -650,7 +658,6 @@ function resetChangesAndFilesDOM() {
   $("file-error").textContent = ""; $("file-error").classList.add("hidden");
   $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
   $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
-  $("tab-changes-count").classList.add("hidden");
 }
 
 function openSession(id) {
@@ -658,6 +665,7 @@ function openSession(id) {
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
+  lastStreamingState = "idle";
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
@@ -676,6 +684,7 @@ function openSession(id) {
   pendingExpandedPathsRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  updateChangesTabBadge();
   showTab("chat");
 }
 
@@ -800,8 +809,8 @@ function renderChanges() {
 
 function updateChangesTabBadge() {
   const badge = $("tab-changes-count");
-  if (!changesState.loaded) { badge.classList.add("hidden"); return; }
-  const count = (changesState.staged?.length || 0) + (changesState.unstaged?.length || 0);
+  const summary = currentSession ? listedSessions.get(currentSession) : null;
+  const count = summary?.worktree?.changedFileCount || 0;
   badge.textContent = String(count);
   badge.classList.toggle("hidden", count === 0);
 }
