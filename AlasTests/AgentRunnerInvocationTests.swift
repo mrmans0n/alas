@@ -58,6 +58,50 @@ struct AgentRunnerInvocationTests {
         #expect(invocation.environment["PATH"] != "/local-only")
     }
 
+    @Test func sshInvocationExecutesHomeRelativeConfiguredBinaryOnRemoteShell() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let home = tmp.appendingPathComponent("remote-home")
+        let bin = home.appendingPathComponent("bin")
+        let worktree = tmp.appendingPathComponent("worktree")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let executable = bin.appendingPathComponent("agent")
+        try "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$1\" \"$2\" \"$3\"\n".write(
+            to: executable,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+
+        let invocation = try AgentRunner.processInvocation(
+            agent: agent(id: "custom", binary: "~/bin/agent", args: ["--mode", "review now"]),
+            input: "payload",
+            prompt: "Prompt's text",
+            target: .ssh(host: "dev@example"),
+            workingDirectory: worktree.path,
+            environment: [:]
+        )
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", try #require(invocation.arguments.last)]
+        process.currentDirectoryURL = worktree
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        let output = Pipe()
+        process.standardOutput = output
+
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = try output.fileHandleForReading.readToEnd()
+        let stdout = String(data: try #require(outputData), encoding: .utf8)
+        #expect(process.terminationStatus == 0)
+        #expect(stdout == "--mode|review now|Prompt's text\n")
+    }
+
     @Test func localInvocationRemainsEnvBased() throws {
         let invocation = try AgentRunner.processInvocation(
             agent: agent(id: "claude", binary: "claude", args: ["-p"]),

@@ -301,9 +301,11 @@ enum AgentRunner {
             guard let workingDirectory else {
                 throw AgentRunError.missingRemoteWorkingDirectory(host: host)
             }
-            let remoteCommand = ([agent.configuredBinary] + promptInvocation.arguments)
-                .map(SSHCommand.shellQuote)
-                .joined(separator: " ")
+            let remoteCommand = (
+                [remoteShellExecutable(agent.configuredBinary)]
+                + promptInvocation.arguments.map(SSHCommand.shellQuote)
+            )
+            .joined(separator: " ")
             let script = SSHCommand.remoteScript(
                 cwd: workingDirectory,
                 command: "exec \(remoteCommand)"
@@ -317,6 +319,18 @@ enum AgentRunner {
                 stdin: promptInvocation.stdin
             )
         }
+    }
+
+    /// Builds the remote-shell word for the configured binary. Unlike local
+    /// execution, `~/` must resolve with the remote account's HOME directory.
+    /// Keep the suffix quoted so it remains one executable path on POSIX
+    /// shells, including when it contains whitespace or quotes.
+    private static func remoteShellExecutable(_ binary: String) -> String {
+        guard binary.hasPrefix("~/") else {
+            return SSHCommand.shellQuote(binary)
+        }
+        let suffix = String(binary.dropFirst(2))
+        return "\"$HOME/\"\(SSHCommand.shellQuote(suffix))"
     }
 }
 
@@ -376,6 +390,7 @@ private struct AgentPromptInvocation {
         let subcommand = agent.promptModeArgs.first
         return binaryName == "codex" && (subcommand == "exec" || subcommand == "e")
     }
+
 }
 
 /// Thread-safe latch for "did the watchdog terminate this child?" Set
