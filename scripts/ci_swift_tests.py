@@ -15,7 +15,6 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / ".build/xcode/results"
-TIMINGS = ROOT / "scripts/ci-swift-test-timings.json"
 
 
 def make_plan(document, policy, batch_count):
@@ -81,8 +80,8 @@ def make_plan(document, policy, batch_count):
                          for chunk in invocations]
             timeouts = [360 if lane == "ordinary" or any(test in slow_tests for suite in chunk for test in groups[suite])
                         else 120 for chunk in invocations]
-            # Cap each subprocess batch below 30 minutes. The shard job timeout
-            # covers the combined deadlines of every assigned batch.
+            # The workflow reserves 30 minutes per subprocess step. Include
+            # termination/result extraction and leave a minute for reporting.
             if lane == "subprocess" and sum(timeout + 40 for timeout in timeouts) > 1740:
                 raise ValueError(f"Subprocess batch {index + 1} exceeds its time budget; increase the batch count")
             batches.append({"id": f"{lane}-{index + 1}", "lane": lane, "index": index,
@@ -91,23 +90,6 @@ def make_plan(document, policy, batch_count):
     if len(scheduled) != len(set(scheduled)) or set(scheduled) | set(excluded) != set(tests):
         raise ValueError("Inventory is not assigned exactly once")
     return {"id": str(uuid.uuid4()), "tests": tests, "excluded": excluded, "policy": policy, "batches": batches}
-
-
-def assign_shards(plan, timings, shard_count):
-    """Balance complete batches by measured duration without splitting isolation boundaries."""
-    batch_ids = {batch["id"] for batch in plan["batches"]}
-    if (shard_count < 1 or set(timings) != batch_ids
-            or any(isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0
-                   for value in timings.values())):
-        raise ValueError("Shard timings must contain one positive duration for every planned batch")
-    shards = [{"index": index, "batch_ids": [], "expected_seconds": 0} for index in range(shard_count)]
-    for batch_id in sorted(batch_ids, key=lambda value: (-timings[value], value)):
-        shard = min(shards, key=lambda value: (value["expected_seconds"], value["index"]))
-        shard["batch_ids"].append(batch_id)
-        shard["expected_seconds"] += timings[batch_id]
-    for shard in shards:
-        shard["expected_seconds"] = round(shard["expected_seconds"], 2)
-    return shards
 
 
 def account(expected, document):
@@ -146,12 +128,6 @@ def write_json(path, value):
 
 
 def xcode_arguments():
-    if xctestrun := os.environ.get("SWIFT_TEST_XCTESTRUN"):
-        path = Path(xctestrun)
-        if not path.is_file():
-            raise ValueError(f"Missing xctestrun artifact: {path}")
-        return ["xcodebuild", "-xctestrun", str(path),
-                "-destination", "platform=macOS,arch=arm64"]
     return ["xcodebuild", "-project", str(ROOT / "Alas.xcodeproj"), "-scheme", "Alas",
             "-destination", "platform=macOS,arch=arm64", "-derivedDataPath",
             os.environ.get("SWIFT_TEST_DERIVED_DATA", str(ROOT / ".build/xcode/DerivedData")),
@@ -234,15 +210,6 @@ def run_batch(plan, directory, lane, index):
     return success
 
 
-def run_shard(plan, directory, index):
-    shard = next(shard for shard in plan["shards"] if shard["index"] == index)
-    success = True
-    for batch_id in shard["batch_ids"]:
-        lane, batch_number = batch_id.rsplit("-", 1)
-        success = run_batch(plan, directory, lane, int(batch_number) - 1) and success
-    return success
-
-
 def summarize(plan, directory):
     rows, missing, observed = [], [], set()
     executed = skipped = 0
@@ -287,15 +254,12 @@ def summarize(plan, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "run", "run-shard", "summary"])
+    parser.add_argument("command", choices=["plan", "run", "summary"])
     parser.add_argument("--directory", type=Path, default=RESULTS)
     parser.add_argument("--enumeration", type=Path)
     parser.add_argument("--policy", type=Path, default=ROOT / "scripts/ci-swift-test-policy.tsv")
-    parser.add_argument("--timings", type=Path, default=TIMINGS)
     parser.add_argument("--batch-count", type=int, default=6)
     parser.add_argument("--batch", type=int, default=0)
-    parser.add_argument("--shard", type=int, default=0)
-    parser.add_argument("--shard-count", type=int, default=2)
     parser.add_argument("--lane", choices=["ordinary", "subprocess"], default="ordinary")
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
@@ -306,22 +270,13 @@ def main():
         with args.policy.open() as policy:
             rows = [row for row in csv.reader(policy, delimiter="\t") if row and not row[0].startswith("#")]
         plan = make_plan(json.loads(source.read_text()), rows, args.batch_count)
-        timing_document = json.loads(args.timings.read_text())
-        plan["shards"] = assign_shards(plan, timing_document["durations_seconds"], args.shard_count)
-        plan["timing_source"] = timing_document["source"]
         write_json(plan_path, plan)
         print(f"Discovered {len(plan['tests'])} tests; excluded {len(plan['excluded'])}; "
               f"scheduled {len(plan['tests']) - len(plan['excluded'])}")
-        for shard in plan["shards"]:
-            print(f"Shard {shard['index']}: {shard['expected_seconds']} measured seconds; "
-                  f"batches: {', '.join(shard['batch_ids'])}")
         return True
     plan = json.loads(plan_path.read_text())
-    if args.command == "run":
-        return run_batch(plan, args.directory, args.lane, args.batch)
-    if args.command == "run-shard":
-        return run_shard(plan, args.directory, args.shard)
-    return summarize(plan, args.directory)
+    return (run_batch(plan, args.directory, args.lane, args.batch) if args.command == "run"
+            else summarize(plan, args.directory))
 
 
 if __name__ == "__main__":

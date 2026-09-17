@@ -100,24 +100,6 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "budget"):
             self.module.make_plan(enumeration(*ids), policy, 1)
 
-    def test_measured_batches_are_balanced_across_two_shards(self):
-        plan = {"batches": [{"id": batch_id} for batch_id in
-                            ["ordinary-1", "ordinary-2", "subprocess-1", "subprocess-2"]]}
-        timings = {"ordinary-1": 9, "ordinary-2": 8, "subprocess-1": 7, "subprocess-2": 6}
-        shards = self.module.assign_shards(plan, timings, 2)
-        self.assertEqual(shards, [
-            {"index": 0, "batch_ids": ["ordinary-1", "subprocess-2"], "expected_seconds": 15},
-            {"index": 1, "batch_ids": ["ordinary-2", "subprocess-1"], "expected_seconds": 15},
-        ])
-
-    def test_shard_timing_inventory_must_match_the_plan(self):
-        plan = {"batches": [{"id": "ordinary-1"}, {"id": "subprocess-1"}]}
-        for timings in [{"ordinary-1": 1},
-                        {"ordinary-1": 1, "subprocess-1": 2, "stale": 3},
-                        {"ordinary-1": 1, "subprocess-1": 0}]:
-            with self.subTest(timings=timings), self.assertRaises(ValueError):
-                self.module.assign_shards(plan, timings, 2)
-
     def test_partial_exclusion_never_selects_its_parent_suite(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/A/b()"),
             [("AlasTests/A/b()", "quarantine", "needs credentials", "#1270")], 1)
@@ -216,25 +198,6 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(first_report["failed"], ["AlasTests/S0/test()"])
             self.assertTrue(second_report["ok"])
             self.assertEqual(second_report["executed"], 1)
-
-    def test_failed_batch_does_not_prevent_later_batches_in_the_shard(self):
-        plan = {"shards": [{"index": 0, "batch_ids": ["ordinary-1", "subprocess-2"]}]}
-        with patch.object(self.module, "run_batch", side_effect=[False, True]) as run_batch:
-            self.assertFalse(self.module.run_shard(plan, Path("/tmp/results"), 0))
-        self.assertEqual(run_batch.call_args_list, [
-            unittest.mock.call(plan, Path("/tmp/results"), "ordinary", 0),
-            unittest.mock.call(plan, Path("/tmp/results"), "subprocess", 1),
-        ])
-
-    def test_xctestrun_artifact_avoids_project_and_package_resolution(self):
-        with tempfile.TemporaryDirectory() as directory:
-            xctestrun = Path(directory) / "Alas.xctestrun"
-            xctestrun.touch()
-            with patch.dict("os.environ", {"SWIFT_TEST_XCTESTRUN": str(xctestrun)}):
-                arguments = self.module.xcode_arguments()
-        self.assertEqual(arguments[:3], ["xcodebuild", "-xctestrun", str(xctestrun)])
-        self.assertNotIn("-project", arguments)
-        self.assertNotIn("-clonedSourcePackagesDirPath", arguments)
 
 
 if __name__ == "__main__":
