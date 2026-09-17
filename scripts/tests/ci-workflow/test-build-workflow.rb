@@ -4,11 +4,36 @@ workflow_path = File.expand_path("../../../.github/workflows/build.yml", __dir__
 workflow = YAML.safe_load_file(workflow_path, aliases: true)
 jobs = workflow.fetch("jobs")
 
-swift_job = jobs.fetch("build-test")
-bounded_step_minutes = swift_job.fetch("steps").sum { |step| step.fetch("timeout-minutes", 0) }
-# Reserve time for checkout, tools, caches, and other preparation steps.
-raise "build-test timeout must cover its sequential steps plus 30 minutes of preparation" unless
-  swift_job.fetch("timeout-minutes") >= bounded_step_minutes + 30
+swift_build = jobs.fetch("swift-build")
+bounded_step_minutes = swift_build.fetch("steps").sum { |step| step.fetch("timeout-minutes", 0) }
+# Reserve time for checkout, tools, caches, packaging, and artifact upload.
+raise "swift-build timeout must cover its bounded steps plus 30 minutes of preparation" unless
+  swift_build.fetch("timeout-minutes") >= bounded_step_minutes + 30
+
+swift_tests = jobs.fetch("swift-tests")
+raise "Swift shards must wait for the single build" unless swift_tests.fetch("needs") == "swift-build"
+raise "Swift shard failures must not cancel diagnostic collection" unless
+  swift_tests.dig("strategy", "fail-fast") == false
+raise "Swift CI must use exactly two measured shards" unless
+  swift_tests.dig("strategy", "matrix", "shard") == [0, 1]
+
+test_steps = swift_tests.fetch("steps")
+raise "Swift shards must download the compiled test products" unless
+  test_steps.any? { |step| step["uses"]&.start_with?("actions/download-artifact@") && step.dig("with", "name") == "swift-test-products" }
+raise "Swift shards must execute their assigned plan" unless
+  test_steps.any? { |step| step.fetch("run", "").include?("ci_swift_tests.py run-shard --shard ${{ matrix.shard }}") }
+results_upload = test_steps.find { |step| step["uses"]&.start_with?("actions/upload-artifact@") }
+raise "Each Swift shard must preserve diagnostics after failure" unless results_upload&.fetch("if", "") == "always()"
+
+swift_coverage = jobs.fetch("swift-coverage")
+raise "Coverage reconciliation must wait for build and every shard" unless
+  swift_coverage.fetch("needs") == ["swift-build", "swift-tests"]
+raise "Coverage reconciliation must run after shard failures" unless swift_coverage.fetch("if") == "always()"
+coverage_steps = swift_coverage.fetch("steps")
+raise "Coverage reconciliation must merge every shard artifact" unless
+  coverage_steps.any? { |step| step["uses"]&.start_with?("actions/download-artifact@") && step.dig("with", "pattern") == "swift-test-results-*" && step.dig("with", "merge-multiple") == true }
+raise "Coverage reconciliation must audit the complete plan" unless
+  coverage_steps.any? { |step| step.fetch("run", "").include?("ci_swift_tests.py summary") }
 
 expected_runners = {
   "ci-workflow-contract" => "ubuntu-24.04",
