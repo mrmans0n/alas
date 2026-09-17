@@ -2,12 +2,10 @@ import SwiftUI
 import AppKit
 
 struct WindowConfigurator: NSViewRepresentable {
-    /// When true, the window opts out of all mouse-driven window-moves
-    /// (`isMovable = false`); regions that should still drag the window must
-    /// be marked with `.windowDragHandle()`. The main workspace window needs
-    /// this so the center pane's top tab bar isn't hijacked by the system
-    /// titlebar drag tracker. Secondary titleless windows keep the default
-    /// movable behavior so the system titlebar still drags them.
+    /// When true, the window opts out of titlebar-driven moves. The main
+    /// workspace window needs this so its top tab strip is not hijacked;
+    /// explicit `WindowDragHandle` regions provide application-controlled
+    /// movement instead. Secondary titleless windows keep the system behavior.
     var disablesSystemDrag: Bool = false
 
     func makeNSView(context: Context) -> NSView {

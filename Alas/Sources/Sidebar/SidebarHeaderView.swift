@@ -74,7 +74,6 @@ struct SidebarHeaderView: View {
         .frame(height: 38)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .windowDragHandle()
     }
 
     private func attentionToolbarButton(metrics: ToolbarControlMetrics = .standard) -> some View {
@@ -93,7 +92,8 @@ struct SidebarHeaderView: View {
     private var expandedHeader: some View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
-            Spacer()
+            WindowDragHandle()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(alignment: .center, spacing: 1) {
                 WorktreeSortMenu(
                     selection: worktreeSortMode,
@@ -145,7 +145,8 @@ struct SidebarHeaderView: View {
     private var compactHeader: some View {
         HStack(spacing: 8) {
             TrafficLights()
-            Spacer(minLength: 0)
+            WindowDragHandle()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
                 if showsAttentionInbox {

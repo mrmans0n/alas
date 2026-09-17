@@ -53,6 +53,7 @@ struct TabBarView: View {
     let titleLookup: (TabID) -> String?
     let transcriptLookup: (TabID) -> ACPTranscript?
     var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
+    @State private var tabStripWidth: CGFloat = 0
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -74,24 +75,36 @@ struct TabBarView: View {
                     .padding(.trailing, 8)
                     .transition(.opacity)
             }
-            ScrollViewReader { scrollProxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 0) {
-                        ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
-                            tabButton(for: idx, tab: tab)
+            GeometryReader { geometry in
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
+                                tabButton(for: idx, tab: tab)
+                            }
+                        }
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.width
+                        } action: {
+                            tabStripWidth = $0
                         }
                     }
+                    .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
+                    .onAppear {
+                        scrollActiveTab(using: scrollProxy, animated: false)
+                    }
+                    .onChange(of: activeId) { _, _ in
+                        scrollActiveTab(using: scrollProxy, animated: true)
+                    }
                 }
-                .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
-                .onAppear {
-                    scrollActiveTab(using: scrollProxy, animated: false)
-                }
-                .onChange(of: activeId) { _, _ in
-                    scrollActiveTab(using: scrollProxy, animated: true)
+                .overlay(alignment: .trailing) {
+                    if tabs.isEmpty || tabStripWidth > 0 {
+                        WindowDragHandle()
+                            .frame(width: max(0, geometry.size.width - tabStripWidth))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
-            .windowDragHandle()
             if isTerminalActive {
                 ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
                     NotificationCenter.default.post(name: .alasSplitRight, object: nil)
@@ -128,7 +141,6 @@ struct TabBarView: View {
         .frame(height: 34)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
-        .windowDragHandle()
     }
 
     private func tabButton(for idx: Int, tab: Tab) -> some View {
