@@ -138,7 +138,7 @@ struct CenterPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            let availableAgents = state.agentAvailability(worktreePath: worktree.path).agents
+            let availableAgents = centerAgentAvailability.agents
             let composition = state.centerTabComposition(
                 focusedWorktreeID: worktree.id,
                 sharedSessionOwner: sharedSessionOwner
@@ -787,8 +787,15 @@ struct CenterPaneView: View {
         .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
         }
-        .task(id: worktree.path) {
-            await state.loadAgentAvailability(worktreePath: worktree.path)
+        .task(id: centerAgentAvailabilityTaskID) {
+            if let checkout = selectedCheckoutForSharedOwner {
+                await state.loadAgentAvailability(
+                    worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                    remoteHost: checkout.executionLocation.sshHost
+                )
+            } else {
+                await state.loadAgentAvailability(for: worktree)
+            }
         }
         .background(theme.color("bg-1"))
     }
@@ -929,5 +936,27 @@ struct CenterPaneView: View {
               checkout.id == checkoutID
         else { return nil }
         return checkout
+    }
+
+    private var centerAgentAvailability: AgentAvailabilityState {
+        if let checkout = selectedCheckoutForSharedOwner {
+            return state.agentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                remoteHost: checkout.executionLocation.sshHost
+            )
+        }
+        return state.agentAvailability(for: worktree)
+    }
+
+    private var centerAgentAvailabilityTaskID: String {
+        if let checkout = selectedCheckoutForSharedOwner {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = state.agentAvailabilityGeneration(
+                worktreePath: root,
+                remoteHost: checkout.executionLocation.sshHost
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        return "\(worktree.id)\u{0000}\(state.agentExecutionTarget(for: worktree))\u{0000}\(state.agentAvailabilityGeneration(for: worktree))"
     }
 }

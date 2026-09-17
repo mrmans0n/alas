@@ -130,8 +130,9 @@ struct MergeConflictTabView: View {
         // tab for the same path, so re-focusing after a second conflict on
         // the same file must re-read the three sides to avoid showing stale
         // resultText/regions from the prior conflict.
-        .task(id: agentExecutionTarget) {
+        .task(id: agentAvailabilityTaskID) {
             await state.loadAgentAvailability(for: worktree)
+            triggerExplainIfNeeded()
         }
         .task {
             await model.load()
@@ -242,6 +243,10 @@ struct MergeConflictTabView: View {
 
     private var agentExecutionTarget: AgentExecutionTarget {
         state.agentExecutionTarget(for: worktree)
+    }
+
+    private var agentAvailabilityTaskID: String {
+        "\(agentExecutionTarget)\u{0000}\(worktree.path.path)\u{0000}\(state.agentAvailabilityGeneration(for: worktree))"
     }
 
     /// Best-effort language label for the agent prompts. Returns nil for

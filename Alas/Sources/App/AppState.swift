@@ -771,6 +771,13 @@ final class AppState {
         return agentAvailabilityStore.generation
     }
 
+    func agentAvailabilityGeneration(for worktree: Worktree) -> Int {
+        agentAvailabilityGeneration(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
     func loadAgentAvailability(
         worktreePath: URL,
         remoteHost: String? = nil,
