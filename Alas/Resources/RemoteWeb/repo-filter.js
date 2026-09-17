@@ -59,7 +59,8 @@ function relativeTimeShort(updatedAtMs, nowMs) {
 function diffBarSegments(added, deleted) {
   const total = added + deleted;
   if (total <= 0) return [false, false, false, false, false];
-  const addSegments = Math.min(5, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));
+  const cap = deleted > 0 ? 4 : 5;
+  const addSegments = Math.min(cap, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));
   return Array.from({ length: 5 }, (_, i) => i < addSegments);
 }
 

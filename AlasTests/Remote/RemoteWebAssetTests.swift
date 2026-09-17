@@ -944,4 +944,14 @@ struct RemoteWebAssetTests {
         #expect(changesView.contains("function changedFileCount(state)"))
         #expect(changesView.contains("changedFileCount,"))
     }
+
+    // Regression (Codex review, PR #1285): a heavy add/delete imbalance
+    // (e.g. 999 added, 1 deleted) rounded to 5 add-colored segments,
+    // dropping the sole deleted line's segment entirely and contradicting
+    // the function's own "each present side gets a segment" guarantee.
+    @Test func diffBarSegmentsReservesASegmentForEachNonzeroSide() throws {
+        let js = try asset("repo-filter.js")
+        #expect(js.contains("const cap = deleted > 0 ? 4 : 5;"))
+        #expect(js.contains("const addSegments = Math.min(cap, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));"))
+    }
 }
