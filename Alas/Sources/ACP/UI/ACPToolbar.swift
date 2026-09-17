@@ -30,7 +30,14 @@ struct ACPToolbar: View {
                     _ = state.saveConfig()
                     reconnectSession()
                 },
-                onReconnect: reconnectSession
+                onReconnect: reconnectSession,
+                onToggleRepoServer: { name, disable in
+                    state.setRepoMCPServerDisabled(
+                        projectId: worktree.projectId,
+                        name: name,
+                        disabled: disable
+                    )
+                }
             )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {

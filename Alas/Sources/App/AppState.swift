@@ -2527,7 +2527,21 @@ final class AppState {
            let checkout = workspacesManager.checkout(id: checkoutID) {
             return workspaceFrozenMCPServers(for: checkout)
         }
-        return projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return [] }
+        // The stored attachment fingerprint includes approved repo-defined
+        // servers, so the staleness comparison must feed the same merged list
+        // back in - otherwise approving a pending repo server never marks the
+        // session stale. Remote projects keep today's behavior.
+        guard project.host == nil,
+              let repo = repoConfig(worktreeRoot: worktree.path) else {
+            return project.mcpServers
+        }
+        return RepoMCPResolver.merge(
+            appServers: project.mcpServers,
+            repoServers: repo.mcpServers,
+            disabledNames: Set(project.disabledRepoMCPServers),
+            trust: project.repoMCPTrust
+        ).active
     }
 
     private func currentWorkspaceCheckoutSnapshot(_ checkout: WorkspaceCheckout) -> WorkspaceCheckout {
@@ -10191,7 +10205,28 @@ final class AppState {
                 if let parentSessionId {
                     self.delegatedSessionParents[sessionId] = parentSessionId
                 }
-                let configuredServers = self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+                let configuredServers: [ProjectMCPServer] = {
+                    guard let project = self.projects.first(where: { $0.id == worktree.projectId }) else {
+                        return []
+                    }
+                    // Remote projects keep today's behavior: app-level servers
+                    // only (repo config is a local-only layer in v1).
+                    guard project.host == nil,
+                          let repo = self.repoConfig(
+                              worktreeRoot: URL(fileURLWithPath: worktreePath)
+                          ) else {
+                        return project.mcpServers
+                    }
+                    // An approved repo-defined server named like a built-in
+                    // ("alas", "git-gud") suppresses the built-in the same
+                    // way an app-level server would.
+                    return RepoMCPResolver.merge(
+                        appServers: project.mcpServers,
+                        repoServers: repo.mcpServers,
+                        disabledNames: Set(project.disabledRepoMCPServers),
+                        trust: project.repoMCPTrust
+                    ).active
+                }()
                 if self.config.harness.alasMCPTransport == .http,
                    adapterSupportsHTTP,
                    let binaryPath, let socketPath = self.harness.socketServer.socketPath,
@@ -10252,10 +10287,28 @@ final class AppState {
                       let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath),
                       Self.shouldAttachGGMCP(context: integration.context)
                 else { return nil }
+                // A local project's approved repo-defined server named
+                // "git-gud" suppresses the auto-attached one, mirroring an
+                // app-level same-name override.
+                let configuredServers: [ProjectMCPServer] = {
+                    guard integration.project.host == nil,
+                          let repo = self.repoConfig(
+                              worktreeRoot: URL(fileURLWithPath: worktreePath)
+                          )
+                    else {
+                        return integration.project.mcpServers
+                    }
+                    return RepoMCPResolver.merge(
+                        appServers: integration.project.mcpServers,
+                        repoServers: repo.mcpServers,
+                        disabledNames: Set(integration.project.disabledRepoMCPServers),
+                        trust: integration.project.repoMCPTrust
+                    ).active
+                }()
                 return GGMCPInjection.injection(
                     gatePassed: true,
                     binaryPath: GGAvailability.shared.ggMCPBinaryPath,
-                    configuredServers: integration.project.mcpServers,
+                    configuredServers: configuredServers,
                     worktreePath: worktreePath
                 )
             },
@@ -10312,24 +10365,23 @@ final class AppState {
             let worktreeURL = URL(fileURLWithPath: worktreePath)
             let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
             let project = self.projects.first(where: { $0.id == worktree.projectId })
-            let servers = project?.mcpServers ?? []
-            // Resolved unconditionally — even when the adapter is not
-            // (yet) installed — so the preamble can name the project's
-            // servers regardless of adapter state ("not installed" wording
-            // still lists them). pi-mcp-adapter reads the resolved wire
-            // config, not the raw project definitions, so
-            // ${WORKTREE_DIR}/${PROJECT_DIR} templates are interpolated
-            // exactly as the normal ACP session/new attach path does.
-            // Unlike that path, http/sse are force-enabled here:
-            // pi-mcp-adapter supports them even though pi-acp's own ACP
-            // layer reports them unsupported, so this must not drop those
-            // servers.
+            // The external adapter gets the same merged list the ACP attach
+            // path plans: approved repo-defined servers join (local projects
+            // only), and unknown/declined/disabled ones stay off. Remote
+            // projects keep today's behavior.
+            let repo: RepoConfig? = {
+                guard project?.host == nil else { return nil }
+                return self.repoConfig(worktreeRoot: worktreeURL)
+            }()
             let plan = MCPAttachmentPlanner.plan(.init(
-                configuredServers: servers,
+                configuredServers: project?.mcpServers ?? [],
                 projectDirectory: project?.path ?? worktreePath,
                 worktreeDirectory: worktreePath,
                 environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
-                capabilities: ACPMCPServerCapabilities(http: true, sse: true)
+                capabilities: ACPMCPServerCapabilities(http: true, sse: true),
+                repoServers: repo?.mcpServers ?? [],
+                disabledRepoServerNames: Set(project?.disabledRepoMCPServers ?? []),
+                repoTrust: project?.repoMCPTrust ?? [:]
             ))
             let userServerNames = plan.wireServers.map(\.name)
             let skippedServerStatuses = plan.statuses.filter {

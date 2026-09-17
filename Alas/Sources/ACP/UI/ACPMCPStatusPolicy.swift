@@ -27,6 +27,15 @@ struct ACPMCPStatusState: Equatable {
         let transport: String
         let detail: String
         let isRequested: Bool
+        /// Present on repo-defined rows the user can enable or disable
+        /// right from this control.
+        let repoToggle: RepoToggle?
+    }
+
+    /// The enable/disable affordance a repo-defined server's row carries.
+    enum RepoToggle: Equatable {
+        case enable
+        case disable
     }
 
     let requestedCount: Int
@@ -92,7 +101,8 @@ struct ACPMCPStatusState: Equatable {
                 detail: externalStatus.cliActive
                     ? "via alas CLI (environment injected)"
                     : "unavailable (Alas CLI not injected)",
-                isRequested: externalStatus.cliActive)
+                isRequested: externalStatus.cliActive,
+                repoToggle: nil)
             let availability = externalStatus.adapterServerAvailability
             let adapterDetail: String
             let adapterIsRequested: Bool
@@ -123,7 +133,8 @@ struct ACPMCPStatusState: Equatable {
                 id: "external-adapter", name: "user MCP servers",
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
-                isRequested: adapterIsRequested)
+                isRequested: adapterIsRequested,
+                repoToggle: nil)
             let skippedRows = externalStatus.skippedServerStatuses.map {
                 Self.row($0, idPrefix: "external-skipped-")
             }
@@ -183,7 +194,8 @@ struct ACPMCPStatusState: Equatable {
                 name: status.name,
                 transport: transport,
                 detail: "Requested",
-                isRequested: true
+                isRequested: true,
+                repoToggle: status.id.hasPrefix(RepoConfig.repoServerIDPrefix) ? .disable : nil
             )
         case let .skipped(reason):
             return .init(
@@ -191,7 +203,8 @@ struct ACPMCPStatusState: Equatable {
                 name: status.name,
                 transport: transport,
                 detail: skipDetail(reason),
-                isRequested: false
+                isRequested: false,
+                repoToggle: reason == .repoDisabled ? .enable : nil
             )
         }
     }

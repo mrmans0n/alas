@@ -118,6 +118,28 @@ struct RepoMCPTrustTests {
         #expect(object["repoMCPTrust"] == nil)
         #expect(object["disabledRepoMCPServers"] == nil)
     }
+
+    /// ProjectsManager-level persistence checks for the repo-server
+    /// decisions the banner and status control record.
+    @Test @MainActor func projectsManagerRecordsRepoServerDecisions() {
+        let project = makeProject()
+        let manager = ProjectsManager(persistedProjects: [project])
+        let server = ProjectMCPServer(
+            id: "repo:linear",
+            name: "linear",
+            transport: .http(url: "https://mcp.example.com", headers: [])
+        )
+        let hash = RepoMCPTrust.hash(for: server)
+
+        manager.setRepoMCPTrust(projectId: "p1", hash: hash, state: .approved)
+        #expect(manager.projects.first?.repoMCPTrust[hash] == .approved)
+
+        manager.setRepoMCPServerDisabled(projectId: "p1", name: "linear", disabled: true)
+        #expect(manager.projects.first?.disabledRepoMCPServers == ["linear"])
+
+        manager.setRepoMCPServerDisabled(projectId: "p1", name: "linear", disabled: false)
+        #expect(manager.projects.first?.disabledRepoMCPServers == [])
+    }
 }
 
 private extension ProjectMCPServer {

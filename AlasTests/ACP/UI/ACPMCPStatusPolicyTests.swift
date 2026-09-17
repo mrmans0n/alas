@@ -47,6 +47,68 @@ struct ACPMCPStatusPolicyTests {
         #expect(stale?.accessibilitySummary == "MCP: 1 requested, New settings apply on reconnect.")
     }
 
+    @Test("approving a pending repo server marks the session stale")
+    func approvedRepoServerMarksStaleness() {
+        let app = ProjectMCPServer.stdio(name: "local", command: "mine")
+        let repo = ProjectMCPServer(
+            id: "repo:linear", name: "linear",
+            transport: .http(url: "https://mcp.example.com", headers: [])
+        )
+        // Attached when the repo server was still unapproved: the stored
+        // fingerprint covers the app-level server only. The merged list the
+        // toolbar feeds back includes the now-approved repo server.
+        let summary = MCPAttachmentSummary(
+            statuses: [.init(id: "0", name: "local", transport: .stdio, disposition: .requested)],
+            configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: [app])
+        )
+
+        let stillAppOnly = ACPMCPStatusState(summary: summary, currentServers: [app])
+        let merged = ACPMCPStatusState(
+            summary: summary,
+            currentServers: [app, repo]
+        )
+
+        #expect(stillAppOnly?.isStale == false)
+        #expect(merged?.isStale == true)
+    }
+
+    @Test("a declined or unknown repo server does not mark staleness")
+    func declinedRepoServerKeepsStalenessUntouched() {
+        let app = ProjectMCPServer.stdio(name: "local", command: "mine")
+        let repo = ProjectMCPServer(
+            id: "repo:linear", name: "linear",
+            transport: .http(url: "https://mcp.example.com", headers: [])
+        )
+        let summary = MCPAttachmentSummary(
+            statuses: [.init(id: "0", name: "local", transport: .stdio, disposition: .requested)],
+            configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: [app])
+        )
+
+        let declined = ACPMCPStatusState(
+            summary: summary, currentServers: [app]
+        )
+        let unknown = ACPMCPStatusState(summary: summary, currentServers: [app])
+
+        #expect(declined?.isStale == false)
+        #expect(unknown?.isStale == false)
+    }
+
+    @Test("repo rows carry their enable/disable affordance")
+    func repoRowsCarryToggleAffordance() {
+        let summary = MCPAttachmentSummary(statuses: [
+            .init(id: "0", name: "local", transport: .stdio, disposition: .requested),
+            .init(id: "repo:approved", name: "approved", transport: .http, disposition: .requested),
+            .init(id: "repo:disabled", name: "disabled", transport: .stdio, disposition: .skipped(.repoDisabled)),
+            .init(id: "repo:pending", name: "pending", transport: .stdio, disposition: .skipped(.repoNotApproved)),
+        ], configurationFingerprint: "fp")
+
+        let state = ACPMCPStatusState(summary: summary, currentServers: [])
+        #expect(state?.rows[0].repoToggle == nil)      // app-level row
+        #expect(state?.rows[1].repoToggle == .disable) // approved repo row
+        #expect(state?.rows[2].repoToggle == .enable)  // disabled repo row
+        #expect(state?.rows[3].repoToggle == nil)      // not-enabled: banner owns it
+    }
+
     @Test("shows a stale zero-server state after MCP servers are added")
     func showsStaleStateWhenServersAreAddedAfterAttach() {
         let added = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
