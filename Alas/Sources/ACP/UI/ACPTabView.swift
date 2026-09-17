@@ -160,6 +160,7 @@ private struct ACPSessionView: View {
                     onOpenPreview: onOpenPreview
                 )
                 adapterBanner()
+                repoMCPTrustBanner()
                 contextRestoreBanner()
                 if let retry = session.retryStatus {
                     retryBanner(retry)
@@ -624,6 +625,27 @@ private struct ACPSessionView: View {
         }
         .disabled(isMirror)
         .opacity(isMirror ? 0.5 : 1)
+    }
+
+    @ViewBuilder
+    private func repoMCPTrustBanner() -> some View {
+        if let project = state.projects.first(where: { $0.id == worktree.projectId }) {
+            let decision = state.repoMCPTrustDecision(
+                worktreeRoot: worktree.path,
+                project: project
+            )
+            if decision.isVisible {
+                RepoMCPTrustBanner(
+                    pendingServers: decision.pendingServers,
+                    onApproveAll: {
+                        state.approveRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
+                    },
+                    onDeclineAll: {
+                        state.declineRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
+                    }
+                )
+            }
+        }
     }
 
     @ViewBuilder

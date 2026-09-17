@@ -65,4 +65,50 @@ extension AppState {
         }
         return resolution.icon
     }
+
+    /// Records trust decisions for a batch of repo-defined MCP servers.
+    func approveRepoMCPServers(projectId: String, servers: [ProjectMCPServer]) {
+        for server in servers {
+            projectsManager.setRepoMCPTrust(
+                projectId: projectId,
+                hash: RepoMCPTrust.hash(for: server),
+                state: .approved
+            )
+        }
+        saveProjects()
+    }
+
+    /// Declines a batch of repo-defined MCP servers.
+    func declineRepoMCPServers(projectId: String, servers: [ProjectMCPServer]) {
+        for server in servers {
+            projectsManager.setRepoMCPTrust(
+                projectId: projectId,
+                hash: RepoMCPTrust.hash(for: server),
+                state: .declined
+            )
+        }
+        saveProjects()
+    }
+
+    /// Enables/disables a repo-defined MCP server for this project by name.
+    func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {
+        projectsManager.setRepoMCPServerDisabled(
+            projectId: projectId,
+            name: name,
+            disabled: disabled
+        )
+        saveProjects()
+    }
+
+    /// Which repo-defined servers still need a trust decision for this
+    /// worktree's session. Remote projects stay silent.
+    func repoMCPTrustDecision(
+        worktreeRoot: URL,
+        project: ProjectConfig
+    ) -> RepoMCPTrustBannerDecision {
+        RepoMCPTrustBannerPolicy.decision(
+            project: project,
+            repoConfig: project.host == nil ? repoConfig(worktreeRoot: worktreeRoot) : nil
+        )
+    }
 }
