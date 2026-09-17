@@ -10143,9 +10143,18 @@ final class AppState {
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
                     return nil
                 }
+                // Repo config participates on live local paths only; remote
+                // projects keep today's behavior (no SSH round-trip here).
+                let repo: RepoConfig? = {
+                    guard project.host == nil else { return nil }
+                    return self?.repoConfig(worktreeRoot: worktree.path)
+                }()
                 return MCPProjectContext(
                     projectDirectory: project.path,
-                    configuredServers: project.mcpServers
+                    configuredServers: project.mcpServers,
+                    repoServers: repo?.mcpServers ?? [],
+                    disabledRepoServerNames: Set(project.disabledRepoMCPServers),
+                    repoTrust: project.repoMCPTrust
                 )
             },
             builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
