@@ -745,7 +745,7 @@ struct RemoteWebAssetTests {
             js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(idleBody.contains(#"activeTab !== "files""#))
         let scheduleBody = try #require(
-            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(400) })
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(700) })
         #expect(scheduleBody.contains("refreshFileTree()"))
     }
 
@@ -909,7 +909,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 6px 6px 6px 14px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 18px; }"))
     }
 
-    // Regression (Codex review, PR #1285): `session.updatedAt` is Unix
+    // Regression (PR #1285 review): `session.updatedAt` is Unix
     // seconds on the wire (matches RemoteSessionSummary /
     // Date().timeIntervalSince1970 elsewhere in the app), but
     // RemoteRepoFilter.relativeTimeShort and Date.now() are milliseconds —
@@ -919,7 +919,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();"))
     }
 
-    // Regression (Codex review, PR #1285): the primary-branch (home) icon
+    // Regression (PR #1285 review): the primary-branch (home) icon
     // was keyed off `worktree.worktreeName` (a display name that can differ
     // from the actual checked-out branch) instead of `worktree.branch`.
     @Test func sessionCardIconChecksTheActualBranchField() throws {
@@ -928,7 +928,7 @@ struct RemoteWebAssetTests {
         #expect(!js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.worktreeName)"))
     }
 
-    // Regression (Codex review, PR #1285): the Changes tab badge was sourced
+    // Regression (PR #1285 review): the Changes tab badge was sourced
     // only from the session-list snapshot's `worktree.changedFileCount`,
     // which the gateway does not repush after an idle-turn edit — so the
     // badge could stay stale (including stuck hidden at zero) while the
@@ -945,7 +945,7 @@ struct RemoteWebAssetTests {
         #expect(changesView.contains("changedFileCount,"))
     }
 
-    // Regression (Codex review, PR #1285): a heavy add/delete imbalance
+    // Regression (PR #1285 review): a heavy add/delete imbalance
     // (e.g. 999 added, 1 deleted) rounded to 5 add-colored segments,
     // dropping the sole deleted line's segment entirely and contradicting
     // the function's own "each present side gets a segment" guarantee.
@@ -955,7 +955,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("const addSegments = Math.min(cap, Math.max(added > 0 ? 1 : 0, Math.round((5 * added) / total)));"))
     }
 
-    // Regression (Codex review, PR #1285): the synthetic "Other" section
+    // Regression (PR #1285 review): the synthetic "Other" section
     // (sessions with no project/worktree) unconditionally bypassed search
     // and filter chips, so it stayed visible for any query and under the
     // Active/Dirty chips even when none of its sessions matched.
@@ -966,5 +966,37 @@ struct RemoteWebAssetTests {
             js.range(of: "function filterVisibleSections(sections) {").map { js[$0.lowerBound...].prefix(700) })
         #expect(body.contains("RemoteRepoFilter.sectionMatchesFilter(section, repoActiveFilter)"))
         #expect(body.contains("RemoteRepoFilter.sectionMatchesQuery(section, repoSearchQuery)"))
+    }
+
+    // Regression (PR #1285 review): the idle-transition list refresh only
+    // ran while the Changes or Files tab was open, so the Changes badge
+    // (visible on every tab) kept showing the stale pre-turn count whenever
+    // an agent edited files while the default Chat tab was selected.
+    @Test func idleRefreshAlsoCoversTheChatTabForTheBadge() throws {
+        let js = try asset("app.js")
+
+        let noteBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(noteBody.contains(#"activeTab !== "changes" && activeTab !== "files" && activeTab !== "chat""#))
+
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(scheduleBody.contains(#"activeTab === "changes" || activeTab === "chat""#))
+    }
+
+    // Regression (PR #1285 review): session cards' relative timestamps
+    // ("21 min", "4 hr") were computed once at render time with no timer,
+    // so a session could read "now" for hours until an unrelated re-render.
+    @Test func repoListRefreshesRelativeTimestampsPeriodically() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;"))
+        let body = try #require(
+            js.range(of: "const REPO_LIST_RELATIVE_TIME_REFRESH_MS").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(body.contains("setInterval("))
+        #expect(body.contains(#"if ($("sessions").classList.contains("hidden")) return;"#))
+        #expect(body.contains(#".session-row[data-session-id]"#))
+        #expect(body.contains(#".querySelector(".card-when")"#))
+        #expect(body.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now)"))
     }
 }

@@ -632,6 +632,25 @@ function renderSessionRow(s) {
   return row;
 }
 
+const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;
+
+// Session cards show a relative timestamp ("21 min", "4 hr") computed once,
+// at the moment renderSessions() runs — with no live timer it freezes there
+// until the next full re-render (a search keystroke, a filter tap, a fresh
+// sessionList push). Refresh just the `.card-when` text in place instead of
+// re-rendering the whole list, which would blow away scroll position,
+// search focus, and collapse state.
+setInterval(() => {
+  if ($("sessions").classList.contains("hidden")) return;
+  const now = Date.now();
+  document.querySelectorAll(".session-row[data-session-id]").forEach(row => {
+    const session = listedSessions.get(row.dataset.sessionId);
+    const when = row.querySelector(".card-when");
+    if (!session || !when) return;
+    when.textContent = RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now);
+  });
+}, REPO_LIST_RELATIVE_TIME_REFRESH_MS);
+
 function sessionMetaParts(worktree) {
   if (!worktree.metricsAvailable) return [el("span", "", "changes unavailable")];
 
@@ -1034,7 +1053,10 @@ function scheduleListRefresh() {
   if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
   changesRefreshDebounceTimer = setTimeout(() => {
     changesRefreshDebounceTimer = null;
-    if (activeTab === "changes") requestChanges();
+    // Chat shares this refresh (unlike Files) purely to keep the Changes
+    // tab's count badge current — requestChanges() only updates changesState
+    // and the hidden #changes DOM, nothing visible changes on Chat itself.
+    if (activeTab === "changes" || activeTab === "chat") requestChanges();
     else if (activeTab === "files") refreshFileTree();
   }, CHANGES_REFRESH_DEBOUNCE_MS);
 }
@@ -1053,7 +1075,7 @@ function noteStreamingStateForChanges(state) {
   const wasIdle = previousChangesStreamingState === "idle";
   previousChangesStreamingState = state;
   if (state !== "idle" || wasIdle) return;
-  if (activeTab !== "changes" && activeTab !== "files") return;
+  if (activeTab !== "changes" && activeTab !== "files" && activeTab !== "chat") return;
   if (detailStack.length !== 0) {
     pendingListRefresh = true;
     return;
