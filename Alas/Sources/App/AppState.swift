@@ -3726,7 +3726,7 @@ final class AppState {
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
-        return [binary] + argv.dropFirst().map(Self.shellQuote)
+        return ([binary] + argv.dropFirst().map(Self.shellQuote))
             .joined(separator: " ")
     }
 
