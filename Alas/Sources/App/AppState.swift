@@ -2482,7 +2482,9 @@ final class AppState {
 
     private func workspaceFrozenMCPServers(for checkout: WorkspaceCheckout) -> [ProjectMCPServer] {
         guard let descriptors = workspaceFrozenMCPAttachments(for: checkout)?.descriptors else { return [] }
-        return MCPAttachmentPlanner.normalizedFrozenServerDescriptors(for: descriptors).map(\.server)
+        return MCPAttachmentPlanner.normalizedFrozenServerDescriptors(for: descriptors)
+            .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+            .map(\.server)
     }
 
     private func authoritativeCheckoutMember(
