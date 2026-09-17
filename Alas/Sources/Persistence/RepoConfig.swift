@@ -88,8 +88,9 @@ struct RepoConfig: Equatable {
 
     /// Icon paths are resolved against `<checkout>/.alas/`, so absolute paths
     /// and `..` components are rejected rather than allowed to escape the
-    /// repo. A rejected path just drops the icon.
-    private static func sanitizedIconPath(_ raw: String) -> String? {
+    /// repo. A rejected path just drops the icon. `RepoIconResolver` applies
+    /// the same rule to hand-built configs that skipped decoding.
+    static func sanitizedIconPath(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else { return nil }
         let components = trimmed.split(separator: "/", omittingEmptySubsequences: true)

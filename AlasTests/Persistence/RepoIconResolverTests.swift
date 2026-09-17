@@ -25,8 +25,15 @@ struct RepoIconResolverTests {
 
         var alas: URL { checkout.appendingPathComponent(".alas", isDirectory: true) }
 
+        /// One level above the checkout, where an escaping `..` path would land.
+        var container: URL { checkout.deletingLastPathComponent() }
+
         func writeIcon(_ name: String, bytes: Data) throws {
             try bytes.write(to: alas.appendingPathComponent(name), options: .atomic)
+        }
+
+        func stagedFileURLs() throws -> [URL] {
+            try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)
         }
     }
 
@@ -41,7 +48,15 @@ struct RepoIconResolverTests {
         repoConfig: RepoConfig? = nil,
         in fixture: Fixture
     ) -> ProjectIcon {
-        RepoIconResolver.effectiveIcon(
+        resolution(appIcon: appIcon, repoConfig: repoConfig, in: fixture).icon
+    }
+
+    private func resolution(
+        appIcon: ProjectIcon,
+        repoConfig: RepoConfig? = nil,
+        in fixture: Fixture
+    ) -> RepoIconResolver.RepoIconResolution {
+        RepoIconResolver.resolve(
             appIcon: appIcon,
             projectID: Self.projectID,
             repoConfig: repoConfig,
@@ -190,5 +205,121 @@ struct RepoIconResolverTests {
         #expect(RepoIconResolver.iconIsExplicit(.init(mode: .symbol, color: "#5fb7c4", symbolName: "star")))
         #expect(RepoIconResolver.iconIsExplicit(.init(mode: .emoji, color: "#5fb7c4", emoji: "🚀")))
         #expect(RepoIconResolver.iconIsExplicit(.init(mode: .image, color: "#5fb7c4", imagePath: "p/x.png")))
+    }
+
+    // MARK: - Resolution source
+
+    @Test func resolveReportsTheDiscoveredFileAsTheSource() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+
+        let resolution = resolution(appIcon: .default(), in: fixture)
+        let expected = try ProjectIconImageStaging.stage(
+            data: Self.pngBytes,
+            projectId: Self.projectID,
+            root: fixture.staging
+        )
+
+        #expect(resolution.icon.imagePath == expected.imagePath)
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.png"))
+        #expect(resolution.sourceModificationDate != nil)
+        #expect(resolution.sourceFileSize == Self.pngBytes.count)
+    }
+
+    @Test func resolveReportsTheConfigKeyedFileAsTheSource() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        try fixture.writeIcon("logo.png", bytes: Self.otherPNGBytes)
+
+        let resolution = resolution(
+            appIcon: .default(),
+            repoConfig: RepoConfig(icon: .init(image: "logo.png")),
+            in: fixture
+        )
+
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("logo.png"))
+        #expect(resolution.sourceModificationDate != nil)
+        #expect(resolution.sourceFileSize == Self.otherPNGBytes.count)
+    }
+
+    @Test func resolveReportsNoSourceWhenTheAppIconIsUsed() throws {
+        let fixture = try Fixture()
+        let appIcon = ProjectIcon(mode: .letter, color: "#112233")
+
+        let noRepoIcon = resolution(appIcon: appIcon, in: fixture)
+        #expect(noRepoIcon.icon == appIcon)
+        #expect(noRepoIcon.sourceURL == nil)
+        #expect(noRepoIcon.sourceModificationDate == nil)
+        #expect(noRepoIcon.sourceFileSize == nil)
+
+        // An explicit app icon wins without ever consulting a repo file, so it
+        // has no source to cache on either.
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let explicit = ProjectIcon(mode: .emoji, color: "#112233", emoji: "🚀")
+        let explicitResolution = resolution(appIcon: explicit, in: fixture)
+        #expect(explicitResolution.icon == explicit)
+        #expect(explicitResolution.sourceURL == nil)
+        #expect(explicitResolution.sourceModificationDate == nil)
+        #expect(explicitResolution.sourceFileSize == nil)
+    }
+
+    @Test func effectiveIconReturnsWhatResolveReports() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let appIcon = ProjectIcon(mode: .letter, color: "#112233")
+
+        let icon = RepoIconResolver.effectiveIcon(
+            appIcon: appIcon,
+            projectID: Self.projectID,
+            repoConfig: nil,
+            primaryCheckout: fixture.checkout,
+            store: RepoConfigStore(),
+            stagingRoot: fixture.staging
+        )
+
+        #expect(icon == resolution(appIcon: appIcon, in: fixture).icon)
+        #expect(icon.mode == .image)
+    }
+
+    // MARK: - Containment
+
+    @Test func unsafeConfigPathCannotEscapeTheCheckout() throws {
+        let fixture = try Fixture()
+        // A real PNG one level above the checkout, exactly where an escaping
+        // path would resolve to.
+        try Self.otherPNGBytes.write(to: fixture.container.appendingPathComponent("escape.png"))
+        let appIcon = ProjectIcon(mode: .letter, color: "#112233")
+
+        let resolution = resolution(
+            appIcon: appIcon,
+            repoConfig: RepoConfig(icon: .init(image: "../../escape.png")),
+            in: fixture
+        )
+
+        #expect(resolution.icon == appIcon)
+        #expect(resolution.icon.mode != .image)
+        #expect(resolution.sourceURL == nil)
+        // Nothing was read or staged, so the outside file was never touched.
+        #expect(try fixture.stagedFileURLs().isEmpty)
+    }
+
+    @Test func unsafeConfigPathStillFallsThroughToTheDiscoveredIcon() throws {
+        let fixture = try Fixture()
+        try Self.otherPNGBytes.write(to: fixture.container.appendingPathComponent("escape.png"))
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+
+        let resolution = resolution(
+            appIcon: .default(),
+            repoConfig: RepoConfig(icon: .init(image: "../../escape.png")),
+            in: fixture
+        )
+        let expected = try ProjectIconImageStaging.stage(
+            data: Self.pngBytes,
+            projectId: Self.projectID,
+            root: fixture.staging
+        )
+
+        #expect(resolution.icon.imagePath == expected.imagePath)
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.png"))
     }
 }
