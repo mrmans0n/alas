@@ -446,6 +446,27 @@ struct HarnessServiceTests {
         #expect(service.summary(forSessionIds: ["session-1"])?.state == .running)
     }
 
+    @Test func newLifecycleDiscardsOldBackgroundActivity() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(
+                event: .backgroundStarted, agent: .pi,
+                activityId: "old-run", lifecycleId: "old"
+            ),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .pi, lifecycleId: "new"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .pi, lifecycleId: "new"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.summary(forSessionIds: ["session-1"]) == nil)
+    }
+
     @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
         let (service, _) = makeService()
         service.handleSocketEvent(

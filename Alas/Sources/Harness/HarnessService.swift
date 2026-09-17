@@ -148,6 +148,10 @@ final class HarnessService {
                 if let activeLifecycleId {
                     retiredSocketLifecycleIdsBySession[event.sessionId, default: []].insert(activeLifecycleId)
                 }
+                backgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+                completedBackgroundActivityIdsBySession.removeValue(forKey: event.sessionId)
+                deferredForegroundIdleBySession.removeValue(forKey: event.sessionId)
+                activityBySession.removeValue(forKey: event.sessionId)
                 activeSocketLifecycleBySession[event.sessionId] = lifecycleId
             }
         } else if event.agent == .pi {
