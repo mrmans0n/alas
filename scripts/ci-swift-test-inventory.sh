@@ -349,6 +349,35 @@ while IFS= read -r source; do
             pending_scope_name = name
             pending_scope_previous_suite = previous_suite
         }
+        function remember_nominal_declaration(previous_suite) {
+            pending_nominal_declaration = 1
+            pending_nominal_previous_suite = previous_suite
+        }
+        function maybe_complete_pending_nominal_declaration(line,    name, previous_suite) {
+            if (!pending_nominal_declaration) {
+                return 0
+            }
+            if (line !~ /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/) {
+                return 0
+            }
+            name = clean_identifier(line)
+            if (name ~ /Tests$/) {
+                previous_suite = pending_nominal_previous_suite
+                suite = qualified(name)
+                if (line ~ /[{]/) {
+                    push_scope(name, brace_depth + 1, previous_suite)
+                } else {
+                    remember_scope(name, previous_suite)
+                }
+            } else if (line ~ /[{]/) {
+                push_scope(name, brace_depth + 1, pending_nominal_previous_suite)
+            } else {
+                remember_scope(name, pending_nominal_previous_suite)
+            }
+            pending_nominal_declaration = 0
+            pending_nominal_previous_suite = ""
+            return 1
+        }
         function maybe_push_pending_scope(line) {
             if (pending_scope_name == "") {
                 return
@@ -376,6 +405,10 @@ while IFS= read -r source; do
             if (candidate ~ /(^|[[:space:]{;])@Test([[:space:](]|$)/) {
                 pending_test = 1
             }
+            maybe_complete_pending_nominal_declaration(candidate)
+        }
+        candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]*$/ {
+            remember_nominal_declaration(suite)
         }
         candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
             name = candidate
@@ -763,6 +796,28 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
             function remember_scope(name) {
                 pending_scope_name = name
             }
+            function remember_nominal_declaration() {
+                pending_nominal_declaration = 1
+            }
+            function maybe_complete_pending_nominal_declaration(line,    name) {
+                if (!pending_nominal_declaration) {
+                    return 0
+                }
+                if (line !~ /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)([[:space:]:{(]|$)/) {
+                    return 0
+                }
+                name = clean_identifier(line)
+                if (name ~ /Tests$/) {
+                    print qualified(name)
+                }
+                if (line ~ /[{]/) {
+                    push_scope(name, brace_depth + 1)
+                } else {
+                    remember_scope(name)
+                }
+                pending_nominal_declaration = 0
+                return 1
+            }
             function maybe_push_pending_scope(line) {
                 if (pending_scope_name == "") {
                     return
@@ -784,6 +839,10 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
                 candidate = strip_attributes($0)
                 sub(/^[[:space:]]*/, "", candidate)
                 maybe_push_pending_scope(candidate)
+                maybe_complete_pending_nominal_declaration(candidate)
+            }
+            candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]*$/ {
+                remember_nominal_declaration()
             }
             candidate ~ /^((public|private|internal|fileprivate|open|package|final|indirect)[[:space:]]+)*(struct|class|actor|enum)[[:space:]]+(`[^`]*Tests`|[A-Za-z_][A-Za-z0-9_]*Tests)([[:space:]:{(]|$)/ {
                 name = candidate

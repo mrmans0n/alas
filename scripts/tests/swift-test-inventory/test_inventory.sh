@@ -219,6 +219,15 @@ extension SplitDeclarationTests {
     @Test func ordinary() {}
 }
 SWIFT
+cat > "${sandbox}/AlasTests/KeywordSplitSuite.swift" <<'SWIFT'
+import Testing
+
+struct
+KeywordSplitTests
+{
+    @Test func works() {}
+}
+SWIFT
 cat > "${sandbox}/AlasTests/SplitRuntimeTests.swift" <<'SWIFT'
 struct SplitRuntimeTests {}
 SWIFT
@@ -386,7 +395,7 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=44 scheduled=43 ordinary=25 subprocess=18 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=45 scheduled=44 ordinary=26 subprocess=18 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
@@ -406,6 +415,7 @@ grep -qx 'globalProcessBehavior' "${inventory_cache}/subprocess.txt"
 grep -qx 'IndirectTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNamedSuiteTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'InlineNestedAttributeTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'KeywordSplitTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ModifierTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'MultilineStringTests' "${inventory_cache}/ordinary.txt"
@@ -461,6 +471,7 @@ grep -qx -- '-only-testing AlasTests/IndirectTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/SecondTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineSuiteTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/InlineNamedSuiteTests' <<<"${selectors}"
+grep -qx -- '-only-testing AlasTests/KeywordSplitTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/ModifierTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineAttributeTests' <<<"${selectors}"
 grep -qx -- '-only-testing AlasTests/MultilineStringTests' <<<"${selectors}"
@@ -502,7 +513,7 @@ if grep -q 'AlasTests/runs' <<<"${selectors}"; then
     exit 1
 fi
 if grep -q 'AlasTests/works' <<<"${selectors}"; then
-    echo 'escaped identifier suite test was scheduled as a free-standing test' >&2
+    echo 'modified suite test was scheduled as a free-standing test' >&2
     exit 1
 fi
 if grep -q 'RuntimeBehaviorTests' <<<"${selectors}"; then
