@@ -24,7 +24,7 @@ final class AttachIssueDialogModel {
             selectedProjectID: String,
             projects: @escaping () -> [ProjectConfig],
             configuredBranchPrefix: @escaping (String) -> String,
-            clipboardText: @escaping () -> String? = Clipboard.read
+            clipboardText: @escaping () -> String? = { Clipboard.read() }
         ) {
             self.resolve = resolve
             self.loadSuggestions = loadSuggestions
