@@ -58,6 +58,40 @@ struct WrapperFixtureTests {
     }
 }
 SWIFT
+cat > "${sandbox}/AlasTests/JSONRPCStdioFixtureTests.swift" <<'SWIFT'
+import Foundation
+import Testing
+
+struct JSONRPCStdioFixtureTests {
+    @Test func runsStdioTransport() {
+        _ = JSONRPCStdioTransport(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: [],
+            environment: nil
+        )
+    }
+}
+SWIFT
+cat > "${sandbox}/AlasTests/LSPTransportFixtureTests.swift" <<'SWIFT'
+import Foundation
+import Testing
+
+struct LSPTransportFixtureTests {
+    @Test func runsLSPTransport() {
+        _ = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: [], environment: nil)
+    }
+}
+SWIFT
+cat > "${sandbox}/AlasTests/ACPStdioClientFixtureTests.swift" <<'SWIFT'
+import Foundation
+import Testing
+
+struct ACPStdioClientFixtureTests {
+    @Test func runsExecutableBackedClient() {
+        _ = ACPStdioClient(executable: URL(fileURLWithPath: "/bin/bash"), arguments: [], environment: nil)
+    }
+}
+SWIFT
 cat > "${sandbox}/AlasTests/SharedGitFixtureTests.swift" <<'SWIFT'
 import Testing
 
@@ -267,12 +301,13 @@ SWIFT
 printf 'QuarantinedTests\trequires the external fixture; #23\n' > "${sandbox}/quarantine.tsv"
 
 summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate)"
-grep -qx 'discovered=30 scheduled=29 ordinary=16 subprocess=13 quarantined=1' <<<"${summary}"
+grep -qx 'discovered=33 scheduled=32 ordinary=16 subprocess=16 quarantined=1' <<<"${summary}"
 
 inventory_cache="${sandbox}/inventory-cache"
 cached_summary="$(bash "${inventory}" --root "${sandbox}/AlasTests" --quarantine "${sandbox}/quarantine.tsv" --validate --write-dir "${inventory_cache}")"
 grep -qx "${summary}" <<<"${cached_summary}"
 grep -qx 'AgentRunnerInvocationTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'ACPStdioClientFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'BraceOwnerTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'CommentAttributeTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'EscapedDelimiterTests' "${inventory_cache}/ordinary.txt"
@@ -286,7 +321,9 @@ grep -qx 'NestedCommentTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'ParserNamespace.ParserTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RawStringTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'RuntimeBehaviorTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'JSONRPCStdioFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'LSPInstallerTests' "${inventory_cache}/subprocess.txt"
+grep -qx 'LSPTransportFixtureTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SelfUpdaterTests' "${inventory_cache}/subprocess.txt"
 grep -qx 'SplitDeclarationTests' "${inventory_cache}/ordinary.txt"
 grep -qx 'SplitRuntimeTests' "${inventory_cache}/subprocess.txt"
@@ -373,7 +410,10 @@ subprocess_selectors="$(
         --batch 0 --batch-count 1 --lane subprocess
 )"
 grep -qx -- '-only-testing AlasTests/AgentRunnerInvocationTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/ACPStdioClientFixtureTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/JSONRPCStdioFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/LSPInstallerTests' <<<"${subprocess_selectors}"
+grep -qx -- '-only-testing AlasTests/LSPTransportFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/ProcessFixtureTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/SelfUpdaterTests' <<<"${subprocess_selectors}"
 grep -qx -- '-only-testing AlasTests/BehaviorFixtureTests' <<<"${subprocess_selectors}"
@@ -418,10 +458,13 @@ subprocess_log="${sandbox}/subprocess-xcodebuild.log"
 env PATH="${sandbox}/bin:${PATH}" XCODEBUILD_LOG="${subprocess_log}" SWIFT_TEST_INVENTORY_DIR="${inventory_cache}" \
     bash "${batch_runner}" 0 1 subprocess
 grep -qx -- 'AlasTests/AgentRunnerInvocationTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/ACPStdioClientFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BehaviorFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/BeautifulMermaidFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/InlineNestedAttributeTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/JSONRPCStdioFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/LSPInstallerTests' "${subprocess_log}"
+grep -qx -- 'AlasTests/LSPTransportFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/ProcessFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RunScriptFixtureTests' "${subprocess_log}"
 grep -qx -- 'AlasTests/RuntimeBehaviorTests' "${subprocess_log}"

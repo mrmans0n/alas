@@ -402,7 +402,7 @@ comm -23 "${suite_file}" "${quarantine_file}" > "${scheduled_file}"
 {
     grep -E 'Git|Process|RunScript|Terminal|SSH|Shell|CLI|Hook|Zmx|BeautifulMermaid|WorkspaceEditExecutor|LSPInstaller|SelfUpdater|AgentRunner' "${scheduled_file}" || true
     while IFS= read -r source; do
-        grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture' "${source}" || continue
+        grep -Eq '\<Process([.(]|[A-Za-z_]*(Runner|Launcher|Executor))|CheckpointTestRepository|makeCleanupFixture|JSONRPCStdioTransport[[:space:]]*\(|LSPTransport[[:space:]]*\(|ACPStdioClient[[:space:]]*\([[:space:]]*executable:' "${source}" || continue
         awk '
             function consume_attribute_arguments(line,    i, c, hashes, j, closing) {
                 for (i = 1; i <= length(line); i++) {
