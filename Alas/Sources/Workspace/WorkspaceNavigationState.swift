@@ -147,12 +147,26 @@ enum WorkspaceMemberWorktreeResolver {
 /// Presentation data for a concrete worktree's membership in a Workspace
 /// checkout. It intentionally keeps Workspace state out of the Git `Worktree`
 /// model: membership is owned by the persisted checkout snapshot.
+enum WorktreeWorkspaceCheckoutPresentationState: Equatable {
+    case active
+    case archived
+    case formerWorkspace
+}
+
 struct WorktreeWorkspaceCheckoutPresentation: Equatable {
     let name: String
-    let isActive: Bool
+    let state: WorktreeWorkspaceCheckoutPresentationState
+
+    var isActive: Bool {
+        state == .active
+    }
 
     var accessibilityLabel: String {
-        isActive ? "Workspace checkout: \(name)" : "Former workspace checkout: \(name)"
+        switch state {
+        case .active: "Workspace checkout: \(name)"
+        case .archived: "Archived workspace checkout: \(name)"
+        case .formerWorkspace: "Former workspace checkout: \(name)"
+        }
     }
 }
 
@@ -172,8 +186,16 @@ enum WorkspaceCheckoutWorktreeResolver {
         guard let checkout = matchingCheckouts.sorted(by: isPreferred).first else { return nil }
         return .init(
             name: checkout.fallbackWorkspaceName,
-            isActive: checkout.archivedAt == nil && checkout.workspaceID != nil
+            state: presentationState(for: checkout)
         )
+    }
+
+    private static func presentationState(
+        for checkout: WorkspaceCheckout
+    ) -> WorktreeWorkspaceCheckoutPresentationState {
+        if checkout.workspaceID == nil { return .formerWorkspace }
+        if checkout.archivedAt != nil { return .archived }
+        return .active
     }
 
     private static func isPreferred(_ lhs: WorkspaceCheckout, _ rhs: WorkspaceCheckout) -> Bool {

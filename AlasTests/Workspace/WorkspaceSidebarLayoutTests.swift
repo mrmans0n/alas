@@ -109,7 +109,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [differentProject, matching]
         ))
 
-        #expect(presentation == .init(name: "Release", isActive: true))
+        #expect(presentation == .init(name: "Release", state: .active))
     }
 
     @Test func prefersActiveCheckoutOverNewerArchivedMatch() throws {
@@ -122,7 +122,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [archived, active]
         ))
 
-        #expect(presentation == .init(name: "Active", isActive: true))
+        #expect(presentation == .init(name: "Active", state: .active))
     }
 
     @Test func showsFormerWorkspaceUsingPersistedName() throws {
@@ -138,9 +138,21 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [former]
         ))
 
-        #expect(presentation == .init(name: "Former Release", isActive: false))
+        #expect(presentation == .init(name: "Former Release", state: .formerWorkspace))
 
         #expect(presentation.accessibilityLabel == "Former workspace checkout: Former Release")
+    }
+
+    @Test func distinguishesArchivedWorkspaceFromFormerWorkspace() throws {
+        let archived = makeCheckout(name: "Archived Release", archivedAt: .now)
+
+        let presentation = try #require(WorkspaceCheckoutWorktreeResolver.presentation(
+            for: makeWorktree(),
+            checkouts: [archived]
+        ))
+
+        #expect(presentation == .init(name: "Archived Release", state: .archived))
+        #expect(presentation.accessibilityLabel == "Archived workspace checkout: Archived Release")
     }
 
     @Test func ignoresUnavailableCheckoutMember() {
