@@ -92,15 +92,21 @@ enum RepoIconResolver {
             primaryCheckout: primaryCheckout,
             store: store
         ).compactMap { candidate in
+            // Mirror resolve's confinement so the probe and resolve agree on
+            // which files are usable instead of the caller caching stamps
+            // `resolve` would refuse to use.
+            guard let target = confinedTarget(of: candidate, checkout: primaryCheckout) else {
+                return nil
+            }
             // An oversized candidate is skipped here too, so the probe and
             // `resolve` agree on which files are usable instead of the caller
             // caching stamps `resolve` would refuse to use.
-            guard let values = try? candidate.url.resourceValues(
+            guard let values = try? target.resourceValues(
                 forKeys: [.contentModificationDateKey, .fileSizeKey]
             ), !isOversized(values)
             else { return nil }
             return SourceIdentity(
-                url: candidate.url,
+                url: target,
                 modificationDate: values.contentModificationDate,
                 fileSize: values.fileSize
             )
@@ -137,17 +143,23 @@ enum RepoIconResolver {
             primaryCheckout: primaryCheckout,
             store: store
         ) {
+            // Symlinks are resolved and confined before anything is statted or
+            // read, so a committed link cannot point the read outside `.alas/`.
+            guard let target = confinedTarget(of: candidate, checkout: primaryCheckout) else {
+                logUnusableConfigIcon(candidate, exists: true)
+                continue
+            }
             // One stat decides both whether the file is there and whether it is
             // worth reading: an oversized icon is refused before it is loaded,
             // so a 10+ MB file never lands in memory on the render path.
-            let values = try? candidate.url.resourceValues(
+            let values = try? target.resourceValues(
                 forKeys: [.contentModificationDateKey, .fileSizeKey]
             )
             guard !isOversized(values) else {
                 logUnusableConfigIcon(candidate, exists: true)
                 continue
             }
-            guard let data = try? Data(contentsOf: candidate.url),
+            guard let data = try? Data(contentsOf: target),
                   let staged = try? ProjectIconImageStaging.stage(
                       data: data,
                       projectId: projectID,
@@ -164,7 +176,7 @@ enum RepoIconResolver {
                     imagePath: staged.imagePath,
                     transparentBackground: appIcon.transparentBackground
                 ),
-                sourceURL: candidate.url,
+                sourceURL: target,
                 sourceModificationDate: values?.contentModificationDate,
                 sourceFileSize: values?.fileSize
             )
@@ -211,6 +223,27 @@ enum RepoIconResolver {
     private static func isOversized(_ values: URLResourceValues?) -> Bool {
         guard let size = values?.fileSize else { return false }
         return size > ProjectIconImageStaging.maxBytes
+    }
+
+    /// A candidate may only be read when it resolves — after following any
+    /// symlink components — to a regular file whose canonical path stays
+    /// inside the repo's `.alas/` directory. A committed `icon.png` that is
+    /// really a symlink to somewhere outside the checkout would otherwise
+    /// defeat both the path confinement and the size check that assume the
+    /// file lives under `.alas/`.
+    private static func confinedTarget(of candidate: Candidate, checkout: URL) -> URL? {
+        let resolved = candidate.url.standardizedFileURL.resolvingSymlinksInPath()
+        let root = checkout
+            .appendingPathComponent(".alas", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard resolved.path.hasPrefix(root.path + "/") else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return nil
+        }
+        return resolved
     }
 
     /// The configured file is a deliberate team decision, so one that is

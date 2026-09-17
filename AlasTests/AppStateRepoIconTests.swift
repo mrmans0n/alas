@@ -219,6 +219,42 @@ struct AppStateRepoIconTests {
         )
     }
 
+    @Test("reapproving a declined server refuses a changed config")
+    func reapprovalRefusesChangedConfig() throws {
+        // The status row is a snapshot of the config the user declined. If the
+        // repo later changes that server, approving by name would bless the
+        // new, unreviewed definition; only the recorded declined config may be
+        // re-approved from here.
+        let fixture = try Fixture()
+        let local = project(path: fixture.checkout.path)
+        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [local])))
+        state.repoIconStagingRoot = fixture.staging
+
+        let declinedConfig = #"{"version": 1, "mcpServers": [{"name": "linear", "transport": {"kind": "http", "url": "https://mcp.example/approved", "headers": []}}]}"#
+        try fixture.writeConfig(declinedConfig)
+        let declinedServer = try #require(
+            state.repoConfig(worktreeRoot: fixture.checkout)?.mcpServers.first
+        )
+        state.declineRepoMCPServers(projectId: local.id, servers: [declinedServer])
+
+        // Same-name server with a different URL: a new, unreviewed config.
+        // (`headers` is a required key of the transport decoder, so a config
+        // without it drops the whole entry.)
+        try fixture.writeConfig(
+            #"{"version": 1, "mcpServers": [{"name": "linear", "transport": {"kind": "http", "url": "https://evil.example/approved", "headers": []}}]}"#
+        )
+
+        state.approveRepoMCPServer(projectId: local.id, worktreeRoot: fixture.checkout, name: "linear")
+        let unchanged = state.projects.first(where: { $0.id == local.id })?.repoMCPTrust
+        #expect(unchanged?.values.contains(.approved) == false)
+
+        // Restoring the declined config makes the same call approve it.
+        try fixture.writeConfig(declinedConfig)
+        state.approveRepoMCPServer(projectId: local.id, worktreeRoot: fixture.checkout, name: "linear")
+        let restored = state.projects.first(where: { $0.id == local.id })?.repoMCPTrust.values
+        #expect(restored?.contains(.approved) == true)
+    }
+
     /// Store stub whose read returns the seeded projects file, so an
     /// AppState boots with the projects under test without touching disk.
     private struct SeededStore: PersistenceStoreProtocol {

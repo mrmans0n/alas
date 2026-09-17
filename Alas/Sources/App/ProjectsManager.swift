@@ -240,6 +240,13 @@ final class ProjectsManager {
         projects[idx].repoMCPTrust[hash] = state
     }
 
+    /// The recorded trust decision for a repo-defined MCP server's exact
+    /// config, or nil when no decision exists yet.
+    func repoMCPTrustState(projectId: String, for server: ProjectMCPServer) -> RepoMCPTrustState? {
+        projects.first(where: { $0.id == projectId })?
+            .repoMCPTrust[RepoMCPTrust.hash(for: server)]
+    }
+
     /// Enables/disables a repo-defined MCP server for this project by name.
     /// Callers persist via `AppState.saveProjects()`.
     func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {

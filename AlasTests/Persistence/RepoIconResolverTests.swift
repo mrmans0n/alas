@@ -428,4 +428,59 @@ struct RepoIconResolverTests {
         #expect(resolution.icon.imagePath == expected.imagePath)
         #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.png"))
     }
+
+    @Test func symlinkedIconPointingOutsideTheCheckoutIsRefused() throws {
+        // A committed .alas/icon.png that is really a symlink to a file one
+        // level above the checkout: the read must not follow it out of the
+        // repo, or the path confinement and size check are both bypassed.
+        let fixture = try Fixture()
+        let outside = fixture.container.appendingPathComponent("outside.png")
+        try Self.otherPNGBytes.write(to: outside)
+        try FileManager.default.createSymbolicLink(
+            atPath: fixture.alas.appendingPathComponent("link.png").path,
+            withDestinationPath: outside.path
+        )
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let config = RepoConfig(icon: .init(image: "link.png"))
+
+        let resolution = resolution(
+            appIcon: .default(),
+            repoConfig: config,
+            in: fixture
+        )
+        let expected = try ProjectIconImageStaging.stage(
+            data: Self.pngBytes,
+            projectId: Self.projectID,
+            root: fixture.staging
+        )
+
+        // The escaping link is refused and the discovered icon.png is used
+        // instead; nothing from outside the checkout was staged.
+        #expect(resolution.icon.imagePath == expected.imagePath)
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("icon.png"))
+
+        // The probe agrees with resolve, so a cache keyed on the chain cannot
+        // be poisoned by the escaping link either.
+        #expect(probe(appIcon: .default(), repoConfig: config, in: fixture).map(\.url) == [
+            fixture.alas.appendingPathComponent("icon.png")
+        ])
+    }
+
+    @Test func symlinkedIconInsideTheAlasDirectoryIsFollowed() throws {
+        // A link that stays inside .alas/ is legitimate and keeps working.
+        let fixture = try Fixture()
+        try fixture.writeIcon("real.png", bytes: Self.pngBytes)
+        try FileManager.default.createSymbolicLink(
+            atPath: fixture.alas.appendingPathComponent("icon.png").path,
+            withDestinationPath: fixture.alas.appendingPathComponent("real.png").path
+        )
+
+        let chain = probe(appIcon: .default(), in: fixture)
+        let resolution = resolution(appIcon: .default(), in: fixture)
+
+        #expect(chain.map(\.url) == [fixture.alas.appendingPathComponent("real.png")])
+        #expect(resolution.sourceURL == fixture.alas.appendingPathComponent("real.png"))
+        #expect(resolution.icon.mode == .image)
+        #expect(chain.first == resolution.sourceIdentity)
+    }
 }

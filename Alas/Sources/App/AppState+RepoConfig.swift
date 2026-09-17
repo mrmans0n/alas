@@ -77,11 +77,15 @@ extension AppState {
 
     /// Approves a repo-defined MCP server by name, so a declined server can be
     /// reconsidered from the MCP status control without editing projects.json.
-    /// Resolves the server from the worktree's repo config; nil when the name
-    /// no longer matches a repo-defined server.
+    /// Resolves the server from the worktree's repo config. Refuses when the
+    /// name's current config is not the recorded declined one: a changed
+    /// definition is a new, unreviewed decision and belongs to the trust
+    /// banner instead of reusing the stale row's approval.
     func approveRepoMCPServer(projectId: String, worktreeRoot: URL, name: String) {
         guard let server = repoConfig(worktreeRoot: worktreeRoot)?.mcpServers
-            .first(where: { $0.name == name }) else {
+            .first(where: { $0.name == name }),
+            projectsManager.repoMCPTrustState(projectId: projectId, for: server) == .declined
+        else {
             return
         }
         approveRepoMCPServers(projectId: projectId, servers: [server])
