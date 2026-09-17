@@ -115,7 +115,11 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             .accessibilityLabel(collapsed ? "Expand workspace" : "Collapse workspace")
             Button { state.selectWorkspace(id: workspace.id) } label: {
                 HStack(spacing: 7) {
-                    WorkspaceRepositoryPile(workspace: workspace, projects: Array(projects.values))
+                    WorkspaceRepositoryPile(
+                        workspace: workspace,
+                        projects: Array(projects.values),
+                        icon: { state.effectiveIcon(for: $0) }
+                    )
                     Text(workspace.name)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundColor(theme.color(selected ? "fg" : "fg-muted"))
@@ -267,7 +271,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     } label: {
                         HStack(spacing: 7) {
                             if let project = projects[member.projectID] {
-                                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                                ProjectIconView(icon: state.effectiveIcon(for: project), fallbackName: project.name, size: .sidebar)
                             } else {
                                 Icon(name: "folder", size: 12)
                             }
@@ -466,6 +470,9 @@ struct WorkspaceCheckoutInspector: View {
 struct WorkspaceRepositoryPile: View {
     let workspace: Workspace
     let projects: [ProjectConfig]
+    /// Resolves each member's icon, which may come from the repo's `.alas/`
+    /// directory when the project has no explicit icon.
+    let icon: (ProjectConfig) -> ProjectIcon
     var size: ProjectIconView.Size = .sidebar
     @Environment(\.theme) private var theme
 
@@ -478,7 +485,7 @@ struct WorkspaceRepositoryPile: View {
             } else {
                 HStack(spacing: -size.dimension * 0.3125) {
                     ForEach(repositories.prefix(3)) { project in
-                        ProjectIconView(icon: project.icon, fallbackName: project.name, size: size)
+                        ProjectIconView(icon: icon(project), fallbackName: project.name, size: size)
                             .overlay(
                                 RoundedRectangle(cornerRadius: size.cornerRadius)
                                     .strokeBorder(theme.color("bg-1"), lineWidth: ringWidth)

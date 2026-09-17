@@ -232,6 +232,34 @@ final class ProjectsManager {
         projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
     }
 
+    /// Records a per-user trust decision for a repo-defined MCP server,
+    /// keyed by `RepoMCPTrust.hash(for:)`. Callers persist via
+    /// `AppState.saveProjects()`.
+    func setRepoMCPTrust(projectId: String, hash: String, state: RepoMCPTrustState) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].repoMCPTrust[hash] = state
+    }
+
+    /// The recorded trust decision for a repo-defined MCP server's exact
+    /// config, or nil when no decision exists yet.
+    func repoMCPTrustState(projectId: String, for server: ProjectMCPServer) -> RepoMCPTrustState? {
+        projects.first(where: { $0.id == projectId })?
+            .repoMCPTrust[RepoMCPTrust.hash(for: server)]
+    }
+
+    /// Enables/disables a repo-defined MCP server for this project by name.
+    /// Callers persist via `AppState.saveProjects()`.
+    func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        if disabled {
+            if !projects[idx].disabledRepoMCPServers.contains(name) {
+                projects[idx].disabledRepoMCPServers.append(name)
+            }
+        } else {
+            projects[idx].disabledRepoMCPServers.removeAll { $0 == name }
+        }
+    }
+
     func issueAttachment(projectId: String, worktreeId: String) -> IssueAttachment? {
         projects.first(where: { $0.id == projectId })?.issueAttachments[worktreeId]
     }

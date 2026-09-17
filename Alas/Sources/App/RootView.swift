@@ -353,6 +353,7 @@ struct RootView: View {
                 WorkspaceOverviewView(
                     workspace: workspace,
                     projects: state.projects,
+                    icon: { state.effectiveIcon(for: $0) },
                     onNewCheckout: { creatingWorkspaceCheckout = workspace },
                     onEdit: { editingWorkspace = workspace }
                 )
@@ -480,6 +481,9 @@ struct RootView: View {
 private struct WorkspaceOverviewView: View {
     let workspace: Workspace
     let projects: [ProjectConfig]
+    /// Resolves each member's icon, which may come from the repo's `.alas/`
+    /// directory when the project has no explicit icon.
+    let icon: (ProjectConfig) -> ProjectIcon
     let onNewCheckout: () -> Void
     let onEdit: () -> Void
     @Environment(\.theme) private var theme
@@ -487,7 +491,12 @@ private struct WorkspaceOverviewView: View {
     var body: some View {
         VStack(spacing: 18) {
             VStack(spacing: 8) {
-                WorkspaceRepositoryPile(workspace: workspace, projects: projects, size: .overview)
+                WorkspaceRepositoryPile(
+                    workspace: workspace,
+                    projects: projects,
+                    icon: icon,
+                    size: .overview
+                )
                     .padding(.bottom, 4)
                 Text(workspace.name)
                     .font(.system(size: 20, weight: .semibold))
@@ -501,7 +510,7 @@ private struct WorkspaceOverviewView: View {
                     ForEach(workspace.members) { member in
                         HStack(spacing: 8) {
                             if let project = projects.first(where: { $0.id == member.projectID }) {
-                                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                                ProjectIconView(icon: icon(project), fallbackName: project.name, size: .sidebar)
                             } else {
                                 Icon(name: "folder", size: 14)
                             }

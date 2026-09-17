@@ -112,7 +112,8 @@ final class ACPSessionManager: ObservableObject {
             adapterState: PiMCPAdapterInspector.State,
             configOutcome: PiMCPConfigWriter.Outcome?,
             userServerNames: [String],
-            skippedServerStatuses: [MCPAttachmentServerStatus]
+            skippedServerStatuses: [MCPAttachmentServerStatus],
+            requestedServerStatuses: [MCPAttachmentServerStatus]
         )
 
     let instanceId: String
@@ -3489,7 +3490,10 @@ extension ACPSessionManager {
                 environment: agentEnvironment,
                 capabilities: initialized.mcpCapabilities,
                 frozenServerDescriptors: frozenAttachments?.descriptors,
-                unavailableFrozenDescriptorIDs: frozenAttachments?.unavailableDescriptorIDs ?? []
+                unavailableFrozenDescriptorIDs: frozenAttachments?.unavailableDescriptorIDs ?? [],
+                repoServers: projectContext.repoServers,
+                disabledRepoServerNames: projectContext.disabledRepoServerNames,
+                repoTrust: projectContext.repoTrust
             ))
             // The built-in alas server composes after planning (it is not
             // user configuration). It is local-only by construction — its
@@ -3557,7 +3561,8 @@ extension ACPSessionManager {
                         configOutcome: external?.configOutcome,
                         hint: hint,
                         userServerNames: external?.userServerNames ?? [],
-                        skippedServerStatuses: external?.skippedServerStatuses ?? []
+                        skippedServerStatuses: external?.skippedServerStatuses ?? [],
+                        requestedServerStatuses: external?.requestedServerStatuses ?? []
                     )
                 } else {
                     // Remote pi session: the worktree lives on the remote host, so
@@ -3572,6 +3577,10 @@ extension ACPSessionManager {
                         userServerNames: mcpPlan.statuses.map(\.name),
                         skippedServerStatuses: mcpPlan.statuses.filter {
                             if case .skipped = $0.disposition { return true }
+                            return false
+                        },
+                        requestedServerStatuses: mcpPlan.statuses.filter {
+                            if case .requested = $0.disposition { return true }
                             return false
                         },
                         canInstallAdapterLocally: false

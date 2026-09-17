@@ -47,6 +47,7 @@ struct RepoGroupViewLayoutTests {
 
         let view = RepoGroupView(
             project: project,
+            icon: { $0.icon },
             worktrees: worktrees,
             collapsed: .constant(collapsed),
             selectedWorktreeId: nil,

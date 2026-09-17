@@ -27,6 +27,17 @@ struct ACPMCPStatusState: Equatable {
         let transport: String
         let detail: String
         let isRequested: Bool
+        /// Present on repo-defined rows the user can enable or disable
+        /// right from this control.
+        let repoToggle: RepoToggle?
+    }
+
+    /// The enable/disable/approve affordance a repo-defined server's row carries.
+    enum RepoToggle: Equatable {
+        case enable
+        case disable
+        /// Re-approving a declined repo server from the status control.
+        case approve
     }
 
     let requestedCount: Int
@@ -92,7 +103,8 @@ struct ACPMCPStatusState: Equatable {
                 detail: externalStatus.cliActive
                     ? "via alas CLI (environment injected)"
                     : "unavailable (Alas CLI not injected)",
-                isRequested: externalStatus.cliActive)
+                isRequested: externalStatus.cliActive,
+                repoToggle: nil)
             let availability = externalStatus.adapterServerAvailability
             let adapterDetail: String
             let adapterIsRequested: Bool
@@ -123,11 +135,19 @@ struct ACPMCPStatusState: Equatable {
                 id: "external-adapter", name: "user MCP servers",
                 transport: "pi-mcp-adapter",
                 detail: adapterDetail,
-                isRequested: adapterIsRequested)
+                isRequested: adapterIsRequested,
+                repoToggle: nil)
             let skippedRows = externalStatus.skippedServerStatuses.map {
                 Self.row($0, idPrefix: "external-skipped-")
             }
-            let rows = [cliRow, adapterRow] + skippedRows
+            // Repo-defined servers the plan requested get real rows here too:
+            // `.external` injection replaces the attachment rows wholesale, so
+            // without them an approved repo server would be invisible — and its
+            // Disable action unreachable — in this presentation.
+            let requestedRepoRows = externalStatus.requestedServerStatuses
+                .filter { $0.id.hasPrefix(RepoConfig.repoServerIDPrefix) }
+                .map { Self.row($0, idPrefix: "external-requested-") }
+            let rows = [cliRow, adapterRow] + requestedRepoRows + skippedRows
             externalRows = rows
             requestedCount = rows.count(where: \.isRequested)
             skippedCount = (cliRow.isRequested ? 0 : 1)
@@ -183,7 +203,8 @@ struct ACPMCPStatusState: Equatable {
                 name: status.name,
                 transport: transport,
                 detail: "Requested",
-                isRequested: true
+                isRequested: true,
+                repoToggle: status.id.hasPrefix(RepoConfig.repoServerIDPrefix) ? .disable : nil
             )
         case let .skipped(reason):
             return .init(
@@ -191,8 +212,20 @@ struct ACPMCPStatusState: Equatable {
                 name: status.name,
                 transport: transport,
                 detail: skipDetail(reason),
-                isRequested: false
+                isRequested: false,
+                repoToggle: repoToggle(for: reason)
             )
+        }
+    }
+
+    /// Declined repo servers carry an approve affordance so an accidental
+    /// decline is recoverable; disabled ones keep their enable toggle; an
+    /// unapproved server stays banner-owned.
+    private static func repoToggle(for reason: MCPAttachmentSkipReason) -> RepoToggle? {
+        switch reason {
+        case .repoDisabled: return .enable
+        case .repoDeclined: return .approve
+        default: return nil
         }
     }
 
@@ -206,6 +239,12 @@ struct ACPMCPStatusState: Equatable {
             return "Skipped: invalid configuration"
         case .unavailableMember:
             return "Skipped: checkout member unavailable"
+        case .repoNotApproved:
+            return "Skipped: not enabled (repo)"
+        case .repoDeclined:
+            return "Skipped: declined (repo)"
+        case .repoDisabled:
+            return "Skipped: disabled (repo)"
         }
     }
 }

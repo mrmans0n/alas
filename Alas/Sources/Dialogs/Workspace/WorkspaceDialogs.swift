@@ -179,7 +179,7 @@ private struct WorkspaceDefinitionEditor: View {
     private func repositoryRow(_ member: WorkspaceMember, index: Int) -> some View {
         HStack(spacing: 10) {
             if let project = state.projects.first(where: { $0.id == member.projectID }) {
-                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                ProjectIconView(icon: state.effectiveIcon(for: project), fallbackName: project.name, size: .sidebar)
             } else {
                 Icon(name: "folder", size: 14)
             }

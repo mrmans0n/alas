@@ -442,7 +442,7 @@ struct ACPSessionManagerAttachRestoreTests {
         var providerCalled = false
         manager.externalMCPStatusProvider = { _ in
             providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [])
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [], requestedServerStatuses: [])
         }
 
         await manager.attach(to: session.id, freshlyCreated: true)
@@ -477,7 +477,7 @@ struct ACPSessionManagerAttachRestoreTests {
             ["ALAS_SESSION_ID": sessionId, "PATH": "/managed/bin:/usr/bin"]
         }
         manager.externalMCPStatusProvider = { _ in
-            (adapterState: .installed, configOutcome: .wrote, userServerNames: ["docs-http"], skippedServerStatuses: [])
+            (adapterState: .installed, configOutcome: .wrote, userServerNames: ["docs-http"], skippedServerStatuses: [], requestedServerStatuses: [])
         }
 
         await manager.attach(to: session.id, freshlyCreated: true)
@@ -509,7 +509,7 @@ struct ACPSessionManagerAttachRestoreTests {
         var providerCalled = false
         manager.externalMCPStatusProvider = { _ in
             providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [])
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [], requestedServerStatuses: [])
         }
 
         await manager.attach(to: session.id, freshlyCreated: true)

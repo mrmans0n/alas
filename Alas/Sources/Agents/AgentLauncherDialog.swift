@@ -102,7 +102,9 @@ struct AgentLauncherDialog: View {
     private var rows: [AgentDefinition] {
         appState.agentLauncher.rows(
             enabledAgents: appState.agentRegistry.enabled(),
-            preferredAgentID: appState.defaultAgentID(projectID: selectedWorktree()?.projectId)
+            preferredAgentID: selectedWorktree().flatMap {
+                appState.defaultAgentID(projectId: $0.projectId, worktreeRoot: $0.path)
+            }
         )
     }
 
