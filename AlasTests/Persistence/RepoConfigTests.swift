@@ -55,11 +55,58 @@ struct RepoConfigTests {
         }
         """))
         #expect(config.mcpServers.map(\.name) == ["good"])
+        // first entry wins, not just for the name list but for the definition
+        if case .stdio(let command, _, _) = try #require(config.mcpServers.first).transport {
+            #expect(command == "npx")
+        } else {
+            Issue.record("expected stdio transport")
+        }
+    }
+
+    @Test func serverNamesAreTrimmed() throws {
+        let config = try #require(decode("""
+        {
+          "version": 1,
+          "mcpServers": [
+            { "name": "  good  ", "transport": { "kind": "stdio", "command": "npx", "args": [], "environment": [] } }
+          ]
+        }
+        """))
+        #expect(config.mcpServers.map(\.name) == ["good"])
+        #expect(config.mcpServers.first?.id == "repo:good")
     }
 
     @Test func blankDefaultAgentBecomesNil() throws {
         let config = try #require(decode(#"{"version": 1, "defaultAgent": "  "}"#))
         #expect(config.defaultAgent == nil)
+    }
+
+    @Test func blankIconImageBecomesNil() throws {
+        let config = try #require(decode(#"{"version": 1, "icon": {"image": "   "}}"#))
+        #expect(config.icon == nil)
+    }
+
+    @Test func wrongTypeForIconKeepsOtherKeys() throws {
+        let config = try #require(decode(#"{"version": 1, "icon": "logo.png", "defaultAgent": "pi"}"#))
+        #expect(config.icon == nil)
+        #expect(config.defaultAgent == "pi")
+    }
+
+    @Test func wrongTypeForServersKeepsOtherKeys() throws {
+        let config = try #require(decode(#"{"version": 1, "mcpServers": {}, "defaultAgent": "pi"}"#))
+        #expect(config.mcpServers.isEmpty)
+        #expect(config.defaultAgent == "pi")
+    }
+
+    @Test func iconPathsCannotEscapeTheCheckout() throws {
+        let traversing = try #require(decode(#"{"version": 1, "icon": {"image": "../../outside.png"}}"#))
+        #expect(traversing.icon == nil)
+
+        let absolute = try #require(decode(#"{"version": 1, "icon": {"image": "/tmp/outside.png"}}"#))
+        #expect(absolute.icon == nil)
+
+        let nested = try #require(decode(#"{"version": 1, "icon": {"image": "brand/logo.png"}}"#))
+        #expect(nested.icon?.image == "brand/logo.png")
     }
 
     @Test func emptyFileDecodesToEmptyConfig() throws {
