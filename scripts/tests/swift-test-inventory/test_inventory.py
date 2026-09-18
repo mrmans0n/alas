@@ -75,6 +75,47 @@ class InventoryTests(unittest.TestCase):
             with self.subTest(seconds=seconds), self.assertRaises(ValueError):
                 self.module.assign_shards(plan, [{"selectors": ["AlasTests/A"], "seconds": seconds}])
 
+    def test_quarantine_changes_reuse_suite_group_timing_without_changing_selection(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/A/b()"), [
+            ("AlasTests/A", "subprocess", "isolation", "#23"),
+            ("AlasTests/A/b()", "quarantine", "failure", "#23")], 1)
+        self.module.assign_shards(plan, [{"selectors": ["AlasTests/A"], "seconds": 12}])
+        self.assertEqual(plan["shard_seconds"], [12, 0])
+        self.assertEqual(plan["batches"][1]["invocations"], [["AlasTests/A/a()"]])
+        self.assertEqual(plan["batches"][1]["timeouts"], [120])
+
+    def test_regrouped_and_unknown_suites_use_estimates_not_timeout_budgets(self):
+        ids = [f"AlasTests/{suite}/test()" for suite in "ABCDEF"]
+        policy = [(f"AlasTests/{suite}", "subprocess", "isolation", "#23") for suite in "ABCDEF"]
+        plan = self.module.make_plan(enumeration(*ids), policy, 1)
+        self.module.assign_shards(plan, [
+            {"selectors": ["AlasTests/A", "AlasTests/D"], "seconds": 20},
+            {"selectors": ["AlasTests/B", "AlasTests/E"], "seconds": 40}])
+        # A/D contribute 10 each, B/E 20 each, unknown C/F use the median 15.
+        self.assertEqual(plan["shard_seconds"], [45, 45])
+        self.assertEqual(plan["timing_sources"], {"exact": 0, "suite-group": 0, "estimated": 2})
+        self.assertEqual(plan["batches"][1]["timeouts"], [120, 120])
+
+    def test_successful_audit_exports_refreshable_timings_without_result_bundles(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [
+            ("AlasTests/A", "subprocess", "isolation", "#23")], 1)
+        self.module.assign_shards(plan, [])
+        report = self.module.account(["AlasTests/A/a()"], results(("A/a()", "Passed")))
+        report.update(plan_id=plan["id"], selectors=["AlasTests/A"], duration_seconds=14)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            self.module.write_json(directory / "shard-1/subprocess-1-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+            timings = json.loads((directory / "timings.json").read_text())
+            self.assertEqual(timings["invocations"], [{"selectors": ["AlasTests/A"], "seconds": 14}])
+            self.assertIn("Estimated seconds", (directory / "summary.md").read_text())
+            report["ok"] = False
+            self.module.write_json(directory / "shard-1/subprocess-1-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertFalse(self.module.summarize(plan, directory))
+            self.assertFalse((directory / "timings.json").exists())
+
     def test_shards_execute_every_invocation_once_and_propagate_failure(self):
         ids = [f"AlasTests/S{i}/test()" for i in range(7)]
         policy = [(f"AlasTests/S{i}", "subprocess", "isolation", "#23") for i in range(7)]

@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import statistics
 import subprocess
 import sys
 import time
@@ -121,23 +122,46 @@ def account(expected, document):
             "executed": executed, "outcomes": observed}
 
 
+def suite_key(selectors):
+    return tuple(sorted({selector.rsplit("/", 1)[0] if selector.count("/") > 1 else selector
+                         for selector in selectors}))
+
+
 def assign_shards(plan, timings):
     """Keep ordinary work on shard zero; balance isolated invocations on 1 and 2."""
     weights = {}
+    groups, suites = {}, {}
     for entry in timings:
         key = tuple(entry["selectors"])
         seconds = entry["seconds"]
-        if key in weights or not math.isfinite(seconds) or seconds <= 0:
+        if not key or key in weights or not math.isfinite(seconds) or seconds <= 0:
             raise ValueError("Invalid or duplicate invocation timing")
         weights[key] = seconds
+        group = suite_key(key)
+        groups.setdefault(group, []).append(seconds)
+        # Apportion invocation wall time only as a fallback for regrouped suites.
+        # These are estimates, not individually measured suite durations.
+        for suite in group:
+            suites.setdefault(suite, []).append(seconds / len(group))
+    suite_weights = {suite: statistics.median(values) for suite, values in suites.items()}
+    unknown = statistics.median(suite_weights.values()) if suite_weights else 10.0
+    sources = dict.fromkeys(("exact", "suite-group", "estimated"), 0)
     pending = []
     for batch in plan["batches"]:
         batch["shards"] = [0] * len(batch["invocations"])
+        batch["estimated_seconds"] = [None] * len(batch["invocations"])
         if batch["lane"] == "subprocess":
             for index, selectors in enumerate(batch["invocations"]):
-                # Exact selector keys survive insertion/reordering of other suites.
-                # New groupings receive a conservative estimate, never exclusion.
-                seconds = weights.get(tuple(selectors), batch["timeouts"][index])
+                group = suite_key(selectors)
+                if tuple(selectors) in weights:
+                    seconds, source = weights[tuple(selectors)], "exact"
+                elif group in groups:
+                    seconds, source = statistics.median(groups[group]), "suite-group"
+                else:
+                    seconds = sum(suite_weights.get(suite, unknown) for suite in group)
+                    source = "estimated"
+                sources[source] += 1
+                batch["estimated_seconds"][index] = seconds
                 pending.append((seconds, batch["id"], index, batch))
     totals = [0.0, 0.0]
     for seconds, _, index, batch in sorted(pending, key=lambda row: (-row[0], row[1], row[2])):
@@ -145,6 +169,7 @@ def assign_shards(plan, timings):
         batch["shards"][index] = shard + 1
         totals[shard] += seconds
     plan["shard_seconds"] = totals
+    plan["timing_sources"] = sources
 
 
 def write_json(path, value):
@@ -255,6 +280,9 @@ def run_shard(plan, directory, shard):
 
 def summarize(plan, directory):
     rows, missing, observed = [], [], set()
+    timings, shard_seconds = [], [0.0, 0.0, 0.0]
+    timing_path = directory / "timings.json"
+    timing_path.unlink(missing_ok=True)
     reports = {}
     for path in directory.rglob("*.report.json"):
         reports.setdefault(path.name, []).append(path)
@@ -280,6 +308,12 @@ def summarize(plan, directory):
             executed += report.get("executed", 0)
             skipped += report.get("skipped", 0)
             success = success and report["ok"]
+            duration = report.get("duration_seconds")
+            if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0:
+                shard = batch.get("shards", [0] * len(batch["invocations"]))[number - 1]
+                shard_seconds[shard] += duration
+                if batch["lane"] == "subprocess":
+                    timings.append({"selectors": batch["invocations"][number - 1], "seconds": duration})
             rows.append(f"| {name} | {report.get('executed', 0)} | {report.get('skipped', 0)} | "
                         f"{report.get('duration_seconds', 'incomplete')} | {report['ok']} |")
     scheduled = set(plan["tests"]) - set(plan["excluded"])
@@ -290,6 +324,20 @@ def summarize(plan, directory):
                "Counts are test definitions; parameter cases are retained in result bundles.\n\n"
                "| Invocation | Executed | Skipped | Seconds | OK |\n|---|---:|---:|---:|---|\n" + "\n".join(rows)
                + f"\n\nMissing invocation reports: {', '.join(missing) or 'none'}.\n")
+    if "shard_seconds" in plan:
+        summary += "\n| Lane | Estimated seconds | Actual invocation seconds |\n|---|---:|---:|\n"
+        for shard, seconds in enumerate(shard_seconds):
+            estimate = "n/a" if shard == 0 else f"{plan['shard_seconds'][shard - 1]:.2f}"
+            summary += f"| {shard} | {estimate} | {seconds:.2f} |\n"
+        summary += f"\nTiming sources: {json.dumps(plan.get('timing_sources', {}), sort_keys=True)}.\n"
+        summary += "Actual totals include only reports with durations; check coverage above for incomplete lanes.\n"
+    invocation_count = sum(len(batch["invocations"]) for batch in plan["batches"] if batch["lane"] == "subprocess")
+    if success and timings and len(timings) == invocation_count:
+        source = (f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                  f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
+                  if all(os.environ.get(key) for key in ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))
+                  else f"plan:{plan['id']}")
+        write_json(timing_path, {"source": source, "invocations": timings})
     (directory / "summary.md").write_text(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
