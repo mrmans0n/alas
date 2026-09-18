@@ -574,12 +574,27 @@ final class ACPSessionManager: ObservableObject {
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
     private var disposingAttachments: Set<ACPSession.ID> = []
+    /// Latches a teardown cancellation until the coalesced attach waiters
+    /// have observed it. `performAttach` clears `disposingAttachments` as
+    /// part of its own cleanup before those waiters resume.
+    private var cancelledInFlightAttachments: Set<ACPSession.ID> = []
+    private var teardownCounts: [ACPSession.ID: Int] = [:]
+    private var teardownWaiters: [ACPSession.ID: [CheckedContinuation<Void, Never>]] = [:]
     private struct AttachingConnection {
         let connection: ACPConnection
         var remoteSessionId: String?
         var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
+    /// Concurrent callers may all need the result of the same connection
+    /// attempt. Callers that arrive during `.spawning` wait for its terminal
+    /// state instead of observing a transient failure.
+    private var inFlightAttachments: Set<ACPSession.ID> = []
+    private struct AttachmentWaiter {
+        let continuation: CheckedContinuation<Bool, Never>
+        let arrivedAfterTemporaryDetach: Bool
+    }
+    private var attachmentWaiters: [ACPSession.ID: [AttachmentWaiter]] = [:]
     private var pendingQueueForceSends: [ACPSession.ID: [UUID]] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
@@ -2568,6 +2583,13 @@ final class ACPSessionManager: ObservableObject {
 // MARK: - Writer lease + heartbeat
 
 extension ACPSessionManager {
+    private func waitForTeardown(sessionId: ACPSession.ID) async {
+        guard teardownCounts[sessionId, default: 0] > 0 else { return }
+        await withCheckedContinuation { continuation in
+            teardownWaiters[sessionId, default: []].append(continuation)
+        }
+    }
+
     private enum BoundedOperationOutcome {
         case succeeded
         case failed(any Error)
@@ -3208,6 +3230,34 @@ extension ACPSessionManager {
     /// runs the setup check; if ready, spawns the process, initialises ACP,
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
+        guard inFlightAttachments.insert(sessionId).inserted else {
+            let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
+                attachmentWaiters[sessionId, default: []].append(.init(
+                    continuation: continuation,
+                    arrivedAfterTemporaryDetach: cancelledInFlightAttachments.contains(sessionId)
+                ))
+            }
+            guard retryAfterDetachedAttachment else { return }
+            await waitForTeardown(sessionId: sessionId)
+            // A detach can cancel the in-flight attempt while this caller is
+            // waiting. Re-enter `attach` so concurrent reconnects coalesce
+            // again, rather than all starting a replacement attachment.
+            await attach(to: sessionId, freshlyCreated: freshlyCreated)
+            return
+        }
+        defer {
+            inFlightAttachments.remove(sessionId)
+            let wasDetached = cancelledInFlightAttachments.remove(sessionId) != nil
+            let waiters = attachmentWaiters.removeValue(forKey: sessionId) ?? []
+            for waiter in waiters {
+                waiter.continuation.resume(returning: wasDetached && waiter.arrivedAfterTemporaryDetach)
+            }
+        }
+        await waitForTeardown(sessionId: sessionId)
+        await performAttach(to: sessionId, freshlyCreated: freshlyCreated)
+    }
+
+    private func performAttach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
         guard let session = sessions[sessionId] else { return }
         switch session.agentState {
         case .spawning, .ready: return
@@ -3236,9 +3286,21 @@ extension ACPSessionManager {
         // Only the lease holder runs a live agent + writes. If another
         // live instance owns this session, stay a read-only mirror.
         guard await acquireWriterLease(sessionId: sessionId) else {
+            disposingAttachments.remove(sessionId)
             session.agentState = .idle
             session.clearConnectionRecovery()
             beginMirroring(sessionId: sessionId)
+            return
+        }
+        // Teardown can arrive while the lease acquisition was suspended.
+        // Do not start any connection work after that cancelled attempt
+        // successfully claims the lease.
+        guard sessions[sessionId] === session,
+              !disposingAttachments.contains(sessionId),
+              !isDisposed
+        else {
+            await releaseWriterLease(sessionId: sessionId)
+            disposingAttachments.remove(sessionId)
             return
         }
         endMirroring(sessionId: sessionId)
@@ -5012,13 +5074,28 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        teardownCounts[sessionId, default: 0] += 1
+        defer {
+            let remaining = teardownCounts[sessionId, default: 1] - 1
+            if remaining == 0 {
+                teardownCounts.removeValue(forKey: sessionId)
+                for waiter in teardownWaiters.removeValue(forKey: sessionId) ?? [] {
+                    waiter.resume()
+                }
+            } else {
+                teardownCounts[sessionId] = remaining
+            }
+        }
         cancelAutoReconnect(sessionId: sessionId)
         let session = sessions[sessionId]
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
-        if attachingSessions.contains(sessionId) {
+        if inFlightAttachments.contains(sessionId) {
             disposingAttachments.insert(sessionId)
+            if !closeRemote {
+                cancelledInFlightAttachments.insert(sessionId)
+            }
         }
         let attaching = attachingConnections.removeValue(forKey: sessionId)
         // Reset transient session state SYNCHRONOUSLY before any await.
