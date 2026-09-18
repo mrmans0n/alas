@@ -339,16 +339,14 @@ struct NewWorktreeDialog: View {
 
     private var effectiveAutoLaunchAgent: AgentDefinition? {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return nil }
-        let resolved = AgentAutoLaunch.resolve(
-            registry: state.agentRegistry,
+        let agentId = Self.resolvedAutoLaunchAgentID(
             globalAgentId: state.config.agents.worktreeAutoLaunch.agentId,
-            globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
             projectMode: project.startupScripts.worktreeAgentMode,
             projectAgentId: project.startupScripts.worktreeAgentId,
-            projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions,
-            repoAgentId: repoDefaultAgentId
+            repoAgentId: repoDefaultAgentId,
+            enabledAgents: launchEligibleAgents
         )
-        return resolved.flatMap { state.agent(id: $0.agentId) }
+        return agentId.flatMap { id in launchEligibleAgents.first { $0.id == id } }
     }
 
     /// The repo's `.alas/config.json` default agent when it names an
@@ -963,6 +961,28 @@ struct NewWorktreeDialog: View {
         locallyEnabledAgents: [AgentDefinition]
     ) -> [AgentDefinition] {
         isRemoteProject ? configuredEnabledAgents : locallyEnabledAgents
+    }
+
+    nonisolated static func resolvedAutoLaunchAgentID(
+        globalAgentId: String?,
+        projectMode: ProjectStartupScriptMode,
+        projectAgentId: String?,
+        repoAgentId: String?,
+        enabledAgents: [AgentDefinition]
+    ) -> String? {
+        func enabled(_ id: String?) -> String? {
+            guard let id, enabledAgents.contains(where: { $0.id == id }) else { return nil }
+            return id
+        }
+
+        switch projectMode {
+        case .disabled:
+            return nil
+        case .useGlobal:
+            return enabled(repoAgentId) ?? enabled(globalAgentId)
+        case .overrideGlobal, .appendToGlobal:
+            return enabled(projectAgentId)
+        }
     }
 
     nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {
