@@ -397,6 +397,35 @@ struct WorktreeCleanupModelTests {
         #expect(message.contains("2 attached sessions will close"))
     }
 
+    @Test func deleteConfirmationListsOnlyAuthorizedTargets() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .candidate(confidence: .high))
+        var confirmation: (title: String, message: String)?
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree, b.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree, b.worktree] },
+            scan: { _, _ in .success([a, b]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { title, message, _ in
+                confirmation = (title, message)
+                return false
+            },
+            authorizeDelete: { _ in
+                .init(unavailableReasons: [b.id: "Workspace Checkout ownership could not be verified"])
+            }
+        )
+        model.applyScanResult([a, b])
+
+        await model.deleteSelected()
+
+        #expect(confirmation?.title == "Delete 1 worktree?")
+        #expect(confirmation?.message.contains("• a") == true)
+        #expect(confirmation?.message.contains("• b") == false)
+    }
+
     /// A row carrying a `.mergedOnForge` signal — the scan matched its exact
     /// HEAD SHA against a confirmed-merged review request — is trusted
     /// enough to force-delete its branch, regardless of that row's overall

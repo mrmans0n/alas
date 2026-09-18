@@ -238,9 +238,12 @@ final class WorktreeCleanupModel {
     }
 
     func confirmationMessage(
-        authorization: WorktreeCleanupDeleteAuthorization = .init()
+        authorization: WorktreeCleanupDeleteAuthorization = .init(),
+        targetIds: Set<String>? = nil
     ) -> String {
-        let selected = candidates.filter { selectedIds.contains($0.id) }
+        let selected = candidates.filter { candidate in
+            selectedIds.contains(candidate.id) && (targetIds?.contains(candidate.id) ?? true)
+        }
         let list = selected.map { candidate in
             var warnings = candidate.signals
                 .filter(\.isBlocking)
@@ -310,7 +313,10 @@ final class WorktreeCleanupModel {
         }
         guard confirm(
             "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
-            confirmationMessage(authorization: authorization),
+            confirmationMessage(
+                authorization: authorization,
+                targetIds: Set(targets.map(\.id))
+            ),
             buttonTitle
         ) else {
             results = []

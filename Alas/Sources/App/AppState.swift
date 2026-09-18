@@ -9153,7 +9153,10 @@ final class AppState {
                 sessionStateIsAcknowledged = !hasLiveSessions(worktreeId: worktree.id)
             }
             let ownershipIsValid = authorization == nil || (
-                workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                Self.workspaceCleanupOwnershipAvailable(
+                    workspacesEnabled: config.workspacesEnabled,
+                    workspacesCanMutate: workspacesManager.canMutate
+                ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             )
             guard sessionStateIsAcknowledged,
                   projectsManager.operationState(for: worktree.id) == nil,
@@ -9202,6 +9205,28 @@ final class AppState {
                             worktreeId: worktree.id,
                             branch: worktree.branch,
                             outcome: .skipped(reason: "Git deletion risks changed since confirmation")
+                        ))
+                        continue
+                    }
+                    let postPreflightDirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
+                        current: dirtyTabGenerations(worktreeId: worktree.id),
+                        acknowledgedAtConfirmation: dirtyTabsAtConfirmation[worktree.id] ?? [:]
+                    )
+                    let postPreflightSessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+                        .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+                    let postPreflightOwnershipIsValid = Self.workspaceCleanupOwnershipAvailable(
+                        workspacesEnabled: config.workspacesEnabled,
+                        workspacesCanMutate: workspacesManager.canMutate
+                    ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                    guard postPreflightDirtyIsAcknowledged,
+                          postPreflightSessionsAreAcknowledged,
+                          projectsManager.operationState(for: worktree.id) == nil,
+                          postPreflightOwnershipIsValid
+                    else {
+                        results.append(WorktreeBatchResult(
+                            worktreeId: worktree.id,
+                            branch: worktree.branch,
+                            outcome: .skipped(reason: "Worktree changed since confirmation")
                         ))
                         continue
                     }
@@ -9641,11 +9666,14 @@ final class AppState {
             )
             let sessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
                 .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+            let ownershipIsValid = Self.workspaceCleanupOwnershipAvailable(
+                workspacesEnabled: config.workspacesEnabled,
+                workspacesCanMutate: workspacesManager.canMutate
+            ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard dirtyIsAcknowledged,
                   sessionsAreAcknowledged,
                   projectsManager.operationState(for: worktree.id) == nil,
-                  workspacesManager.canMutate,
-                  worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                  ownershipIsValid
             else {
                 results.append(.init(
                     worktreeId: worktree.id,
