@@ -91,16 +91,15 @@ struct EditorDisplayIntegrationTests {
         tabs.discardBuffer(worktreeId: "next", tabId: "external")
     }
 
-    @Test func twoSecondServerDelayDoesNotBlockNativeTypingOrMenu() async throws {
+    @Test("pending server request does not block native typing or menu")
+    func twoSecondServerDelayDoesNotBlockNativeTypingOrMenu() async throws {
         let fixture = try await Fixture(String(repeating: "let value = 1\n", count: 10000))
         defer { fixture.remove() }
         let transport = FakeTransport()
         defer { transport.finish() }
         let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
-        var received = false
         var replied = false
-        var delayed: Task<Void, Never>?
-        defer { delayed?.cancel() }
+        var reply: (() -> Void)?
         transport.onSend = { sent in
             guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
             Task { @MainActor in
@@ -108,10 +107,7 @@ struct EditorDisplayIntegrationTests {
                 // enclosing `@MainActor` closure already carries the guarantee, and
                 // this asserts it at runtime the same way.
                 MainActor.assertIsolated()
-                received = true
-                delayed = Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(2))
-                    guard !Task.isCancelled else { return }
+                reply = {
                     transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": .null]).encodedData(), as: UTF8.self))
                     replied = true
                 }
@@ -119,20 +115,18 @@ struct EditorDisplayIntegrationTests {
         }
         let request = Task { try await client.hover(uri: "file:///tmp/file.swift", position: .init(line: 0, character: 0)) }
         defer { request.cancel() }
-        try await Self.eventually("delayed hover request") { received }
+        try await Self.eventually("pending hover request") { reply != nil }
         let router = EditorCommandRouter(capabilities: .init(supportedCommands: [.hover]), isServerReady: true, handlers: [.hover: { _ in }])
         fixture.view.editorCommandRouter = router
         let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 4, y: 4), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-        let start = ContinuousClock.now
         fixture.view.setSourceSelectedRange(NSRange(location: 0, length: 0))
         fixture.view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
         let menu = fixture.view.menu(for: event)
-        let duration = start.duration(to: .now)
         #expect(fixture.buffer.storage.string.hasPrefix("xlet value"))
         #expect(menu?.items.contains { $0.title == "Show Hover" } == true)
         #expect(!replied)
-        #expect(duration < .seconds(1))
-        print("EDITOR_LSP_RESPONSIVENESS sourceUTF16=140000 lines=10000 delaySeconds=2 typingAndMenu=\(duration)")
+        let sendReply = try #require(reply)
+        sendReply()
         _ = try await request.value
         #expect(replied)
         let snippets = EditorNavigationStore()

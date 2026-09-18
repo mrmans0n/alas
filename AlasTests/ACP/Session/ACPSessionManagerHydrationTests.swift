@@ -741,6 +741,7 @@ struct ACPSessionManagerHydrationTests {
         let warning = try #require(s.contextRestoreWarning)
         #expect(warning.canSendTranscript)
         #expect(s.contextRecoveryStatus == .sendingTranscript)
+        await mgr.awaitBackfill(id: "s")
     }
 
     @Test("hydrateIfNeeded for short transcripts skips backfill")

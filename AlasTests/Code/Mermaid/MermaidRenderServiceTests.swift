@@ -79,14 +79,16 @@ struct MermaidRenderServiceTests {
     }
 
     @Test("cancelling the last consumer cancels its render task")
-    func cancellingLastConsumerCancelsRenderTask() async {
-        let backend = CancellationTrackingMermaidBackend()
+    func cancellingLastConsumerCancelsRenderTask() async throws {
+        let backend = SuspendedMermaidBackend()
         let service = MermaidRenderService(backend: backend)
         let task = Task {
             await service.render(key: TestMermaid.key(source: "graph TD; A-->B"))
         }
+        defer { task.cancel() }
 
-        #expect(await backend.waitForStart())
+        let didStart = await backend.waitForStart()
+        try #require(didStart)
         task.cancel()
         _ = await task.value
 
@@ -179,5 +181,42 @@ private actor CancellationTrackingMermaidBackend: MermaidRenderingBackend {
             await Task.yield()
         }
         return false
+    }
+}
+
+private actor SuspendedMermaidBackend: MermaidRenderingBackend {
+    private var didStart = false
+    private var renderContinuation: CheckedContinuation<MermaidRenderOutcome, Never>?
+    private(set) var observedCancellation = false
+
+    func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
+        didStart = true
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    observedCancellation = true
+                    continuation.resume(returning: .failed(.renderFailed("cancelled")))
+                } else {
+                    renderContinuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelRender() }
+        }
+    }
+
+    func waitForStart() async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !didStart, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return didStart
+    }
+
+    private func cancelRender() {
+        observedCancellation = true
+        renderContinuation?.resume(returning: .failed(.renderFailed("cancelled")))
+        renderContinuation = nil
     }
 }

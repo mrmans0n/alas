@@ -201,9 +201,8 @@ struct SignatureHelpFeatureTests {
             isEnabled: { true }
         )
         textView.signatureHelpManualTriggerHandler?()
-        for _ in 0 ..< 100 {
-            if feature.testingSnapshot.help != nil { break }
-            await Task.yield()
+        try await Self.eventually("signature help response") {
+            feature.testingSnapshot.help != nil
         }
 
         #expect(feature.testingSnapshot.help?.signatures.first?.label == "f(value)")
@@ -230,5 +229,13 @@ struct SignatureHelpFeatureTests {
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         return textView
+    }
+
+    private static func eventually(_ description: String, _ condition: () -> Bool) async throws {
+        for _ in 0 ..< 300 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition(), "Timed out waiting for \(description)")
     }
 }

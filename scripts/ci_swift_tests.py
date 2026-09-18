@@ -2,6 +2,7 @@
 """Schedule Xcode's compiled test inventory and reconcile its result bundles."""
 
 import argparse
+from collections import deque
 from contextlib import suppress
 import csv
 import json
@@ -71,19 +72,49 @@ def make_plan(document, policy, batch_count):
         selectors = sorted(groups)
         chunks = ([selectors[i:i + 3] for i in range(0, len(selectors), 3)]
                   if lane == "subprocess" else [selectors[i::batch_count] for i in range(batch_count)])
+        if lane == "subprocess":
+            bounded_chunks = []
+            for chunk in chunks:
+                regular = []
+                for selector in chunk:
+                    if slow_tests.intersection(groups[selector]):
+                        # Parameterized restore suites can consume the entire
+                        # invocation deadline. Give small method selections
+                        # independent deadlines, including result finalization.
+                        methods = groups[selector]
+                        bounded_chunks.extend(methods[i:i + 4] for i in range(0, len(methods), 4))
+                    else:
+                        regular.append(selector)
+                if regular:
+                    bounded_chunks.append(regular)
+            chunks = bounded_chunks
+
+        def invocation_timeout(chunk):
+            return 360 if lane == "ordinary" or any(
+                test in slow_tests for selector in chunk for test in groups.get(selector, [selector])) else 120
+
+        if lane == "subprocess":
+            # Spread the larger deadlines first so splitting a slow suite does
+            # not overload one batch while another has room for more work.
+            buckets = [[] for _ in range(batch_count)]
+            budgets = [0] * batch_count
+            for chunk in sorted(chunks, key=invocation_timeout, reverse=True):
+                bucket = min(range(batch_count), key=lambda candidate: (budgets[candidate], candidate))
+                buckets[bucket].append(chunk)
+                budgets[bucket] += invocation_timeout(chunk) + 40
         for index in range(batch_count):
-            invocations = chunks[index::batch_count] if lane == "subprocess" else [chunks[index]]
+            invocations = buckets[index] if lane == "subprocess" else [chunks[index]]
             invocations = [chunk for chunk in invocations if chunk]
-            selected = [test for chunk in invocations for selector in chunk for test in groups[selector]]
+            selected = [test for chunk in invocations for selector in chunk for test in groups.get(selector, [selector])]
             # Keep partial suites together, but pass only their runnable test
             # identifiers to Xcode so an excluded sibling cannot execute.
             arguments = [[selector for suite in chunk
-                          for selector in ([suite] if len(suite_lanes[suite]) == 1 else groups[suite])]
+                          for selector in (groups[suite] if suite in groups and len(suite_lanes[suite]) > 1 else [suite])]
                          for chunk in invocations]
-            timeouts = [360 if lane == "ordinary" or any(test in slow_tests for suite in chunk for test in groups[suite])
-                        else 120 for chunk in invocations]
-            # The workflow reserves 30 minutes per subprocess step. Include
-            # termination/result extraction and leave a minute for reporting.
+            timeouts = [invocation_timeout(chunk) for chunk in invocations]
+            # Retain the logical batch's 30-minute planning limit, including
+            # termination/result extraction and a minute for reporting. The
+            # measured scheduler below redistributes invocations across jobs.
             if lane == "subprocess" and sum(timeout + 40 for timeout in timeouts) > 1740:
                 raise ValueError(f"Subprocess batch {index + 1} exceeds its time budget; increase the batch count")
             batches.append({"id": f"{lane}-{index + 1}", "lane": lane, "index": index,
@@ -259,10 +290,18 @@ def run_batch(plan, directory, lane, index, shard=None):
         print(f"{name}: ok={report['ok']} executed={report.get('executed', 0)} "
               f"skipped={report.get('skipped', 0)} duration={report['duration_seconds']}s", flush=True)
         if not report["ok"]:
+            print(f"Selected tests: {', '.join(selectors)}", flush=True)
+            if report.get("exit_status") == 124:
+                print(f"Timed out after {batch['timeouts'][number - 1]} seconds", flush=True)
             print(f"Diagnostics: {report_path}; {bundle}", flush=True)
             for field in ("error", "failed", "missing", "unexpected"):
                 if report.get(field):
                     print(f"{field}: {report[field]}", flush=True)
+            log = directory / f"{name}.log"
+            if log.exists():
+                with log.open(errors="replace") as output:
+                    tail = deque(output, maxlen=80)
+                print("Last test output:\n" + "".join(tail), flush=True)
         success = success and report["ok"]
     return success
 

@@ -814,6 +814,7 @@ struct ACPSessionRunnerTests {
                 && callbackTitles == ["New session"]
         }
 
+        await runner.flushPersistence()
         let row = try #require(try store.loadSession(id: "s"))
         #expect(row.title == "New session")
         #expect(row.titleSource == .placeholder)
