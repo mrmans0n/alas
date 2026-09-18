@@ -17,6 +17,8 @@ struct AgentLauncherDialog: View {
     @State private var discoveryOwner: SessionOwnerID?
     @State private var selectedSessionIndex = 0
     @State private var loadingMore = false
+    @State private var openingSessionId: String?
+    @State private var openingError: String?
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
 
@@ -569,7 +571,7 @@ struct AgentLauncherDialog: View {
                     detail: "Start a new \(agent.displayName) session",
                     systemImage: "plus",
                     isSelected: selectedSessionIndex == 0,
-                    isEnabled: true,
+                    isEnabled: openingSessionId == nil,
                     onTap: launchNewChat
                 )
 
@@ -610,12 +612,16 @@ struct AgentLauncherDialog: View {
                 ForEach(Array(discovered.enumerated()), id: \.element.id) { index, item in
                     let canOpen = item.isAlreadyInAlas
                         || (capabilities?.canOpenRemoteSession == true && item.isCompatibleWithAlas)
+                    let isOpening = openingSessionId == item.remoteSessionId
                     AgentSessionLauncherRow(
                         title: item.title,
-                        detail: sessionDetail(item, canOpen: canOpen),
-                        systemImage: item.isAlreadyInAlas ? "checkmark.circle" : "clock",
+                        detail: isOpening
+                            ? "Opening…"
+                            : sessionDetail(item, canOpen: canOpen),
+                        systemImage: isOpening ? nil : (item.isAlreadyInAlas ? "checkmark.circle" : "clock"),
                         isSelected: selectedSessionIndex == index + 1,
-                        isEnabled: canOpen,
+                        isEnabled: canOpen && openingSessionId == nil,
+                        spinner: isOpening,
                         onTap: { openDiscoveredSession(item) }
                     )
                     .contextMenu {
@@ -667,6 +673,9 @@ struct AgentLauncherDialog: View {
             }
             if let deletionError {
                 launcherStatusRow(deletionError)
+            }
+            if let openingError {
+                launcherStatusRow(openingError)
             }
         }
     }
@@ -882,7 +891,7 @@ struct AgentLauncherDialog: View {
     }
 
     private func launchNewChat() {
-        guard let chatAgent else { return }
+        guard let chatAgent, openingSessionId == nil else { return }
         let owner = discoveryOwner
         Task { @MainActor in
             if let owner {
@@ -895,16 +904,28 @@ struct AgentLauncherDialog: View {
     }
 
     private func openDiscoveredSession(_ session: ACPDiscoveredSession) {
-        guard let capabilities = discoveryModel?.capabilities,
-              let owner = discoveryOwner
+        guard let discoveryModel,
+              let capabilities = discoveryModel.capabilities,
+              let owner = discoveryOwner,
+              openingSessionId == nil
         else { return }
+        openingSessionId = session.remoteSessionId
+        openingError = nil
         Task {
             let opened = await appState.openDiscoveredACPSession(
                 session,
                 owner: owner,
                 capabilities: capabilities
             )
-            guard opened else { return }
+            // Esc/back while the open was in flight rebuilds the browser
+            // around a fresh discovery model. Never close the launcher on
+            // a completion from an outdated browser generation.
+            guard self.discoveryModel === discoveryModel else { return }
+            guard opened else {
+                openingSessionId = nil
+                openingError = "Could not open session. Try again."
+                return
+            }
             close()
         }
     }
@@ -966,6 +987,8 @@ struct AgentLauncherDialog: View {
         loadingMore = false
         deletionRequest = nil
         deletionError = nil
+        openingSessionId = nil
+        openingError = nil
         Task { await prior?.stop() }
     }
 
@@ -1014,18 +1037,17 @@ struct ACPSessionDeletionRequest: Identifiable {
 private struct AgentSessionLauncherRow: View {
     let title: String
     let detail: String
-    let systemImage: String
+    let systemImage: String?
     let isSelected: Bool
     let isEnabled: Bool
+    var spinner = false
     let onTap: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 12))
-                    .foregroundStyle(isEnabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+                iconView
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -1046,6 +1068,19 @@ private struct AgentSessionLauncherRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        if spinner {
+            Spinner().frame(width: 12, height: 12)
+        } else if let systemImage {
+            Image(systemName: systemImage)
+                .font(.system(size: 12))
+                .foregroundStyle(isEnabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+        } else {
+            Color.clear
+        }
     }
 }
 

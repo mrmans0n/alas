@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Show a loading state in the agent launcher while opening a discovered agent session instead of freezing without feedback.
+
 ## [0.18.5] - 2026-09-18
 
 ### ✨ Features
