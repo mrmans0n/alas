@@ -198,6 +198,25 @@ struct WorktreeRowView: View {
         let baseBranch: String
         let preferLocal: Bool
         let revision: Int
+
+        /// What's actually being counted, excluding `revision`. A revision
+        /// bump alone — e.g. an unrelated ref change elsewhere in the project —
+        /// still triggers a refetch via `.task(id:)`, but should not hide an
+        /// already-loaded count while that refetch is in flight.
+        struct Identity: Hashable {
+            let path: URL
+            let branch: String
+            let baseBranch: String
+            let preferLocal: Bool
+        }
+
+        var identity: Identity {
+            Identity(path: path, branch: branch, baseBranch: baseBranch, preferLocal: preferLocal)
+        }
+    }
+
+    nonisolated static func hasVisibleCommits(_ commits: GitService.BranchCommitCount?) -> Bool {
+        (commits?.count ?? 0) > 0
     }
 
     nonisolated static func showsCommitCount(
@@ -228,12 +247,14 @@ struct WorktreeRowView: View {
     }
 
     private var visibleBranchCommits: GitService.BranchCommitCount? {
-        guard loadedCommitQuery == activeCommitQuery,
+        guard let activeCommitQuery,
+              loadedCommitQuery?.identity == activeCommitQuery.identity,
               Self.showsCommitCount(
                 harnessState: harnessSummary?.state,
                 worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
                 isMain: isMain
-              ) else { return nil }
+              ),
+              Self.hasVisibleCommits(branchCommits) else { return nil }
         return branchCommits
     }
 
@@ -325,9 +346,15 @@ struct WorktreeRowView: View {
             contextMenuContent
         }
         .task(id: activeCommitQuery) {
-            branchCommits = nil
-            loadedCommitQuery = nil
-            guard let query = activeCommitQuery else { return }
+            guard let query = activeCommitQuery else {
+                branchCommits = nil
+                loadedCommitQuery = nil
+                return
+            }
+            if loadedCommitQuery?.identity != query.identity {
+                branchCommits = nil
+                loadedCommitQuery = nil
+            }
             // Coalesce bursts of ref updates before launching Git.
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             let summary = try? await GitService().branchCommitCount(
