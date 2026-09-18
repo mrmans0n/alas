@@ -554,6 +554,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: s,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
@@ -563,6 +564,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
@@ -575,6 +577,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
@@ -945,6 +948,13 @@ struct CenterPaneView: View {
             )
         }
         return state.agentAvailability(for: worktree)
+    }
+
+    private var composerExecutionTarget: AgentExecutionTarget {
+        if let checkout = selectedCheckoutForSharedOwner {
+            return checkout.executionLocation.agentExecutionTarget
+        }
+        return state.agentExecutionTarget(for: worktree)
     }
 
     private var centerAgentAvailabilityTaskID: String {

@@ -4,6 +4,7 @@ struct CommitEditorTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let tabState: CommitEditorTabState
+    let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -37,16 +38,12 @@ struct CommitEditorTabView: View {
     @Environment(\.theme) private var theme
     private let git = GitService()
 
-    private var executionTarget: AgentExecutionTarget {
-        .resolve(worktreePath: worktreePath)
-    }
-
     private var agentAvailability: AgentAvailabilityState {
-        appState.agentAvailability(worktreePath: worktreePath)
+        appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
     }
 
     private var agentAvailabilityTaskKey: String {
-        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath))"
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: executionTarget))"
     }
 
     private static let minPaneWidth: CGFloat = 140
@@ -99,7 +96,13 @@ struct CommitEditorTabView: View {
                     agentAvailability: agentAvailability,
                     executionTarget: executionTarget,
                     onRetryAgentAvailability: {
-                        Task { await appState.loadAgentAvailability(worktreePath: worktreePath, force: true) }
+                        Task {
+                            await appState.loadAgentAvailability(
+                                worktreePath: worktreePath,
+                                executionTarget: executionTarget,
+                                force: true
+                            )
+                        }
                     },
                     onGenerate: generateMessage,
                     primaryAction: CommitPrimaryAction(
@@ -139,7 +142,7 @@ struct CommitEditorTabView: View {
             _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
         }
         .task(id: agentAvailabilityTaskKey) {
-            await appState.loadAgentAvailability(worktreePath: worktreePath)
+            await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
         }
         .task(id: diffTaskKey) {
             guard !loadingDetails else { return }
@@ -524,7 +527,7 @@ struct CommitEditorTabView: View {
                         target: executionTarget,
                         worktreePath: worktreePath.path
                     )
-                    await appState.loadAgentAvailability(worktreePath: worktreePath)
+                    await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
                 }
                 self.error = runError.localizedDescription
             } catch {

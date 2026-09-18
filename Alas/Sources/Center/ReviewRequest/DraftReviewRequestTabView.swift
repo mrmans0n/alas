@@ -5,6 +5,7 @@ struct DraftReviewRequestTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let tabState: DraftReviewRequestTabState
+    let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -37,16 +38,12 @@ struct DraftReviewRequestTabView: View {
 
     private let git = GitService()
 
-    private var executionTarget: AgentExecutionTarget {
-        .resolve(worktreePath: worktreePath)
-    }
-
     private var agentAvailability: AgentAvailabilityState {
-        appState.agentAvailability(worktreePath: worktreePath)
+        appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
     }
 
     private var agentAvailabilityTaskKey: String {
-        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath))"
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: executionTarget))"
     }
 
     private enum Field: Hashable { case title, body }
@@ -126,7 +123,7 @@ struct DraftReviewRequestTabView: View {
             loadDraftCommentController()
         }
         .task(id: agentAvailabilityTaskKey) {
-            await appState.loadAgentAvailability(worktreePath: worktreePath)
+            await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
         }
         .onDisappear {
             generation?.cancel()
@@ -196,7 +193,13 @@ struct DraftReviewRequestTabView: View {
                 agentAvailability: agentAvailability,
                 executionTarget: executionTarget,
                 onRetryAgentAvailability: {
-                    Task { await appState.loadAgentAvailability(worktreePath: worktreePath, force: true) }
+                    Task {
+                        await appState.loadAgentAvailability(
+                            worktreePath: worktreePath,
+                            executionTarget: executionTarget,
+                            force: true
+                        )
+                    }
                 },
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
@@ -628,7 +631,7 @@ struct DraftReviewRequestTabView: View {
                         target: executionTarget,
                         worktreePath: worktreePath.path
                     )
-                    await appState.loadAgentAvailability(worktreePath: worktreePath)
+                    await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
                 }
                 self.error = runError.localizedDescription
             } catch {
