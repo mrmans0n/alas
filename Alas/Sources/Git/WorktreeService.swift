@@ -1029,20 +1029,22 @@ struct WorktreeService {
             try failAfterRollingBack("Worktree changed while it was being staged.")
         }
 
-        let stagedSubmodulesHaveNoLocalState: Bool
-        do {
-            stagedSubmodulesHaveNoLocalState = try await stagedInitializedSubmodulesHaveNoLocalState(
-                ticket.stagedPath,
-                gitDirectory: expectedRegistration.gitDirectory
-            )
-        } catch {
-            try failAfterRollingBack(error.localizedDescription)
-        }
-        guard stagedSubmodulesHaveNoLocalState else {
-            try failAfterRollingBack("Worktree contains initialized submodule local state.")
-        }
-        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
-            try failAfterRollingBack("Worktree changed while its submodules were audited.")
+        if !force {
+            let stagedSubmodulesHaveNoLocalState: Bool
+            do {
+                stagedSubmodulesHaveNoLocalState = try await stagedInitializedSubmodulesHaveNoLocalState(
+                    ticket.stagedPath,
+                    gitDirectory: expectedRegistration.gitDirectory
+                )
+            } catch {
+                try failAfterRollingBack(error.localizedDescription)
+            }
+            guard stagedSubmodulesHaveNoLocalState else {
+                try failAfterRollingBack("Worktree contains initialized submodule local state.")
+            }
+            guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+                try failAfterRollingBack("Worktree changed while its submodules were audited.")
+            }
         }
 
         if !force {

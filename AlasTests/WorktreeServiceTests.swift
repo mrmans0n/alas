@@ -1696,51 +1696,26 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1)
     }
 
-    @Test func fastLocalRemoveRestoresWhenSubmoduleLocalStateAppearsAfterApproval() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(
-            suffix: "fast-submodule-local-state-race"
-        )
-        let trashRoot = WorktreeTrash.root(
-            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
-        )
-        defer {
-            try? FileManager.default.removeItem(at: trashRoot)
-            fixture.removeFiles()
-        }
+    @Test func fastLocalRemoveAllowsApprovedSubmoduleLocalState() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "fast-submodule-local-state")
+        defer { fixture.removeFiles() }
+        let submodule = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodule)
 
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await fixture.service.removeFastLocal(
-                repoPath: fixture.repo,
-                worktree: fixture.worktree,
-                deleteBranchIfMerged: false,
-                force: true,
-                moveItem: { source, destination in
-                    if source.standardizedFileURL == fixture.worktree.path.standardizedFileURL {
-                        let submodule = source.appendingPathComponent("Deps/Submodule")
-                        let process = Foundation.Process()
-                        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-                        process.arguments = ["tag", "local-after-approval"]
-                        process.currentDirectoryURL = submodule
-                        try process.run()
-                        process.waitUntilExit()
-                        guard process.terminationStatus == 0 else {
-                            throw CocoaError(.fileWriteUnknown)
-                        }
-                    }
-                    try FileManager.default.moveItem(at: source, to: destination)
-                }
-            )
-        }
-
-        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
-        #expect(FileManager.default.fileExists(
-            atPath: fixture.worktree.path.appendingPathComponent("Deps/Submodule").path
-        ))
-        let registrations = try await Process.git(
-            ["worktree", "list", "--porcelain"],
-            cwd: fixture.repo
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: true
         )
-        #expect(registrations.stdout.contains(fixture.worktree.path.path))
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let listed = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
+        #expect(listed.count == 1)
     }
 
     @Test func removeDoesNotForceDeleteIgnoredDirtySubmodule() async throws {
