@@ -3,8 +3,8 @@ import SwiftUI
 struct WorktreeCleanupSheet: View {
     @Bindable var model: WorktreeCleanupModel
     let showKeepBranchOption: Bool
+    let onOpenCheckout: (UUID) -> Void
     let onClose: () -> Void
-
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -84,7 +84,8 @@ struct WorktreeCleanupSheet: View {
                             isSelected: model.selectedIds.contains(row.id),
                             isSelectionDisabled: model.isScanning,
                             result: model.results.first { $0.worktreeId == row.id },
-                            onToggle: { model.toggle(row.id) }
+                            onToggle: { model.toggle(row.id) },
+                            onOpenCheckout: onOpenCheckout
                         )
                     }
                 }
@@ -124,7 +125,7 @@ private struct WorktreeCleanupRow: View {
     let isSelectionDisabled: Bool
     let result: WorktreeBatchResult?
     let onToggle: () -> Void
-
+    let onOpenCheckout: (UUID) -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -164,13 +165,20 @@ private struct WorktreeCleanupRow: View {
                     ForEach(candidate.signals, id: \.self) { signal in
                         HStack(spacing: 5) {
                             Icon(
-                                name: signal.isBlocking ? "x" : "check",
+                                name: signal.isHardBlocker ? "x" : signal.isBlocking ? "alert" : "check",
                                 size: 9,
-                                color: theme.color(signal.isBlocking ? "fg-muted" : "add")
+                                color: theme.color(
+                                    signal.isHardBlocker ? "del" : signal.isBlocking ? "mod" : "add"
+                                )
                             )
                             Text(signal.label)
                                 .font(.system(size: 11))
                                 .foregroundColor(theme.color("fg-dim"))
+                            if case .workspaceCheckout(let owner) = signal {
+                                AlasButton(title: "Open Checkout", style: .normal) {
+                                    onOpenCheckout(owner.id)
+                                }
+                            }
                         }
                     }
                 } else {
@@ -195,14 +203,18 @@ private struct WorktreeCleanupRow: View {
     }
 
     private func verdictLabel(_ verdict: WorktreeCleanupVerdict) -> String {
+        if row.candidate?.isSelectable == true,
+           row.candidate?.signals.contains(where: \.isBlocking) == true {
+            return "Needs confirmation"
+        }
         switch verdict {
         case .candidate(.high):   return "Merged"
         case .candidate(.medium): return "Merged locally"
         case .candidate(.low):    return "Stale"
-        case .busy:               return "Busy"
+        case .busy:               return "Blocked"
         case .dirty:              return "Has changes"
         case .active:             return "Active"
-        case .excluded:           return "Excluded"
+        case .excluded:           return "Blocked"
         }
     }
 
@@ -241,6 +253,10 @@ struct WorktreeCleanupSheetHost: View {
                 WorktreeCleanupSheet(
                     model: model,
                     showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
+                    onOpenCheckout: { checkoutID in
+                        state.selectWorkspaceCheckout(id: checkoutID)
+                        onClose()
+                    },
                     onClose: onClose
                 )
             } else {

@@ -33,10 +33,37 @@ struct WorktreeCleanupProbe: Equatable, Sendable {
     var hasUntrackedFiles: Bool
     var unpushedCommitCount: Int
     var stashCount: Int
+    /// Every terminal pane and ACP session cleanup would close.
     var activeSessionCount: Int
+    /// The subset actively working, awaiting input or permission, or running a
+    /// foreground terminal task. The remaining active sessions are idle.
+    var busySessionCount: Int
     var operationInFlight: Bool
     var lastActivity: Date
     var mergeState: WorktreeMergeState
+    /// Every persisted Workspace Checkout record which still owns this path.
+    var workspaceOwners: [WorktreeCleanupWorkspaceOwner]
+    var workspaceOwnershipAvailable: Bool
+}
+
+struct WorktreeCleanupWorkspaceOwner: Equatable, Hashable, Sendable, Identifiable {
+    enum State: Equatable, Hashable, Sendable {
+        case active
+        case archived
+        case formerWorkspace
+
+        var label: String {
+            switch self {
+            case .active: "Workspace Checkout"
+            case .archived: "Archived Workspace Checkout"
+            case .formerWorkspace: "Former Workspace Checkout"
+            }
+        }
+    }
+
+    let id: UUID
+    let name: String
+    let state: State
 }
 
 /// One reason a worktree does or does not qualify for cleanup. Signals carry
@@ -56,41 +83,46 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
     case noActiveSessions
     case idle(days: Int)
 
-    // Blocking
+    // Warnings
+    case idleSessions(count: Int)
+    case busySessions(count: Int)
     case uncommittedChanges
     case untrackedFiles
     case unpushedCommits(count: Int)
     case stashes(count: Int)
-    case activeSessions(count: Int)
     case recentActivity(days: Int)
     case notMerged
     case mergeStateUnknown(reason: String)
 
-    // Excluding
+    // Hard blockers
     case mainWorktree
     case remoteWorktree
     case operationInFlight
+    case workspaceCheckout(WorktreeCleanupWorkspaceOwner)
+    case workspaceStateUnavailable
     case detachedHead
 
-    /// True when this signal counts *against* cleanup. Drives both the row's
-    /// icon and its sort position — blocking signals render first so the user
-    /// reads the objection before the reassurance.
-    ///
-    /// Blocking is not the same as disqualifying. `.mergeStateUnknown` is
-    /// blocking (it is a caution, and must not be shown with a reassuring
-    /// checkmark) but a worktree carrying it can still be a low-confidence
-    /// candidate when it is otherwise clean and long idle. The verdict, not
-    /// this flag, decides candidacy.
     var isBlocking: Bool {
         switch self {
         case .mergedOnForge, .mergedLocally, .noUncommittedChanges,
              .fullyPushed, .noStashes, .noActiveSessions, .idle:
             return false
-        case .uncommittedChanges, .untrackedFiles, .unpushedCommits,
-             .stashes, .activeSessions, .recentActivity, .notMerged,
+        case .idleSessions, .busySessions, .uncommittedChanges, .untrackedFiles,
+             .unpushedCommits, .stashes, .recentActivity, .notMerged,
              .mergeStateUnknown, .mainWorktree, .remoteWorktree,
-             .operationInFlight, .detachedHead:
+             .operationInFlight, .workspaceCheckout, .workspaceStateUnavailable,
+             .detachedHead:
             return true
+        }
+    }
+
+    var isHardBlocker: Bool {
+        switch self {
+        case .mainWorktree, .remoteWorktree, .operationInFlight,
+             .workspaceCheckout, .workspaceStateUnavailable, .detachedHead:
+            return true
+        default:
+            return false
         }
     }
 
@@ -107,9 +139,13 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
         case .noStashes:
             return "No stashes"
         case .noActiveSessions:
-            return "No active sessions"
+            return "No attached sessions"
         case .idle(let days):
             return "Untouched for \(days) \(days == 1 ? "day" : "days")"
+        case .idleSessions(let count):
+            return "\(count) idle \(count == 1 ? "session" : "sessions") will close"
+        case .busySessions(let count):
+            return "\(count) active \(count == 1 ? "session" : "sessions") will close"
         case .uncommittedChanges:
             return "Has uncommitted changes"
         case .untrackedFiles:
@@ -118,8 +154,6 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
             return "\(count) unpushed \(count == 1 ? "commit" : "commits")"
         case .stashes(let count):
             return "\(count) \(count == 1 ? "stash" : "stashes")"
-        case .activeSessions(let count):
-            return "\(count) active \(count == 1 ? "session" : "sessions")"
         case .recentActivity(let days):
             return days == 0
                 ? "Active today"
@@ -134,10 +168,14 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
             return "Remote worktree — cleanup is not supported yet"
         case .operationInFlight:
             return "Another operation is in progress"
+        case .workspaceCheckout(let owner):
+            return "\(owner.state.label) '\(owner.name)' owns this worktree"
+        case .workspaceStateUnavailable:
+            return "Workspace Checkout ownership could not be verified"
         case .detachedHead:
             return "Detached HEAD — its commits could become unreachable if removed"
-        }
     }
+}
 }
 
 /// The headline verdict for a worktree, collapsing its signal set.
@@ -171,21 +209,18 @@ struct WorktreeCleanupCandidate: Identifiable, Equatable, Sendable {
 
     var id: String { worktree.id }
 
-    /// Pre-checked in the cleanup sheet.
+    /// Safe rows are pre-checked; any warning needs an explicit user choice.
     var isSelectedByDefault: Bool {
-        if case .candidate = verdict { return true }
+        if case .candidate = verdict {
+            return !signals.contains(where: \.isBlocking)
+        }
         return false
     }
 
-    /// Whether the user may override and select this row anyway. Dirty rows
-    /// are selectable — that is the per-item override, for files the user
-    /// might not care about. Busy rows are not: a live session or process
-    /// might belong to someone else entirely (another window), and both
-    /// batch actions unconditionally skip busy worktrees regardless of
-    /// selection — offering the checkbox anyway would promise an override
-    /// that never happens. Excluded rows never are either, which is what
-    /// keeps bulk delete off a main worktree.
+    /// Main, remote, detached, operation-in-flight and Workspace-owned rows
+    /// are structural blockers. Every other risk can be selected deliberately
+    /// and is revalidated before destructive execution.
     var isSelectable: Bool {
-        verdict != .excluded && verdict != .busy
+        !signals.contains(where: \.isHardBlocker)
     }
 }

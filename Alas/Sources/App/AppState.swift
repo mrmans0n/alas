@@ -5590,6 +5590,18 @@ final class AppState {
         }
     }
 
+    nonisolated static func submoduleRiskDidNotIncrease(
+        current: SubmoduleLocalState,
+        acknowledged: SubmoduleLocalState
+    ) -> Bool {
+        switch (acknowledged, current) {
+        case (.unknown, _), (.present, .present), (.present, .none), (.none, .none):
+            true
+        case (.none, .present), (.none, .unknown), (.present, .unknown):
+            false
+        }
+    }
+
     /// Archive several worktrees at once. Nothing on disk is touched — this
     /// only marks each path hidden in `ProjectConfig`, which is what persists
     /// across relaunch.
@@ -9057,7 +9069,8 @@ final class AppState {
     func batchDeleteWorktrees(
         _ worktrees: [Worktree],
         keepBranch: Bool,
-        forgeConfirmedMergedBranchSHAs: [String: String] = [:]
+        forgeConfirmedMergedBranchSHAs: [String: String] = [:],
+        authorization: WorktreeCleanupDeleteAuthorization? = nil
     ) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
@@ -9070,11 +9083,14 @@ final class AppState {
         // discard would skip every worktree it was meant to cover. Recording
         // each dirty tab's edit generation, not just its id, also catches a
         // tab re-edited (from another window) after being acknowledged here.
-        let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
-        )
+        let dirtyTabsAtConfirmation = authorization?.dirtyTabsByWorktree
+            ?? Dictionary(
+                uniqueKeysWithValues: worktrees.map {
+                    ($0.id, dirtyTabGenerations(worktreeId: $0.id))
+                }
+            )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
-        if dirtyCount > 0 {
+        if authorization == nil, dirtyCount > 0 {
             guard promptForDirtyBuffersInBatch(
                 action: "Delete",
                 worktreeCount: worktrees.count,
@@ -9129,13 +9145,24 @@ final class AppState {
                 ))
                 continue
             }
-            guard !hasLiveSessions(worktreeId: worktree.id),
-                  projectsManager.operationState(for: worktree.id) == nil
+            let sessionStateIsAcknowledged: Bool
+            if let authorization {
+                sessionStateIsAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+                    .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+            } else {
+                sessionStateIsAcknowledged = !hasLiveSessions(worktreeId: worktree.id)
+            }
+            let ownershipIsValid = authorization == nil || (
+                workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            )
+            guard sessionStateIsAcknowledged,
+                  projectsManager.operationState(for: worktree.id) == nil,
+                  ownershipIsValid
             else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
-                    outcome: .skipped(reason: "Became busy since this list was scanned")
+                    outcome: .skipped(reason: "Worktree changed since confirmation")
                 ))
                 continue
             }
@@ -9155,6 +9182,41 @@ final class AppState {
                 continue
             }
 
+            let force: Bool
+            if let authorization {
+                do {
+                    let preflight = try await Task.detached {
+                        try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+                    }.value
+                    guard let acknowledgedPreflight = authorization.preflightByWorktree[worktree.id],
+                          preflight.reasons.isSubset(of: acknowledgedPreflight.reasons),
+                          Self.submoduleRiskDidNotIncrease(
+                              current: preflight.submoduleLocalState,
+                              acknowledged: acknowledgedPreflight.submoduleLocalState
+                          ),
+                          !preflight.requiresForce
+                              || authorization.forceWorktreeIDs.contains(worktree.id)
+                    else {
+                        results.append(WorktreeBatchResult(
+                            worktreeId: worktree.id,
+                            branch: worktree.branch,
+                            outcome: .skipped(reason: "Git deletion risks changed since confirmation")
+                        ))
+                        continue
+                    }
+                    force = preflight.requiresForce
+                } catch {
+                    results.append(WorktreeBatchResult(
+                        worktreeId: worktree.id,
+                        branch: worktree.branch,
+                        outcome: .skipped(reason: (error as? LocalizedError)?.errorDescription ?? "\(error)")
+                    ))
+                    continue
+                }
+            } else {
+                force = false
+            }
+
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
             projectsManager.setOperationState(id: worktree.id, state: .deleting)
@@ -9166,12 +9228,10 @@ final class AppState {
                     globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
                     keepBranch: keepBranch
                 ),
-                force: false,
+                force: force,
                 removedIndex: removedIndex,
                 // One refresh at the end, not one per item.
                 refreshAfter: false,
-                // No modal mid-batch: a worktree needing force is reported and
-                // left for the user to handle through the single-item flow.
                 promptsForForce: false,
                 verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
@@ -9246,28 +9306,27 @@ final class AppState {
                         // weakly would only add a redundant weak box.
                         activeSessionCount: { worktreeId in
                             await MainActor.run {
-                                // Count every open terminal/ACP session tab, not just
-                                // ones the harness currently reports as busy or
-                                // awaiting input. `HarnessService.summary` filters
-                                // out idle activity — including a session with no
-                                // activity record at all — so a plain shell or an
-                                // idle agent session would read as zero live
-                                // sessions even though `cleanupWorktreeState` closes
-                                // it (and can kill its process) on delete/archive.
-                                // The acceptance criterion is "no active agent OR
-                                // terminal sessions", not "no busy agent sessions".
-                                return self.tabs.tabs(forWorktree: worktreeId).reduce(0) { count, tab in
-                                    switch tab {
-                                    case .terminal(let s):   return count + s.root.leaves().count
-                                    case .acpSession:        return count + 1
-                                    default:                 return count
-                                    }
-                                }
+                                self.worktreeCleanupSessionCounts(worktreeId: worktreeId).total
+                            }
+                        },
+                        busySessionCount: { worktreeId in
+                            await MainActor.run {
+                                self.worktreeCleanupSessionCounts(worktreeId: worktreeId).busy
                             }
                         },
                         operationInFlight: { worktreeId in
                             await MainActor.run {
                                 self.projectsManager.operationState(for: worktreeId) != nil
+                            }
+                        },
+                        workspaceOwners: { worktree in
+                            await MainActor.run {
+                                self.worktreeCleanupWorkspaceOwners(for: worktree)
+                            }
+                        },
+                        workspaceOwnershipAvailable: {
+                            await MainActor.run {
+                                self.workspacesManager.canMutate
                             }
                         }
                     )
@@ -9301,8 +9360,288 @@ final class AppState {
                 alert.addButton(withTitle: "Cancel")
                 confirmButton.hasDestructiveAction = true
                 return alert.runModal() == .alertFirstButtonReturn
+            },
+            authorizeDelete: { [weak self] worktrees in
+                guard let self else {
+                    return .init(unavailableReasons: Dictionary(
+                        uniqueKeysWithValues: worktrees.map { ($0.id, "Alas is no longer available") }
+                    ))
+                }
+                return await self.worktreeCleanupDeleteAuthorization(for: worktrees)
+            },
+            authorizedDeleteBatch: { [weak self] authorization, worktrees, keepBranch, forgeConfirmedMergedBranchSHAs in
+                guard let self else { return [] }
+                return await self.batchDeleteWorktrees(
+                    worktrees,
+                    keepBranch: keepBranch,
+                    forgeConfirmedMergedBranchSHAs: forgeConfirmedMergedBranchSHAs,
+                    authorization: authorization
+                )
+            },
+            authorizeArchive: { [weak self] worktrees in
+                self?.worktreeCleanupArchiveAuthorization(for: worktrees)
+            },
+            authorizedArchiveBatch: { [weak self] authorization, worktrees in
+                guard let self else { return [] }
+                return await self.batchArchiveWorktrees(authorization, worktrees)
             }
         )
+    }
+
+    private func worktreeCleanupSessionCounts(worktreeId: String) -> (total: Int, busy: Int) {
+        tabs.tabs(forWorktree: worktreeId).reduce(into: (total: 0, busy: 0)) { counts, tab in
+            switch tab {
+            case .terminal(let state):
+                for leaf in state.root.leaves() {
+                    counts.total += 1
+                    if harness.activityBySession[leaf.sessionId]?.state != .idle
+                        || terminal.registry.session(for: leaf.sessionId)?.surface.foregroundPid != nil {
+                        counts.busy += 1
+                    }
+                }
+            case .acpSession(let state):
+                counts.total += 1
+                if harness.activityBySession[state.sessionId]?.state != .idle {
+                    counts.busy += 1
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func worktreeCleanupWorkspaceOwners(
+        for worktree: Worktree
+    ) -> [WorktreeCleanupWorkspaceOwner] {
+        let path = worktree.path.standardizedFileURL.path
+        return workspacesManager.checkouts.compactMap { checkout in
+            guard let member = checkout.members.first(where: { member in
+                guard member.projectID == worktree.projectId,
+                      URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path == path
+                else { return false }
+                if let memberLineage = member.gitLineageID,
+                   let worktreeLineage = worktree.lineageID,
+                   memberLineage != worktreeLineage {
+                    return false
+                }
+                return !(member.availability == .explicitlyDeleted
+                    && member.cleanup?.worktreeRemoved == true)
+            }) else { return nil }
+
+            let state: WorktreeCleanupWorkspaceOwner.State
+            if checkout.workspaceID == nil {
+                state = .formerWorkspace
+            } else if checkout.archivedAt != nil {
+                state = .archived
+            } else {
+                state = .active
+            }
+            _ = member
+            return .init(id: checkout.id, name: checkout.fallbackWorkspaceName, state: state)
+        }
+    }
+
+    private func worktreeCleanupSessionIDs(worktreeId: String) -> Set<String> {
+        Set(tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+            switch tab {
+            case .terminal(let state):
+                state.root.leaves().map(\.sessionId)
+            case .acpSession(let state):
+                [state.sessionId]
+            default:
+                []
+            }
+        })
+    }
+
+    private func worktreeCleanupDeleteAuthorization(
+        for worktrees: [Worktree]
+    ) async -> WorktreeCleanupDeleteAuthorization {
+        var forceWorktreeIDs: Set<String> = []
+        var dirtyTabsByWorktree: [String: [TabID: Int]] = [:]
+        var sessionIDsByWorktree: [String: Set<String>] = [:]
+        var forceReasons: [String: [String]] = [:]
+        var preflightByWorktree: [String: WorktreeDeletePreflight] = [:]
+        var unavailableReasons: [String: String] = [:]
+
+        for worktree in worktrees {
+            guard workspacesManager.canMutate else {
+                unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
+                continue
+            }
+            guard worktreeCleanupWorkspaceOwners(for: worktree).isEmpty else {
+                unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
+                continue
+            }
+            guard projectsManager.operationState(for: worktree.id) == nil else {
+                unavailableReasons[worktree.id] = "Another operation is in progress"
+                continue
+            }
+            let preflight: WorktreeDeletePreflight
+            do {
+                preflight = try await Task.detached {
+                    try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+                }.value
+            } catch {
+                unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                continue
+            }
+            preflightByWorktree[worktree.id] = preflight
+
+            if preflight.requiresForce {
+                forceWorktreeIDs.insert(worktree.id)
+                var reasons: [String] = []
+                if preflight.reasons.contains(.dirty) {
+                    reasons.append("Git will force-remove modified or untracked files")
+                }
+                if preflight.reasons.contains(.locked) {
+                    reasons.append("Git will force-remove this locked worktree")
+                }
+                if preflight.reasons.contains(.containsInitializedSubmodules) {
+                    reasons.append("Git requires force to remove initialized submodules")
+                    switch preflight.submoduleLocalState {
+                    case .none:
+                        break
+                    case .present:
+                        reasons.append("Submodules contain local-only state")
+                    case .unknown:
+                        reasons.append("Alas could not verify submodule local state")
+                    }
+                }
+                forceReasons[worktree.id] = reasons
+            }
+            let dirty = dirtyTabGenerations(worktreeId: worktree.id)
+            if !dirty.isEmpty { dirtyTabsByWorktree[worktree.id] = dirty }
+            sessionIDsByWorktree[worktree.id] = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+        }
+        return .init(
+            forceWorktreeIDs: forceWorktreeIDs,
+            dirtyTabsByWorktree: dirtyTabsByWorktree,
+            sessionIDsByWorktree: sessionIDsByWorktree,
+            forceReasons: forceReasons,
+            preflightByWorktree: preflightByWorktree,
+            unavailableReasons: unavailableReasons
+        )
+    }
+
+    private func worktreeCleanupArchiveAuthorization(
+        for worktrees: [Worktree]
+    ) -> WorktreeCleanupArchiveAuthorization? {
+        var dirtyTabsByWorktree: [String: [TabID: Int]] = [:]
+        var sessionIDsByWorktree: [String: Set<String>] = [:]
+        var unavailableReasons: [String: String] = [:]
+
+        for worktree in worktrees {
+            guard workspacesManager.canMutate else {
+                unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
+                continue
+            }
+            guard worktreeCleanupWorkspaceOwners(for: worktree).isEmpty else {
+                unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
+                continue
+            }
+            guard projectsManager.operationState(for: worktree.id) == nil else {
+                unavailableReasons[worktree.id] = "Another operation is in progress"
+                continue
+            }
+            let dirty = dirtyTabGenerations(worktreeId: worktree.id)
+            if !dirty.isEmpty { dirtyTabsByWorktree[worktree.id] = dirty }
+            sessionIDsByWorktree[worktree.id] = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+        }
+
+        let targets = worktrees.filter { unavailableReasons[$0.id] == nil }
+        guard !targets.isEmpty else {
+            return .init(
+                dirtyTabsByWorktree: dirtyTabsByWorktree,
+                sessionIDsByWorktree: sessionIDsByWorktree,
+                unavailableReasons: unavailableReasons,
+                bufferResolution: .save
+            )
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Archive \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?"
+        let list = targets.map(\.branch).map { "• \($0)" }.joined(separator: "\n")
+        let sessionCount = targets.reduce(0) {
+            $0 + (sessionIDsByWorktree[$1.id]?.count ?? 0)
+        }
+        var message = """
+        These worktrees will be hidden from the sidebar. Their files and branches stay on disk.
+
+        \(list)
+        """
+        if sessionCount > 0 {
+            message += "\n\n\(sessionCount) attached terminal or agent \(sessionCount == 1 ? "session will" : "sessions will") be closed."
+        }
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        let resolution: WorktreeCleanupArchiveBufferResolution
+        if dirtyTabsByWorktree.isEmpty {
+            alert.addButton(withTitle: "Archive")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            resolution = .save
+        } else {
+            alert.addButton(withTitle: "Save & Archive")
+            let discard = alert.addButton(withTitle: "Discard & Archive")
+            discard.hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                resolution = .save
+            case .alertSecondButtonReturn:
+                resolution = .discard
+            default:
+                return nil
+            }
+        }
+        return .init(
+            dirtyTabsByWorktree: dirtyTabsByWorktree,
+            sessionIDsByWorktree: sessionIDsByWorktree,
+            unavailableReasons: unavailableReasons,
+            bufferResolution: resolution
+        )
+    }
+
+    private func batchArchiveWorktrees(
+        _ authorization: WorktreeCleanupArchiveAuthorization,
+        _ worktrees: [Worktree]
+    ) async -> [WorktreeBatchResult] {
+        var results: [WorktreeBatchResult] = []
+        for worktree in worktrees {
+            if authorization.bufferResolution == .save,
+               authorization.dirtyTabsByWorktree[worktree.id] != nil,
+               await !saveDirtyBuffers(in: worktree) {
+                results.append(.init(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Could not save unsaved editor changes")
+                ))
+                continue
+            }
+            let dirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
+                current: dirtyTabGenerations(worktreeId: worktree.id),
+                acknowledgedAtConfirmation: authorization.dirtyTabsByWorktree[worktree.id] ?? [:]
+            )
+            let sessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+                .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+            guard dirtyIsAcknowledged,
+                  sessionsAreAcknowledged,
+                  projectsManager.operationState(for: worktree.id) == nil,
+                  workspacesManager.canMutate,
+                  worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            else {
+                results.append(.init(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Worktree changed since confirmation")
+                ))
+                continue
+            }
+            archiveWorktreeAfterSaving(worktree)
+            results.append(.init(worktreeId: worktree.id, branch: worktree.branch, outcome: .archived))
+        }
+        return results
     }
 
     /// One batched merged-review-request query per repository. Any failure —

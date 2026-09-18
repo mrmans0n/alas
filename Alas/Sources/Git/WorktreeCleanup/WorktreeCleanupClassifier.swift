@@ -41,18 +41,37 @@ enum WorktreeCleanupClassifier {
                 signals: [.detachedHead]
             )
         }
+        if !probe.workspaceOwnershipAvailable {
+            return WorktreeCleanupCandidate(
+                worktree: worktree,
+                verdict: .excluded,
+                signals: [.workspaceStateUnavailable]
+            )
+        }
+        if !probe.workspaceOwners.isEmpty {
+            return WorktreeCleanupCandidate(
+                worktree: worktree,
+                verdict: .excluded,
+                signals: probe.workspaceOwners.map(WorktreeCleanupSignal.workspaceCheckout)
+            )
+        }
+
 
         var blocking: [WorktreeCleanupSignal] = []
         var qualifying: [WorktreeCleanupSignal] = []
 
-        // Busy
-        if probe.operationInFlight { blocking.append(.operationInFlight) }
-        if probe.activeSessionCount > 0 {
-            blocking.append(.activeSessions(count: probe.activeSessionCount))
-        } else {
+        // A live session is a deliberate, selectable warning: cleanup closes
+        // terminal and agent sessions, including idle ones. Only an app-owned
+        // mutation remains a hard execution blocker.
+        if probe.activeSessionCount == 0 {
             qualifying.append(.noActiveSessions)
+        } else {
+            let busyCount = min(probe.busySessionCount, probe.activeSessionCount)
+            let idleCount = probe.activeSessionCount - busyCount
+            if busyCount > 0 { blocking.append(.busySessions(count: busyCount)) }
+            if idleCount > 0 { blocking.append(.idleSessions(count: idleCount)) }
         }
-        let isBusy = probe.operationInFlight || probe.activeSessionCount > 0
+        let isBusy = probe.operationInFlight
 
         // Dirty
         if probe.hasUncommittedChanges { blocking.append(.uncommittedChanges) }

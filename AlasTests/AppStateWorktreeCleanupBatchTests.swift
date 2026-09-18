@@ -210,4 +210,15 @@ struct AppStateWorktreeCleanupBatchTests {
             acknowledgedAtConfirmation: ["tab-a": -1]
         ))
     }
+
+    @Test func submoduleRiskCanOnlyStayTheSameOrDecreaseAfterConfirmation() {
+        #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .none))
+        #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .present))
+        #expect(AppState.submoduleRiskDidNotIncrease(current: .present, acknowledged: .present))
+        #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .unknown))
+        #expect(AppState.submoduleRiskDidNotIncrease(current: .present, acknowledged: .unknown))
+        #expect(!AppState.submoduleRiskDidNotIncrease(current: .present, acknowledged: .none))
+        #expect(!AppState.submoduleRiskDidNotIncrease(current: .unknown, acknowledged: .none))
+        #expect(!AppState.submoduleRiskDidNotIncrease(current: .unknown, acknowledged: .present))
+    }
 }

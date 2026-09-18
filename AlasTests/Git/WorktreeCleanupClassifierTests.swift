@@ -31,13 +31,16 @@ struct WorktreeCleanupClassifierTests {
             unpushedCommitCount: 0,
             stashCount: 0,
             activeSessionCount: 0,
+            busySessionCount: 0,
             operationInFlight: false,
             lastActivity: now.addingTimeInterval(-Double(daysIdle) * 86_400),
             mergeState: .mergedOnForge(
                 identity: "GitHub #42",
                 url: URL(string: "https://github.com/o/r/pull/42")!,
                 headSHA: "abc123"
-            )
+            ),
+            workspaceOwners: [],
+            workspaceOwnershipAvailable: true
         )
     }
 
@@ -87,14 +90,12 @@ struct WorktreeCleanupClassifierTests {
         #expect(Self.classify(probe).verdict == .candidate(confidence: .low))
     }
 
-    /// `isBlocking` drives icon and sort order, not candidacy — a clean, long
-    /// idle worktree whose merge state could not be determined is still offered
-    /// (at low confidence) with the caution shown alongside it.
-    @Test func lowConfidenceCandidateIsStillSelectedDespiteACautionSignal() {
+    @Test func lowConfidenceCandidateRequiresManualSelection() {
         var probe = Self.idealProbe(daysIdle: 30)
         probe.mergeState = .unknown(reason: "gh pr list failed")
         let result = Self.classify(probe)
-        #expect(result.isSelectedByDefault)
+        #expect(!result.isSelectedByDefault)
+        #expect(result.isSelectable)
         #expect(result.signals.contains { $0.isBlocking })
     }
 
@@ -140,13 +141,16 @@ struct WorktreeCleanupClassifierTests {
         #expect(result.signals.contains(.stashes(count: 2)))
     }
 
-    @Test func activeSessionsBlockCandidacyAndOutrankDirtiness() {
+    @Test func activeSessionsAreWarningsAndDoNotOutrankDirtiness() {
         var probe = Self.idealProbe()
         probe.activeSessionCount = 1
+        probe.busySessionCount = 1
         probe.hasUncommittedChanges = true
         let result = Self.classify(probe)
-        #expect(result.verdict == .busy)
-        #expect(result.signals.contains(.activeSessions(count: 1)))
+        #expect(result.verdict == .dirty)
+        #expect(result.signals.contains(.busySessions(count: 1)))
+        #expect(result.isSelectable)
+        #expect(!result.isSelectedByDefault)
     }
 
     @Test func inFlightOperationMakesWorktreeBusy() {
@@ -155,16 +159,14 @@ struct WorktreeCleanupClassifierTests {
         #expect(Self.classify(probe).verdict == .busy)
     }
 
-    /// A busy row is never selectable — unlike dirty, which the user may
-    /// override. Both batch actions unconditionally skip busy worktrees
-    /// regardless of selection, so offering the checkbox would promise an
-    /// override that never actually happens.
-    @Test func busyWorktreeIsNotSelectable() {
+    @Test func sessionsRemainSelectableButRequireConfirmation() {
         var probe = Self.idealProbe()
         probe.activeSessionCount = 1
         let result = Self.classify(probe)
-        #expect(result.verdict == .busy)
-        #expect(!result.isSelectable)
+        #expect(result.verdict == .candidate(confidence: .high))
+        #expect(result.isSelectable)
+        #expect(!result.isSelectedByDefault)
+        #expect(result.signals.contains(.idleSessions(count: 1)))
     }
 
     @Test func recentlyTouchedMergedWorktreeIsActiveNotACandidate() {
@@ -212,6 +214,29 @@ struct WorktreeCleanupClassifierTests {
         #expect(!result.isSelectable)
         #expect(WorktreeCleanupSignal.remoteWorktree.label
                 == "Remote worktree — cleanup is not supported yet")
+    }
+
+    @Test func persistedWorkspaceCheckoutExcludesWorktree() {
+        var probe = Self.idealProbe()
+        let owner = WorktreeCleanupWorkspaceOwner(
+            id: UUID(),
+            name: "release train",
+            state: .archived
+        )
+        probe.workspaceOwners = [owner]
+        let result = Self.classify(probe)
+        #expect(result.verdict == .excluded)
+        #expect(!result.isSelectable)
+        #expect(result.signals == [.workspaceCheckout(owner)])
+    }
+
+    @Test func unavailableWorkspaceOwnershipExcludesWorktree() {
+        var probe = Self.idealProbe()
+        probe.workspaceOwnershipAvailable = false
+        let result = Self.classify(probe)
+        #expect(result.verdict == .excluded)
+        #expect(!result.isSelectable)
+        #expect(result.signals == [.workspaceStateUnavailable])
     }
 
     /// A detached-HEAD worktree's commits are reachable only via that
