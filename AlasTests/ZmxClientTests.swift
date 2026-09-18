@@ -277,7 +277,7 @@ struct ZmxClientTests {
         let started = Date()
         let result = SubprocessRunner.system.run(
             URL(fileURLWithPath: "/usr/bin/perl"),
-            ["-e", "defined(my $pid=fork) or die 'fork failed'; if ($pid == 0) { sleep 10; exit 0; } print $pid; exit 0;"],
+            ["-e", "use POSIX qw(_exit); $|=1; defined(my $pid=fork) or die 'fork failed'; if ($pid == 0) { sleep 10; _exit(0); } print $pid; _exit(0);"],
             ProcessInfo.processInfo.environment,
             5.0
         )
