@@ -9447,14 +9447,14 @@ final class AppState {
             case .terminal(let state):
                 for leaf in state.root.leaves() {
                     counts.total += 1
-                    if harness.activityBySession[leaf.sessionId]?.state != .idle
+                    if Self.harnessActivityIsBusy(harness.activityBySession[leaf.sessionId]?.state)
                         || terminal.registry.session(for: leaf.sessionId)?.surface.foregroundPid != nil {
                         counts.busy += 1
                     }
                 }
             case .acpSession(let state):
                 counts.total += 1
-                if harness.activityBySession[state.sessionId]?.state != .idle {
+                if Self.harnessActivityIsBusy(harness.activityBySession[state.sessionId]?.state) {
                     counts.busy += 1
                 }
             default:
@@ -9463,10 +9463,15 @@ final class AppState {
         }
     }
 
+    nonisolated static func harnessActivityIsBusy(_ state: ActivityState?) -> Bool {
+        guard let state else { return false }
+        return state != .idle
+    }
     private func worktreeCleanupWorkspaceOwners(
         for worktree: Worktree
     ) -> [WorktreeCleanupWorkspaceOwner] {
         let path = worktree.path.standardizedFileURL.path
+
         return workspacesManager.checkouts.compactMap { checkout in
             guard let member = checkout.members.first(where: { member in
                 guard member.projectID == worktree.projectId,

@@ -239,6 +239,12 @@ struct AppStateWorktreeCleanupBatchTests {
             workspacesCanMutate: false
         ))
     }
+
+    @Test func missingHarnessActivityIsIdleForCleanupSessionCounts() {
+        #expect(!AppState.harnessActivityIsBusy(nil))
+        #expect(!AppState.harnessActivityIsBusy(.idle))
+        #expect(AppState.harnessActivityIsBusy(.busy))
+    }
     @Test func submoduleRiskCanOnlyStayTheSameOrDecreaseAfterConfirmation() {
         #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .none))
         #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .present))
