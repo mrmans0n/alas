@@ -223,12 +223,11 @@ private struct NativeContextMenuHost<MenuItems: View>: NSViewRepresentable {
 }
 
 private final class NativeContextMenuView<MenuItems: View>: NSView {
-    private let hostingMenu: NSHostingMenu<Group<MenuItems>>
+    private var menuItems: MenuItems
 
     init(menuItems: MenuItems) {
-        hostingMenu = NSHostingMenu(rootView: Group { menuItems })
+        self.menuItems = menuItems
         super.init(frame: .zero)
-        menu = hostingMenu
         setAccessibilityElement(true)
         setAccessibilityRole(.menuButton)
         setAccessibilityLabel("Context menu")
@@ -238,7 +237,11 @@ private final class NativeContextMenuView<MenuItems: View>: NSView {
     required init?(coder: NSCoder) { nil }
 
     func update(menuItems: MenuItems) {
-        hostingMenu.rootView = Group { menuItems }
+        self.menuItems = menuItems
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        makeMenu()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -254,8 +257,12 @@ private final class NativeContextMenuView<MenuItems: View>: NSView {
     }
 
     override func accessibilityPerformShowMenu() -> Bool {
-        guard let menu else { return false }
+        let menu = makeMenu()
         menu.popUp(positioning: nil, at: .zero, in: self)
         return true
+    }
+
+    private func makeMenu() -> NSMenu {
+        NSHostingMenu(rootView: Group { menuItems })
     }
 }
