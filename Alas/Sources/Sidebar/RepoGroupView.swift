@@ -120,18 +120,20 @@ struct RepoGroupView: View {
                 Button("Reset Sort to Default", action: onResetSort)
                     .disabled(!project.worktreeOrderIsManual)
                 Button("Clean Up Worktrees…", action: onCleanupWorktrees)
-                Menu("Spaces") {
-                    ForEach(spaces) { space in
-                        let isMember = isProjectInSpace(space.id)
-                        Button {
-                            onToggleSpaceMembership(space.id)
-                        } label: {
-                            HStack {
-                                Text("\(space.emoji) \(space.name)")
-                                if isMember { Text("✓") }
+                if !spaces.isEmpty {
+                    Menu("Spaces") {
+                        ForEach(spaces) { space in
+                            let isMember = isProjectInSpace(space.id)
+                            Button {
+                                onToggleSpaceMembership(space.id)
+                            } label: {
+                                HStack {
+                                    Text("\(space.emoji) \(space.name)")
+                                    if isMember { Text("✓") }
+                                }
                             }
+                            .disabled(isMember && !canRemoveFromSpace(space.id))
                         }
-                        .disabled(isMember && !canRemoveFromSpace(space.id))
                     }
                 }
                 Divider()
