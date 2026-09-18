@@ -75,6 +75,55 @@ struct AlasFieldTests {
         #expect(field.currentEditor() != nil)
     }
 
+    @Test func typingIntoFilteredFieldKeepsEveryCharacterAndCaretAtEnd() {
+        let host = TypingHost()
+        let controller = NSHostingController(rootView: host.body.environment(\.theme, currentTheme()))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 28),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+
+        let field = try! #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        pump()
+
+        let editor = try! #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+
+        for character in "feature" {
+            editor.insertText(String(character), replacementRange: editor.selectedRange())
+            pump()
+        }
+
+        #expect(editor.string == "nacho/feature")
+        #expect(editor.selectedRange().location == (editor.string as NSString).length)
+    }
+
+    private struct TypingHost {
+        var body: some View { Inner() }
+
+        private struct Inner: View {
+            @State private var text = "nacho/"
+            var body: some View {
+                AlasField(
+                    text: $text,
+                    monospaced: true,
+                    focusOnAppear: true,
+                    inputFilter: .branchName
+                )
+            }
+        }
+    }
+
+    private func pump() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+
     private static func firstTextField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField { return field }
         for subview in view.subviews {

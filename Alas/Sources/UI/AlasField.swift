@@ -101,7 +101,20 @@ private struct AlasNSTextField: NSViewRepresentable {
         } else if nsView.stringValue != text {
             nsView.stringValue = text
         }
+        // `nsView.window` can still be nil on the update pass that fires right after
+        // `makeNSView` (the view hasn't been attached yet), which leaves
+        // `nsView.focusOnAppear` unconsumed. This block then only gets a chance to run
+        // later, on whatever update pass happens to land after the view is attached —
+        // which, in the worst case, is the pass triggered by the user's first keystroke
+        // (typing writes into `text`, which re-renders and calls `updateNSView`). If the
+        // field is already being edited by then, re-acquiring first responder would reset
+        // the field editor's selection to select-all and eat the next keystroke, so skip
+        // the focus/selection dance entirely and just consume the flag.
         if focusOnAppear, nsView.focusOnAppear, let window = nsView.window {
+            guard !context.coordinator.isEditing, nsView.currentEditor() == nil else {
+                nsView.focusOnAppear = false
+                return
+            }
             if window.firstResponder !== nsView {
                 window.makeFirstResponder(nsView)
             }
