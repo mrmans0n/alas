@@ -56,7 +56,6 @@ enum WorktreeCleanupClassifier {
             )
         }
 
-
         var blocking: [WorktreeCleanupSignal] = []
         var qualifying: [WorktreeCleanupSignal] = []
 
