@@ -1,4 +1,6 @@
 enum RemoteAgentProbe {
+    private static let outputPrefix = "__ALAS_AGENT_PROBE_AVAILABLE__ "
+
     static func command(agents: [AgentDefinition], workingDirectory: String) -> String {
         agents.enumerated().compactMap { index, agent in
             guard let check = BinaryClassification(agent.configuredBinary).check(
@@ -6,14 +8,16 @@ enum RemoteAgentProbe {
             ) else {
                 return nil
             }
-            return "if \(check); then printf '%s\\n' '\(index)'; fi"
+            return "if \(check); then printf '%s%s\\n' '\(outputPrefix)' '\(index)'; fi"
         }
         .joined(separator: "\n")
     }
 
     static func availableAgentIDs(stdout: String, agents: [AgentDefinition]) -> Set<String> {
         Set(stdout.split(whereSeparator: \.isNewline).compactMap { line in
-            guard let index = Int(line), agents.indices.contains(index) else { return nil }
+            guard line.hasPrefix(outputPrefix) else { return nil }
+            let rawIndex = line.dropFirst(outputPrefix.count)
+            guard let index = Int(rawIndex), agents.indices.contains(index) else { return nil }
             return agents[index].id
         })
     }

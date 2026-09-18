@@ -17,6 +17,7 @@ struct RemoteAgentProbeTests {
         #expect(command.contains("'/opt/tools/codex'"))
         #expect(command.contains("$HOME/"))
         #expect(command.contains("cd '/srv/repo with space'"))
+        #expect(command.contains("__ALAS_AGENT_PROBE_AVAILABLE__ "))
         #expect(command.contains("; fi\nif "))
         #expect(!command.contains("; fi if "))
         #expect(!command.contains("hostile-'-$()-id"))
@@ -29,7 +30,16 @@ struct RemoteAgentProbeTests {
             TestAgents.custom(id: "two", binary: "two")
         ]
 
-        #expect(RemoteAgentProbe.availableAgentIDs(stdout: "0\n1\n1\n99\nnope\n", agents: agents) == ["one", "two"])
+        let stdout = """
+        0
+        __ALAS_AGENT_PROBE_AVAILABLE__ 0
+        __ALAS_AGENT_PROBE_AVAILABLE__ 1
+        __ALAS_AGENT_PROBE_AVAILABLE__ 1
+        __ALAS_AGENT_PROBE_AVAILABLE__ 99
+        nope
+        """
+
+        #expect(RemoteAgentProbe.availableAgentIDs(stdout: stdout, agents: agents) == ["one", "two"])
     }
 }
 
