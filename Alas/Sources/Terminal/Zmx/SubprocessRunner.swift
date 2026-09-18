@@ -26,67 +26,75 @@ struct SubprocessRunner: Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        // Drain each pipe with a blocking `readDataToEndOfFile()` on its own
-        // background queue. This avoids the readabilityHandler race where
-        // `waitUntilExit()` can return before the asynchronous EOF callback
-        // has flushed the final buffered chunk — and it still prevents
-        // pipe-buffer deadlocks because the readers run concurrently with
-        // the child. The reader groups are joined AFTER process exit (or
-        // forced termination), giving us a synchronization point with EOF
-        // delivery before we read the accumulated output.
+        // Drain each pipe incrementally. A descendant can retain an inherited
+        // writer after the direct child exits, so EOF is not a reliable
+        // prerequisite for returning the output emitted so far.
         let stdoutBox = OutputBox()
         let stderrBox = OutputBox()
-        let stdoutDrain = DispatchGroup()
-        let stderrDrain = DispatchGroup()
-        stdoutDrain.enter()
-        stderrDrain.enter()
-        DispatchQueue.global().async {
-            defer { stdoutDrain.leave() }
-            stdoutBox.append(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+        let exitSemaphore = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            exitSemaphore.signal()
         }
-        DispatchQueue.global().async {
-            defer { stderrDrain.leave() }
-            stderrBox.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutBox.markClosed()
+            } else {
+                stdoutBox.append(data)
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrBox.markClosed()
+            } else {
+                stderrBox.append(data)
+            }
+        }
+
+        func finishDrainingPipes() {
+            let pipes = [
+                (stdoutBox, stdoutPipe.fileHandleForReading),
+                (stderrBox, stderrPipe.fileHandleForReading),
+            ]
+            for (output, reader) in pipes {
+                _ = output.waitForClose(timeout: .now() + .milliseconds(250))
+                reader.readabilityHandler = nil
+            }
         }
 
         do {
             try process.run()
         } catch {
-            // Spawn failed: close the pipe write ends so the drain threads
-            // hit EOF and exit, then wait for them.
             try? stdoutPipe.fileHandleForWriting.close()
             try? stderrPipe.fileHandleForWriting.close()
-            stdoutDrain.wait()
-            stderrDrain.wait()
+            finishDrainingPipes()
             return Result(exitCode: nil, stdout: "", stderr: "\(error)")
         }
 
+        // Without closing our copies after Process duplicates them into the
+        // child, a normal direct-child exit can never produce EOF here.
+        try? stdoutPipe.fileHandleForWriting.close()
+        try? stderrPipe.fileHandleForWriting.close()
+
         let deadline = DispatchTime.now() + timeout
-        let exitGroup = DispatchGroup()
-        exitGroup.enter()
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            exitGroup.leave()
-        }
-        let waitResult = exitGroup.wait(timeout: deadline)
+        let waitResult = exitSemaphore.wait(timeout: deadline)
         if waitResult == .timedOut {
             process.terminate()
-            _ = exitGroup.wait(timeout: .now() + .milliseconds(250))
+            _ = exitSemaphore.wait(timeout: .now() + .milliseconds(250))
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                _ = exitGroup.wait(timeout: .now() + .milliseconds(250))
+                _ = exitSemaphore.wait(timeout: .now() + .milliseconds(250))
             }
-            // Child is dead → its pipe write ends are closed → drain threads
-            // observe EOF and exit. Join them so we read complete buffers.
-            stdoutDrain.wait()
-            stderrDrain.wait()
+            finishDrainingPipes()
+            process.terminationHandler = nil
             return Result(exitCode: nil, stdout: stdoutBox.string(), stderr: stderrBox.string())
         }
 
-        // Process exited normally; pipe write ends are closed, drains will
-        // hit EOF. Join before reading the boxes.
-        stdoutDrain.wait()
-        stderrDrain.wait()
+        finishDrainingPipes()
+        process.terminationHandler = nil
         return Result(
             exitCode: process.terminationStatus,
             stdout: stdoutBox.string(),
@@ -101,6 +109,12 @@ struct SubprocessRunner: Sendable {
 private final class OutputBox: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
+    private var closed = false
+    private let closeGroup = DispatchGroup()
+
+    init() {
+        closeGroup.enter()
+    }
 
     func append(_ chunk: Data) {
         lock.lock()
@@ -112,5 +126,20 @@ private final class OutputBox: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    func markClosed() {
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return
+        }
+        closed = true
+        lock.unlock()
+        closeGroup.leave()
+    }
+
+    func waitForClose(timeout: DispatchTime) -> DispatchTimeoutResult {
+        closeGroup.wait(timeout: timeout)
     }
 }
