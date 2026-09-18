@@ -1137,6 +1137,99 @@ import Foundation
                 "attaching session lease must be released by attach's own defer after the coroutine exits")
     }
 
+    @Test("concurrent attach waits for the active attachment")
+    func concurrentAttachWaitsForActiveAttachment() async throws {
+        struct StubError: Error {}
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coalesced-attach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let setupGate = LeaseTestGate()
+        var connectionAttempts = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt",
+            store: store, instanceId: "A", pid: Int64(getpid()),
+            setupEvaluator: { _ in
+                await setupGate.wait()
+                return .ready
+            },
+            connectionFactory: { _, _, _ throws -> ACPConnection in
+                connectionAttempts += 1
+                throw StubError()
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let completions = AttachCompletionTracker()
+
+        let first = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: true)
+            await completions.record("first")
+        }
+        while !manager.isAttachingForTest(session.id) {
+            await Task.yield()
+        }
+
+        let second = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: true)
+            await completions.record("second")
+        }
+        await Task.yield()
+
+        #expect(await completions.values().isEmpty)
+
+        await setupGate.open()
+        await first.value
+        await second.value
+
+        #expect(Set(await completions.values()) == ["first", "second"])
+        #expect(connectionAttempts == 1,
+                "an ordinary attachment failure must be shared by concurrent callers")
+    }
+
+    @Test("concurrent attach retries after the active attachment is detached")
+    func concurrentAttachRetriesAfterDetachedActiveAttachment() async throws {
+        struct StubError: Error {}
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coalesced-detached-attach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let setupGate = LeaseTestGate()
+        var connectionAttempts = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt",
+            store: store, instanceId: "A", pid: Int64(getpid()),
+            setupEvaluator: { _ in
+                await setupGate.wait()
+                return .ready
+            },
+            connectionFactory: { _, _, _ throws -> ACPConnection in
+                connectionAttempts += 1
+                throw StubError()
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+
+        let first = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: true)
+        }
+        while !manager.isAttachingForTest(session.id) {
+            await Task.yield()
+        }
+
+        await manager.detach(sessionId: session.id)
+        let retry = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: true)
+        }
+        await Task.yield()
+
+        await setupGate.open()
+        await first.value
+        await retry.value
+
+        #expect(connectionAttempts == 1,
+                "the waiting retry must start after the detached attach aborts")
+    }
+
     // MARK: - Fix 3: Terminal kill/release gate
 
     @Test("terminal kill denied when lease is held by another instance")
@@ -1250,5 +1343,17 @@ private actor LeaseTestGate {
         let pending = waiters
         waiters.removeAll()
         for c in pending { c.resume() }
+    }
+}
+
+private actor AttachCompletionTracker {
+    private var recorded: [String] = []
+
+    func record(_ value: String) {
+        recorded.append(value)
+    }
+
+    func values() -> [String] {
+        recorded
     }
 }
