@@ -80,4 +80,68 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(acpTabs.count == 1)
         #expect(terminalTabs.isEmpty)
     }
+
+    @Test
+    func terminalLaunchSurfaceWithUnavailableAgentLeavesCreateFailure() async throws {
+        let repo = try await makeRepo(name: "terminal-unavailable-agent")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "terminal-unavailable-agent",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-terminal-unavailable-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "terminal-unavailable",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .terminal(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .createFailed = operation { return true }
+            return false
+        }
+
+        guard case .createFailed(_, let message, _, _, let launchSurface, _) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected createFailed state")
+            return
+        }
+        #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)
+        #expect(launchSurface == .terminal(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
+    }
+
+    private func waitForOperationStateMatching(
+        _ mgr: ProjectsManager,
+        id: String,
+        matches: (WorktreeOperationState?) -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if matches(mgr.operationState(for: id)) { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for operationState to match for id \(id)")
+    }
 }

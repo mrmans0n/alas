@@ -3625,7 +3625,7 @@ final class AppState {
                     case .none:
                         break
                     case .terminal(let agentId):
-                        let suffix = await self.worktreeAgentStartupSuffix(
+                        let suffix = try await self.worktreeAgentStartupSuffix(
                             agentId: agentId,
                             worktree: newWorktree,
                             project: project
@@ -3870,6 +3870,17 @@ final class AppState {
         }
     }
 
+    enum WorktreeAgentStartupError: LocalizedError, Equatable {
+        case agentUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .agentUnavailable:
+                return "The selected agent is not available for this worktree."
+            }
+        }
+    }
+
     enum ACPAuthTerminalLaunchError: LocalizedError, Equatable {
         case invalidEnvKey(String)
 
@@ -3959,10 +3970,12 @@ final class AppState {
         agentId: String?,
         worktree: Worktree,
         project: ProjectConfig
-    ) async -> String? {
+    ) async throws -> String? {
         guard let agentId else { return nil }
         await loadAgentAvailability(for: worktree)
-        guard let agent = availableAgent(id: agentId, for: worktree) else { return nil }
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
+            throw WorktreeAgentStartupError.agentUnavailable
+        }
         return agentStartupCommand(for: agent, project: project)
     }
 
@@ -5122,8 +5135,8 @@ final class AppState {
             guard case .createFailed(
                 let failedProjectId,
                 _,
-                _,
-                _,
+                let failedBase,
+                let failedMode,
                 let launchSurface,
                 let issueAttachment
             ) = state,
@@ -5151,15 +5164,29 @@ final class AppState {
             case .none, .delegated:
                 break
             case .terminal(let agentId):
-                let suffix = await self.worktreeAgentStartupSuffix(
-                    agentId: agentId,
-                    worktree: worktree,
-                    project: project
-                )
-                _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
-                    for: worktree,
-                    startupScriptSuffix: suffix
-                )
+                do {
+                    let suffix = try await self.worktreeAgentStartupSuffix(
+                        agentId: agentId,
+                        worktree: worktree,
+                        project: project
+                    )
+                    _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                        for: worktree,
+                        startupScriptSuffix: suffix
+                    )
+                } catch {
+                    projectsManager.setOperationState(
+                        id: worktree.id,
+                        state: .createFailed(
+                            projectId: projectId,
+                            message: error.localizedDescription,
+                            base: failedBase,
+                            ggWorktreeMode: failedMode,
+                            launchSurface: launchSurface,
+                            issueAttachment: issueAttachment
+                        )
+                    )
+                }
             case .acp(let agentId, let preparedPrompt):
                 if let preparedPrompt {
                     await openPreparedWorktreeACPSession(
@@ -10334,6 +10361,16 @@ final class AppState {
                     owner: owner,
                     sessionId: sessionId,
                     retainActivePrompt: retainActivePrompt
+                )
+            },
+            launchSpecTransformer: { [weak self] spec in
+                guard let self else { return spec }
+                let project = self.projects.first(where: { $0.id == worktree.projectId })
+                return self.workspaceACPLaunchSpec(
+                    from: spec,
+                    remoteHome: nil,
+                    treatsHomeAsRemote: project?.host != nil,
+                    useBypassPermissions: project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false
                 )
             },
             brokerServiceFactory: {
