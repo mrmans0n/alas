@@ -20,7 +20,7 @@ enum ACPRemoteLaunch {
         nodeBinDirectory: String? = nil
     ) -> String {
         let scrub = markerScrub.map { "-u \($0)" }.joined(separator: " ")
-        let argv = ([command] + arguments).map(SSHCommand.shellQuote).joined(separator: " ")
+        let argv = ([remoteShellWord(command)] + arguments.map(SSHCommand.shellQuote)).joined(separator: " ")
         let pathPrefix = nodeBinDirectory.map {
             "PATH=\(SSHCommand.shellQuote($0)):\"$PATH\" && export PATH && "
         } ?? ""
@@ -49,22 +49,22 @@ enum ACPRemoteLaunch {
     /// first word so multi-word catalog commands probe the binary, not flags.
     static func setupProbeCommand(command: String) -> String {
         let binary = command.split(separator: " ").first.map(String.init) ?? command
-        return "command -v \(SSHCommand.shellQuote(binary))"
+        return "command -v \(remoteShellWord(binary))"
     }
 
     static func setupProbeCommand(check: ACPSetupCheck) -> String {
         switch check {
         case .binaryOnPath(let name):
-            return "command -v \(SSHCommand.shellQuote(name))"
+            return "command -v \(remoteShellWord(name))"
         case .npxPackage(let name):
             return npmPackageProbeCommand(package: name)
         case .binaryOnPathOrNpmPackage(let binary, let package):
-            return "command -v \(SSHCommand.shellQuote(binary)) >/dev/null 2>&1 || (\(npmPackageProbeCommand(package: package)))"
+            return "command -v \(remoteShellWord(binary)) >/dev/null 2>&1 || (\(npmPackageProbeCommand(package: package)))"
         }
     }
 
     static func launchPathProbeCommand(for spec: ACPLaunchSpec) -> String? {
-        let binary = SSHCommand.shellQuote(spec.command)
+        let binary = remoteShellWord(spec.command)
         switch spec.setupCheck {
         case .binaryOnPath:
             return nil
@@ -94,8 +94,15 @@ enum ACPRemoteLaunch {
         let pairs = env.sorted { $0.key < $1.key }
             .map { SSHCommand.shellQuote("\($0.key)=\($0.value)") }
         let scrub = markerScrub.map { "-u \($0)" }
-        let argv = ([command] + args).map(SSHCommand.shellQuote)
+        let argv = [remoteShellWord(command)] + args.map(SSHCommand.shellQuote)
         let envCommand = (["env"] + scrub + pairs + argv).joined(separator: " ")
         return "cd \(SSHCommand.shellQuote(cwd)) && \(envCommand)"
+    }
+
+    private static func remoteShellWord(_ word: String) -> String {
+        guard word.hasPrefix("~/") else { return SSHCommand.shellQuote(word) }
+        let suffix = String(word.dropFirst(2))
+        guard !suffix.isEmpty else { return "~" }
+        return "~/\(SSHCommand.shellQuote(suffix))"
     }
 }

@@ -27,16 +27,12 @@ enum ACPForkTargetPolicy {
     static func targets(
         sourceAgentID: String,
         enabledAgents: [ACPForkAgentOption],
-        sourceAgent: ACPForkAgentOption?,
         catalogAgentIDs: [String]
     ) -> [ACPSessionForkTarget] {
-        var byID = Dictionary(
+        let byID = Dictionary(
             enabledAgents.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        if let sourceAgent {
-            byID[sourceAgent.id] = sourceAgent
-        }
         let ordered = catalogAgentIDs.compactMap { byID[$0] }
         let current = ordered.filter { $0.id == sourceAgentID }
         let others = ordered.filter { $0.id != sourceAgentID }

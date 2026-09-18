@@ -456,6 +456,73 @@ struct NewWorktreeDialogTests {
         #expect(NewWorktreeDialog.acpCapableAgents(from: agents).isEmpty)
     }
 
+    @Test func launchEligibleAgentsForLocalProjectUsesInstalledAgents() {
+        let configured = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "codex", displayName: "Codex"),
+        ]
+        let locallyInstalled = [
+            Self.agent(id: "claude", displayName: "Claude"),
+        ]
+
+        let agents = NewWorktreeDialog.launchEligibleAgents(
+            isRemoteProject: false,
+            configuredEnabledAgents: configured,
+            locallyEnabledAgents: locallyInstalled
+        )
+
+        #expect(agents.map(\.id) == ["claude"])
+    }
+
+    @Test func launchEligibleAgentsForRemoteProjectUsesConfiguredAgents() {
+        let configured = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "codex", displayName: "Codex"),
+        ]
+        let locallyInstalled = [
+            Self.agent(id: "claude", displayName: "Claude"),
+        ]
+
+        let agents = NewWorktreeDialog.launchEligibleAgents(
+            isRemoteProject: true,
+            configuredEnabledAgents: configured,
+            locallyEnabledAgents: locallyInstalled
+        )
+
+        #expect(agents.map(\.id) == ["claude", "codex"])
+    }
+
+    @Test func remoteAutoLaunchDefaultUsesConfiguredAgentCatalog() {
+        let configured = [
+            Self.agent(id: "remote-only", displayName: "Remote Only"),
+            Self.agent(id: "local", displayName: "Local"),
+        ]
+        let agentId = NewWorktreeDialog.resolvedAutoLaunchAgentID(
+            globalAgentId: "remote-only",
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            repoAgentId: nil,
+            enabledAgents: configured
+        )
+
+        #expect(agentId == "remote-only")
+    }
+
+    @Test func localAutoLaunchDefaultRejectsUninstalledConfiguredAgent() {
+        let locallyInstalled = [
+            Self.agent(id: "local", displayName: "Local"),
+        ]
+        let agentId = NewWorktreeDialog.resolvedAutoLaunchAgentID(
+            globalAgentId: "remote-only",
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            repoAgentId: nil,
+            enabledAgents: locallyInstalled
+        )
+
+        #expect(agentId == nil)
+    }
+
     @Test func acpSegmentEnabledWhenAtLeastOneACPCapableAgent() {
         let agents = [Self.agent(id: "claude", displayName: "Claude")]
         #expect(NewWorktreeDialog.acpSegmentEnabled(enabledAgents: agents))

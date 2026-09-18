@@ -71,6 +71,22 @@ struct ACPLaunchSpec: Equatable {
             remoteNodeBinDirectory: remoteNodeBinDirectory)
     }
 
+    /// A copy of this spec whose setup check verifies the same executable that
+    /// launch will run. Used for explicit user overrides; catalog defaults keep
+    /// their adapter-specific setup rules.
+    func overridingCommandAndSetupCheck(_ command: String) -> ACPLaunchSpec {
+        ACPLaunchSpec(
+            agentID: agentID,
+            command: command,
+            arguments: arguments,
+            extraEnv: extraEnv,
+            setupCheck: .binaryOnPath(name: command),
+            supportsModelSelection: supportsModelSelection,
+            supportsModeSelection: supportsModeSelection,
+            mcpInjection: mcpInjection,
+            remoteNodeBinDirectory: nil)
+    }
+
     /// A copy of this spec with `env` overlaid onto `extraEnv` (new keys win).
     func mergingExtraEnv(_ env: [String: String]) -> ACPLaunchSpec {
         ACPLaunchSpec(

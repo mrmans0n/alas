@@ -23,24 +23,15 @@ struct AgentRegistry: Equatable {
         customs: [AgentDefinition],
         installedIds: Set<String>
     ) {
-        var out: [AgentDefinition] = []
-        for var builtin in AgentBuiltins.catalog {
-            let prefersEnabled: Bool
-            if let state = builtinState[builtin.id] {
-                prefersEnabled = state.isEnabled
-                builtin.binaryOverride = state.binaryOverride
-                builtin.extraTerminalArgs = state.extraTerminalArgs
-            } else {
-                prefersEnabled = builtin.isEnabled
-            }
-            builtin.isEnabled = prefersEnabled && installedIds.contains(builtin.id)
-            out.append(builtin)
+        let configured = AgentConfiguredCatalog.all(
+            builtinState: builtinState,
+            customs: customs
+        )
+        self.agents = configured.map { agent in
+            var localAgent = agent
+            localAgent.isEnabled = agent.isEnabled && installedIds.contains(agent.id)
+            return localAgent
         }
-        for var c in customs {
-            c.isEnabled = c.isEnabled && installedIds.contains(c.id)
-            out.append(c)
-        }
-        self.agents = out
         self.installedIds = installedIds
     }
 

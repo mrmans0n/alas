@@ -28,7 +28,15 @@ struct MergeConflictTabView: View {
             initialValue: MergeConflictTabModel(
                 worktreePath: worktree.path,
                 relativePath: tabState.relativePath,
-                gitService: GitService()
+                gitService: GitService(),
+                agentBinaryUnavailable: { [state, worktree] target in
+                    guard case .ssh = target else { return }
+                    state.agentAvailabilityStore.invalidate(
+                        target: target,
+                        worktreePath: worktree.path.path
+                    )
+                    await state.loadAgentAvailability(for: worktree)
+                }
             )
         )
     }
@@ -76,7 +84,8 @@ struct MergeConflictTabView: View {
                             await model.requestAgentResolveFile(
                                 using: agent,
                                 template: template,
-                                language: fileLanguage
+                                language: fileLanguage,
+                                target: agentExecutionTarget
                             )
                         }
                     },
@@ -129,6 +138,10 @@ struct MergeConflictTabView: View {
         // tab for the same path, so re-focusing after a second conflict on
         // the same file must re-read the three sides to avoid showing stale
         // resultText/regions from the prior conflict.
+        .task(id: agentAvailabilityTaskID) {
+            await state.loadAgentAvailability(for: worktree)
+            triggerExplainIfNeeded()
+        }
         .task {
             await model.load()
             // Kick off the first annotation fetch directly after load. The
@@ -208,7 +221,11 @@ struct MergeConflictTabView: View {
               model.annotation(for: block) == nil
         else { return }
         Task {
-            await model.explainCurrentConflict(using: agent, language: fileLanguage)
+            await model.explainCurrentConflict(
+                using: agent,
+                language: fileLanguage,
+                target: agentExecutionTarget
+            )
         }
     }
 
@@ -225,10 +242,22 @@ struct MergeConflictTabView: View {
         // Explicit "none" means the user disabled AI: respect that and never
         // auto-fire agent calls (auto-explain on conflict change, etc.).
         if id == "none" { return nil }
-        if !id.isEmpty, let agent = state.agent(id: id) {
+        let agents = state.agentAvailability(for: worktree).agents
+        if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
             return agent
         }
-        return state.agentRegistry.enabled().first
+        if !id.isEmpty {
+            return nil
+        }
+        return agents.first
+    }
+
+    private var agentExecutionTarget: AgentExecutionTarget {
+        state.agentExecutionTarget(for: worktree)
+    }
+
+    private var agentAvailabilityTaskID: String {
+        "\(agentExecutionTarget)\u{0000}\(worktree.path.path)\u{0000}\(state.agentAvailabilityGeneration(for: worktree))"
     }
 
     /// Best-effort language label for the agent prompts. Returns nil for

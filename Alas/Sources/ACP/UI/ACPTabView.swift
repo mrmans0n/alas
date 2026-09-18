@@ -16,19 +16,47 @@ struct ACPTabView: View {
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
-        if let manager = managerForOwnerBoundary {
-            ACPManagedTabView(
-                sessionId: sessionId,
-                state: state,
-                worktree: worktree,
-                owner: owner,
-                onOpenPreview: onOpenPreview,
-                onStartupRecoveryReady: onStartupRecoveryReady,
-                manager: manager
-            )
-        } else {
-            unavailable
+        Group {
+            if let manager = managerForOwnerBoundary {
+                ACPManagedTabView(
+                    sessionId: sessionId,
+                    state: state,
+                    worktree: worktree,
+                    owner: owner,
+                    onOpenPreview: onOpenPreview,
+                    onStartupRecoveryReady: onStartupRecoveryReady,
+                    manager: manager
+                )
+            } else {
+                unavailable
+            }
         }
+        .task(id: agentAvailabilityTaskKey) {
+            if let checkout = selectedWorkspaceCheckout {
+                await state.loadAgentAvailability(
+                    worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                    executionTarget: checkout.executionLocation.agentExecutionTarget
+                )
+            } else {
+                await state.loadAgentAvailability(for: worktree)
+            }
+        }
+    }
+
+    private var agentAvailabilityTaskKey: String {
+        if let checkout = selectedWorkspaceCheckout {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = state.agentAvailabilityGeneration(
+                worktreePath: root,
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        return "\(worktree.path.path):\(state.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private var selectedWorkspaceCheckout: WorkspaceCheckout? {
+        state.workspaceCheckout(for: owner)
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {
@@ -475,7 +503,11 @@ private struct ACPSessionView: View {
                 await manager.reloadFullToolCallContent(
                     sessionId: sessionId, toolCallId: toolCallId)
             },
-            forkTargets: state.acpForkTargets(sourceAgentID: session.agentId),
+            forkTargets: state.acpForkTargets(
+                sourceAgentID: session.agentId,
+                worktreePath: acpForkTargetWorktreePath,
+                executionTarget: acpForkTargetExecutionTarget
+            ),
             onQuote: { message in
                 composerActions.quote(message)
             },
@@ -855,6 +887,20 @@ private struct ACPSessionView: View {
             target: adapterTarget,
             agentID: session.agentId
         )
+    }
+
+    private var acpForkTargetWorktreePath: URL {
+        if let checkout = state.workspaceCheckout(for: owner) {
+            return URL(fileURLWithPath: checkout.rootPath)
+        }
+        return worktree.path
+    }
+
+    private var acpForkTargetExecutionTarget: AgentExecutionTarget {
+        if let checkout = state.workspaceCheckout(for: owner) {
+            return checkout.executionLocation.agentExecutionTarget
+        }
+        return state.agentExecutionTarget(for: worktree)
     }
 
     private func reattachAfterAdapterChange() async {

@@ -168,6 +168,11 @@ struct SidebarView: View {
                                             )
                                         }
                                     },
+                                    onRetryLaunch: { wt in
+                                        Task { @MainActor in
+                                            await state.retryWorktreeLaunch(wt, project: project)
+                                        }
+                                    },
                                     onRetryDelete: { wt in state.deleteWorktree(wt) },
                                     onSetGGWorktreeMode: { wt, mode in
                                         state.setGGWorktreeMode(

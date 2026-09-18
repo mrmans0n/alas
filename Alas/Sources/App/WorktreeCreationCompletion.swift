@@ -33,6 +33,11 @@ enum WorktreeCreationCompletion {
             case .creating:
                 await sleep()
                 continue
+            case .launchFailed:
+                if let reconciledWorktree {
+                    return .success(reconciledWorktree)
+                }
+                return .failure(.init(message: "Worktree creation was interrupted."))
             case .preparingDelete, .deleting, .deleteFailed:
                 return .failure(.init(message: "Worktree creation was interrupted."))
             case nil:

@@ -70,6 +70,10 @@ struct AgentLauncherDialog: View {
             resetSessionBrowser()
             requestInputFocus()
         }
+        .task(id: selectedAgentAvailabilityTaskID) {
+            guard appState.isAgentLauncherOpen else { return }
+            await loadSelectedAgentAvailability()
+        }
         .confirmationDialog(
             deletionRequest?.title ?? "Delete session history?",
             isPresented: Binding(
@@ -100,12 +104,50 @@ struct AgentLauncherDialog: View {
     }
 
     private var rows: [AgentDefinition] {
-        appState.agentLauncher.rows(
-            enabledAgents: appState.agentRegistry.enabled(),
+        let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
+        return appState.agentLauncher.rows(
+            enabledAgents: availableAgents,
             preferredAgentID: selectedWorktree().flatMap {
                 appState.defaultAgentID(projectId: $0.projectId, worktreeRoot: $0.path)
             }
         )
+    }
+
+    private var selectedAgentAvailability: AgentAvailabilityState? {
+        if let checkout = selectedWorkspaceCheckout() {
+            return appState.agentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            )
+        }
+        return selectedWorktree().map { appState.agentAvailability(for: $0) }
+    }
+
+    private var selectedAgentAvailabilityTaskID: String {
+        guard appState.isAgentLauncherOpen else { return "closed" }
+        if let checkout = selectedWorkspaceCheckout() {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = appState.agentAvailabilityGeneration(
+                worktreePath: root,
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        guard let worktree = selectedWorktree() else { return "no-worktree" }
+        return "\(worktree.id)\u{0000}\(appState.agentExecutionTarget(for: worktree))\u{0000}\(appState.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private func loadSelectedAgentAvailability(force: Bool = false) async {
+        if let checkout = selectedWorkspaceCheckout() {
+            await appState.loadAgentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                executionTarget: checkout.executionLocation.agentExecutionTarget,
+                force: force
+            )
+            return
+        }
+        guard let worktree = selectedWorktree() else { return }
+        await appState.loadAgentAvailability(for: worktree, force: force)
     }
 
     /// Hidden while browsing an agent's sessions, and while the launcher is
@@ -229,7 +271,13 @@ struct AgentLauncherDialog: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if agents.isEmpty {
+                    if let availability = selectedAgentAvailability,
+                       case .loading = availability {
+                        launcherStatusRow("Checking agents on SSH host…", progress: true)
+                    } else if let availability = selectedAgentAvailability,
+                              case .failed(let message) = availability {
+                        failedAvailabilityRow(message)
+                    } else if agents.isEmpty {
                         emptyState
                     } else {
                         ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
@@ -258,6 +306,24 @@ struct AgentLauncherDialog: View {
                 }
             }
         }
+    }
+
+    private func failedAvailabilityRow(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Text(message).lineLimit(2)
+            Spacer()
+            Button("Retry") {
+                Task {
+                    await loadSelectedAgentAvailability(force: true)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.color("accent"))
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(theme.color("fg-faint"))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
     }
 
     private func sessionRowList(agent: AgentDefinition) -> some View {

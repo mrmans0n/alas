@@ -695,6 +695,7 @@ final class AppState {
         customs: [],
         installedIds: []
     )
+    let agentAvailabilityStore = AgentAvailabilityStore()
 
     /// Resolve a single agent by id (built-in id or custom UUID). Nil for
     /// unknown ids or "none".
@@ -703,17 +704,28 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
-    func acpForkTargets(sourceAgentID: String) -> [ACPSessionForkTarget] {
+    func availableAgentForHandoff(id: String?, worktree: Worktree) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        return agentAvailability(for: worktree).agents.first { $0.id == id }
+    }
+
+    func availableAgentForHandoff(id: String?, checkout: WorkspaceCheckout) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        return agentAvailability(
+            worktreePath: URL(fileURLWithPath: checkout.rootPath),
+            executionTarget: checkout.executionLocation.agentExecutionTarget
+        ).agents.first { $0.id == id }
+    }
+
+    private func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
+        await loadAgentAvailability(for: worktree, retryFailed: true)
+        return agentAvailability(for: worktree)
+    }
+
+    func acpForkTargets(sourceAgentID: String, worktreePath: URL) -> [ACPSessionForkTarget] {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
-            enabledAgents: agentRegistry.enabled().map {
-                ACPForkAgentOption(
-                    id: $0.id,
-                    displayName: $0.displayName,
-                    logoAssetName: $0.builtinLogoAssetName
-                )
-            },
-            sourceAgent: agentRegistry.agents.first(where: { $0.id == sourceAgentID }).map {
+            enabledAgents: agentAvailability(worktreePath: worktreePath).agents.map {
                 ACPForkAgentOption(
                     id: $0.id,
                     displayName: $0.displayName,
@@ -724,6 +736,48 @@ final class AppState {
         )
     }
 
+    func acpForkTargets(
+        sourceAgentID: String,
+        worktreePath: URL,
+        remoteHost: String?
+    ) -> [ACPSessionForkTarget] {
+        acpForkTargets(
+            sourceAgentID: sourceAgentID,
+            worktreePath: worktreePath,
+            executionTarget: AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        )
+    }
+
+    func acpForkTargets(
+        sourceAgentID: String,
+        worktreePath: URL,
+        executionTarget: AgentExecutionTarget
+    ) -> [ACPSessionForkTarget] {
+        ACPForkTargetPolicy.targets(
+            sourceAgentID: sourceAgentID,
+            enabledAgents: agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget).agents.map {
+                ACPForkAgentOption(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    logoAssetName: $0.builtinLogoAssetName
+                )
+            },
+            catalogAgentIDs: ACPLaunchCatalog.specs.map(\.agentID)
+        )
+    }
+
+    func remoteHost(for worktree: Worktree) -> String? {
+        projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+    }
+
+    func workspaceCheckout(for owner: SessionOwnerID?) -> WorkspaceCheckout? {
+        guard case .workspaceCheckout(let checkoutID, let location) = owner,
+              let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.executionLocation.normalized == location.normalized
+        else { return nil }
+        return checkout
+    }
+
     /// Recompute `agentRegistry` from `config.agents` + a fresh detection
     /// scan. Safe to call repeatedly.
     func rescanAgents() {
@@ -732,12 +786,122 @@ final class AppState {
             let installedIds = await AgentDetector.scanCurrentEnvironment(
                 agents: registry.agents
             )
+            self.agentAvailabilityStore.invalidateAll()
             self.agentRegistry = AgentRegistry(
                 builtinState: self.config.agents.builtinState,
                 customs: self.config.agents.custom,
                 installedIds: installedIds
             )
             self.snapInvalidatedAgentSelections()
+        }
+    }
+
+    func agentAvailability(
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> AgentAvailabilityState {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return agentAvailability(worktreePath: worktreePath, executionTarget: target)
+    }
+
+    func agentAvailability(
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> AgentAvailabilityState {
+        return agentAvailabilityStore.state(
+            target: target,
+            worktreePath: worktreePath.path,
+            localAgents: agentRegistry.enabled()
+        )
+    }
+
+    func agentAvailability(for worktree: Worktree) -> AgentAvailabilityState {
+        agentAvailability(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
+    func agentExecutionTarget(for worktree: Worktree) -> AgentExecutionTarget {
+        AgentExecutionTarget.resolve(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
+    func loadAgentAvailability(for worktree: Worktree, force: Bool = false, retryFailed: Bool = false) async {
+        await loadAgentAvailability(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
+            force: force,
+            retryFailed: retryFailed
+        )
+    }
+
+    func agentAvailabilityGeneration(
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> Int {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: target)
+    }
+
+    func agentAvailabilityGeneration(
+        worktreePath _: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> Int {
+        guard case .ssh = target else { return 0 }
+        return agentAvailabilityStore.generation
+    }
+
+    func agentAvailabilityGeneration(for worktree: Worktree) -> Int {
+        agentAvailabilityGeneration(
+            worktreePath: worktree.path,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        )
+    }
+
+    func loadAgentAvailability(
+        worktreePath: URL,
+        remoteHost: String? = nil,
+        force: Bool = false,
+        retryFailed: Bool = false
+    ) async {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        await loadAgentAvailability(
+            worktreePath: worktreePath,
+            executionTarget: target,
+            force: force,
+            retryFailed: retryFailed
+        )
+    }
+
+    func loadAgentAvailability(
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget,
+        force: Bool = false,
+        retryFailed: Bool = false
+    ) async {
+        guard case .ssh = target else { return }
+        let candidates = AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        )
+        if force {
+            agentAvailabilityStore.invalidate(target: target, worktreePath: worktreePath.path)
+        }
+        if retryFailed {
+            await agentAvailabilityStore.loadRetryingFailure(
+                target: target,
+                worktreePath: worktreePath.path,
+                candidates: candidates
+            )
+        } else {
+            await agentAvailabilityStore.load(
+                target: target,
+                worktreePath: worktreePath.path,
+                candidates: candidates
+            )
         }
     }
 
@@ -758,7 +922,10 @@ final class AppState {
     ///   - per-project `worktreeAgentMode` → `.useGlobal` if it referenced
     ///     a vanished agent
     private func snapInvalidatedAgentSelections() {
-        let enabledIds = Set(agentRegistry.enabled().map(\.id))
+        let enabledIds = Set(AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        ).map(\.id))
         var changed = false
         let currentTool = config.changes.aiToolId
         if currentTool != "none", !enabledIds.contains(currentTool) {
@@ -1595,7 +1762,7 @@ final class AppState {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .deleteFailed:
+                case nil, .preparingDelete, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
                     else { continue }
                     targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
@@ -1637,7 +1804,7 @@ final class AppState {
             switch self.projectsManager.operationState(for: worktree.id) {
             case .creating, .deleting, .createFailed:
                 return
-            case nil, .preparingDelete, .deleteFailed:
+            case nil, .preparingDelete, .launchFailed, .deleteFailed:
                 break
             }
             guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
@@ -1963,7 +2130,7 @@ final class AppState {
                     switch self.projectsManager.operationState(for: $0.id) {
                     case .creating, .deleting, .createFailed:
                         return false
-                    case nil, .preparingDelete, .deleteFailed:
+                    case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
                     }
                 }
@@ -2340,7 +2507,19 @@ final class AppState {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        let launchRoot = URL(fileURLWithPath: authoritative.rootPath)
+        let launchTarget = authoritative.executionLocation.agentExecutionTarget
+        if case .ssh = launchTarget {
+            await loadAgentAvailability(
+                worktreePath: launchRoot,
+                executionTarget: launchTarget
+            )
+        }
+        guard let agent = availableAgent(
+            id: agentId,
+            worktreePath: launchRoot,
+            executionTarget: launchTarget
+        ) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         if agent.id == AgentKind.copilot.rawValue, project.host == nil {
@@ -2785,16 +2964,32 @@ final class AppState {
                agent(id: agentID) != nil,
                let worktreeID = selectedWorktreeId,
                let worktree = worktree(withId: worktreeID) {
-                _ = try? await openWorkspaceCheckoutAgentTerminalTab(
-                    checkout,
-                    focusedMemberWorktree: worktree,
-                    agentId: agentID
-                )
+                do {
+                    _ = try await openWorkspaceCheckoutAgentTerminalTab(
+                        checkout,
+                        focusedMemberWorktree: worktree,
+                        agentId: agentID
+                    )
+                } catch {
+                    _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
+                }
             } else {
                 _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
             }
         case .acp:
-            guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
+            guard let agentID = preference.agentID else { return }
+            let checkoutRoot = URL(fileURLWithPath: checkout.rootPath)
+            let target = checkout.executionLocation.agentExecutionTarget
+            if case .ssh = target {
+                await loadAgentAvailability(worktreePath: checkoutRoot, executionTarget: target)
+            }
+            guard availableAgent(
+                id: agentID,
+                worktreePath: checkoutRoot,
+                executionTarget: target
+            ) != nil else {
+                return
+            }
             _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
         }
     }
@@ -2821,6 +3016,15 @@ final class AppState {
                 worktreePath: planned.destinationPath
             )
         }
+        let enabledAgentIDs: Set<String> = switch plan.executionLocation.normalized {
+        case .local:
+            Set(agentRegistry.enabled().map(\.id))
+        case .ssh:
+            Set(AgentConfiguredCatalog.enabled(
+                builtinState: config.agents.builtinState,
+                customs: config.agents.custom
+            ).map(\.id))
+        }
         return WorkspaceConfigurationResolver.resolve(.init(
             globalTerminal: config.terminal,
             globalLaunchPreference: .init(
@@ -2832,7 +3036,7 @@ final class AppState {
             workspaceConfiguration: workspace.configuration,
             members: members,
             availableLauncherModes: Set(AppConfig.LauncherMode.allCases),
-            enabledAgentIDs: Set(agentRegistry.enabled().map(\.id))
+            enabledAgentIDs: enabledAgentIDs
         ))
     }
 
@@ -3491,32 +3695,15 @@ final class AppState {
                         selectWorktree(id: newWorktree.id)
                     }
 
-                    switch launchSurface {
-                    case .none:
-                        break
-                    case .terminal(let agentId):
-                        let suffix: String? = {
-                            guard let id = agentId,
-                                  let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                            else { return nil }
-                            return self.agentStartupCommand(for: agent, project: project)
-                        }()
-                        _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
-                            for: newWorktree,
-                            startupScriptSuffix: suffix
+                    do {
+                        try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
+                    } catch {
+                        self.markWorktreeLaunchFailed(
+                            worktree: newWorktree,
+                            projectId: projectId,
+                            error: error,
+                            launchSurface: launchSurface
                         )
-                    case .acp(let agentId, let preparedPrompt):
-                        if let preparedPrompt {
-                            await openPreparedWorktreeACPSession(
-                                worktree: newWorktree,
-                                agentID: agentId,
-                                preparedPrompt: preparedPrompt
-                            )
-                        } else {
-                            openNewACPSession(agentID: agentId)
-                        }
-                    case .delegated:
-                        break
                     }
                 } catch {
                     discardUnpersistedGGWorktreeMode(
@@ -3706,8 +3893,8 @@ final class AppState {
 
     private func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, useBypassPermissions: Bool) -> String {
         let binary = project.host == nil
-            ? agent.resolvedBinary
-            : URL(fileURLWithPath: agent.resolvedBinary).lastPathComponent
+            ? Self.shellQuote(agent.resolvedBinary)
+            : remoteShellBinary(agent.configuredBinary)
         var argv = [binary]
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
             argv.append(contentsOf: extra)
@@ -3716,7 +3903,15 @@ final class AppState {
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
-        return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+        return ([binary] + argv.dropFirst().map(Self.shellQuote))
+            .joined(separator: " ")
+    }
+
+    private func remoteShellBinary(_ configuredBinary: String) -> String {
+        guard configuredBinary.hasPrefix("~/") else {
+            return Self.shellQuote(configuredBinary)
+        }
+        return "\"$HOME\"/\(Self.shellQuote(String(configuredBinary.dropFirst(2))))"
     }
 
     enum AgentTerminalLaunchError: LocalizedError, Equatable {
@@ -3729,6 +3924,17 @@ final class AppState {
                 return "The selected worktree's project is no longer available."
             case .agentUnavailable:
                 return "The selected agent is no longer enabled."
+            }
+        }
+    }
+
+    enum WorktreeAgentStartupError: LocalizedError, Equatable {
+        case agentUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .agentUnavailable:
+                return "The selected agent is not available for this worktree."
             }
         }
     }
@@ -3760,7 +3966,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -3782,7 +3988,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -3796,6 +4002,136 @@ final class AppState {
         } catch {
             showFileActionError(title: "Launch Agent Failed", message: error.localizedDescription)
             throw error
+        }
+    }
+
+    private func availableAgent(
+        id: String,
+        for worktree: Worktree,
+        remoteHost: String? = nil
+    ) -> AgentDefinition? {
+        let resolvedRemoteHost = remoteHost ?? projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        return availableAgent(id: id, worktreePath: worktree.path, remoteHost: resolvedRemoteHost)
+    }
+
+    private func availableAgent(
+        id: String,
+        worktreePath: URL,
+        remoteHost: String? = nil
+    ) -> AgentDefinition? {
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return availableAgent(id: id, worktreePath: worktreePath, executionTarget: target)
+    }
+
+    private func availableAgent(
+        id: String,
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> AgentDefinition? {
+        agentAvailability(worktreePath: worktreePath, executionTarget: target)
+            .agents
+            .first { $0.id == id }
+    }
+
+    private func worktreeAgentStartupSuffix(
+        agentId: String?,
+        worktree: Worktree,
+        project: ProjectConfig,
+        refreshAvailability: Bool = false
+    ) async throws -> String? {
+        guard let agentId else { return nil }
+        await loadAgentAvailability(for: worktree, force: refreshAvailability, retryFailed: refreshAvailability)
+        guard let agent = availableAgent(id: agentId, for: worktree) else {
+            throw WorktreeAgentStartupError.agentUnavailable
+        }
+        return agentStartupCommand(for: agent, project: project)
+    }
+
+    private func validateWorktreeACPAgent(
+        agentID: String,
+        worktree: Worktree,
+        refreshAvailability: Bool = false
+    ) async throws {
+        await loadAgentAvailability(for: worktree, force: refreshAvailability, retryFailed: refreshAvailability)
+        guard availableAgent(id: agentID, for: worktree) != nil else {
+            throw WorktreeAgentStartupError.agentUnavailable
+        }
+    }
+
+    private func launchWorktreeSurface(
+        _ launchSurface: WorktreeLaunchSurface,
+        worktree: Worktree,
+        project: ProjectConfig,
+        refreshAvailability: Bool = false
+    ) async throws {
+        switch launchSurface {
+        case .none, .delegated:
+            break
+        case .terminal(let agentId):
+            let suffix = try await worktreeAgentStartupSuffix(
+                agentId: agentId,
+                worktree: worktree,
+                project: project,
+                refreshAvailability: refreshAvailability
+            )
+            _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                for: worktree,
+                startupScriptSuffix: suffix
+            )
+        case .acp(let agentId, let preparedPrompt):
+            try await validateWorktreeACPAgent(
+                agentID: agentId,
+                worktree: worktree,
+                refreshAvailability: refreshAvailability
+            )
+            if let preparedPrompt {
+                await openPreparedWorktreeACPSession(
+                    worktree: worktree,
+                    agentID: agentId,
+                    preparedPrompt: preparedPrompt
+                )
+            } else {
+                guard let manager = acpManager(for: worktree) else { return }
+                openNewACPSession(agentID: agentId, owner: manager.owner)
+            }
+        }
+    }
+
+    private func markWorktreeLaunchFailed(
+        worktree: Worktree,
+        projectId: String,
+        error: Error,
+        launchSurface: WorktreeLaunchSurface
+    ) {
+        projectsManager.setOperationState(
+            id: worktree.id,
+            state: .launchFailed(
+                projectId: projectId,
+                message: error.localizedDescription,
+                launchSurface: launchSurface
+            )
+        )
+    }
+
+    func retryWorktreeLaunch(_ worktree: Worktree, project: ProjectConfig) async {
+        guard case .launchFailed(_, _, let launchSurface) = projectsManager.operationState(for: worktree.id) else {
+            return
+        }
+        do {
+            try await launchWorktreeSurface(
+                launchSurface,
+                worktree: worktree,
+                project: project,
+                refreshAvailability: true
+            )
+            projectsManager.setOperationState(id: worktree.id, state: nil)
+        } catch {
+            markWorktreeLaunchFailed(
+                worktree: worktree,
+                projectId: project.id,
+                error: error,
+                launchSurface: launchSurface
+            )
         }
     }
 
@@ -4980,30 +5316,15 @@ final class AppState {
                 selectWorktree(id: worktree.id)
             }
 
-            switch launchSurface {
-            case .none, .delegated:
-                break
-            case .terminal(let agentId):
-                let suffix: String? = {
-                    guard let id = agentId,
-                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                    else { return nil }
-                    return self.agentStartupCommand(for: agent, project: project)
-                }()
-                _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
-                    for: worktree,
-                    startupScriptSuffix: suffix
+            do {
+                try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
+            } catch {
+                markWorktreeLaunchFailed(
+                    worktree: worktree,
+                    projectId: projectId,
+                    error: error,
+                    launchSurface: launchSurface
                 )
-            case .acp(let agentId, let preparedPrompt):
-                if let preparedPrompt {
-                    await openPreparedWorktreeACPSession(
-                        worktree: worktree,
-                        agentID: agentId,
-                        preparedPrompt: preparedPrompt
-                    )
-                } else {
-                    openNewACPSession(agentID: agentId)
-                }
             }
         }
         return changed
@@ -5613,10 +5934,21 @@ final class AppState {
                     }
                     return nil
                 },
-                availableAgents: { [weak self] in
+                configuredAgents: { [weak self] in
                     guard let self else { return [] }
                     let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    return self.agentRegistry.enabled().map {
+                    return AgentConfiguredCatalog.enabled(
+                        builtinState: self.config.agents.builtinState,
+                        customs: self.config.agents.custom
+                    ).map {
+                        ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
+                    }
+                },
+                availableAgents: { [weak self] _, worktree in
+                    guard let self else { return [] }
+                    let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
+                    let agents = await self.loadAgentAvailabilityForDelegation(worktree).agents
+                    return agents.map {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
                 },
@@ -10168,6 +10500,16 @@ final class AppState {
                     retainActivePrompt: retainActivePrompt
                 )
             },
+            launchSpecTransformer: { [weak self] spec in
+                guard let self else { return spec }
+                let project = self.projects.first(where: { $0.id == worktree.projectId })
+                return self.workspaceACPLaunchSpec(
+                    from: spec,
+                    remoteHome: nil,
+                    treatsHomeAsRemote: project?.host != nil,
+                    useBypassPermissions: project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false
+                )
+            },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
@@ -10453,6 +10795,28 @@ final class AppState {
         guard await workspaceCheckoutManifestMatches(checkout) else { return .pendingRootOrLocation }
         if let existing = acpManagers[owner] { return .ready(existing) }
 
+        let launchSpecRemoteHome: String?
+        if let pinnedRemoteHost {
+            let configuredAgents = AgentConfiguredCatalog.enabled(
+                builtinState: config.agents.builtinState,
+                customs: config.agents.custom
+            )
+            let needsRemoteHome = configuredAgents.contains {
+                $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true
+            }
+            if let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost),
+               remoteHome.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                launchSpecRemoteHome = remoteHome
+            } else if needsRemoteHome {
+                return .pendingRootOrLocation
+            } else {
+                launchSpecRemoteHome = nil
+            }
+        } else {
+            launchSpecRemoteHome = nil
+        }
+        if let existing = acpManagers[owner] { return .ready(existing) }
+
         let dbURL = Paths.acpSessionsDB(for: owner)
         let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
             guard let self else { return nil }
@@ -10516,12 +10880,13 @@ final class AppState {
                 )
             },
             launchSpecTransformer: { [weak self] spec in
-                guard let self,
-                      checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
-                      let flag = self.agentRegistry.enabled().first(where: { $0.id == spec.agentID })?.bypassPermissionsFlag,
-                      spec.arguments.contains(flag) == false
-                else { return spec }
-                return spec.prependingArguments([flag])
+                guard let self else { return spec }
+                return self.workspaceACPLaunchSpec(
+                    from: spec,
+                    remoteHome: launchSpecRemoteHome,
+                    treatsHomeAsRemote: pinnedRemoteHost != nil,
+                    useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
+                )
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -10652,6 +11017,56 @@ final class AppState {
         memoryDiagnostics.attach(manager: manager)
         #endif
         return .ready(manager)
+    }
+
+    func workspaceACPLaunchSpec(
+        from spec: ACPLaunchSpec,
+        configuredAgents: [AgentDefinition]? = nil,
+        remoteHome: String? = nil,
+        treatsHomeAsRemote: Bool = false,
+        useBypassPermissions: Bool
+    ) -> ACPLaunchSpec {
+        let agents = configuredAgents ?? AgentConfiguredCatalog.enabled(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom
+        )
+        let configuredAgent = agents.first(where: { $0.id == spec.agentID })
+        var launchSpec = spec
+        if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) == nil,
+           let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
+           !binaryOverride.isEmpty,
+           let command = Self.normalizedACPBinaryOverride(
+            binaryOverride,
+            remoteHome: remoteHome,
+            treatsHomeAsRemote: treatsHomeAsRemote
+           ),
+           command != spec.command {
+            launchSpec = launchSpec.overridingCommandAndSetupCheck(command)
+        }
+        if useBypassPermissions,
+           let flag = configuredAgent?.bypassPermissionsFlag,
+           launchSpec.arguments.contains(flag) == false {
+            launchSpec = launchSpec.prependingArguments([flag])
+        }
+        return launchSpec
+    }
+
+    nonisolated static func normalizedACPBinaryOverride(
+        _ override: String,
+        remoteHome: String?,
+        treatsHomeAsRemote: Bool = false
+    ) -> String? {
+        let trimmed = override.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("~/") {
+            if let remoteHome {
+                let home = remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                guard !home.isEmpty else { return treatsHomeAsRemote ? nil : trimmed }
+                return "/\(home)/\(trimmed.dropFirst(2))"
+            }
+            guard treatsHomeAsRemote == false else { return trimmed }
+        }
+        return (trimmed as NSString).expandingTildeInPath
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
@@ -11068,7 +11483,10 @@ final class AppState {
         guard let snapshot = reviewLoop.snapshot else { return }
         guard actionKind == .openAgentHandoff else { return }
         let agentID = config.changes.aiToolId
-        guard agentID != "none", agent(id: agentID) != nil else { return }
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+        else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: snapshot,
             action: ReviewLoopAction(
@@ -11082,7 +11500,10 @@ final class AppState {
 
     func openReviewEvidenceHandoff(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) {
         let agentID = config.changes.aiToolId
-        guard agentID != "none", agent(id: agentID) != nil else { return }
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+        else { return }
         let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
             snapshot: snapshot,
             detail: detail
@@ -12042,7 +12463,7 @@ extension AppState: RemoteSessionsProvider {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .deleteFailed:
+                case nil, .preparingDelete, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
                 }
             }
@@ -12092,7 +12513,7 @@ extension AppState: RemoteSessionsProvider {
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:
             return .failure("Worktree is no longer available.")
-        case nil, .preparingDelete, .deleteFailed:
+        case nil, .preparingDelete, .launchFailed, .deleteFailed:
             break
         }
 

@@ -4,6 +4,7 @@ struct DraftCommitTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let tabState: DraftCommitTabState
+    let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -32,6 +33,14 @@ struct DraftCommitTabView: View {
 
     @Environment(\.theme) private var theme
     private let git = GitService()
+
+    private var agentAvailability: AgentAvailabilityState {
+        appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
+    }
+
+    private var agentAvailabilityTaskKey: String {
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: executionTarget))"
+    }
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
@@ -204,7 +213,17 @@ struct DraftCommitTabView: View {
                 title: amend ? "Amend HEAD" : "Draft commit",
                 busy: busy,
                 error: publishError ?? error,
-                availableAgents: appState.agentRegistry.enabled(),
+                agentAvailability: agentAvailability,
+                executionTarget: executionTarget,
+                onRetryAgentAvailability: {
+                    Task {
+                        await appState.loadAgentAvailability(
+                            worktreePath: worktreePath,
+                            executionTarget: executionTarget,
+                            force: true
+                        )
+                    }
+                },
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
                     label: presentation.commit.label,
@@ -275,6 +294,9 @@ struct DraftCommitTabView: View {
         // HEAD-changing event (external commit, rebase, reset, etc.). On
         // mount the key is "" → "<sha>" so the task fires once.
         .task(id: amendProbeKey) { await refreshCanAmend() }
+        .task(id: agentAvailabilityTaskKey) {
+            await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
+        }
         .task(id: publicationProbeKey) {
             guard amend else { return }
             await publicationProbe.load(key: publicationProbeKey) {
@@ -411,8 +433,11 @@ struct DraftCommitTabView: View {
 
     private func runGenerate() {
         publishSession?.clearError()
-        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
-            error = "Select an AI tool to generate a commit message."
+        guard let agent = RepositoryAgentSelectionPolicy.selection(
+            selectedID: appState.config.changes.aiToolId,
+            availability: agentAvailability
+        ).agent else {
+            error = "Select an AI tool available on this host."
             return
         }
         let amendSnapshot = amend
@@ -456,6 +481,7 @@ struct DraftCommitTabView: View {
                     agent: agent,
                     input: payload,
                     prompt: prompt,
+                    target: executionTarget,
                     workingDirectory: wt.path
                 )
                 guard !Task.isCancelled else { return }
@@ -463,6 +489,16 @@ struct DraftCommitTabView: View {
                 bodyText = message.body
             } catch is CancellationError {
                 // user-cancelled
+            } catch let runError as AgentRunError {
+                if case .binaryNotFound = runError,
+                   case .ssh = executionTarget {
+                    appState.agentAvailabilityStore.invalidate(
+                        target: executionTarget,
+                        worktreePath: wt.path
+                    )
+                    await appState.loadAgentAvailability(worktreePath: wt, executionTarget: executionTarget)
+                }
+                self.error = runError.localizedDescription
             } catch {
                 self.error = (error as NSError).localizedDescription
             }

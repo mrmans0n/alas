@@ -23,6 +23,16 @@ struct AgentPathResolveTests {
         #expect(resolved == exe.path)
     }
 
+    @Test("accepts executable absolute paths")
+    func acceptsAbsolutePath() throws {
+        let exe = try makeExecutable(named: "fake-tool")
+        defer { try? FileManager.default.removeItem(at: exe.deletingLastPathComponent()) }
+
+        let resolved = AgentPath.resolveExecutable(named: exe.path, base: "/var/empty", wellKnown: [])
+
+        #expect(resolved == exe.path)
+    }
+
     @Test("returns nil when not found")
     func missing() {
         let resolved = AgentPath.resolveExecutable(named: "definitely-absent-xyz", base: "/var/empty", wellKnown: [])

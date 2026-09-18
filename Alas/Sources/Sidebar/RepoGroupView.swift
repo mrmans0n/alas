@@ -49,6 +49,7 @@ struct RepoGroupView: View {
     let onActivateHarness: (Worktree, String) -> Void
     let onCopyError: (String) -> Void
     let onRetryCreate: (Worktree) -> Void
+    let onRetryLaunch: (Worktree) -> Void
     let onRetryDelete: (Worktree) -> Void
     let onSetGGWorktreeMode: (Worktree, GGWorktreeMode) -> Void
     let onRemoveFailed: (Worktree) -> Void
@@ -167,6 +168,7 @@ struct RepoGroupView: View {
                             onCopyError: onCopyError,
                             onRemoveFailed: { onRemoveFailed(wt) },
                             onRetryCreate: { onRetryCreate(wt) },
+                            onRetryLaunch: { onRetryLaunch(wt) },
                             onRetryDelete: { onRetryDelete(wt) },
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
                             workspaceCheckout: workspaceCheckout(wt)

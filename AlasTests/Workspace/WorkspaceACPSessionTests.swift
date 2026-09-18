@@ -31,6 +31,22 @@ struct WorkspaceACPSessionTests {
         let state = AppState(store: MemoryStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [.init(
+                id: "test",
+                displayName: "Test",
+                binary: "test",
+                binaryOverride: nil,
+                promptModeArgs: [],
+                bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
+                isBuiltin: false,
+                isEnabled: true,
+                builtinLogoAssetName: nil
+            )],
+            installedIds: ["test"]
+        )
         state.config.workspacesEnabled = true
         state.config.changes.aiToolId = "none"
         _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
@@ -126,6 +142,155 @@ struct WorkspaceACPSessionTests {
         #expect(capturedSpec?.arguments.first == "--dangerously-bypass-approvals-and-sandbox")
         #expect(capturedHost == "checkout-host")
         #expect(manager.remoteHost == "checkout-host")
+    }
+
+    @MainActor
+    @Test func checkoutManagerEvaluatesSetupAfterLaunchSpecTransform() async throws {
+        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
+        client.script(method: "session/new") { _ in Data(#"{"sessionId":"new"}"#.utf8) }
+        var setupSpec: ACPLaunchSpec?
+        var launchedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "checkout",
+            worktreePath: "/checkout",
+            owner: .workspaceCheckout(UUID(), .local),
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { spec in
+                setupSpec = spec
+                return .ready
+            },
+            connectionFactory: { spec, _, _ in
+                launchedSpec = spec
+                return ACPConnection(client: client)
+            },
+            launchSpecTransformer: { spec in
+                spec.agentID == "gemini"
+                    ? spec.overridingCommandAndSetupCheck("/opt/tools/gemini-acp")
+                    : spec
+            }
+        )
+        let session = manager.createSession(agentId: "gemini")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(setupSpec?.command == "/opt/tools/gemini-acp")
+        #expect(launchedSpec?.command == "/opt/tools/gemini-acp")
+        if case .binaryOnPath(let name) = setupSpec?.setupCheck {
+            #expect(name == "/opt/tools/gemini-acp")
+        } else {
+            Issue.record("expected setup to check the overridden binary")
+        }
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecPreservesAdapterCommandWithoutBinaryOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.command == spec.command)
+        #expect(transformed.command == ACPManagedAdapterDescriptor.claude.binaryName)
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecPreservesManagedAdapterCommandWithBinaryOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: "/opt/bin/claude",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: true)
+
+        #expect(transformed.command == ACPManagedAdapterDescriptor.claude.binaryName)
+        #expect(transformed.arguments.first == "--dangerously-skip-permissions")
+        #expect(transformed.setupCheck == spec.setupCheck)
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecAppliesNativeACPBinaryOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["gemini"] = .init(
+            isEnabled: true,
+            binaryOverride: "/opt/tools/gemini",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "gemini"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.command == "/opt/tools/gemini")
+        if case .binaryOnPath(let name) = transformed.setupCheck {
+            #expect(name == "/opt/tools/gemini")
+        } else {
+            Issue.record("expected setup to check the overridden binary")
+        }
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecExpandsHomeRelativeLocalOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["gemini"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/gemini",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "gemini"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.command == "\(NSHomeDirectory())/bin/gemini")
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecExpandsHomeRelativeRemoteOverride() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["gemini"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/gemini",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "gemini"))
+
+        let transformed = state.workspaceACPLaunchSpec(
+            from: spec,
+            remoteHome: "/home/builder",
+            useBypassPermissions: false
+        )
+
+        #expect(transformed.command == "/home/builder/bin/gemini")
+    }
+
+    @MainActor
+    @Test func checkoutLaunchSpecPreservesHomeRelativeRemoteOverrideWithoutRemoteHome() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["gemini"] = .init(
+            isEnabled: true,
+            binaryOverride: "~/bin/gemini",
+            extraTerminalArgs: nil
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "gemini"))
+
+        let transformed = state.workspaceACPLaunchSpec(
+            from: spec,
+            remoteHome: nil,
+            treatsHomeAsRemote: true,
+            useBypassPermissions: false
+        )
+
+        #expect(transformed.command == "~/bin/gemini")
+        if case .binaryOnPath(let name) = transformed.setupCheck {
+            #expect(name == "~/bin/gemini")
+        } else {
+            Issue.record("expected setup to check the remote-home-relative override")
+        }
     }
 
     @MainActor

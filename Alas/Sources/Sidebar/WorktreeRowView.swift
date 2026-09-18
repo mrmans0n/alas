@@ -182,6 +182,7 @@ struct WorktreeRowView: View {
     let onCopyError: (String) -> Void
     let onRemoveFailed: () -> Void
     let onRetryCreate: () -> Void
+    let onRetryLaunch: () -> Void
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
@@ -201,6 +202,7 @@ struct WorktreeRowView: View {
         case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
         case .createFailed(_, let msg, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
+        case .launchFailed(_, let msg, _): return "Launch failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
         case .none: return ""
         }
@@ -209,7 +211,7 @@ struct WorktreeRowView: View {
     nonisolated static func showsProgress(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
         case .preparingDelete, .deleting: return true
-        case .creating, .createFailed, .deleteFailed, .none: return false
+        case .creating, .createFailed, .launchFailed, .deleteFailed, .none: return false
         }
     }
 
@@ -219,7 +221,7 @@ struct WorktreeRowView: View {
 
     private var errorMessage: String? {
         switch operationState {
-        case .createFailed(_, let message, _, _, _, _), .deleteFailed(let message):
+        case .createFailed(_, let message, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
             return message
         case .creating, .preparingDelete, .deleting, .none:
             return nil
@@ -451,6 +453,14 @@ struct WorktreeRowView: View {
                 Button("Copy Error") { onCopyError(errorMessage) }
             }
             Button("Copy Path", action: onCopyPath)
+        } else if case .launchFailed = operationState {
+            Button("Retry Launch", action: onRetryLaunch)
+            if let errorMessage {
+                Divider()
+                Button("Copy Error") { onCopyError(errorMessage) }
+            }
+            Divider()
+            availableWorktreeContextMenuContent
         } else if case .deleteFailed = operationState {
             if Self.showsRemovalActions(isMain: isMain) {
                 Button("Retry Delete", action: onRetryDelete)
@@ -463,38 +473,43 @@ struct WorktreeRowView: View {
             Button("Copy Path", action: onCopyPath)
             Button("Copy Branch Name", action: onCopyBranch)
         } else if !isPending {
-            Button("Open in Terminal", action: onOpenTerminal)
-            if let onOpenIssue {
-                Button("Open Issue", action: onOpenIssue)
-                Divider()
+            availableWorktreeContextMenuContent
+        }
+    }
+
+    @ViewBuilder
+    private var availableWorktreeContextMenuContent: some View {
+        Button("Open in Terminal", action: onOpenTerminal)
+        if let onOpenIssue {
+            Button("Open Issue", action: onOpenIssue)
+            Divider()
+        }
+        Button("Copy Path", action: onCopyPath)
+        Button("Copy Branch Name", action: onCopyBranch)
+        if !worktree.path.isRemoteAlasPath {
+            Button("Reveal in Finder", action: onRevealInFinder)
+        }
+        Divider()
+        if ggMenuModel.isVisible {
+            Menu(Self.ggModeMenuTitle) {
+                // Static buttons: a data-driven ForEach inside a hover-revealed
+                // context-menu submenu renders empty on macOS.
+                let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
+                ggModeMenuButton(items[0])
+                ggModeMenuButton(items[1])
+                ggModeMenuButton(items[2])
             }
-            Button("Copy Path", action: onCopyPath)
-            Button("Copy Branch Name", action: onCopyBranch)
-            if !worktree.path.isRemoteAlasPath {
-                Button("Reveal in Finder", action: onRevealInFinder)
+            if let explanation = ggMenuModel.inactiveExplanation {
+                Divider()
+                Text(explanation)
             }
             Divider()
-            if ggMenuModel.isVisible {
-                Menu(Self.ggModeMenuTitle) {
-                    // Static buttons: a data-driven ForEach inside a hover-revealed
-                    // context-menu submenu renders empty on macOS.
-                    let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
-                    ggModeMenuButton(items[0])
-                    ggModeMenuButton(items[1])
-                    ggModeMenuButton(items[2])
-                }
-                if let explanation = ggMenuModel.inactiveExplanation {
-                    Divider()
-                    Text(explanation)
-                }
-                Divider()
-            }
-            if Self.showsRemovalActions(isMain: isMain) {
-                Button("Archive", action: onArchive)
-                Button("Delete Worktree…", role: .destructive, action: onDelete)
-                if showKeepBranchOption {
-                    Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
-                }
+        }
+        if Self.showsRemovalActions(isMain: isMain) {
+            Button("Archive", action: onArchive)
+            Button("Delete Worktree…", role: .destructive, action: onDelete)
+            if showKeepBranchOption {
+                Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
             }
         }
     }

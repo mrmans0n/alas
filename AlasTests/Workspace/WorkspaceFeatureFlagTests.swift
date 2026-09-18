@@ -518,6 +518,7 @@ struct WorkspaceFeatureFlagTests {
             isEnabled: true,
             builtinLogoAssetName: nil
         )
+        state.config.agents.custom = [agent]
         state.agentRegistry = AgentRegistry(builtinState: [:], customs: [agent], installedIds: [agent.id])
         let workspace = Workspace(
             name: "Release",
@@ -549,6 +550,72 @@ struct WorkspaceFeatureFlagTests {
             return false
         }
         #expect(acpTabs.count == 1)
+    }
+
+    @Test @MainActor func appStateSkipsFrozenACPLaunchWhenAgentUnavailableAfterCheckoutCompletes() async throws {
+        let workspaceURL = temporaryURL()
+        let checkoutRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-workspace-launch-unavailable-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            removeWorkspaceFiles(near: workspaceURL)
+            try? FileManager.default.removeItem(at: checkoutRoot)
+        }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let spaces = emptySpacesFile()
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: RecordingSpacesStore(spacesFile: spaces),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let agent = AgentDefinition(
+            id: "workspace-test-agent",
+            displayName: "Workspace Test Agent",
+            binary: "workspace-test-agent",
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: "--unsafe",
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
+        state.config.agents.custom = [agent]
+        state.agentRegistry = AgentRegistry(builtinState: [:], customs: [agent], installedIds: [])
+        let workspace = Workspace(
+            name: "Release",
+            executionLocation: .local,
+            members: [],
+            configuration: .init(creationLaunchPreference: .override(.init(
+                openAfterCreate: true,
+                launcherMode: .acp,
+                agentID: agent.id,
+                useBypassPermissions: true
+            )))
+        )
+        let plan = FrozenWorkspaceCheckoutPlan(
+            checkoutID: UUID(),
+            workspaceID: workspace.id,
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: checkoutRoot.path,
+            members: []
+        )
+
+        let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
+        await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
+        try await Task.sleep(for: .milliseconds(200))
+
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let acpTabs = state.tabs.tabs(for: owner).filter {
+            if case .acpSession = $0 { return true }
+            return false
+        }
+        #expect(acpTabs.isEmpty)
     }
 
     @Test @MainActor func deletingWorkspaceDefinitionRemovesSpacePlacementAndKeepsFormerCheckoutSnapshot() async throws {

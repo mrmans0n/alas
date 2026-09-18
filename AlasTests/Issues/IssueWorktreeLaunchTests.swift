@@ -5,6 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct IssueWorktreeLaunchTests {
+    fileprivate static let agentID = "omp"
     private static let promptID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 
     @Test func chatLaunchCreatesAcpTabQueuesEditedPromptOnceAndPersistsAttachment() async throws {
@@ -15,7 +16,7 @@ struct IssueWorktreeLaunchTests {
 
         let id = try await fixture.create(
             branch: "issue-chat",
-            launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: prepared),
+            launchSurface: .acp(agentId: Self.agentID, preparedPrompt: prepared),
             issueAttachment: attachment
         )
 
@@ -32,7 +33,7 @@ struct IssueWorktreeLaunchTests {
         #expect(session.queue.first.map { ACPSessionRunner.textPreview(of: $0.blocks) } == prepared.text)
 
         let persisted = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: id).path)
-        #expect(try await persisted.loadSession(id: prepared.sessionID)?.agentId == "missing-acp-agent")
+        #expect(try await persisted.loadSession(id: prepared.sessionID)?.agentId == Self.agentID)
         #expect(try await persisted.loadQueue(sessionId: prepared.sessionID).map(\.id) == [prepared.promptID])
     }
 
@@ -42,7 +43,7 @@ struct IssueWorktreeLaunchTests {
         let prepared = Self.preparedPrompt()
         let id = try await fixture.create(
             branch: "issue-retry",
-            launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: prepared),
+            launchSurface: .acp(agentId: Self.agentID, preparedPrompt: prepared),
             issueAttachment: Self.attachment()
         )
         let worktree = try #require(fixture.state.worktree(withId: id))
@@ -50,7 +51,7 @@ struct IssueWorktreeLaunchTests {
         _ = try? await fixture.state.startACPSession(
             worktree: worktree,
             sessionID: prepared.sessionID,
-            agentID: "missing-acp-agent",
+            agentID: Self.agentID,
             promptID: prepared.promptID,
             prompt: prepared.text
         )
@@ -107,7 +108,7 @@ struct IssueWorktreeLaunchTests {
         let attachment = Self.attachment()
         let id = try await fixture.create(
             branch: "issue-reload",
-            launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: prepared),
+            launchSurface: .acp(agentId: Self.agentID, preparedPrompt: prepared),
             issueAttachment: attachment
         )
         let persistedProjects = try #require(fixture.store.writtenProjectsFile)
@@ -289,6 +290,16 @@ private final class WorktreeLaunchFixture {
             color: "#5fb7c4"
         )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState[IssueWorktreeLaunchTests.agentID] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: [IssueWorktreeLaunchTests.agentID]
+        )
     }
 
     func create(

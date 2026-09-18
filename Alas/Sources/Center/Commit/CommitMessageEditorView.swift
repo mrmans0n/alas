@@ -1,6 +1,44 @@
 import AppKit
 import SwiftUI
 
+struct CommitAgentAvailabilityPresentation: Equatable {
+    let message: String?
+    let showsProgress: Bool
+    let showsRetry: Bool
+    let canGenerate: Bool
+
+    static func make(
+        availability: AgentAvailabilityState,
+        target: AgentExecutionTarget
+    ) -> Self {
+        switch availability {
+        case .loading:
+            return .init(
+                message: hostMessage(target, local: "Checking available agents…", remote: "Checking agents on %@…"),
+                showsProgress: true,
+                showsRetry: false,
+                canGenerate: false
+            )
+        case .failed(let message):
+            return .init(message: message, showsProgress: false, showsRetry: true, canGenerate: false)
+        case .available(let agents) where agents.isEmpty:
+            return .init(
+                message: hostMessage(target, local: "No configured agents found.", remote: "No configured agents found on %@."),
+                showsProgress: false,
+                showsRetry: false,
+                canGenerate: false
+            )
+        case .available:
+            return .init(message: nil, showsProgress: false, showsRetry: false, canGenerate: true)
+        }
+    }
+
+    private static func hostMessage(_ target: AgentExecutionTarget, local: String, remote: String) -> String {
+        guard case .ssh(let host) = target else { return local }
+        return String(format: remote, host)
+    }
+}
+
 struct CommitMessageEditorView: View {
     @Binding var subject: String
     @Binding var bodyText: String
@@ -8,7 +46,9 @@ struct CommitMessageEditorView: View {
     let title: String
     let busy: Bool
     let error: String?
-    let availableAgents: [AgentDefinition]
+    let agentAvailability: AgentAvailabilityState
+    let executionTarget: AgentExecutionTarget
+    let onRetryAgentAvailability: () -> Void
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
     var alternateAction: CommitPrimaryAction? = nil
@@ -33,9 +73,19 @@ struct CommitMessageEditorView: View {
         return action.label
     }
 
+    private var agentPresentation: CommitAgentAvailabilityPresentation {
+        CommitAgentAvailabilityPresentation.make(
+            availability: agentAvailability,
+            target: executionTarget
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             headerRow
+            if let message = agentPresentation.message {
+                agentAvailabilityMessage(message)
+            }
             subjectField
             bodyField
             if let error {
@@ -78,16 +128,33 @@ struct CommitMessageEditorView: View {
                 accessory
             }
             AiSplitButton(
-                availableAgents: availableAgents,
+                availableAgents: agentAvailability.agents,
                 selectedToolId: $aiToolId,
                 busy: busy,
                 onGenerate: onGenerate
             )
-            .disabled(editorDisabled)
+            .disabled(editorDisabled || !agentPresentation.canGenerate)
             actionButton(primaryAction, position: .leading)
             if let alternateAction {
                 actionButton(alternateAction, position: .trailing)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func agentAvailabilityMessage(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            if agentPresentation.showsProgress {
+                ProgressView().controlSize(.small)
+            }
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            if agentPresentation.showsRetry {
+                AlasButton(title: "Retry", style: .subtle, action: onRetryAgentAvailability)
+                    .disabled(busy || editorDisabled)
+            }
+            Spacer()
         }
     }
 

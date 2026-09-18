@@ -24,12 +24,8 @@ struct ACPSessionForkPresentationTests {
             enabledAgents: [
                 .init(id: "claude", displayName: "Claude", logoAssetName: "agent-claude"),
                 .init(id: "gemini", displayName: "Gemini", logoAssetName: "agent-gemini"),
+                .init(id: "codex", displayName: "Codex", logoAssetName: "agent-codex")
             ],
-            sourceAgent: .init(
-                id: "codex",
-                displayName: "Codex",
-                logoAssetName: "agent-codex"
-            ),
             catalogAgentIDs: ["claude", "gemini", "codex"]
         )
         #expect(targets.map(\.id) == ["codex", "claude", "gemini"])

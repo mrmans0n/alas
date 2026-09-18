@@ -35,6 +35,10 @@ enum AgentPath {
         base: String?,
         wellKnown: [String] = wellKnownDirectories
     ) -> String? {
+        if name.contains("/") {
+            let expanded = (name as NSString).expandingTildeInPath
+            return FileManager.default.isExecutableFile(atPath: expanded) ? expanded : nil
+        }
         let pathValue = augment(base: base ?? "", wellKnown: wellKnown)
         for dir in pathValue.split(separator: ":") {
             let candidate = "\(dir)/\(name)"

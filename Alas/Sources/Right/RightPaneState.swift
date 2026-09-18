@@ -1196,8 +1196,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func canOpenReviewLoopHandoff(appState: AppState) -> Bool {
         guard let request = reviewLoop.snapshot?.reviewRequest else { return false }
         guard request.worstCheckBucket == .fail || request.hasActionableFeedback else { return false }
-        let agentID = appState.config.changes.aiToolId
-        return agentID != "none" && appState.agent(id: agentID) != nil
+        return appState.availableAgentForHandoff(id: appState.config.changes.aiToolId, worktree: worktree) != nil
     }
 
     func openReviewLoopProviderPage() {
@@ -4320,7 +4319,12 @@ final class RightPaneState: GGSplitCommitServicing {
     /// is the entire point of resolving merges with a coding agent) and
     /// avoids paying CLI startup cost per file.
     @MainActor
-    func resolveAllConflicts(using agent: AgentDefinition, prompt: String) {
+    func resolveAllConflicts(
+        using agent: AgentDefinition,
+        prompt: String,
+        target: AgentExecutionTarget = .local,
+        agentBinaryUnavailable: ((AgentExecutionTarget) async -> Void)? = nil
+    ) {
         guard !checkpointMutationsDisabled else { return }
         guard bulkResolveTask == nil else { return }
         guard changes.contains(where: { $0.conflict != nil }) else { return }
@@ -4334,7 +4338,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 let agentOutput = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
-                    worktreePath: self.worktree.path
+                    worktreePath: self.worktree.path,
+                    target: target
                 )
                 await self.refresh()
                 let remaining = self.changes.filter { $0.conflict != nil }.count
@@ -4349,6 +4354,19 @@ final class RightPaneState: GGSplitCommitServicing {
                     remainingConflicts: remaining,
                     summary: headline,
                     details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            } catch let runError as AgentRunError {
+                if case .binaryNotFound = runError,
+                   case .ssh = target {
+                    await agentBinaryUnavailable?(target)
+                }
+                await self.refresh()
+                let remaining = self.changes.filter { $0.conflict != nil }.count
+                report = BulkConflictResolveReport(
+                    success: false,
+                    remainingConflicts: remaining,
+                    summary: "Agent failed: \(runError.localizedDescription)",
+                    details: ""
                 )
             } catch {
                 await self.refresh()

@@ -5,6 +5,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStateCreateWorktreeLaunchSurfaceTests {
+    private struct TerminalOpenFailure: LocalizedError {
+        var errorDescription: String? { "Terminal failed to open" }
+    }
+
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-launchsurface-\(name)-\(UUID().uuidString)")
@@ -25,6 +29,61 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
+    }
+
+    @Test
+    func terminalLaunchSurfaceRecordsLaunchFailureWhenTerminalOpenFails() async throws {
+        let repo = try await makeRepo(name: "terminal-open-fails")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                throw TerminalOpenFailure()
+            }
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "terminal-open-fails",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: ["claude"]
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-terminal-open-fails-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "terminal-open-fails",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .terminal(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+
+        guard case .launchFailed(_, let message, let launchSurface) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected launchFailed state")
+            return
+        }
+        #expect(message == TerminalOpenFailure().localizedDescription)
+        #expect(launchSurface == .terminal(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
     }
 
     @Test
@@ -79,5 +138,192 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         }
         #expect(acpTabs.count == 1)
         #expect(terminalTabs.isEmpty)
+    }
+
+    @Test
+    func terminalLaunchSurfaceWithUnavailableAgentLeavesLaunchFailure() async throws {
+        let repo = try await makeRepo(name: "terminal-unavailable-agent")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "terminal-unavailable-agent",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-terminal-unavailable-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "terminal-unavailable",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .terminal(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+
+        guard case .launchFailed(_, let message, let launchSurface) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected launchFailed state")
+            return
+        }
+        #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)
+        #expect(launchSurface == .terminal(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
+    }
+
+    @Test
+    func acpLaunchSurfaceWithUnavailableAgentLeavesLaunchFailure() async throws {
+        let repo = try await makeRepo(name: "acp-unavailable-agent")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "acp-unavailable-agent",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-acp-unavailable-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "acp-unavailable",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .acp(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+
+        guard case .launchFailed(_, let message, let launchSurface) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected launchFailed state")
+            return
+        }
+        #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)
+        #expect(launchSurface == .acp(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
+    }
+
+    @Test
+    func retryingAcpLaunchRefreshesAvailabilityAndTargetsFailedWorktree() async throws {
+        let repo = try await makeRepo(name: "acp-retry-target")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "acp-retry-target",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        guard let main = state.projectsManager.worktrees(projectId: project.id).first else {
+            Issue.record("Expected main worktree")
+            return
+        }
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-acp-retry-target-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "acp-retry-target",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .acp(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+        guard let failedWorktree = state.projectsManager.worktrees(projectId: project.id)
+            .first(where: { $0.id == id })
+        else {
+            Issue.record("Expected failed worktree to remain in the project")
+            return
+        }
+
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: ["claude"]
+        )
+        state.selectWorktree(id: main.id)
+
+        await state.retryWorktreeLaunch(failedWorktree, project: project)
+
+        #expect(state.projectsManager.operationState(for: id) == nil)
+        let failedWorktreeTabs = state.tabs.tabs(forWorktree: id)
+        let mainTabs = state.tabs.tabs(forWorktree: main.id)
+        #expect(failedWorktreeTabs.contains {
+            if case .acpSession = $0 { return true }
+            return false
+        })
+        #expect(!mainTabs.contains {
+            if case .acpSession = $0 { return true }
+            return false
+        })
+    }
+
+    private func waitForOperationStateMatching(
+        _ mgr: ProjectsManager,
+        id: String,
+        matches: (WorktreeOperationState?) -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if matches(mgr.operationState(for: id)) { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for operationState to match for id \(id)")
     }
 }

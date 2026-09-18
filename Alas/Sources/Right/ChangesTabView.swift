@@ -128,6 +128,9 @@ struct ChangesTabView: View {
             }
         }
         .onDisappear { rps.endAttentionReveal() }
+        .task(id: agentAvailabilityTaskID) {
+            await appState.loadAgentAvailability(for: rps.worktree)
+        }
         .task(id: amendProbeKey) {
             let key = amendProbeKey
             guard currentDraft?.amend == true, !isGGDrawerActive else { return }
@@ -140,6 +143,10 @@ struct ChangesTabView: View {
     private var isRevealingAttentionReview: Bool {
         if case .reviewRequest = rps.attentionRevealedTarget { return true }
         return false
+    }
+
+    private var agentAvailabilityTaskID: String {
+        "\(rps.worktree.id)\u{0000}\(rps.worktree.path.path)\u{0000}\(appState.agentExecutionTarget(for: rps.worktree))\u{0000}\(appState.agentAvailabilityGeneration(for: rps.worktree))"
     }
 
     private var publishMutationDisabledReason: String? {
@@ -344,7 +351,15 @@ struct ChangesTabView: View {
                         guard let agent = resolvedBulkAgent else { return }
                         rps.resolveAllConflicts(
                             using: agent,
-                            prompt: appState.config.changes.mergeBulkResolvePrompt
+                            prompt: appState.config.changes.mergeBulkResolvePrompt,
+                            target: appState.agentExecutionTarget(for: rps.worktree),
+                            agentBinaryUnavailable: { target in
+                                appState.agentAvailabilityStore.invalidate(
+                                    target: target,
+                                    worktreePath: rps.worktree.path.path
+                                )
+                                await appState.loadAgentAvailability(for: rps.worktree)
+                            }
                         )
                     },
                     onCancelBulkResolve: { rps.cancelBulkResolve() },
@@ -1034,7 +1049,8 @@ struct ChangesTabView: View {
     private var resolvedBulkAgent: AgentDefinition? {
         let id = appState.config.changes.aiToolId
         if id == "none" { return nil }
-        if !id.isEmpty, let agent = appState.agent(id: id) {
+        let agents = appState.agentAvailability(for: rps.worktree).agents
+        if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
             return agent.bypassPermissionsFlag != nil ? agent : nil
         }
         // Fallback: pick the first ENABLED agent that also supports
@@ -1044,7 +1060,7 @@ struct ChangesTabView: View {
         // Cursor) — without this we'd reject the first match and
         // leave bulk resolve disabled despite a usable tool being
         // available.
-        return appState.agentRegistry.enabled()
+        return agents
             .first(where: { $0.bypassPermissionsFlag != nil })
     }
 }

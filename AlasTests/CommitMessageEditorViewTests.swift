@@ -61,7 +61,9 @@ struct CommitMessageEditorViewTests {
             title: "Edit abc1234",
             busy: busy,
             error: error,
-            availableAgents: [],
+            agentAvailability: .available([]),
+            executionTarget: .local,
+            onRetryAgentAvailability: {},
             onGenerate: {},
             primaryAction: CommitPrimaryAction(
                 label: "Save message",
@@ -72,6 +74,39 @@ struct CommitMessageEditorViewTests {
             )
         )
         .environment(\.theme, currentTheme())
+    }
+
+    @Test func failedRemoteAvailabilityShowsRetryAndDisablesGenerate() {
+        let presentation = CommitAgentAvailabilityPresentation.make(
+            availability: .failed("Could not check agents on dev."),
+            target: .ssh(host: "dev")
+        )
+
+        #expect(presentation.message == "Could not check agents on dev.")
+        #expect(presentation.showsRetry)
+        #expect(!presentation.canGenerate)
+    }
+
+    @Test func emptyRemoteAvailabilityExplainsNoAgentsFound() {
+        let presentation = CommitAgentAvailabilityPresentation.make(
+            availability: .available([]),
+            target: .ssh(host: "dev")
+        )
+
+        #expect(presentation.message == "No configured agents found on dev.")
+        #expect(!presentation.showsRetry)
+        #expect(!presentation.canGenerate)
+    }
+
+    @Test func loadingRemoteAvailabilityShowsProgress() {
+        let presentation = CommitAgentAvailabilityPresentation.make(
+            availability: .loading,
+            target: .ssh(host: "dev")
+        )
+
+        #expect(presentation.message == "Checking agents on dev…")
+        #expect(presentation.showsProgress)
+        #expect(!presentation.canGenerate)
     }
 
     @Test func rendersWithoutCrashing() {
@@ -235,7 +270,9 @@ private struct CommitComposerHarness: View {
             title: "Edit abc1234",
             busy: false,
             error: nil,
-            availableAgents: [],
+            agentAvailability: .available([]),
+            executionTarget: .local,
+            onRetryAgentAvailability: {},
             onGenerate: {},
             primaryAction: CommitPrimaryAction(label: "Save", isEnabled: true, handler: {})
         )

@@ -339,16 +339,14 @@ struct NewWorktreeDialog: View {
 
     private var effectiveAutoLaunchAgent: AgentDefinition? {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return nil }
-        let resolved = AgentAutoLaunch.resolve(
-            registry: state.agentRegistry,
+        let agentId = Self.resolvedAutoLaunchAgentID(
             globalAgentId: state.config.agents.worktreeAutoLaunch.agentId,
-            globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
             projectMode: project.startupScripts.worktreeAgentMode,
             projectAgentId: project.startupScripts.worktreeAgentId,
-            projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions,
-            repoAgentId: repoDefaultAgentId
+            repoAgentId: repoDefaultAgentId,
+            enabledAgents: launchEligibleAgents
         )
-        return resolved.flatMap { state.agent(id: $0.agentId) }
+        return agentId.flatMap { id in launchEligibleAgents.first { $0.id == id } }
     }
 
     /// The repo's `.alas/config.json` default agent when it names an
@@ -362,7 +360,7 @@ struct NewWorktreeDialog: View {
               )?.defaultAgent else {
             return nil
         }
-        return state.agentRegistry.enabled().contains(where: { $0.id == candidate }) ? candidate : nil
+        return launchEligibleAgents.contains(where: { $0.id == candidate }) ? candidate : nil
     }
 
     private var currentLaunchPreference: NewWorktreeLaunchPreference {
@@ -435,7 +433,7 @@ struct NewWorktreeDialog: View {
             preferredMode: defaults.launchMode,
             projectAgentMode: project?.startupScripts.worktreeAgentMode ?? .useGlobal,
             resolvedAgentID: effectiveAutoLaunchAgent?.id,
-            enabledAgents: state.agentRegistry.enabled()
+            enabledAgents: launchEligibleAgents
         )
         persistableLaunchMode = defaults.persistableLaunchMode
         openAfterCreate = defaults.openAfterCreate
@@ -443,7 +441,7 @@ struct NewWorktreeDialog: View {
         launchAgentId = Self.resolvedLaunchAgent(
             initialAgentId: initialAgent,
             mode: launchMode,
-            enabledAgents: state.agentRegistry.enabled()
+            enabledAgents: launchEligibleAgents
         )
     }
 
@@ -495,7 +493,7 @@ struct NewWorktreeDialog: View {
             launchMode = .acp
             persistableLaunchMode = .acp
             launchAgentId = Self.issueLaunchAgent(
-                from: state.agentRegistry.enabled(),
+                from: launchEligibleAgents,
                 preferredAgentID: effectiveAutoLaunchAgent?.id
             )
         }
@@ -842,7 +840,7 @@ struct NewWorktreeDialog: View {
     // MARK: - Launch surface UI
 
     private var pickerAgents: [AgentDefinition] {
-        let enabled = state.agentRegistry.enabled()
+        let enabled = launchEligibleAgents
         switch launchMode {
         case .terminal: return enabled
         case .acp:      return Self.acpCapableAgents(from: enabled)
@@ -850,7 +848,22 @@ struct NewWorktreeDialog: View {
     }
 
     private var acpSegmentEnabled: Bool {
-        Self.acpSegmentEnabled(enabledAgents: state.agentRegistry.enabled())
+        Self.acpSegmentEnabled(enabledAgents: launchEligibleAgents)
+    }
+
+    private var launchEligibleAgents: [AgentDefinition] {
+        Self.launchEligibleAgents(
+            isRemoteProject: state.projects.first(where: { $0.id == projectId })?.host != nil,
+            configuredEnabledAgents: configuredEnabledAgents,
+            locallyEnabledAgents: state.agentRegistry.enabled()
+        )
+    }
+
+    private var configuredEnabledAgents: [AgentDefinition] {
+        AgentConfiguredCatalog.enabled(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom
+        )
     }
 
     private var launchAgentPicker: some View {
@@ -919,7 +932,7 @@ struct NewWorktreeDialog: View {
             launchAgentId = Self.resolvedLaunchAgent(
                 initialAgentId: launchAgentId,
                 mode: .terminal,
-                enabledAgents: state.agentRegistry.enabled()
+                enabledAgents: launchEligibleAgents
             )
         case .acp:
             guard acpSegmentEnabled else { return }
@@ -929,7 +942,7 @@ struct NewWorktreeDialog: View {
             launchAgentId = Self.resolvedLaunchAgent(
                 initialAgentId: launchAgentId,
                 mode: .acp,
-                enabledAgents: state.agentRegistry.enabled()
+                enabledAgents: launchEligibleAgents
             )
         }
         issueState.recordLaunchPreferenceChangeAfterAttach()
@@ -940,6 +953,36 @@ struct NewWorktreeDialog: View {
     nonisolated static func acpCapableAgents(from agents: [AgentDefinition]) -> [AgentDefinition] {
         let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
         return agents.filter { acpIds.contains($0.id) }
+    }
+
+    nonisolated static func launchEligibleAgents(
+        isRemoteProject: Bool,
+        configuredEnabledAgents: [AgentDefinition],
+        locallyEnabledAgents: [AgentDefinition]
+    ) -> [AgentDefinition] {
+        isRemoteProject ? configuredEnabledAgents : locallyEnabledAgents
+    }
+
+    nonisolated static func resolvedAutoLaunchAgentID(
+        globalAgentId: String?,
+        projectMode: ProjectStartupScriptMode,
+        projectAgentId: String?,
+        repoAgentId: String?,
+        enabledAgents: [AgentDefinition]
+    ) -> String? {
+        func enabled(_ id: String?) -> String? {
+            guard let id, enabledAgents.contains(where: { $0.id == id }) else { return nil }
+            return id
+        }
+
+        switch projectMode {
+        case .disabled:
+            return nil
+        case .useGlobal:
+            return enabled(repoAgentId) ?? enabled(globalAgentId)
+        case .overrideGlobal, .appendToGlobal:
+            return enabled(projectAgentId)
+        }
     }
 
     nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {

@@ -138,6 +138,7 @@ struct CenterPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            let availableAgents = centerAgentAvailability.agents
             let composition = state.centerTabComposition(
                 focusedWorktreeID: worktree.id,
                 sharedSessionOwner: sharedSessionOwner
@@ -324,7 +325,13 @@ struct CenterPaneView: View {
                     }
                 },
                 onNewTerminal: openTerminal,
-                enabledAgents: state.agentRegistry.enabled(),
+                agentAvailability: centerAgentAvailability,
+                enabledAgents: RepositoryAgentMenuPolicy.directAgents(from: availableAgents),
+                onRetryAgentAvailability: {
+                    Task {
+                        await loadCenterAgentAvailability(force: true)
+                    }
+                },
                 onLaunchAgent: { agentId in
                     Task { @MainActor in
                         if let checkout = selectedCheckoutForSharedOwner {
@@ -343,14 +350,7 @@ struct CenterPaneView: View {
                         state.openNewACPSession(agentID: agentId)
                     }
                 },
-                acpAgents: {
-                    // Only enabled builtins with a wired ACP launch spec.
-                    let enabledIds = Set(state.agentRegistry.enabled().map(\.id))
-                    return ACPLaunchCatalog.specs.compactMap { spec in
-                        guard enabledIds.contains(spec.agentID) else { return nil }
-                        return AgentBuiltins.entry(id: spec.agentID)
-                    }
-                }(),
+                acpAgents: RepositoryAgentMenuPolicy.acpAgents(from: availableAgents),
                 loadRunScripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
                 isScriptRunning: { script in state.runningScriptTab(for: script, in: worktree) != nil },
                 onRunScript: { script in state.runOrFocusScript(script, in: worktree) },
@@ -554,6 +554,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: s,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
@@ -563,6 +564,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
@@ -575,6 +577,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
+                            executionTarget: composerExecutionTarget,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
@@ -793,6 +796,9 @@ struct CenterPaneView: View {
         .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
         }
+        .task(id: centerAgentAvailabilityTaskID) {
+            await loadCenterAgentAvailability()
+        }
         .background(theme.color("bg-1"))
     }
 
@@ -932,5 +938,46 @@ struct CenterPaneView: View {
               checkout.id == checkoutID
         else { return nil }
         return checkout
+    }
+
+    private var centerAgentAvailability: AgentAvailabilityState {
+        if let checkout = selectedCheckoutForSharedOwner {
+            return state.agentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            )
+        }
+        return state.agentAvailability(for: worktree)
+    }
+
+    private var composerExecutionTarget: AgentExecutionTarget {
+        if let checkout = selectedCheckoutForSharedOwner {
+            return checkout.executionLocation.agentExecutionTarget
+        }
+        return state.agentExecutionTarget(for: worktree)
+    }
+
+    private var centerAgentAvailabilityTaskID: String {
+        if let checkout = selectedCheckoutForSharedOwner {
+            let root = URL(fileURLWithPath: checkout.rootPath)
+            let generation = state.agentAvailabilityGeneration(
+                worktreePath: root,
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            )
+            return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
+        }
+        return "\(worktree.id)\u{0000}\(state.agentExecutionTarget(for: worktree))\u{0000}\(state.agentAvailabilityGeneration(for: worktree))"
+    }
+
+    private func loadCenterAgentAvailability(force: Bool = false) async {
+        if let checkout = selectedCheckoutForSharedOwner {
+            await state.loadAgentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                executionTarget: checkout.executionLocation.agentExecutionTarget,
+                force: force
+            )
+        } else {
+            await state.loadAgentAvailability(for: worktree, force: force)
+        }
     }
 }

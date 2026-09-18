@@ -41,7 +41,7 @@ struct RightPaneSelectionStateResolver {
                 return .deleting(wt)
             case .createFailed:
                 return .createFailed(wt)
-            case .deleteFailed:
+            case .launchFailed, .deleteFailed:
                 // The worktree still exists on disk; the right pane shows
                 // real content while the center pane carries the failure
                 // hero and recovery actions.

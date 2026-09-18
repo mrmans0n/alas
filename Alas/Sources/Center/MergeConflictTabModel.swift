@@ -71,12 +71,19 @@ final class MergeConflictTabModel {
     let worktreePath: URL
     let relativePath: String
     private let gitService: GitService
+    private let agentBinaryUnavailable: (AgentExecutionTarget) async -> Void
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "merge-conflict-tab")
 
-    init(worktreePath: URL, relativePath: String, gitService: GitService) {
+    init(
+        worktreePath: URL,
+        relativePath: String,
+        gitService: GitService,
+        agentBinaryUnavailable: @escaping (AgentExecutionTarget) async -> Void = { _ in }
+    ) {
         self.worktreePath = worktreePath
         self.relativePath = relativePath
         self.gitService = gitService
+        self.agentBinaryUnavailable = agentBinaryUnavailable
     }
 
     /// Number of unresolved conflict regions currently in `resultText`.
@@ -983,6 +990,14 @@ final class MergeConflictTabModel {
     /// cached, or a request for the same block is already in flight.
     /// Errors are silent (no UI).
     func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
+        await explainCurrentConflict(using: agent, language: language, target: .local)
+    }
+
+    func explainCurrentConflict(
+        using agent: AgentDefinition,
+        language: String?,
+        target: AgentExecutionTarget
+    ) async {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
@@ -996,11 +1011,19 @@ final class MergeConflictTabModel {
             let sentence = try await MergeAgent.explainConflict(
                 agent: agent,
                 block: block,
-                language: language
+                language: language,
+                target: target,
+                workingDirectory: worktreePath.path
             )
             if !sentence.isEmpty {
                 setAnnotation(sentence, for: block)
             }
+        } catch let runError as AgentRunError {
+            if case .binaryNotFound = runError,
+               case .ssh = target {
+                await agentBinaryUnavailable(target)
+            }
+            logger.error("explain failed: \(runError.localizedDescription, privacy: .public)")
         } catch {
             logger.error("explain failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -1019,6 +1042,20 @@ final class MergeConflictTabModel {
         template: String,
         language: String?
     ) async {
+        await requestAgentResolveFile(
+            using: agent,
+            template: template,
+            language: language,
+            target: .local
+        )
+    }
+
+    func requestAgentResolveFile(
+        using agent: AgentDefinition,
+        template: String,
+        language: String?,
+        target: AgentExecutionTarget
+    ) async {
         guard let file = conflictedFile else { return }
         let startGeneration = loadGeneration
         agentBusy = true
@@ -1036,10 +1073,20 @@ final class MergeConflictTabModel {
                 base: file.base,
                 remote: file.remote ?? "",
                 mergedWithMarkers: resultText,
-                language: language
+                language: language,
+                target: target,
+                workingDirectory: worktreePath.path
             )
             guard loadGeneration == startGeneration else { return }
             agentProposal = proposal
+        } catch let runError as AgentRunError {
+            guard loadGeneration == startGeneration else { return }
+            if case .binaryNotFound = runError,
+               case .ssh = target {
+                await agentBinaryUnavailable(target)
+            }
+            agentProposal = nil
+            logger.error("resolveFile failed: \(runError.localizedDescription, privacy: .public)")
         } catch {
             guard loadGeneration == startGeneration else { return }
             agentProposal = nil

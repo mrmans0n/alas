@@ -4,6 +4,7 @@ struct CommitEditorTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let tabState: CommitEditorTabState
+    let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -36,6 +37,14 @@ struct CommitEditorTabView: View {
 
     @Environment(\.theme) private var theme
     private let git = GitService()
+
+    private var agentAvailability: AgentAvailabilityState {
+        appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
+    }
+
+    private var agentAvailabilityTaskKey: String {
+        "\(executionTarget):\(appState.agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: executionTarget))"
+    }
 
     private static let minPaneWidth: CGFloat = 140
     private var checkpointLeaseActive: Bool {
@@ -84,7 +93,17 @@ struct CommitEditorTabView: View {
                     title: tabState.title,
                     busy: busy,
                     error: error,
-                    availableAgents: appState.agentRegistry.enabled(),
+                    agentAvailability: agentAvailability,
+                    executionTarget: executionTarget,
+                    onRetryAgentAvailability: {
+                        Task {
+                            await appState.loadAgentAvailability(
+                                worktreePath: worktreePath,
+                                executionTarget: executionTarget,
+                                force: true
+                            )
+                        }
+                    },
                     onGenerate: generateMessage,
                     primaryAction: CommitPrimaryAction(
                         label: "Save message",
@@ -121,6 +140,9 @@ struct CommitEditorTabView: View {
         }
         .task(id: worktreeId) {
             _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+        }
+        .task(id: agentAvailabilityTaskKey) {
+            await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
         }
         .task(id: diffTaskKey) {
             guard !loadingDetails else { return }
@@ -439,8 +461,11 @@ struct CommitEditorTabView: View {
 
     private func generateMessage() {
         guard !busy else { return }
-        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
-            error = "Select an AI tool to generate a commit message."
+        guard let agent = RepositoryAgentSelectionPolicy.selection(
+            selectedID: appState.config.changes.aiToolId,
+            availability: agentAvailability
+        ).agent else {
+            error = "Select an AI tool available on this host."
             return
         }
         guard details != nil else {
@@ -489,11 +514,22 @@ struct CommitEditorTabView: View {
                     agent: agent,
                     input: payload,
                     prompt: prompt,
+                    target: executionTarget,
                     workingDirectory: worktreePath.path
                 )
                 guard !Task.isCancelled else { return }
                 subject = message.subject
                 bodyText = message.body
+            } catch let runError as AgentRunError {
+                if case .binaryNotFound = runError,
+                   case .ssh = executionTarget {
+                    appState.agentAvailabilityStore.invalidate(
+                        target: executionTarget,
+                        worktreePath: worktreePath.path
+                    )
+                    await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
+                }
+                self.error = runError.localizedDescription
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
