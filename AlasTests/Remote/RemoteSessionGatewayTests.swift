@@ -1501,6 +1501,14 @@ struct RemoteSessionGatewayTests {
         #expect((wire.text ?? "").isEmpty == false)
     }
 
+    @Test func checkpointAttachmentDoesNotRenderAsRemotePlaceholder() {
+        let msg = ACPMessage.user(id: UUID(), text: "hello", attachments: [.checkpointReference(id: UUID())])
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+
+        #expect(wire.kind == "user")
+        #expect(wire.text == "hello")
+    }
+
     @Test func toolCallWireOmitsInlineAssetData() throws {
         let msg = ACPMessage.toolCall(.init(
             toolCallId: "tc-image",

@@ -1076,7 +1076,7 @@ final class RemoteSessionGateway {
             // phone (we don't serve the image bytes to the client in v1).
             var parts: [String] = []
             if !text.isEmpty { parts.append(text) }
-            parts.append(contentsOf: attachments.map { "🖼 \($0.name ?? "Image")" })
+            parts.append(contentsOf: attachments.filter { !$0.isCheckpointReference }.map { "🖼 \($0.name ?? "Image")" })
             return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil, index: index)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
