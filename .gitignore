@@ -18,7 +18,8 @@ ThirdParty/treesitter-pack/target/
 # Local agent/worktree state
 /.superpowers/
 /.worktrees/
-/.claude/
+/.claude/*
+!/.claude/skills
 
 # Let's ignore superpower docs
 docs/superpowers
