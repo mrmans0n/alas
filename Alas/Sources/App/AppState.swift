@@ -6417,6 +6417,9 @@ final class AppState {
         project: ProjectConfig,
         forcedCwd: URL?
     ) throws -> OpenedTerminalSession {
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
         let opened: OpenedTerminalSession
         if let terminalSessionOpener {
             opened = try terminalSessionOpener(
@@ -8274,6 +8277,10 @@ final class AppState {
                     await awaitPendingACPDetach(worktreeId: worktreeID, sessionId: state.sessionId)
                     cancelRetainedACPSessionCleanup(owner: .worktree(worktreeID), sessionId: state.sessionId)
                     guard closedTabHistory.last?.id == entry.id else { continue }
+                    guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktreeID)) else {
+                        closedTabHistory.remove(id: entry.id)
+                        return
+                    }
                     guard worktree(withId: worktreeID) != nil else {
                         closedTabHistory.remove(id: entry.id)
                         continue
@@ -11714,6 +11721,11 @@ final class AppState {
 
     @discardableResult
     func openNewACPSession(agentID: String, owner: SessionOwnerID, initialPrompt: String? = nil) -> ACPSessionTabState? {
+        if case .worktree(let worktreeID) = owner {
+            guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktreeID)) else {
+                return nil
+            }
+        }
         guard let mgr = acpManager(for: owner) else { return nil }
         let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {

@@ -1194,25 +1194,25 @@ struct WorktreeService {
     }
 
     static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
-        let status = try await Process.git(
+        let status = try await Process.gitData(
             ["status", "--porcelain=v1", "--ignore-submodules=none", "--untracked-files=all"],
             cwd: worktreePath
         )
         guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
 
-        let diff = try await Process.git(
+        let diff = try await Process.gitData(
             ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
             cwd: worktreePath
         )
         guard diff.exitCode == 0 else { throw WorktreeError.gitFailed(diff.stderr) }
 
-        let cachedDiff = try await Process.git(
+        let cachedDiff = try await Process.gitData(
             ["diff", "--cached", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
             cwd: worktreePath
         )
         guard cachedDiff.exitCode == 0 else { throw WorktreeError.gitFailed(cachedDiff.stderr) }
 
-        let untracked = try await Process.run(
+        let untracked = try await Process.runData(
             "/bin/sh",
             args: [
                 "-c",
@@ -1223,7 +1223,7 @@ struct WorktreeService {
         )
         guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
 
-        let submodules = try await Process.git([
+        let submodules = try await Process.gitData([
             "submodule", "foreach", "--quiet", "--recursive",
             """
             set -e
@@ -1238,14 +1238,19 @@ struct WorktreeService {
         ], cwd: worktreePath)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
 
-        let payload = [
-            "status", status.stdout,
-            "diff", diff.stdout,
-            "cachedDiff", cachedDiff.stdout,
-            "untracked", untracked.stdout,
-            "submodules", submodules.stdout
-        ].joined(separator: "\0")
-        return SHA256.hash(data: Data(payload.utf8))
+        var payload = Data()
+        func append(_ label: String, _ data: Data) {
+            payload.append(Data(label.utf8))
+            payload.append(0)
+            payload.append(data)
+            payload.append(0)
+        }
+        append("status", status.stdout)
+        append("diff", diff.stdout)
+        append("cachedDiff", cachedDiff.stdout)
+        append("untracked", untracked.stdout)
+        append("submodules", submodules.stdout)
+        return SHA256.hash(data: payload)
             .map { String(format: "%02x", $0) }
             .joined()
     }
