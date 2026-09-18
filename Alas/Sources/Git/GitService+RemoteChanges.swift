@@ -454,9 +454,33 @@ extension GitService {
         guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
             return 0
         }
-        guard let data = try? Data(contentsOf: url), !looksBinary(data),
-              let text = String(data: data, encoding: .utf8) else { return 0 }
-        return Self.lineCount(of: text)
+        guard let handle = try? FileHandle(forReadingFrom: url),
+              let prefix = try? handle.read(upToCount: 8192),
+              !looksBinary(prefix),
+              String(data: prefix, encoding: .utf8) != nil
+        else { return 0 }
+        try? handle.close()
+        return Self.streamingLineCount(of: url)
+    }
+
+    /// Counts newline bytes in bounded chunks so a large untracked text file
+    /// cannot be loaded wholesale during a sidebar refresh.
+    private static func streamingLineCount(of url: URL) -> Int {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+        let chunkSize = 64 * 1024
+        var count = 0
+        var sawBytes = false
+        var endedWithNewline = false
+        while true {
+            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+            sawBytes = true
+            count += chunk.reduce(into: 0) { result, byte in
+                if byte == 0x0A { result += 1 }
+            }
+            endedWithNewline = chunk.last == 0x0A
+        }
+        return count + (sawBytes && !endedWithNewline ? 1 : 0)
     }
 
     private static func lineCount(of text: String) -> Int {

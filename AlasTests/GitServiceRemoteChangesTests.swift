@@ -35,6 +35,17 @@ struct GitServiceRemoteChangesTests {
         #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 0, deleted: 1))
     }
 
+    @Test func untrackedLineCountStreamsLargeFiles() throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-line-count-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("large.txt")
+        let line = String(repeating: "x", count: 64) + "\n"
+        try String(repeating: line, count: 100_000).write(to: file, atomically: true, encoding: .utf8)
+        #expect(GitService.addedLineCount(worktreePath: repo, path: "large.txt") == 100_000)
+    }
+
     @Test func sidebarDiffStatsCountPartiallyStagedFilesOnceAndClearAfterCommit() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
