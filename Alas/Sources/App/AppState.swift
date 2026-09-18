@@ -9497,7 +9497,7 @@ final class AppState {
     ) -> [WorktreeCleanupWorkspaceOwner] {
         let path = worktree.path.standardizedFileURL.path
 
-        return workspacesManager.checkouts.compactMap { checkout in
+        return workspacesManager.ownershipCheckouts.compactMap { checkout in
             guard let member = checkout.members.first(where: { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path == path
@@ -9510,7 +9510,6 @@ final class AppState {
                 return !(member.availability == .explicitlyDeleted
                     && member.cleanup?.worktreeRemoved == true)
             }) else { return nil }
-
             let state: WorktreeCleanupWorkspaceOwner.State
             if checkout.workspaceID == nil {
                 state = .formerWorkspace

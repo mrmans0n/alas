@@ -16,6 +16,7 @@ final class WorkspacesManager {
     private let bridge: WorkspaceSpacePersistenceBridge
     private let observer: any WorkspaceCheckoutObserving
     private(set) var loadState: WorkspaceLoadState = .notLoaded
+    private(set) var dormantCheckouts: [WorkspaceCheckout] = []
     private(set) var checkoutReconciliations: [UUID: WorkspaceCheckoutReconciliation] = [:]
 
     var canMutate: Bool {
@@ -38,6 +39,13 @@ final class WorkspacesManager {
         return state.checkouts.map(presentedCheckout)
     }
 
+    var ownershipCheckouts: [WorkspaceCheckout] {
+        if case .loaded = loadState {
+            return checkouts
+        }
+        return dormantCheckouts
+    }
+
     /// Current persisted/reconciled checkout snapshot for runtime session
     /// attachment. Returns nil while Workspace storage is unavailable rather
     /// than fabricating a focus-derived replacement.
@@ -57,10 +65,14 @@ final class WorkspacesManager {
     /// in-memory gate: it neither deletes nor rewrites Workspace storage.
     func setEnabled(_ enabled: Bool, spacesFile: SpacesFile) async -> SpacesFile? {
         guard enabled else {
+            if case let .loaded(state) = loadState {
+                dormantCheckouts = state.checkouts.map(presentedCheckout)
+            }
             loadState = .notLoaded
             checkoutReconciliations = [:]
             return nil
         }
+        dormantCheckouts = []
 
         switch await bridge.load() {
         case .missing:
