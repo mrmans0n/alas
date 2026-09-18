@@ -31,6 +31,10 @@ struct SubprocessRunner: Sendable {
         // prerequisite for returning the output emitted so far.
         let stdoutBox = OutputBox()
         let stderrBox = OutputBox()
+        let exitSemaphore = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            exitSemaphore.signal()
+        }
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -76,25 +80,21 @@ struct SubprocessRunner: Sendable {
         try? stderrPipe.fileHandleForWriting.close()
 
         let deadline = DispatchTime.now() + timeout
-        let exitGroup = DispatchGroup()
-        exitGroup.enter()
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            exitGroup.leave()
-        }
-        let waitResult = exitGroup.wait(timeout: deadline)
+        let waitResult = exitSemaphore.wait(timeout: deadline)
         if waitResult == .timedOut {
             process.terminate()
-            _ = exitGroup.wait(timeout: .now() + .milliseconds(250))
+            _ = exitSemaphore.wait(timeout: .now() + .milliseconds(250))
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                _ = exitGroup.wait(timeout: .now() + .milliseconds(250))
+                _ = exitSemaphore.wait(timeout: .now() + .milliseconds(250))
             }
             finishDrainingPipes()
+            process.terminationHandler = nil
             return Result(exitCode: nil, stdout: stdoutBox.string(), stderr: stderrBox.string())
         }
 
         finishDrainingPipes()
+        process.terminationHandler = nil
         return Result(
             exitCode: process.terminationStatus,
             stdout: stdoutBox.string(),
