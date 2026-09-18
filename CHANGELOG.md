@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.5] - 2026-09-18
+
+### ✨ Features
+
+- Add automatic ACP checkpoints before prompts and restore them from the transcript (#1317).
+- Show incoming diffs and outgoing commits on sidebar worktree rows (#1310).
+
+### 🐛 Fixes
+
+- Coalesce concurrent ACP session attachments to avoid duplicate work (#1308).
+- Restore agent availability when connecting to SSH hosts (#1293).
+- Keep worktree branch fields editable and honor forced deletion of submodules (#1311, #1315).
+- Make force deletion safer during worktree cleanup (#1318).
+- Avoid a context-menu crash on macOS 27 (#1320).
+
+### 🎨 Changed
+
+- Simplify the composer hint row by removing the pulse dot and agent icon (#1312).
+- Add the shared repository icon used by Alas configuration.
+
+### 🏗️ Internal
+
+- Restore, rebalance, and stabilize Swift CI coverage and asynchronous test fixtures (#1307, #1309, #1314, #1316).
+
 ## [0.18.4] - 2026-09-18
 
 ### ✨ Features
