@@ -1212,17 +1212,16 @@ struct WorktreeService {
         )
         guard cachedDiff.exitCode == 0 else { throw WorktreeError.gitFailed(cachedDiff.stderr) }
 
-        let untracked = try await Process.git([
-            "ls-files", "--others", "--exclude-standard", "-z"
-        ], cwd: worktreePath)
+        let untracked = try await Process.run(
+            "/bin/sh",
+            args: [
+                "-c",
+                #"git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#
+            ],
+            cwd: worktreePath,
+            env: Process.gitEnv()
+        )
         guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
-
-        var untrackedHashes: [String] = []
-        for path in untracked.stdout.split(separator: "\0", omittingEmptySubsequences: true).map(String.init).sorted() {
-            let hash = try await Process.git(["hash-object", "--", path], cwd: worktreePath)
-            guard hash.exitCode == 0 else { throw WorktreeError.gitFailed(hash.stderr) }
-            untrackedHashes.append("\(path)\0\(hash.stdout)")
-        }
 
         let submodules = try await Process.git([
             "submodule", "foreach", "--quiet", "--recursive",
@@ -1232,7 +1231,7 @@ struct WorktreeService {
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
-            git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked=$_\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
+            git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
             git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             """
@@ -1243,7 +1242,7 @@ struct WorktreeService {
             "status", status.stdout,
             "diff", diff.stdout,
             "cachedDiff", cachedDiff.stdout,
-            "untracked", untrackedHashes.joined(separator: "\0"),
+            "untracked", untracked.stdout,
             "submodules", submodules.stdout
         ].joined(separator: "\0")
         return SHA256.hash(data: Data(payload.utf8))

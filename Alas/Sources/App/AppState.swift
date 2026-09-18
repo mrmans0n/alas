@@ -6397,7 +6397,7 @@ final class AppState {
         try Task.checkCancellation()
         await prepareRemoteAccelerationIfNeeded(for: project)
         try Task.checkCancellation()
-        guard projectsManager.operationState(for: worktree.id) == nil else {
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
         return try openTerminalTab(
@@ -6462,7 +6462,7 @@ final class AppState {
         guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
-        guard projectsManager.operationState(for: worktree.id) == nil else {
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -9472,6 +9472,14 @@ final class AppState {
             }
         }
     }
+    nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
+        switch state {
+        case .creating, .preparingDelete, .deleting:
+            return true
+        case .createFailed, .launchFailed, .deleteFailed, nil:
+            return false
+        }
+    }
 
     nonisolated static func harnessActivityIsBusy(_ state: ActivityState?) -> Bool {
         guard let state else { return false }
@@ -11839,7 +11847,7 @@ final class AppState {
         preparedPrompt: PreparedWorktreeACPPrompt
     ) async {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
-        guard projectsManager.operationState(for: worktree.id) == nil else { return }
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else { return }
         guard let manager = acpManager(for: worktree) else { return }
         let session = manager.createSession(
             id: preparedPrompt.sessionID,
@@ -11906,7 +11914,7 @@ final class AppState {
                     targetAgentID: targetAgentID,
                     autoRunDefault: config.harness.acpAutoRunByDefault
                 )
-                guard self.projectsManager.operationState(for: worktree.id) == nil else { return }
+                guard !Self.blocksWorktreeSessionAdmission(self.projectsManager.operationState(for: worktree.id)) else { return }
                 let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
                 let tab = tabs.append(acpSession: tabState, to: worktree.id)
                 activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
@@ -12075,7 +12083,7 @@ final class AppState {
         _ = mgr.placeholderSession(id: sessionId)
         await mgr.hydrateIfNeeded(id: sessionId)
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
-        guard projectsManager.operationState(for: worktree.id) == nil else { return }
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
     }
