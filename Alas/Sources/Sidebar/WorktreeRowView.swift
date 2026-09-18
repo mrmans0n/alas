@@ -216,7 +216,14 @@ struct WorktreeRowView: View {
     }
 
     private var activeCommitQuery: CommitQuery? {
-        isMain || operationState != nil ? nil : commitQuery
+        guard !isMain,
+              operationState == nil,
+              Self.showsCommitCount(
+                harnessState: harnessSummary?.state,
+                worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                isMain: isMain
+              ) else { return nil }
+        return commitQuery
     }
 
     private var visibleBranchCommits: GitService.BranchCommitCount? {
