@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 enum AgentAvailabilityState: Equatable {
@@ -15,6 +16,9 @@ enum AgentAvailabilityState: Equatable {
 @Observable
 final class AgentAvailabilityStore {
     typealias Probe = @Sendable (String, String, [AgentDefinition]) async throws -> ProcessResult
+    typealias Now = @MainActor () -> Date
+
+    static let successfulProbeTTL: TimeInterval = 30
 
     struct Key: Hashable {
         let host: String
@@ -24,10 +28,16 @@ final class AgentAvailabilityStore {
     private(set) var states: [Key: AgentAvailabilityState] = [:]
     private(set) var generation = 0
     @ObservationIgnored private var inFlight: [Key: Task<Void, Never>] = [:]
+    @ObservationIgnored private var loadedAt: [Key: Date] = [:]
     @ObservationIgnored private let probe: Probe
+    @ObservationIgnored private let now: Now
 
-    init(probe: @escaping Probe = AgentAvailabilityStore.remoteProbe) {
+    init(
+        probe: @escaping Probe = AgentAvailabilityStore.remoteProbe,
+        now: @escaping Now = { Date() }
+    ) {
         self.probe = probe
+        self.now = now
     }
 
     func state(
@@ -57,7 +67,11 @@ final class AgentAvailabilityStore {
             await task.value
             return
         }
-        guard states[key] == nil else { return }
+        if let state = states[key] {
+            guard shouldRefresh(state: state, key: key) else { return }
+            states[key] = nil
+            loadedAt[key] = nil
+        }
 
         states[key] = .loading
         let probe = probe
@@ -70,6 +84,7 @@ final class AgentAvailabilityStore {
             )
             guard !Task.isCancelled, let self else { return }
             self.states[key] = state
+            self.loadedAt[key] = self.now()
             self.inFlight[key] = nil
         }
         inFlight[key] = task
@@ -114,6 +129,7 @@ final class AgentAvailabilityStore {
         inFlight.values.forEach { $0.cancel() }
         inFlight = [:]
         states = [:]
+        loadedAt = [:]
         generation += 1
     }
 
@@ -121,6 +137,12 @@ final class AgentAvailabilityStore {
         inFlight[key]?.cancel()
         inFlight[key] = nil
         states[key] = nil
+        loadedAt[key] = nil
+    }
+
+    private func shouldRefresh(state: AgentAvailabilityState, key: Key) -> Bool {
+        guard case .available = state, let loaded = loadedAt[key] else { return false }
+        return now().timeIntervalSince(loaded) >= Self.successfulProbeTTL
     }
 
     private func cacheKey(

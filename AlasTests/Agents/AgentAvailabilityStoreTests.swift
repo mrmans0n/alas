@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -101,6 +102,49 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
     }
 
+    @Test func freshSuccessfulAvailabilityDoesNotProbeAgain() async {
+        let counter = ProbeCounter()
+        let store = AgentAvailabilityStore { _, _, _ in
+            await counter.increment()
+            return ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
+        }
+        let candidates = [TestAgents.custom(id: "one", binary: "one")]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+
+        #expect(await counter.value == 1)
+    }
+
+    @Test func staleSuccessfulAvailabilityRefreshesOnLoad() async {
+        let counter = ProbeCounter()
+        let clock = TestClock()
+        let store = AgentAvailabilityStore(
+            probe: { _, _, _ in
+                let attempt = await counter.increment()
+                return ProcessResult(
+                    exitCode: 0,
+                    stdout: attempt == 1 ? agentProbeLine(0) : "\(agentProbeLine(0))\(agentProbeLine(1))",
+                    stderr: ""
+                )
+            },
+            now: { clock.now }
+        )
+        let candidates = [
+            TestAgents.custom(id: "one", binary: "one"),
+            TestAgents.custom(id: "two", binary: "two")
+        ]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
+
+        clock.advance(by: AgentAvailabilityStore.successfulProbeTTL)
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+
+        #expect(await counter.value == 2)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
+    }
+
     @Test func localStateReturnsLocalAgentsWithoutProbe() {
         let local = [TestAgents.custom(id: "local", binary: "local")]
         let store = AgentAvailabilityStore { _, _, _ in
@@ -166,6 +210,15 @@ private actor ProbeCounter {
     }
 
     var value: Int { count }
+}
+
+@MainActor
+private final class TestClock {
+    private(set) var now = Date(timeIntervalSinceReferenceDate: 0)
+
+    func advance(by interval: TimeInterval) {
+        now = now.addingTimeInterval(interval)
+    }
 }
 
 private enum TestAgents {
