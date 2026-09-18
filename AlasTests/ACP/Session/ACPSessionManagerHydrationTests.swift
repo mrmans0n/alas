@@ -734,13 +734,13 @@ struct ACPSessionManagerHydrationTests {
         let s = try #require(mgr.placeholderSession(id: "s"))
         await mgr.hydrateIfNeeded(id: "s")
 
-        // The in-memory tail is all file edits, so checking the live
-        // transcript here would return false. The warning must look at the
-        // full wire list and find the buried user prompt.
-        #expect(s.hasConversationTranscript == false)
+        // The visible tail is all file edits when hydration first paints.
+        // Backfill may already have prepended seq 0 by now, so the stable
+        // regression signal is the warning derived from the full wire list.
         let warning = try #require(s.contextRestoreWarning)
         #expect(warning.canSendTranscript)
         #expect(s.contextRecoveryStatus == .sendingTranscript)
+        await mgr.awaitBackfill(id: "s")
     }
 
     @Test("hydrateIfNeeded for short transcripts skips backfill")

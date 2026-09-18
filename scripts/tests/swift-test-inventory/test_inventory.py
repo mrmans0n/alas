@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -214,11 +215,43 @@ class InventoryTests(unittest.TestCase):
             ("AlasTests/A", "slow-subprocess", "measured restore scenarios", "#23")], 1)
         self.assertEqual(plan["batches"][1]["timeouts"], [360])
 
+    def test_slow_suite_methods_do_not_share_a_deadline_with_other_suites(self):
+        slow = [f"AlasTests/B/test{i}()" for i in range(8)]
+        ids = ["AlasTests/A/test()", *slow, "AlasTests/C/test()"]
+        policy = [("AlasTests/A", "subprocess", "isolation", "#23"),
+                  ("AlasTests/B", "slow-subprocess", "measured restore scenarios", "#23"),
+                  ("AlasTests/C", "subprocess", "isolation", "#23"),
+                  (slow[-1], "quarantine", "known failure", "#23")]
+        plan = self.module.make_plan(enumeration(*ids), policy, 2)
+        batches = [batch for batch in plan["batches"] if batch["lane"] == "subprocess"]
+        invocations = [chunk for batch in batches for chunk in batch["invocations"]]
+        selected_slow = [chunk for chunk in invocations if any("/B/" in s or s == "AlasTests/B" for s in chunk)]
+        self.assertEqual(len(selected_slow), 2)
+        self.assertTrue(all(len(chunk) <= 4 and all(s in slow[:-1] for s in chunk)
+                            for chunk in selected_slow))
+        self.assertCountEqual([s for chunk in selected_slow for s in chunk], slow[:-1])
+        self.assertCountEqual([test for batch in batches for test in batch["tests"]],
+                              ["AlasTests/A/test()", *slow[:-1], "AlasTests/C/test()"])
+        for batch in batches:
+            for chunk, timeout in zip(batch["invocations"], batch["timeouts"]):
+                self.assertEqual(timeout, 360 if chunk in selected_slow else 120)
+
     def test_plan_rejects_more_work_than_a_subprocess_step_can_finish(self):
         ids = [f"AlasTests/S{i}/test()" for i in range(16)]
         policy = [(f"AlasTests/S{i}", "slow-subprocess", "measured", "#23") for i in range(16)]
         with self.assertRaisesRegex(ValueError, "budget"):
             self.module.make_plan(enumeration(*ids), policy, 1)
+
+    def test_split_slow_suite_deadlines_fit_existing_batch_capacity(self):
+        ids = [f"AlasTests/S{i:03}/test()" for i in range(156)]
+        ids.extend(f"AlasTests/S036/extra{i}()" for i in range(13))
+        policy = [(f"AlasTests/S{i:03}", "slow-subprocess" if i == 36 else "subprocess",
+                   "isolation", "#23") for i in range(156)]
+        plan = self.module.make_plan(enumeration(*ids), policy, 6)
+        self.assertCountEqual([test for batch in plan["batches"] for test in batch["tests"]], ids)
+        for batch in plan["batches"]:
+            if batch["lane"] == "subprocess":
+                self.assertLessEqual(sum(t + 40 for t in batch["timeouts"]), 1740)
 
     def test_partial_exclusion_never_selects_its_parent_suite(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/A/b()"),
@@ -330,6 +363,22 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(first_report["failed"], ["AlasTests/S0/test()"])
             self.assertTrue(second_report["ok"])
             self.assertEqual(second_report["executed"], 1)
+
+    def test_timeout_prints_test_progress_even_without_a_readable_result_bundle(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
+        def execute(command, log, timeout):
+            log.write_text("old build noise\n" * 100 + "Test a() started.\n")
+            return 124
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with patch.object(self.module, "bounded", side_effect=execute), patch.object(
+                    self.module.subprocess, "run", side_effect=subprocess.CalledProcessError(
+                        64, ["xcresulttool"], stderr="missing Info.plist")), patch("sys.stdout", output):
+                self.assertFalse(self.module.run_batch(plan, Path(directory), "ordinary", 0))
+            self.assertIn("Test a() started.", output.getvalue())
+            self.assertIn("Timed out after 360 seconds", output.getvalue())
+            self.assertIn("AlasTests/A", output.getvalue())
+            self.assertLess(output.getvalue().count("old build noise"), 100)
 
 
 if __name__ == "__main__":

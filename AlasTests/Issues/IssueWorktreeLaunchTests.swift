@@ -292,7 +292,7 @@ private final class WorktreeLaunchFixture {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         state.config.agents.builtinState[IssueWorktreeLaunchTests.agentID] = BuiltinAgentState(
             isEnabled: true,
-            binaryOverride: nil,
+            binaryOverride: root.appendingPathComponent("missing-omp").path,
             extraTerminalArgs: nil
         )
         state.agentRegistry = AgentRegistry(
@@ -344,14 +344,21 @@ private final class WorktreeLaunchFixture {
         timeoutSeconds: Double = 10
     ) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
-        let persistence = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: worktreeID).path)
         while Date() < deadline {
-            let liveQueue = state.acpManager(forWorktreeId: worktreeID)?
-                .liveSession(for: preparedPrompt.sessionID)?.queue
-            let persistedQueue = try? await persistence.loadQueue(sessionId: preparedPrompt.sessionID)
-            if liveQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true,
-               persistedQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true {
-                return
+            let manager = state.acpManager(forWorktreeId: worktreeID)
+            let session = manager?.liveSession(for: preparedPrompt.sessionID)
+            if session?.lastError != nil,
+               session?.queue.contains(where: { $0.id == preparedPrompt.promptID }) == true {
+                await manager?.flushPersistence()
+                let persistence = ACPSessionPersistence(
+                    path: Paths.acpSessionsDB(forWorktreeId: worktreeID).path
+                )
+                let persistedQueue = try? await persistence.loadQueue(
+                    sessionId: preparedPrompt.sessionID
+                )
+                if persistedQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true {
+                    return
+                }
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
