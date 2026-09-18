@@ -37,7 +37,8 @@ struct WorktreeCleanupSheet: View {
                 && !model.isPreparingDelete
                 && !model.isRunning
                 && !model.isScanning
-                && model.scanError == nil
+                && model.scanError == nil,
+            cancelEnabled: !model.isPreparingDelete && !model.isRunning
         )
     }
 
