@@ -66,7 +66,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             return (command, arguments)
         }
         let script = "exec \"$HOME\"/\(SSHCommand.shellQuote(suffix)) \"$@\""
-        return ("/bin/sh", ["-lc", script, "alas-acp"] + arguments)
+        return ("/bin/sh", ["-c", script, "alas-acp"] + arguments)
     }
 
     func start() throws {

@@ -2964,11 +2964,15 @@ final class AppState {
                agent(id: agentID) != nil,
                let worktreeID = selectedWorktreeId,
                let worktree = worktree(withId: worktreeID) {
-                _ = try? await openWorkspaceCheckoutAgentTerminalTab(
-                    checkout,
-                    focusedMemberWorktree: worktree,
-                    agentId: agentID
-                )
+                do {
+                    _ = try await openWorkspaceCheckoutAgentTerminalTab(
+                        checkout,
+                        focusedMemberWorktree: worktree,
+                        agentId: agentID
+                    )
+                } catch {
+                    _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
+                }
             } else {
                 _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
             }

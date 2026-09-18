@@ -44,7 +44,7 @@ struct RemoteHelperClientTests {
 
         #expect(launch.command == "/bin/sh")
         #expect(launch.arguments == [
-            "-lc",
+            "-c",
             #"exec "$HOME"/'bin/gemini acp' "$@""#,
             "alas-acp",
             "--model",
