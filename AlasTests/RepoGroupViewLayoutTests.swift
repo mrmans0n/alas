@@ -70,6 +70,7 @@ struct RepoGroupViewLayoutTests {
             onOpenGGInbox: nil,
             onResetSort: {},
             spaces: [],
+            showsSpacesMenu: false,
             activeSpaceId: "",
             isProjectInSpace: { _ in false },
             canRemoveFromSpace: { _ in true },

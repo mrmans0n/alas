@@ -32,6 +32,9 @@ struct RepoGroupView: View {
     let onOpenGGInbox: (() -> Void)?
     let onResetSort: () -> Void
     let spaces: [SpaceConfig]
+    /// Mirrors `SpacesManager.shouldShowSpaceAffordance`: the menu is only
+    /// useful when multiple spaces exist or the single-space affordance is on.
+    let showsSpacesMenu: Bool
     let activeSpaceId: String
     let isProjectInSpace: (_ spaceId: String) -> Bool
     let canRemoveFromSpace: (_ spaceId: String) -> Bool
@@ -120,7 +123,7 @@ struct RepoGroupView: View {
                 Button("Reset Sort to Default", action: onResetSort)
                     .disabled(!project.worktreeOrderIsManual)
                 Button("Clean Up Worktrees…", action: onCleanupWorktrees)
-                if !spaces.isEmpty {
+                if showsSpacesMenu {
                     Menu("Spaces") {
                         ForEach(spaces) { space in
                             let isMember = isProjectInSpace(space.id)

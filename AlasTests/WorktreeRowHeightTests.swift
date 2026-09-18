@@ -67,7 +67,7 @@ struct WorktreeRowHeightTests {
             isMain: { _ in true }, upstreamStatus: { _ in nil }, workspaceCheckout: { _ in nil }, operationState: { _ in nil }, harnessSummary: { _ in nil },
             ggMenuModel: { _ in .init(selectedMode: .inherit, context: .inactive(reason: .policyOff), hasStackSummary: false) },
             onSelect: { _ in }, onNewWorktree: {}, onEditProject: {}, onRemoveProject: {}, onOpenGGInbox: nil,
-            onResetSort: {}, spaces: [], activeSpaceId: "", isProjectInSpace: { _ in true },
+            onResetSort: {}, spaces: [], showsSpacesMenu: false, activeSpaceId: "", isProjectInSpace: { _ in true },
             canRemoveFromSpace: { _ in false }, onToggleSpaceMembership: { _ in }, onOpenTerminal: { _ in },
             onCopyPath: { _ in }, onCopyBranch: { _ in }, onRevealInFinder: { _ in }, onArchive: { _ in },
             onCleanupWorktrees: {},
