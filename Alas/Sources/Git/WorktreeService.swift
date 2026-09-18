@@ -849,6 +849,7 @@ struct WorktreeService {
         allowsSubmoduleLocalState: Bool = false,
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
+        authorizedDeleteContentFingerprint: String? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
@@ -978,6 +979,15 @@ struct WorktreeService {
         else {
             throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
         }
+        if let authorizedDeleteContentFingerprint {
+            let stagedBoundaryFingerprint = try await Self.worktreeDeleteContentFingerprint(
+                worktreePath: worktree.path
+            )
+            guard stagedBoundaryFingerprint == authorizedDeleteContentFingerprint else {
+                throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
+            }
+        }
+
         var hasActivePendingRemoval = false
         do {
             try WorktreeTrash.markPendingForActiveRemoval(
@@ -1165,6 +1175,55 @@ struct WorktreeService {
             )
         }
         return outcome
+    }
+
+    static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
+        let status = try await Process.git(
+            ["status", "--porcelain=v1", "--ignore-submodules=none", "--untracked-files=all"],
+            cwd: worktreePath
+        )
+        guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
+
+        let diff = try await Process.git(
+            ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
+            cwd: worktreePath
+        )
+        guard diff.exitCode == 0 else { throw WorktreeError.gitFailed(diff.stderr) }
+
+        let untracked = try await Process.git([
+            "ls-files", "--others", "--exclude-standard", "-z"
+        ], cwd: worktreePath)
+        guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
+
+        var untrackedHashes: [String] = []
+        for path in untracked.stdout.split(separator: "\0", omittingEmptySubsequences: true).map(String.init).sorted() {
+            let hash = try await Process.git(["hash-object", "--", path], cwd: worktreePath)
+            guard hash.exitCode == 0 else { throw WorktreeError.gitFailed(hash.stderr) }
+            untrackedHashes.append("\(path)\0\(hash.stdout)")
+        }
+
+        let submodules = try await Process.git([
+            "submodule", "foreach", "--quiet", "--recursive",
+            """
+            printf 'path=%s\\n' "$sm_path"
+            git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
+            git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
+            git ls-files --others --exclude-standard | while IFS= read -r path; do printf 'untracked=%s\\n' "$path"; git hash-object -- "$path"; done
+            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
+            git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
+            """
+        ], cwd: worktreePath)
+        guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
+
+        let payload = [
+            "status", status.stdout,
+            "diff", diff.stdout,
+            "untracked", untrackedHashes.joined(separator: "\0"),
+            "submodules", submodules.stdout
+        ].joined(separator: "\0")
+        return SHA256.hash(data: Data(payload.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     func deletePreflight(

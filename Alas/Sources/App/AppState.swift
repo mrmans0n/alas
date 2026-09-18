@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import Observation
 import os
@@ -9283,6 +9282,8 @@ final class AppState {
                 refreshAfter: false,
                 promptsForForce: false,
                 authorizedDeleteContentFingerprint: authorization?.contentFingerprintsByWorktree[worktree.id],
+                authorizedDirtyTabsAtConfirmation: authorization?.dirtyTabsByWorktree[worktree.id] ?? [:],
+                authorizedSessionIDs: authorization?.sessionIDsByWorktree[worktree.id] ?? [],
                 verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
 
@@ -10171,6 +10172,8 @@ final class AppState {
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
         authorizedDeleteContentFingerprint: String? = nil,
+        authorizedDirtyTabsAtConfirmation: [TabID: Int]? = nil,
+        authorizedSessionIDs: Set<String>? = nil,
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
@@ -10180,6 +10183,25 @@ final class AppState {
             )
             return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
+        if let authorizedDirtyTabsAtConfirmation,
+           let authorizedSessionIDs {
+            let volatileStateIsStillAuthorized = Self.hasOnlyAcknowledgedDirtiness(
+                current: dirtyTabGenerations(worktreeId: worktree.id),
+                acknowledgedAtConfirmation: authorizedDirtyTabsAtConfirmation
+            )
+                && worktreeCleanupSessionIDs(worktreeId: worktree.id).isSubset(of: authorizedSessionIDs)
+                && WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
+                && Self.workspaceCleanupOwnershipAvailable(
+                    workspacesEnabled: config.workspacesEnabled,
+                    workspacesCanMutate: workspacesManager.canMutate
+                )
+                && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            guard volatileStateIsStillAuthorized else {
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+                return .skipped(reason: "Worktree changed since confirmation")
+            }
+        }
+
         let outcome: WorktreeRemovalOutcome
         do {
             outcome = try await Self.performRemoveWorktree(
@@ -10195,6 +10217,10 @@ final class AppState {
             projectsManager.setOperationState(id: worktree.id, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+            if stderr == Self.changedDeleteRisksMessage {
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+                return .skipped(reason: Self.changedDeleteRisksMessage)
+            }
             if !force,
                promptsForForce,
                let pending = Self.pendingForceDelete(
@@ -10311,7 +10337,9 @@ final class AppState {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
             try await Task.detached {
                 if let authorizedDeleteContentFingerprint {
-                    let currentFingerprint = try await worktreeDeleteContentFingerprint(worktreePath: worktree.path)
+                    let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
+                        worktreePath: worktree.path
+                    )
                     guard currentFingerprint == authorizedDeleteContentFingerprint else {
                         throw WorktreeDeleteContentFingerprintMismatch()
                     }
@@ -10333,7 +10361,8 @@ final class AppState {
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
                     allowsSubmoduleLocalState: allowsSubmoduleLocalState,
-                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
                 )
             }.value
         }
@@ -10421,52 +10450,7 @@ final class AppState {
     private struct WorktreeDeleteContentFingerprintMismatch: Error {}
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
-        let status = try await Process.git(
-            ["status", "--porcelain=v1", "--ignore-submodules=none", "--untracked-files=all"],
-            cwd: worktreePath
-        )
-        guard status.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(status.stderr) }
-
-        let diff = try await Process.git(
-            ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
-            cwd: worktreePath
-        )
-        guard diff.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(diff.stderr) }
-
-        let untracked = try await Process.git([
-            "ls-files", "--others", "--exclude-standard", "-z"
-        ], cwd: worktreePath)
-        guard untracked.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(untracked.stderr) }
-
-        var untrackedHashes: [String] = []
-        for path in untracked.stdout.split(separator: "\0", omittingEmptySubsequences: true).map(String.init).sorted() {
-            let hash = try await Process.git(["hash-object", "--", path], cwd: worktreePath)
-            guard hash.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(hash.stderr) }
-            untrackedHashes.append("\(path)\0\(hash.stdout)")
-        }
-
-        let submodules = try await Process.git([
-            "submodule", "foreach", "--quiet", "--recursive",
-            """
-            printf 'path=%s\\n' "$sm_path"
-            git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
-            git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
-            git ls-files --others --exclude-standard | while IFS= read -r path; do printf 'untracked=%s\\n' "$path"; git hash-object -- "$path"; done
-            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
-            git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
-            """
-        ], cwd: worktreePath)
-        guard submodules.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(submodules.stderr) }
-
-        let payload = [
-            "status", status.stdout,
-            "diff", diff.stdout,
-            "untracked", untrackedHashes.joined(separator: "\0"),
-            "submodules", submodules.stdout
-        ].joined(separator: "\0")
-        return SHA256.hash(data: Data(payload.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)
     }
 
     nonisolated static func workspaceCleanupOwnershipAvailable(
