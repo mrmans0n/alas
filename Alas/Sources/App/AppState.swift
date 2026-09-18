@@ -3979,10 +3979,11 @@ final class AppState {
     private func worktreeAgentStartupSuffix(
         agentId: String?,
         worktree: Worktree,
-        project: ProjectConfig
+        project: ProjectConfig,
+        refreshAvailability: Bool = false
     ) async throws -> String? {
         guard let agentId else { return nil }
-        await loadAgentAvailability(for: worktree)
+        await loadAgentAvailability(for: worktree, force: refreshAvailability, retryFailed: refreshAvailability)
         guard let agent = availableAgent(id: agentId, for: worktree) else {
             throw WorktreeAgentStartupError.agentUnavailable
         }
@@ -3991,9 +3992,10 @@ final class AppState {
 
     private func validateWorktreeACPAgent(
         agentID: String,
-        worktree: Worktree
+        worktree: Worktree,
+        refreshAvailability: Bool = false
     ) async throws {
-        await loadAgentAvailability(for: worktree)
+        await loadAgentAvailability(for: worktree, force: refreshAvailability, retryFailed: refreshAvailability)
         guard availableAgent(id: agentID, for: worktree) != nil else {
             throw WorktreeAgentStartupError.agentUnavailable
         }
@@ -4002,7 +4004,8 @@ final class AppState {
     private func launchWorktreeSurface(
         _ launchSurface: WorktreeLaunchSurface,
         worktree: Worktree,
-        project: ProjectConfig
+        project: ProjectConfig,
+        refreshAvailability: Bool = false
     ) async throws {
         switch launchSurface {
         case .none, .delegated:
@@ -4011,7 +4014,8 @@ final class AppState {
             let suffix = try await worktreeAgentStartupSuffix(
                 agentId: agentId,
                 worktree: worktree,
-                project: project
+                project: project,
+                refreshAvailability: refreshAvailability
             )
             _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
                 for: worktree,
@@ -4020,7 +4024,8 @@ final class AppState {
         case .acp(let agentId, let preparedPrompt):
             try await validateWorktreeACPAgent(
                 agentID: agentId,
-                worktree: worktree
+                worktree: worktree,
+                refreshAvailability: refreshAvailability
             )
             if let preparedPrompt {
                 await openPreparedWorktreeACPSession(
@@ -4029,7 +4034,8 @@ final class AppState {
                     preparedPrompt: preparedPrompt
                 )
             } else {
-                openNewACPSession(agentID: agentId)
+                guard let manager = acpManager(for: worktree) else { return }
+                openNewACPSession(agentID: agentId, owner: manager.owner)
             }
         }
     }
@@ -4055,7 +4061,12 @@ final class AppState {
             return
         }
         do {
-            try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
+            try await launchWorktreeSurface(
+                launchSurface,
+                worktree: worktree,
+                project: project,
+                refreshAvailability: true
+            )
             projectsManager.setOperationState(id: worktree.id, state: nil)
         } catch {
             markWorktreeLaunchFailed(

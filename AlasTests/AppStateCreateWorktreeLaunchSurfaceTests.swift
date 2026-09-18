@@ -183,6 +183,78 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(state.tabs.tabs(forWorktree: id).isEmpty)
     }
 
+    @Test
+    func retryingAcpLaunchRefreshesAvailabilityAndTargetsFailedWorktree() async throws {
+        let repo = try await makeRepo(name: "acp-retry-target")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "acp-retry-target",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        guard let main = state.projectsManager.worktrees(projectId: project.id).first else {
+            Issue.record("Expected main worktree")
+            return
+        }
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-acp-retry-target-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "acp-retry-target",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .acp(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+        guard let failedWorktree = state.projectsManager.worktrees(projectId: project.id)
+            .first(where: { $0.id == id })
+        else {
+            Issue.record("Expected failed worktree to remain in the project")
+            return
+        }
+
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: ["claude"]
+        )
+        state.selectWorktree(id: main.id)
+
+        await state.retryWorktreeLaunch(failedWorktree, project: project)
+
+        #expect(state.projectsManager.operationState(for: id) == nil)
+        let failedWorktreeTabs = state.tabs.tabs(forWorktree: id)
+        let mainTabs = state.tabs.tabs(forWorktree: main.id)
+        #expect(failedWorktreeTabs.contains {
+            if case .acpSession = $0 { return true }
+            return false
+        })
+        #expect(!mainTabs.contains {
+            if case .acpSession = $0 { return true }
+            return false
+        })
+    }
+
     private func waitForOperationStateMatching(
         _ mgr: ProjectsManager,
         id: String,
