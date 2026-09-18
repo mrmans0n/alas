@@ -962,6 +962,14 @@ struct WorktreeService {
                 withIntermediateDirectories: true
             )
         } catch {
+            if let authorizedDeleteContentFingerprint {
+                let fallbackFingerprint = try await Self.worktreeDeleteContentFingerprint(
+                    worktreePath: worktree.path
+                )
+                guard fallbackFingerprint == authorizedDeleteContentFingerprint else {
+                    throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
+                }
+            }
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1190,6 +1198,12 @@ struct WorktreeService {
         )
         guard diff.exitCode == 0 else { throw WorktreeError.gitFailed(diff.stderr) }
 
+        let cachedDiff = try await Process.git(
+            ["diff", "--cached", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
+            cwd: worktreePath
+        )
+        guard cachedDiff.exitCode == 0 else { throw WorktreeError.gitFailed(cachedDiff.stderr) }
+
         let untracked = try await Process.git([
             "ls-files", "--others", "--exclude-standard", "-z"
         ], cwd: worktreePath)
@@ -1208,6 +1222,7 @@ struct WorktreeService {
             printf 'path=%s\\n' "$sm_path"
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
+            git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git ls-files --others --exclude-standard | while IFS= read -r path; do printf 'untracked=%s\\n' "$path"; git hash-object -- "$path"; done
             git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
@@ -1218,6 +1233,7 @@ struct WorktreeService {
         let payload = [
             "status", status.stdout,
             "diff", diff.stdout,
+            "cachedDiff", cachedDiff.stdout,
             "untracked", untrackedHashes.joined(separator: "\0"),
             "submodules", submodules.stdout
         ].joined(separator: "\0")

@@ -225,6 +225,27 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(secondFingerprint != firstFingerprint)
     }
 
+    @Test func worktreeDeleteContentFingerprintChangesWhenStagedContentChanges() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let tracked = target.path.appendingPathComponent("tracked.txt")
+        try "base".write(to: tracked, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
+        _ = try await Process.git(["commit", "-q", "-m", "track file"], cwd: target.path)
+
+        try "staged one".write(to: tracked, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
+        _ = try await Process.git(["restore", "--worktree", "--source=HEAD", "tracked.txt"], cwd: target.path)
+        let firstFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+
+        try "staged two".write(to: tracked, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
+        _ = try await Process.git(["restore", "--worktree", "--source=HEAD", "tracked.txt"], cwd: target.path)
+        let secondFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+
+        #expect(secondFingerprint != firstFingerprint)
+    }
     @Test func workspaceCleanupOwnershipIsAvailableWhenWorkspacePreviewIsDisabled() {
         #expect(AppState.workspaceCleanupOwnershipAvailable(
             workspacesEnabled: false,
