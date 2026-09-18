@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct RunReportTabView: View {
     let state: AppState
@@ -7,26 +8,23 @@ struct RunReportTabView: View {
     @State private var content = RunReportContent.loading
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                switch content {
-                case .loading:
-                    ProgressView("Loading run report…")
-                        .frame(maxWidth: .infinity, minHeight: 220)
-                case let .report(entry):
-                    report(entry)
-                case .missing:
-                    unavailable(
-                        title: "Run report unavailable",
-                        message: "This completed run is no longer in history. It may have been cleared or pruned."
-                    )
-                case let .error(message):
-                    unavailable(title: "Could not load run report", message: message)
-                }
+        Group {
+            switch content {
+            case .loading:
+                ProgressView("Loading run report…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case let .report(entry):
+                report(entry)
+            case .missing:
+                unavailable(
+                    title: "Run report unavailable",
+                    message: "This completed run is no longer in history. It may have been cleared or pruned."
+                )
+            case let .error(message):
+                unavailable(title: "Could not load run report", message: message)
             }
-            .frame(maxWidth: 1_000, alignment: .leading)
-            .padding(28)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: "\(tabState.id):\(state.runHistoryRevision(worktreeID: tabState.worktreeId))") {
             await load()
         }
@@ -34,12 +32,22 @@ struct RunReportTabView: View {
 
     @ViewBuilder
     private func report(_ entry: RunHistoryEntry) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 0) {
+            reportHeader(entry)
+            Divider()
+            reportOutput(entry.output)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func reportHeader(_ entry: RunHistoryEntry) -> some View {
+        HStack(alignment: .center, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.scriptName)
-                        .font(.title2.weight(.semibold))
-                    Text("\(entry.branch) • \(entry.target.hostLabel)")
+                        .font(.headline)
+                    Text("\(entry.branch) • \(entry.target.hostLabel) • \(entry.finishedAt.formatted(date: .abbreviated, time: .shortened)) • \(RunTabPresentation.format(duration: entry.duration))")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -50,61 +58,43 @@ struct RunReportTabView: View {
                     .background(outcomeColor(entry.outcome).opacity(0.16), in: Capsule())
                     .foregroundStyle(outcomeColor(entry.outcome))
             }
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
-                GridRow {
-                    Text("Finished").foregroundStyle(.secondary)
-                    Text(entry.finishedAt.formatted(date: .abbreviated, time: .standard))
-                }
-                GridRow {
-                    Text("Duration").foregroundStyle(.secondary)
-                    Text(RunTabPresentation.format(duration: entry.duration))
-                }
-                GridRow {
-                    Text("Directory").foregroundStyle(.secondary)
-                    Text(entry.target.workingDirectory).textSelection(.enabled)
-                }
-                if let endpoint = entry.endpoint {
-                    GridRow {
-                        Text("Endpoint").foregroundStyle(.secondary)
-                        Text(endpoint.absoluteString).textSelection(.enabled)
-                    }
-                }
+            if case let .available(text, _) = entry.output {
+                Button("Copy Output") { Clipboard.copy(text) }
             }
         }
-
-        Divider()
-
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Output")
-                    .font(.headline)
-                Spacer()
-                if case let .available(text, _) = entry.output {
-                    Button("Copy Output") { Clipboard.copy(text) }
-                }
-            }
-            output(entry.output)
-        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 
     @ViewBuilder
-    private func output(_ output: RunHistoryOutput) -> some View {
-        switch output {
-        case let .available(text, truncated):
-            Text(text.isEmpty ? "No output was produced." : text)
-                .font(.system(.body, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(12)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            if truncated {
-                Label("Showing the final 1 MiB of output", systemImage: "scissors")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+    private func reportOutput(_ output: RunHistoryOutput) -> some View {
+        switch RunReportOutputPresentation.make(for: output) {
+        case let .document(text, isTruncated):
+            VStack(spacing: 0) {
+                if isTruncated {
+                    Label("Showing the final 1 MiB of output", systemImage: "scissors")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(.quaternary)
+                }
+                ReadonlyTextView(
+                    text: text,
+                    font: CenterTypography.resolveCodeFont(
+                        family: state.config.code.fontFamily,
+                        size: CGFloat(state.config.code.fontSize)
+                    ),
+                    textColor: .labelColor,
+                    backgroundColor: .clear
+                )
             }
         case .unavailable:
             Text("Output could not be captured for this run.")
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

@@ -1622,6 +1622,7 @@
 		DB40AA7EB6A31B5F232EDCA3 /* DiffPaneTextDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA6B39E2B172FADFD9E0E6 /* DiffPaneTextDocumentView.swift */; };
 		DB474070DDBFA87828543D60 /* ACPTranscriptScrollerLiveScrollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BA8B1CD4334FF7F7082E9A /* ACPTranscriptScrollerLiveScrollTests.swift */; };
 		DBDD99AFA9CD69330BB647CE /* CheckpointWriterLeaseStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC35E117D889F9A89CFF6C03 /* CheckpointWriterLeaseStoreTests.swift */; };
+		DBEE279F202E9CEE3A054A5D /* RunReportOutputPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1223435B7BD5FFE928F00B7F /* RunReportOutputPresentation.swift */; };
 		DBF39F5123675F4D74C0F01A /* WorktreeCheckpointStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A590233EFB2E98E5415B9B95 /* WorktreeCheckpointStore.swift */; };
 		DC0989E32F4B7BF023F784D6 /* StartupScriptInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */; };
 		DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */; };
@@ -2050,6 +2051,7 @@
 		11C3EC94DBE871DFC45C7D25 /* AgentTerminalLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalLaunchTests.swift; sourceTree = "<group>"; };
 		11DB4509E8835E63F9532E43 /* AppStateFocusMainWorktreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFocusMainWorktreeTests.swift; sourceTree = "<group>"; };
 		120D10644A278775A9AE1990 /* ImageDiffViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffViewTests.swift; sourceTree = "<group>"; };
+		1223435B7BD5FFE928F00B7F /* RunReportOutputPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunReportOutputPresentation.swift; sourceTree = "<group>"; };
 		1271747193D1594AEA596278 /* AlasCLICommandRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLICommandRouter.swift; sourceTree = "<group>"; };
 		1276253D1FB205BC9B5AEDF1 /* GGMutationModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGMutationModelsTests.swift; sourceTree = "<group>"; };
 		1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionTests.swift; sourceTree = "<group>"; };
@@ -3987,6 +3989,7 @@
 				273E6EC520E3FE03DC9068C7 /* RunEndpoint.swift */,
 				72185067BC1528FA7776DE53 /* RunHistoryStore.swift */,
 				6C45DAE186532566BD5CCA79 /* RunRecord.swift */,
+				1223435B7BD5FFE928F00B7F /* RunReportOutputPresentation.swift */,
 				535C9DF6C26F0FA7289D6D02 /* RunReportTabView.swift */,
 				E3AF2511A18895DBE494798E /* RunScript.swift */,
 				B65DC03DDA5885AA19DEC00E /* RunScriptCompletionMonitor.swift */,
@@ -7994,6 +7997,7 @@
 				D0E7182835E93329C89FCD06 /* RunEndpoint.swift in Sources */,
 				E6C0F9F4C0CF4C781A8D29EB /* RunHistoryStore.swift in Sources */,
 				02821E3FE8E67B2D162A4BC8 /* RunRecord.swift in Sources */,
+				DBEE279F202E9CEE3A054A5D /* RunReportOutputPresentation.swift in Sources */,
 				2FDCA875B675BEC539556D73 /* RunReportTabView.swift in Sources */,
 				B14D567062F568BBA1631562 /* RunScript.swift in Sources */,
 				8C5CD5BD5188B5C8DB1592CD /* RunScriptCompletionMonitor.swift in Sources */,
