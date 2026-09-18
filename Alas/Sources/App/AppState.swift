@@ -711,13 +711,9 @@ final class AppState {
 
     func availableAgentForHandoff(id: String?, checkout: WorkspaceCheckout) -> AgentDefinition? {
         guard let id, id != "none" else { return nil }
-        let remoteHost: String? = switch checkout.executionLocation.normalized {
-        case .local: nil
-        case .ssh(let host): host
-        }
         return agentAvailability(
             worktreePath: URL(fileURLWithPath: checkout.rootPath),
-            remoteHost: remoteHost
+            executionTarget: checkout.executionLocation.agentExecutionTarget
         ).agents.first { $0.id == id }
     }
 
@@ -745,9 +741,21 @@ final class AppState {
         worktreePath: URL,
         remoteHost: String?
     ) -> [ACPSessionForkTarget] {
+        acpForkTargets(
+            sourceAgentID: sourceAgentID,
+            worktreePath: worktreePath,
+            executionTarget: AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        )
+    }
+
+    func acpForkTargets(
+        sourceAgentID: String,
+        worktreePath: URL,
+        executionTarget: AgentExecutionTarget
+    ) -> [ACPSessionForkTarget] {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
-            enabledAgents: agentAvailability(worktreePath: worktreePath, remoteHost: remoteHost).agents.map {
+            enabledAgents: agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget).agents.map {
                 ACPForkAgentOption(
                     id: $0.id,
                     displayName: $0.displayName,
@@ -793,6 +801,13 @@ final class AppState {
         remoteHost: String? = nil
     ) -> AgentAvailabilityState {
         let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return agentAvailability(worktreePath: worktreePath, executionTarget: target)
+    }
+
+    func agentAvailability(
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> AgentAvailabilityState {
         return agentAvailabilityStore.state(
             target: target,
             worktreePath: worktreePath.path,
@@ -828,6 +843,13 @@ final class AppState {
         remoteHost: String? = nil
     ) -> Int {
         let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return agentAvailabilityGeneration(worktreePath: worktreePath, executionTarget: target)
+    }
+
+    func agentAvailabilityGeneration(
+        worktreePath _: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> Int {
         guard case .ssh = target else { return 0 }
         return agentAvailabilityStore.generation
     }
@@ -846,6 +868,20 @@ final class AppState {
         retryFailed: Bool = false
     ) async {
         let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        await loadAgentAvailability(
+            worktreePath: worktreePath,
+            executionTarget: target,
+            force: force,
+            retryFailed: retryFailed
+        )
+    }
+
+    func loadAgentAvailability(
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget,
+        force: Bool = false,
+        retryFailed: Bool = false
+    ) async {
         guard case .ssh = target else { return }
         let candidates = AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
@@ -2472,16 +2508,17 @@ final class AppState {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         let launchRoot = URL(fileURLWithPath: authoritative.rootPath)
-        if let remoteHost = authoritative.executionLocation.sshHost {
+        let launchTarget = authoritative.executionLocation.agentExecutionTarget
+        if case .ssh = launchTarget {
             await loadAgentAvailability(
                 worktreePath: launchRoot,
-                remoteHost: remoteHost
+                executionTarget: launchTarget
             )
         }
         guard let agent = availableAgent(
             id: agentId,
             worktreePath: launchRoot,
-            remoteHost: authoritative.executionLocation.sshHost
+            executionTarget: launchTarget
         ) else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
@@ -2938,13 +2975,14 @@ final class AppState {
         case .acp:
             guard let agentID = preference.agentID else { return }
             let checkoutRoot = URL(fileURLWithPath: checkout.rootPath)
-            if let remoteHost = checkout.executionLocation.sshHost {
-                await loadAgentAvailability(worktreePath: checkoutRoot, remoteHost: remoteHost)
+            let target = checkout.executionLocation.agentExecutionTarget
+            if case .ssh = target {
+                await loadAgentAvailability(worktreePath: checkoutRoot, executionTarget: target)
             }
             guard availableAgent(
                 id: agentID,
                 worktreePath: checkoutRoot,
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: target
             ) != nil else {
                 return
             }
@@ -3977,7 +4015,16 @@ final class AppState {
         worktreePath: URL,
         remoteHost: String? = nil
     ) -> AgentDefinition? {
-        agentAvailability(worktreePath: worktreePath, remoteHost: remoteHost)
+        let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
+        return availableAgent(id: id, worktreePath: worktreePath, executionTarget: target)
+    }
+
+    private func availableAgent(
+        id: String,
+        worktreePath: URL,
+        executionTarget target: AgentExecutionTarget
+    ) -> AgentDefinition? {
+        agentAvailability(worktreePath: worktreePath, executionTarget: target)
             .agents
             .first { $0.id == id }
     }

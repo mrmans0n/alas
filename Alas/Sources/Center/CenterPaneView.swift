@@ -941,7 +941,7 @@ struct CenterPaneView: View {
         if let checkout = selectedCheckoutForSharedOwner {
             return state.agentAvailability(
                 worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: checkout.executionLocation.agentExecutionTarget
             )
         }
         return state.agentAvailability(for: worktree)
@@ -952,7 +952,7 @@ struct CenterPaneView: View {
             let root = URL(fileURLWithPath: checkout.rootPath)
             let generation = state.agentAvailabilityGeneration(
                 worktreePath: root,
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: checkout.executionLocation.agentExecutionTarget
             )
             return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
         }
@@ -963,7 +963,7 @@ struct CenterPaneView: View {
         if let checkout = selectedCheckoutForSharedOwner {
             await state.loadAgentAvailability(
                 worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                remoteHost: checkout.executionLocation.sshHost,
+                executionTarget: checkout.executionLocation.agentExecutionTarget,
                 force: force
             )
         } else {

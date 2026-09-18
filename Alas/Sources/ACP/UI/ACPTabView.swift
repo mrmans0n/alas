@@ -35,7 +35,7 @@ struct ACPTabView: View {
             if let checkout = selectedWorkspaceCheckout {
                 await state.loadAgentAvailability(
                     worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                    remoteHost: checkout.executionLocation.sshHost
+                    executionTarget: checkout.executionLocation.agentExecutionTarget
                 )
             } else {
                 await state.loadAgentAvailability(for: worktree)
@@ -48,7 +48,7 @@ struct ACPTabView: View {
             let root = URL(fileURLWithPath: checkout.rootPath)
             let generation = state.agentAvailabilityGeneration(
                 worktreePath: root,
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: checkout.executionLocation.agentExecutionTarget
             )
             return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
         }
@@ -506,7 +506,7 @@ private struct ACPSessionView: View {
             forkTargets: state.acpForkTargets(
                 sourceAgentID: session.agentId,
                 worktreePath: acpForkTargetWorktreePath,
-                remoteHost: acpForkTargetRemoteHost
+                executionTarget: acpForkTargetExecutionTarget
             ),
             onQuote: { message in
                 composerActions.quote(message)
@@ -896,11 +896,11 @@ private struct ACPSessionView: View {
         return worktree.path
     }
 
-    private var acpForkTargetRemoteHost: String? {
+    private var acpForkTargetExecutionTarget: AgentExecutionTarget {
         if let checkout = state.workspaceCheckout(for: owner) {
-            return checkout.executionLocation.sshHost
+            return checkout.executionLocation.agentExecutionTarget
         }
-        return state.remoteHost(for: worktree)
+        return state.agentExecutionTarget(for: worktree)
     }
 
     private func reattachAfterAdapterChange() async {

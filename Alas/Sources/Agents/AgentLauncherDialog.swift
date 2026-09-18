@@ -117,7 +117,7 @@ struct AgentLauncherDialog: View {
         if let checkout = selectedWorkspaceCheckout() {
             return appState.agentAvailability(
                 worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: checkout.executionLocation.agentExecutionTarget
             )
         }
         return selectedWorktree().map { appState.agentAvailability(for: $0) }
@@ -129,7 +129,7 @@ struct AgentLauncherDialog: View {
             let root = URL(fileURLWithPath: checkout.rootPath)
             let generation = appState.agentAvailabilityGeneration(
                 worktreePath: root,
-                remoteHost: checkout.executionLocation.sshHost
+                executionTarget: checkout.executionLocation.agentExecutionTarget
             )
             return "\(checkout.executionLocation.identityComponent)\u{0000}\(root.path)\u{0000}\(generation)"
         }
@@ -141,7 +141,7 @@ struct AgentLauncherDialog: View {
         if let checkout = selectedWorkspaceCheckout() {
             await appState.loadAgentAvailability(
                 worktreePath: URL(fileURLWithPath: checkout.rootPath),
-                remoteHost: checkout.executionLocation.sshHost,
+                executionTarget: checkout.executionLocation.agentExecutionTarget,
                 force: force
             )
             return
