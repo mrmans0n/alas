@@ -31,9 +31,8 @@ struct SubprocessRunner: Sendable {
         // `waitUntilExit()` can return before the asynchronous EOF callback
         // has flushed the final buffered chunk — and it still prevents
         // pipe-buffer deadlocks because the readers run concurrently with
-        // the child. The reader groups are joined AFTER process exit (or
-        // forced termination), giving us a synchronization point with EOF
-        // delivery before we read the accumulated output.
+        // the child. After the direct child exits, normal EOF delivery gets
+        // a bounded grace period before inherited readers are closed.
         let stdoutBox = OutputBox()
         let stderrBox = OutputBox()
         let stdoutDrain = DispatchGroup()
@@ -49,15 +48,29 @@ struct SubprocessRunner: Sendable {
             stderrBox.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
         }
 
+        // A subprocess can leave descendants behind with inherited pipe
+        // writers. Once the direct child is gone, give normal EOF delivery a
+        // short grace period, then close our readers instead of blocking a
+        // cooperative task indefinitely while joining the drain queues.
+        func finishDrainingPipes() {
+            let drains = [
+                (stdoutDrain, stdoutPipe.fileHandleForReading),
+                (stderrDrain, stderrPipe.fileHandleForReading),
+            ]
+            for (drain, reader) in drains where drain.wait(timeout: .now() + .milliseconds(250)) == .timedOut {
+                try? reader.close()
+                _ = drain.wait(timeout: .now() + .milliseconds(250))
+            }
+        }
+
         do {
             try process.run()
         } catch {
             // Spawn failed: close the pipe write ends so the drain threads
-            // hit EOF and exit, then wait for them.
+            // hit EOF and let the drain queues finish.
             try? stdoutPipe.fileHandleForWriting.close()
             try? stderrPipe.fileHandleForWriting.close()
-            stdoutDrain.wait()
-            stderrDrain.wait()
+            finishDrainingPipes()
             return Result(exitCode: nil, stdout: "", stderr: "\(error)")
         }
 
@@ -76,17 +89,11 @@ struct SubprocessRunner: Sendable {
                 kill(process.processIdentifier, SIGKILL)
                 _ = exitGroup.wait(timeout: .now() + .milliseconds(250))
             }
-            // Child is dead → its pipe write ends are closed → drain threads
-            // observe EOF and exit. Join them so we read complete buffers.
-            stdoutDrain.wait()
-            stderrDrain.wait()
+            finishDrainingPipes()
             return Result(exitCode: nil, stdout: stdoutBox.string(), stderr: stderrBox.string())
         }
 
-        // Process exited normally; pipe write ends are closed, drains will
-        // hit EOF. Join before reading the boxes.
-        stdoutDrain.wait()
-        stderrDrain.wait()
+        finishDrainingPipes()
         return Result(
             exitCode: process.terminationStatus,
             stdout: stdoutBox.string(),
