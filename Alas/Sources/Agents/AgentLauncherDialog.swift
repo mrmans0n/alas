@@ -467,7 +467,11 @@ struct AgentLauncherDialog: View {
     /// match") — the latter needs to tell the user their filter, not the
     /// registry, is why the strip is empty.
     private var emptyTitle: String {
-        guard appState.agentLauncher.query.isEmpty else { return "No agents match" }
+        // `agentPoolCount`, not query emptiness: a genuinely empty mode
+        // pool needs the actionable "enable an agent" message regardless
+        // of what's typed, since clearing the query can't reveal an agent
+        // that was never in the pool to begin with.
+        guard agentPoolCount == 0 else { return "No agents match" }
         switch appState.agentLauncher.mode {
         case .terminal: return "No enabled agents"
         case .acp:      return "No ACP-capable agents enabled"
