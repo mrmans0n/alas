@@ -702,6 +702,11 @@ struct AppStateCleanupTests {
 
         #expect(retryId == failedId)
         try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
+        try await waitForACPTab(
+            state,
+            worktreeId: retryId,
+            sessionId: preparedPrompt.sessionID
+        )
         #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: retryId) == attachment)
         let acpTabs = state.tabs.tabs(forWorktree: retryId).compactMap { tab -> ACPSessionTabState? in
             if case .acpSession(let session) = tab { return session }
@@ -964,7 +969,11 @@ struct AppStateCleanupTests {
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
-        try await waitForWorktreeRemoved(state.projectsManager, projectId: project.id, worktreeId: worktree.id)
+        try await waitForWorktreeRemoved(
+            state.projectsManager,
+            projectId: project.id,
+            worktreeId: worktree.id
+        )
         try await waitForSelectedWorktree(state, equals: Worktree.makeId(path: repo))
 
         let ticket = try #require(probe.launchedTickets.first)
@@ -1007,6 +1016,11 @@ struct AppStateCleanupTests {
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+        try await waitForWorktreeRemoved(
+            state.projectsManager,
+            projectId: project.id,
+            worktreeId: worktree.id
+        )
 
         let ticket = try #require(probe.launchedTickets.first)
         defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
@@ -1626,6 +1640,23 @@ struct AppStateCleanupTests {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         Issue.record("Timed out waiting for worktree removal")
+    }
+
+    private func waitForACPTab(
+        _ state: AppState,
+        worktreeId: String,
+        sessionId: String
+    ) async throws {
+        for _ in 0..<80 {
+            if state.tabs.tabs(forWorktree: worktreeId).contains(where: { tab in
+                guard case .acpSession(let session) = tab else { return false }
+                return session.sessionId == sessionId
+            }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        Issue.record("Timed out waiting for ACP launch completion")
     }
 
     private func waitForSelectedWorktree(

@@ -624,6 +624,18 @@ struct RemoteAppStateAccessTests {
             projectsFile: ProjectsFile(projects: [firstProject, secondProject]),
             spacesFile: spaces
         ))
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: firstProject.path).appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: secondProject.path).appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: firstProject.path)
+            try? FileManager.default.removeItem(atPath: secondProject.path)
+        }
         state.agentRegistry = AgentRegistry(
             builtinState: [
                 "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
@@ -642,7 +654,8 @@ struct RemoteAppStateAccessTests {
             branch: "main",
             path: URL(fileURLWithPath: firstProject.path),
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: URL(fileURLWithPath: firstProject.path))
         )
         let secondWorktree = Worktree(
             id: UUID().uuidString,
@@ -651,7 +664,8 @@ struct RemoteAppStateAccessTests {
             branch: "main",
             path: URL(fileURLWithPath: secondProject.path),
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: URL(fileURLWithPath: secondProject.path))
         )
         cleanupWorktreeIds = [firstWorktree.id, secondWorktree.id]
         state.projectsManager.insertOptimisticWorktree(firstWorktree)
@@ -1733,22 +1747,29 @@ struct RemoteAppStateAccessTests {
     }
 
     private func makeRemoteRenameState() -> AppState {
+        let worktreeID = UUID().uuidString
+        let projectPath = "/tmp/project-\(worktreeID)"
+        try! FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: projectPath).appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
         let project = ProjectConfig(
             id: UUID().uuidString,
             name: "test",
-            path: "/tmp/project-\(UUID().uuidString)",
+            path: projectPath,
             color: "blue",
             addedAt: Date()
         )
         let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
         let worktree = Worktree(
-            id: UUID().uuidString,
+            id: worktreeID,
             projectId: project.id,
             name: "main",
             branch: "main",
             path: URL(fileURLWithPath: project.path),
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: URL(fileURLWithPath: project.path))
         )
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.selectedWorktreeId = worktree.id
@@ -1794,7 +1815,8 @@ struct RemoteAppStateAccessTests {
             branch: "main",
             path: repositoryPath,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: repositoryPath)
         )
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.selectedWorktreeId = worktree.id
@@ -1901,6 +1923,7 @@ struct RemoteAppStateAccessTests {
     }
 
     private func cleanupRemoteRenameFiles(worktreeId: String) {
+        try? FileManager.default.removeItem(atPath: "/tmp/project-\(worktreeId)")
         try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
         let db = Paths.acpSessionsDB(forWorktreeId: worktreeId)
         try? FileManager.default.removeItem(at: db)

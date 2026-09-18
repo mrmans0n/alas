@@ -4,6 +4,15 @@ import Testing
 
 @Suite("ACP session discovery")
 struct ACPSessionDiscoveryTests {
+    private actor DeletedSessions {
+        private var ids: Set<String> = []
+
+        func remaining(from candidates: [String]) -> [String] {
+            candidates.filter { !ids.contains($0) }
+        }
+        func insert(_ id: String) { ids.insert(id) }
+    }
+
     @MainActor
     @Test("unsupported discovery never sends session/delete")
     func unsupportedDeletionIsGated() async throws {
@@ -145,13 +154,14 @@ struct ACPSessionDiscoveryTests {
     @Test("concurrent deletions serialize their discovery refreshes")
     func concurrentDeletionsSerializeRefreshes() async throws {
         let client = discoveryClient(deleteCapability: true)
-        var deleted: Set<String> = []
+        let deleted = DeletedSessions()
         let firstDeleteStarted = AsyncStream<Void>.makeStream()
         let releaseFirstDelete = AsyncStream<Void>.makeStream()
-        client.script(method: "session/list") { _ in
-            try JSONEncoder().encode(ACPSessionListResult(sessions: ["first", "second", "third"]
-                .filter { !deleted.contains($0) }
-                .map { .init(sessionId: $0, cwd: "/tmp/wt", title: $0) }))
+        client.scriptAsync(method: "session/list") { _ in
+            let remaining = await deleted.remaining(from: ["first", "second", "third"])
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: remaining.map {
+                .init(sessionId: $0, cwd: "/tmp/wt", title: $0)
+            }))
         }
         client.scriptAsync(method: "session/delete") { request in
             let id = try #require(request.params as? ACPSessionDeleteParams).sessionId
@@ -159,7 +169,7 @@ struct ACPSessionDiscoveryTests {
                 firstDeleteStarted.continuation.yield()
                 for await _ in releaseFirstDelete.stream { break }
             }
-            deleted.insert(id)
+            await deleted.insert(id)
             return Data("{}".utf8)
         }
         let store = try temporaryStore()

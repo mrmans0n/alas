@@ -311,12 +311,17 @@ struct ACPSessionManagerReattachTests {
 
         mgr.scheduleAutoReconnect(sessionId: session.id)
         for _ in 0 ..< 50
-            where mgr.liveSession(for: session.id) != nil || !session.queue.isEmpty
+            where session.agentState == .disconnected
         {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        #expect(mgr.liveSession(for: session.id) == nil)
-        #expect(session.queue.isEmpty)
+        #expect(mgr.liveSession(for: session.id) === session)
+        #expect(session.queue.map { ACPSessionRunner.textPreview(of: $0.blocks) } == ["due"])
+        #expect(session.agentState != .disconnected)
+
+        session.clearPendingQueue()
+        mgr.persistQueue(for: session)
+        mgr.closeSession(id: session.id)
     }
 
     @Test("remote disconnect publishes the next automatic retry")

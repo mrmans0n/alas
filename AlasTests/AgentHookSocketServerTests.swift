@@ -29,14 +29,74 @@ struct AgentHookSocketServerTests {
     }
 
     private func sendToSocket(path: String, payload: String) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w5 '\(path)'"]
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        try process.run()
-        process.waitUntilExit()
-        return String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        defer { close(fd) }
+
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
+            let result = withUnsafePointer(to: &timeout) { pointer in
+                Darwin.setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    option,
+                    pointer,
+                    socklen_t(MemoryLayout<timeval>.size)
+                )
+            }
+            guard result == 0 else { throw posixError() }
+        }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = path.utf8CString
+        guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+            throw POSIXError(.ENAMETOOLONG)
+        }
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { sunPath in
+            pathBytes.withUnsafeBufferPointer { bytes in
+                memcpy(sunPath, bytes.baseAddress!, bytes.count)
+            }
+        }
+        let addressLength = socklen_t(MemoryLayout<sa_family_t>.size + pathBytes.count)
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, addressLength)
+            }
+        }
+        guard connectResult == 0 else { throw posixError() }
+
+        try Data(payload.utf8).withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            var written = 0
+            while written < bytes.count {
+                let count = Darwin.write(fd, baseAddress.advanced(by: written), bytes.count - written)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw posixError()
+                }
+                guard count > 0 else { throw POSIXError(.EPIPE) }
+                written += count
+            }
+        }
+        shutdown(fd, SHUT_WR)
+
+        var response = Data()
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = Darwin.read(fd, &bytes, bytes.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw posixError()
+            }
+            if count == 0 { break }
+            response.append(contentsOf: bytes.prefix(count))
+        }
+        return String(decoding: response, as: UTF8.self)
+    }
+
+    private func posixError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     @Test func wellFormedEnvelope_dispatchesEvent() async throws {

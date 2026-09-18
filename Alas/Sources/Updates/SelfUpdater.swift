@@ -198,19 +198,21 @@ final class SelfUpdater {
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
 
-        let buffer = LineBuffer()
+        let existingLogLines = logLines
+        let buffer = SelfUpdateOutputBuffer()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 return
             }
-            let chunk = String(decoding: data, as: UTF8.self)
-            let lines = buffer.feed(chunk)
-            if lines.isEmpty { return }
+            let lines = buffer.feed(data)
             Task { @MainActor [weak self] in
                 guard let self, self.generation == myGeneration else { return }
-                self.logLines.append(contentsOf: lines)
+                let snapshot = existingLogLines + lines
+                if snapshot.count >= self.logLines.count {
+                    self.logLines = snapshot
+                }
             }
         }
 
@@ -220,21 +222,10 @@ final class SelfUpdater {
             process.terminationHandler = { [weak self, buffer, pipe] proc in
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let finalData = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-                let finalLines: [String]
-                if let chunk = String(data: finalData, encoding: .utf8), !chunk.isEmpty {
-                    finalLines = buffer.feed(chunk)
-                } else {
-                    finalLines = []
-                }
-                let finalTrailing = buffer.flush()
+                let finalLines = buffer.finish(finalData)
                 Task { @MainActor [weak self] in
                     if let self, self.generation == myGeneration {
-                        if !finalLines.isEmpty {
-                            self.logLines.append(contentsOf: finalLines)
-                        }
-                        if let trailing = finalTrailing, !trailing.isEmpty {
-                            self.logLines.append(trailing)
-                        }
+                        self.logLines = existingLogLines + finalLines
                     }
                     continuation.resume(returning: .exited(
                         status: proc.terminationStatus,
@@ -271,6 +262,40 @@ final class SelfUpdater {
             parts.append(dir)
         }
         return parts.joined(separator: ":")
+    }
+}
+
+private final class SelfUpdateOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = Data()
+    private var lines: [String] = []
+
+    func feed(_ data: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        append(data)
+        return lines
+    }
+
+    func finish(_ data: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        append(data)
+        if !pending.isEmpty {
+            lines.append(String(decoding: pending, as: UTF8.self))
+            pending.removeAll()
+        }
+        return lines
+    }
+
+    private func append(_ data: Data) {
+        pending.append(data)
+        while let newlineIndex = pending.firstIndex(of: 0x0A) {
+            var line = Data(pending[..<newlineIndex])
+            if line.last == 0x0D { line.removeLast() }
+            lines.append(String(decoding: line, as: UTF8.self))
+            pending.removeSubrange(pending.startIndex...newlineIndex)
+        }
     }
 }
 
