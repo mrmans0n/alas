@@ -3,6 +3,22 @@ import Testing
 @testable import Alas
 
 struct WorktreeCheckpointCaptureTests {
+    @Test func automaticCaptureReusesAnUnchangedWorktreeState() async throws {
+        let fixture = try await CheckpointCaptureFixture.make()
+        defer { fixture.remove() }
+        let service = fixture.service()
+
+        let first = try await service.createAutomatic(target: fixture.target, label: "Before first request")
+        let same = try await service.createAutomatic(target: fixture.target, label: "Before second request")
+        try fixture.repo.write("second\n", to: "file.swift")
+        let changed = try await service.createAutomatic(target: fixture.target, label: "Before third request")
+
+        #expect(first.kind == .automatic)
+        #expect(same.id == first.id)
+        #expect(changed.id != first.id)
+        #expect(try await service.summaries(target: fixture.target).summaries.map(\.id) == [changed.id, first.id])
+    }
+
     @Test func manualCapturePersistsExactStateWithoutChangingRepository() async throws {
         let fixture = try await CheckpointCaptureFixture.make()
         defer { fixture.remove() }

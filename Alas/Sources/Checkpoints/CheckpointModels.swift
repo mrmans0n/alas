@@ -221,6 +221,7 @@ enum CheckpointDiffContent: @unchecked Sendable {
 
 enum CheckpointKind: String, Codable, Equatable, Sendable {
     case manual
+    case automatic
     case recovery
 }
 
@@ -233,6 +234,7 @@ enum CheckpointLeafKind: String, Codable, Equatable, Sendable {
 enum CheckpointModelError: Error, Equatable, Sendable {
     case invalidFileState(kind: CheckpointLeafKind, mode: String?, hasBlob: Bool)
     case invalidBlobReference
+    case invalidAutomaticStateKey
     case invalidLabel
     case unsupportedSchemaVersion(Int)
 }
@@ -364,6 +366,7 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
     let branch: String
     let headOID: String
     let capturePolicyVersion: Int
+    let automaticStateKey: String?
     let exclusions: [CheckpointExclusion]
     let groups: [CheckpointFileGroup]
     let paths: [CheckpointPathState]
@@ -381,6 +384,7 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
         branch: String,
         headOID: String,
         capturePolicyVersion: Int = Self.currentCapturePolicyVersion,
+        automaticStateKey: String? = nil,
         exclusions: [CheckpointExclusion],
         groups: [CheckpointFileGroup],
         paths: [CheckpointPathState]
@@ -400,6 +404,7 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
         self.branch = branch
         self.headOID = headOID
         self.capturePolicyVersion = capturePolicyVersion
+        self.automaticStateKey = automaticStateKey
         self.exclusions = exclusions
         self.groups = groups
         self.paths = paths
@@ -421,6 +426,7 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
             branch: container.decode(String.self, forKey: .branch),
             headOID: container.decode(String.self, forKey: .headOID),
             capturePolicyVersion: container.decode(Int.self, forKey: .capturePolicyVersion),
+            automaticStateKey: container.decodeIfPresent(String.self, forKey: .automaticStateKey),
             exclusions: container.decode([CheckpointExclusion].self, forKey: .exclusions),
             groups: container.decode([CheckpointFileGroup].self, forKey: .groups),
             paths: container.decode([CheckpointPathState].self, forKey: .paths)
@@ -435,6 +441,7 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
               !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               label.count <= 120,
               byteCount >= 0,
+              (kind == .automatic) == (automaticStateKey != nil),
               Set(paths.map(\.relativePath)).count == paths.count,
               Set(groups.map(\.id)).count == groups.count
         else { throw CheckpointModelError.invalidLabel }

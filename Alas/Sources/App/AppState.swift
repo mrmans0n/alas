@@ -432,6 +432,8 @@ final class AppState {
     @ObservationIgnored
     var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
     var runScriptCatalogGeneration = 0
+    @ObservationIgnored
+    private let automaticCheckpointService = WorktreeCheckpointService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     /// Settle window before a harness awaiting/permission transition reaches
@@ -10515,6 +10517,13 @@ final class AppState {
                     sessionId: sessionId,
                     retainActivePrompt: retainActivePrompt
                 )
+            },
+            onCheckpointCapture: { [weak self] in
+                guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
+                return try? await self.automaticCheckpointService.createAutomatic(
+                    target: target,
+                    label: "Before agent prompt"
+                ).id
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }

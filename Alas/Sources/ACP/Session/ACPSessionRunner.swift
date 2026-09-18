@@ -57,6 +57,7 @@ final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
+    private let onCheckpointCapture: (@MainActor () async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -153,6 +154,7 @@ final class ACPSessionRunner {
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
+         onCheckpointCapture: (@MainActor () async -> CheckpointID?)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
          ownerInstanceId: String? = nil,
@@ -188,6 +190,7 @@ final class ACPSessionRunner {
         self.onLiveBufferRead = onLiveBufferRead
         self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
+        self.onCheckpointCapture = onCheckpointCapture
         let initialPersistedMessageCount = persistedMessageCount
             ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
             ?? 0
@@ -1824,7 +1827,7 @@ extension ACPSessionRunner {
                 }
                 return
             }
-            let proceeded = await MainActor.run { () -> Bool in
+            let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?) in
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
                 // may already be torn down by detach, and recording the
@@ -1832,7 +1835,7 @@ extension ACPSessionRunner {
                 // detached session.
                 if self.activePromptID != promptID {
                     self.cancelledPromptIDs.remove(promptID)
-                    return false
+                    return (false, nil)
                 }
                 // Re-allow streaming boundary crossings now that we are inside
                 // the Task and have confirmed this prompt is still active. The
@@ -1862,9 +1865,9 @@ extension ACPSessionRunner {
                         self.session.followsTranscriptTail = true
                         self.onResumeTranscriptTail?()
                     }
-                    self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
-                                                  attachments: Self.attachments(of: blocks),
-                                                  delegatedSource: delegatedSource)
+                    let messageID = self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
+                                                                  attachments: Self.attachments(of: blocks),
+                                                                  delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore {
                         self.persistGeneratedTitleIfStoredPlaceholder()
@@ -1874,14 +1877,28 @@ extension ACPSessionRunner {
                         self.session.queue[idx].transcriptRecorded = true
                         self.persistQueue()
                     }
+                    self.resetStreamingPersistBuffer()
+                    self.session.transcript.streamingState = .sending
+                    return (true, messageID)
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                return true
+                return (true, nil)
             }
-            guard proceeded else {
+            guard promptRecording.proceeded else {
                 await MainActor.run { onPromptFinished?(false) }
                 return
+            }
+            if let messageID = promptRecording.messageID,
+               let checkpointID = await self.onCheckpointCapture?() {
+                await MainActor.run {
+                    guard self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
+                          let index = self.session.transcript.messages.firstIndex(where: { message in
+                              guard case .user(let id, _, _, _, _) = message else { return false }
+                              return id == messageID
+                          }) else { return }
+                    self.persistIndices([index])
+                }
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId

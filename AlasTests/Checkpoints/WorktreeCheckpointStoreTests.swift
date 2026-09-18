@@ -74,6 +74,37 @@ struct WorktreeCheckpointStoreTests {
         }
     }
 
+    @Test func automaticPublicationDoesNotEvictManualCheckpointForSpace() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manual = try publication(lineageID: lineageA, label: "Manual", bytes: Data([1, 2, 3]))
+        let automatic = try publication(lineageID: lineageA, label: "Automatic", bytes: Data([4, 5, 6]), kind: .automatic)
+        let store = WorktreeCheckpointStore(
+            root: root,
+            limits: .init(manualCount: 20, automaticCount: 50, recoveryCount: 5, bytes: try storageCost([manual]))
+        )
+        _ = try await store.publish(manual)
+
+        await #expect(throws: CheckpointStoreError.byteLimitExceeded) {
+            try await store.publish(automatic)
+        }
+        #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Manual"])
+    }
+
+    @Test func automaticPublishReusesExistingStateKeyUnderStoreLock() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root)
+        let first = try publication(lineageID: lineageA, label: "Automatic 1", bytes: Data([1]), kind: .automatic)
+        let second = try publication(lineageID: lineageA, label: "Automatic 2", bytes: Data([2]), kind: .automatic)
+
+        let published = try await store.publishAutomaticIfAbsent(first, stateKey: "automatic-state-key")
+        let reused = try await store.publishAutomaticIfAbsent(second, stateKey: "automatic-state-key")
+
+        #expect(reused.id == published.id)
+        #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Automatic 1"])
+    }
+
     @Test func byteLimitRejectsIncomingCheckpointThatCannotFitByItself() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -776,6 +807,7 @@ struct WorktreeCheckpointStoreTests {
             repositoryName: "Alas",
             branch: "main",
             headOID: String(repeating: "f", count: 40),
+            automaticStateKey: kind == .automatic ? "automatic-state-key" : nil,
             exclusions: [], groups: [],
             paths: [.init(relativePath: "File.swift", head: .regular(blob: blob, executable: false), index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
         )

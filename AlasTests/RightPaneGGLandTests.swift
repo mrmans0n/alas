@@ -38,6 +38,10 @@ actor NoopCheckpointService: WorktreeCheckpointServicing {
         throw NoopCheckpointServiceError.unsupported
     }
 
+    func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+        throw NoopCheckpointServiceError.unsupported
+    }
+
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
         throw NoopCheckpointServiceError.unsupported
     }
