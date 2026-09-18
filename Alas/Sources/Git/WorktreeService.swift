@@ -846,6 +846,7 @@ struct WorktreeService {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool = false,
+        allowsSubmoduleLocalState: Bool = false,
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
@@ -1038,7 +1039,7 @@ struct WorktreeService {
         } catch {
             try failAfterRollingBack(error.localizedDescription)
         }
-        guard stagedSubmodulesHaveNoLocalState else {
+        guard stagedSubmodulesHaveNoLocalState || allowsSubmoduleLocalState else {
             try failAfterRollingBack("Worktree contains initialized submodule local state.")
         }
         guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {

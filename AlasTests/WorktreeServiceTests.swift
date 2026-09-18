@@ -1696,6 +1696,29 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1)
     }
 
+    @Test func fastLocalRemoveAllowsApprovedSubmoduleLocalState() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "fast-submodule-local-state")
+        defer { fixture.removeFiles() }
+        let submodule = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodule)
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: true,
+            allowsSubmoduleLocalState: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let listed = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
+        #expect(listed.count == 1)
+    }
+
     @Test func fastLocalRemoveRestoresWhenSubmoduleLocalStateAppearsAfterApproval() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(
             suffix: "fast-submodule-local-state-race"
