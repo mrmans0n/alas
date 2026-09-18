@@ -587,6 +587,18 @@ struct EditorDisplayIntegrationTests {
         #expect(f.view.layoutManager?.temporaryAttribute(.backgroundColor, atCharacterIndex: 5, effectiveRange: nil) as? NSColor == .orange)
     }
 
+    @Test func undoRetainsHintsOutsideTheRevertedLine() async throws {
+        let f = try await Fixture("alpha\nbeta")
+        defer { f.remove() }
+        try f.hints(offset: 6)
+        #expect(f.view.replaceSource(range: NSRange(location: 0, length: 0), with: "x"))
+        f.buffer.undoManager.undo()
+        let hint = try #require(f.view.displayAdapter?.document.map.hintRuns.first?.hint)
+        #expect(hint.id == "hint")
+        #expect(hint.sourceOffset == 6)
+        #expect(f.view.sourceString == "alpha\nbeta")
+    }
+
     @Test func accessibilityUsesSourceValueAndSelection() async throws {
         let f = try await Fixture("a\u{FFFC}🙂b")
         defer { f.remove() }

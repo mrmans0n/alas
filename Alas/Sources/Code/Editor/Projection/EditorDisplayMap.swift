@@ -53,23 +53,19 @@ struct EditorDisplayMap {
 
     init(source: String, revision: Int, hints: [EditorDisplayHint]) throws {
         let text = source as NSString
-        let (length, overflow) = text.length.addingReportingOverflow(hints.count)
-        guard !overflow else { throw EditorDisplayMapError.displayLengthOverflow }
-        var ids = Set<String>()
-        for hint in hints {
-            guard ids.insert(hint.id).inserted else { throw EditorDisplayMapError.duplicateHintID(hint.id) }
-            guard hint.size.width.isFinite, hint.size.height.isFinite,
-                  hint.size.width > 0, hint.size.height > 0
-            else { throw EditorDisplayMapError.invalidHintSize(hint.id) }
-            try Self.validateBoundary(hint.sourceOffset, in: text)
-        }
+        try Self.validateHints(hints, in: text)
+        let length = text.length + hints.count
+        self.source = text
+        self.revision = revision
+        sourceLength = text.length
+        displayLength = length
+        var groups: [HintGroup] = []
+        var hintRuns: [HintRun] = []
+        var sourceRuns: [SourceRun] = []
         let sorted = hints.enumerated().sorted {
             $0.element.sourceOffset == $1.element.sourceOffset
                 ? $0.offset < $1.offset : $0.element.sourceOffset < $1.element.sourceOffset
         }.map(\.element)
-        var groups: [HintGroup] = []
-        var hintRuns: [HintRun] = []
-        var sourceRuns: [SourceRun] = []
         var cursor = 0
         var index = 0
         while index < sorted.count {
@@ -88,13 +84,22 @@ struct EditorDisplayMap {
         if cursor < text.length {
             sourceRuns.append(SourceRun(source: NSRange(location: cursor, length: text.length - cursor), display: NSRange(location: cursor + sorted.count, length: text.length - cursor)))
         }
-        self.source = text
-        self.revision = revision
-        sourceLength = text.length
-        displayLength = length
         self.groups = groups
         self.hintRuns = hintRuns
         self.sourceRuns = sourceRuns
+    }
+
+    static func validateHints(_ hints: [EditorDisplayHint], in text: NSString) throws {
+        let (_, overflow) = text.length.addingReportingOverflow(hints.count)
+        guard !overflow else { throw EditorDisplayMapError.displayLengthOverflow }
+        var ids = Set<String>()
+        for hint in hints {
+            guard ids.insert(hint.id).inserted else { throw EditorDisplayMapError.duplicateHintID(hint.id) }
+            guard hint.size.width.isFinite, hint.size.height.isFinite,
+                  hint.size.width > 0, hint.size.height > 0
+            else { throw EditorDisplayMapError.invalidHintSize(hint.id) }
+            try Self.validateBoundary(hint.sourceOffset, in: text)
+        }
     }
 
     func displayOffset(forSource offset: Int, affinity: EditorDisplayAffinity) throws -> Int {

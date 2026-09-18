@@ -186,6 +186,7 @@ struct CodeEditorView: NSViewRepresentable {
         // buffers across tab switches can rebind onto the new storage; we
         // pass an unattached layout manager here.
         let layoutManager = CodeEditorLayoutManager()
+        layoutManager.allowsNonContiguousLayout = true
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude

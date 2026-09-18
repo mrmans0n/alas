@@ -1308,7 +1308,11 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     func localInsertionRect(at location: Int) -> NSRect? {
         guard let layoutManager, let textContainer else { return nil }
-        layoutManager.ensureLayout(for: textContainer)
+        let length = (string as NSString).length
+        guard location >= 0, location <= length else { return nil }
+        if length > 0 {
+            layoutManager.ensureLayout(forCharacterRange: NSRange(location: min(location, length - 1), length: 1))
+        }
         return fallbackInsertionRect(at: location, layoutManager: layoutManager, textContainer: textContainer)
     }
 
@@ -1618,8 +1622,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         let nsLength = (string as NSString).length
         guard nsLength > 0 else { return [] }
 
-        layoutManager.ensureLayout(for: textContainer)
-
         let origin = textContainerOrigin
         let start = NSPoint(x: startPoint.x - origin.x, y: startPoint.y - origin.y)
         let end = NSPoint(x: endPoint.x - origin.x, y: endPoint.y - origin.y)
@@ -1629,7 +1631,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         let maxY = max(start.y, end.y)
         let selectionRect = NSRect(x: minX, y: minY, width: max(maxX - minX, 1), height: max(maxY - minY, 1))
 
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        layoutManager.ensureLayout(forBoundingRect: selectionRect, in: textContainer)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: selectionRect, in: textContainer)
         var ranges: [NSRange] = []
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, _, lineGlyphRange, _ in
             guard lineRect.intersects(selectionRect) || selectionRect.contains(NSPoint(x: minX, y: lineRect.midY)) else { return }

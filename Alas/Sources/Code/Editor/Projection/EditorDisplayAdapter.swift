@@ -32,7 +32,8 @@ final class EditorDisplayAdapter {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.buffer.storage.editedMask.contains(.editedCharacters) {
-                    if self.isApplyingSourceEdit, !self.composition.isActive {
+                    if self.isApplyingSourceEdit || self.buffer.undoManager.isUndoing || self.buffer.undoManager.isRedoing,
+                       !self.composition.isActive {
                         // The buffer's delegate publishes the committed revision
                         // after this notification. Owned typing updates there once.
                         self.deferredSourceNotification = true
@@ -68,7 +69,7 @@ final class EditorDisplayAdapter {
     /// Accepts only hints captured for the current source revision; composition defers projection.
     func updateHints(_ hints: [EditorDisplayHint], revision: Int) throws {
         guard revision == buffer.editGeneration else { return }
-        _ = try EditorDisplayMap(source: buffer.storage.string, revision: revision, hints: hints)
+        try EditorDisplayMap.validateHints(hints, in: buffer.storage.string as NSString)
         if composition.isActive { deferredHints = (revision, hints)
         return }
         guard document.map.revision != revision || document.map.hintRuns.map(\.hint) != hints else { return }
@@ -129,7 +130,8 @@ final class EditorDisplayAdapter {
         // Protocol actions are invalidated separately. A validated owned edit
         // can retain visual hints on untouched lines; uncertain edits clear them.
         hints = []
-        rebuild(sourceEdit: isApplyingSourceEdit ? edit : nil, sourceDidChange: true)
+        let appliesIncrementally = isApplyingSourceEdit || buffer.undoManager.isUndoing || buffer.undoManager.isRedoing
+        rebuild(sourceEdit: appliesIncrementally ? edit : nil, sourceDidChange: true)
         if let view { NotificationCenter.default.post(name: .editorSourceDidChange, object: view) }
     }
 
@@ -273,6 +275,13 @@ final class EditorDisplayAdapter {
 enum EditorSourceText {
     static func exactlyEqual(_ lhs: String, _ rhs: String) -> Bool {
         lhs.utf16.elementsEqual(rhs.utf16)
+    }
+
+    static func isValidBoundary(_ offset: Int, in text: NSString) -> Bool {
+        guard offset >= 0, offset <= text.length else { return false }
+        return offset == 0 || offset == text.length
+            || !((0xD800 ... 0xDBFF).contains(text.character(at: offset - 1))
+                && (0xDC00 ... 0xDFFF).contains(text.character(at: offset)))
     }
 }
 
