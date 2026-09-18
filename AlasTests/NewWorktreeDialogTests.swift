@@ -456,6 +456,42 @@ struct NewWorktreeDialogTests {
         #expect(NewWorktreeDialog.acpCapableAgents(from: agents).isEmpty)
     }
 
+    @Test func launchEligibleAgentsForLocalProjectUsesInstalledAgents() {
+        let configured = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "codex", displayName: "Codex"),
+        ]
+        let locallyInstalled = [
+            Self.agent(id: "claude", displayName: "Claude"),
+        ]
+
+        let agents = NewWorktreeDialog.launchEligibleAgents(
+            isRemoteProject: false,
+            configuredEnabledAgents: configured,
+            locallyEnabledAgents: locallyInstalled
+        )
+
+        #expect(agents.map(\.id) == ["claude"])
+    }
+
+    @Test func launchEligibleAgentsForRemoteProjectUsesConfiguredAgents() {
+        let configured = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "codex", displayName: "Codex"),
+        ]
+        let locallyInstalled = [
+            Self.agent(id: "claude", displayName: "Claude"),
+        ]
+
+        let agents = NewWorktreeDialog.launchEligibleAgents(
+            isRemoteProject: true,
+            configuredEnabledAgents: configured,
+            locallyEnabledAgents: locallyInstalled
+        )
+
+        #expect(agents.map(\.id) == ["claude", "codex"])
+    }
+
     @Test func acpSegmentEnabledWhenAtLeastOneACPCapableAgent() {
         let agents = [Self.agent(id: "claude", displayName: "Claude")]
         #expect(NewWorktreeDialog.acpSegmentEnabled(enabledAgents: agents))
