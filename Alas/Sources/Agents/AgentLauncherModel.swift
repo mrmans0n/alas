@@ -46,17 +46,25 @@ final class AgentLauncherModel {
     /// query. Terminal mode shows every enabled agent; ACP mode shows
     /// only the subset for which `ACPLaunchCatalog` has a launch spec.
     func rows(enabledAgents: [AgentDefinition], preferredAgentID: String? = nil) -> [AgentDefinition] {
-        let pool: [AgentDefinition]
-        switch mode {
-        case .terminal:
-            pool = enabledAgents
-        case .acp:
-            let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
-            pool = enabledAgents.filter { acpIds.contains($0.id) }
-        }
+        let pool = pool(enabledAgents: enabledAgents)
         let preferred = pool.filter { $0.id == preferredAgentID }
         let remaining = pool.filter { $0.id != preferredAgentID }
         return filtered(preferred + remaining)
+    }
+
+    /// `enabledAgents` narrowed to the current `mode`, before the fuzzy
+    /// `query` filter. Exposed separately so callers that need a stable
+    /// count (e.g. sizing the switcher panel) aren't thrown off by a query
+    /// that's currently being used to filter something else, such as an
+    /// agent's session list while its query field is reused for both.
+    func pool(enabledAgents: [AgentDefinition]) -> [AgentDefinition] {
+        switch mode {
+        case .terminal:
+            return enabledAgents
+        case .acp:
+            let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
+            return enabledAgents.filter { acpIds.contains($0.id) }
+        }
     }
 
     private func filtered(_ agents: [AgentDefinition]) -> [AgentDefinition] {
