@@ -24,6 +24,30 @@ build_commands = jobs.values.flat_map { |job| job.fetch("steps", []) }.count do 
   step.fetch("run", "").lines.any? { |line| line.strip == "build-for-testing" }
 end
 raise "compile the application only once" unless build_commands == 1
+restore = builder_steps.find { |step| step["id"] == "compilation-cache" }
+save = builder_steps.find { |step| step["name"] == "Save compilation cache" }
+build = builder_steps.find { |step| step["name"] == "Build for testing" }
+raise "compilation cache must not restore DerivedData or test products" unless
+  restore&.dig("with", "path") == ".build/xcode/CompilationCache.noindex"
+raise "save and restore must use the same compilation cache" unless
+  save&.dig("with", "path") == restore.dig("with", "path") &&
+  save.dig("with", "key") == "${{ steps.compilation-cache.outputs.cache-primary-key }}"
+key = restore.fetch("with").fetch("key")
+prefixes = restore.fetch("with").fetch("restore-keys").lines.map(&:strip)
+raise "cache fallback must retain all compatibility inputs" unless
+  prefixes == [key.delete_suffix("${{ github.sha }}")] &&
+  ["runner.os", "runner.arch", ".xcode-compilation-cache-toolchain", "project.yml",
+   ".github/workflows/build.yml", "Package.resolved"].all? { |input| key.include?(input) }
+raise "restore before building and save only a successful build" unless
+  builder_steps.index(restore) < builder_steps.index(build) &&
+  builder_steps.index(save) > builder_steps.index(build) &&
+  save["if"] == "success() && steps.compilation-cache.outputs.cache-hit != 'true'"
+raise "compiler must use the restored CAS and emit reuse evidence" unless
+  build.fetch("run").include?('COMPILATION_CACHE_CAS_PATH="$GITHUB_WORKSPACE/.build/xcode/CompilationCache.noindex"') &&
+  build.fetch("run").include?("COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES")
+raise "retain build evidence even after compiler failure" unless builder_steps.any? do |step|
+  step["if"] == "always()" && step.dig("with", "path") == ".build/xcode/build-metrics"
+end
 audit = jobs.fetch("swift-coverage")
 raise "audit must run even if any Swift lane fails" unless audit["if"] == "always()" && audit["needs"].sort == ["build-test", "swift-tests"]
 raise "audit must propagate infrastructure failures too" unless audit.fetch("steps").any? do |step|
