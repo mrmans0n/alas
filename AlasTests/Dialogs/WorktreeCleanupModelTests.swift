@@ -233,6 +233,42 @@ struct WorktreeCleanupModelTests {
         await scanTask.value
     }
 
+    @Test func deleteSelectedIgnoresConcurrentPreparation() async {
+        let candidate = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let gate = WorktreeCleanupScanGate()
+        var authorizationCount = 0
+        var deleteBatchCount = 0
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [candidate.worktree],
+            keepBranches: false,
+            loadWorktrees: { [candidate.worktree] },
+            scan: { _, _ in .success([candidate]) },
+            deleteBatch: { _, _, _ in
+                deleteBatchCount += 1
+                return []
+            },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true },
+            authorizeDelete: { _ in
+                authorizationCount += 1
+                await gate.pause()
+                return .init()
+            }
+        )
+        model.applyScanResult([candidate])
+
+        let firstDelete = Task { await model.deleteSelected() }
+        await gate.waitUntilPaused()
+        await model.deleteSelected()
+
+        #expect(authorizationCount == 1)
+        #expect(deleteBatchCount == 0)
+        await gate.resume()
+        await firstDelete.value
+        #expect(deleteBatchCount == 1)
+    }
+
     /// Drives a rescan through `runScan()` itself, not `applyScanResult`
     /// directly — this is the entry point the Refresh button and any
     /// production rescan actually use. The model is already marked as scanning

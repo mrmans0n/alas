@@ -9282,6 +9282,7 @@ final class AppState {
                 // One refresh at the end, not one per item.
                 refreshAfter: false,
                 promptsForForce: false,
+                authorizedDeleteContentFingerprint: authorization?.contentFingerprintsByWorktree[worktree.id],
                 verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
 
@@ -10164,6 +10165,7 @@ final class AppState {
         removedIndex: Int,
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
+        authorizedDeleteContentFingerprint: String? = nil,
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
@@ -10181,8 +10183,12 @@ final class AppState {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 allowsSubmoduleLocalState: allowsSubmoduleLocalState,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
             )
+        } catch is WorktreeDeleteContentFingerprintMismatch {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
+            return .skipped(reason: Self.changedDeleteRisksMessage)
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if !force,
                promptsForForce,
@@ -10294,10 +10300,18 @@ final class AppState {
         deleteBranchIfMerged: Bool,
         force: Bool,
         allowsSubmoduleLocalState: Bool = false,
-        verifiedMergedBranchSHA: String? = nil
+        verifiedMergedBranchSHA: String? = nil,
+        authorizedDeleteContentFingerprint: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
             try await Task.detached {
+                if let authorizedDeleteContentFingerprint {
+                    let currentFingerprint = try await worktreeDeleteContentFingerprint(worktreePath: worktree.path)
+                    guard currentFingerprint == authorizedDeleteContentFingerprint else {
+                        throw WorktreeDeleteContentFingerprintMismatch()
+                    }
+                }
+
                 if worktree.path.isRemoteAlasPath {
                     try await WorktreeService().remove(
                         repoPath: repoPath,
@@ -10396,6 +10410,10 @@ final class AppState {
             allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
     }
+
+    private static let changedDeleteRisksMessage = "Git deletion risks changed since confirmation"
+
+    private struct WorktreeDeleteContentFingerprintMismatch: Error {}
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
         let status = try await Process.git(

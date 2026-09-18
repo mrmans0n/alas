@@ -153,10 +153,13 @@ struct WorktreeCleanupClassifierTests {
         #expect(!result.isSelectedByDefault)
     }
 
-    @Test func inFlightOperationMakesWorktreeBusy() {
+    @Test func inFlightOperationMakesWorktreeBusyAndUnselectable() {
         var probe = Self.idealProbe()
         probe.operationInFlight = true
-        #expect(Self.classify(probe).verdict == .busy)
+        let result = Self.classify(probe)
+        #expect(result.verdict == .busy)
+        #expect(result.signals.contains(.operationInFlight))
+        #expect(!result.isSelectable)
     }
 
     @Test func sessionsRemainSelectableButRequireConfirmation() {

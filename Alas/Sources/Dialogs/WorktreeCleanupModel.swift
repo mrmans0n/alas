@@ -286,6 +286,7 @@ final class WorktreeCleanupModel {
         guard !requestedTargets.isEmpty,
               !isRunning,
               !isScanning,
+              !isPreparingDelete,
               scanError == nil
         else { return }
 

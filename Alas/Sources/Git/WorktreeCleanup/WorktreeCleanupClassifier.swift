@@ -70,6 +70,7 @@ enum WorktreeCleanupClassifier {
             if busyCount > 0 { blocking.append(.busySessions(count: busyCount)) }
             if idleCount > 0 { blocking.append(.idleSessions(count: idleCount)) }
         }
+        if probe.operationInFlight { blocking.append(.operationInFlight) }
         let isBusy = probe.operationInFlight
 
         // Dirty
