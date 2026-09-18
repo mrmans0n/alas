@@ -92,7 +92,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     func updateNSView(_ nsView: AlasNSTextFieldView, context: Context) {
         context.coordinator.parent = self
         nsView.isEnabled = isEnabled
-        if nsView.stringValue != text {
+        if !context.coordinator.isEditing, nsView.stringValue != text {
             nsView.stringValue = text
         }
         if focusOnAppear, nsView.focusOnAppear, let window = nsView.window {
@@ -114,6 +114,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     @MainActor
     class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: AlasNSTextField
+        var isEditing = false
 
         init(_ parent: AlasNSTextField) {
             self.parent = parent
@@ -130,15 +131,33 @@ private struct AlasNSTextField: NSViewRepresentable {
             parent.onSubmit?()
         }
 
+        func controlTextDidBeginEditing(_: Notification) {
+            isEditing = true
+        }
+
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
-            let value = parent.inputFilter?.sanitize(field.stringValue, mode: .editing) ?? field.stringValue
-            if field.stringValue != value {
-                field.stringValue = value
+            isEditing = true
+            let editor = field.currentEditor() as? NSTextView
+            let editingValue = editor?.string ?? field.stringValue
+            let value = parent.inputFilter?.sanitize(editingValue, mode: .editing) ?? editingValue
+            if value != editingValue, let editor {
+                let selectedRange = editor.selectedRange()
+                editor.string = value
+                let length = (value as NSString).length
+                let location = min(selectedRange.location, length)
+                editor.setSelectedRange(NSRange(
+                    location: location,
+                    length: min(selectedRange.length, length - location)
+                ))
             }
             if value != parent.text {
                 parent.text = value
             }
+        }
+
+        func controlTextDidEndEditing(_: Notification) {
+            isEditing = false
         }
 
         func control(
