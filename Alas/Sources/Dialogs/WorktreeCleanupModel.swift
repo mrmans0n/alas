@@ -20,6 +20,7 @@ struct WorktreeCleanupDeleteAuthorization {
     let forceReasons: [String: [String]]
     let preflightByWorktree: [String: WorktreeDeletePreflight]
     let unavailableReasons: [String: String]
+    let contentFingerprintsByWorktree: [String: String]
 
     init(
         forceWorktreeIDs: Set<String> = [],
@@ -27,7 +28,8 @@ struct WorktreeCleanupDeleteAuthorization {
         sessionIDsByWorktree: [String: Set<String>] = [:],
         forceReasons: [String: [String]] = [:],
         preflightByWorktree: [String: WorktreeDeletePreflight] = [:],
-        unavailableReasons: [String: String] = [:]
+        unavailableReasons: [String: String] = [:],
+        contentFingerprintsByWorktree: [String: String] = [:]
     ) {
         self.forceWorktreeIDs = forceWorktreeIDs
         self.dirtyTabsByWorktree = dirtyTabsByWorktree
@@ -35,6 +37,7 @@ struct WorktreeCleanupDeleteAuthorization {
         self.forceReasons = forceReasons
         self.preflightByWorktree = preflightByWorktree
         self.unavailableReasons = unavailableReasons
+        self.contentFingerprintsByWorktree = contentFingerprintsByWorktree
     }
 }
 

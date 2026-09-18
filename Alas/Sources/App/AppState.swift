@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Observation
 import os
@@ -9208,6 +9209,19 @@ final class AppState {
                         ))
                         continue
                     }
+                    if let acknowledgedFingerprint = authorization.contentFingerprintsByWorktree[worktree.id] {
+                        let currentFingerprint = try await Self.worktreeDeleteContentFingerprint(
+                            worktreePath: worktree.path
+                        )
+                        guard currentFingerprint == acknowledgedFingerprint else {
+                            results.append(WorktreeBatchResult(
+                                worktreeId: worktree.id,
+                                branch: worktree.branch,
+                                outcome: .skipped(reason: "Git deletion risks changed since confirmation")
+                            ))
+                            continue
+                        }
+                    }
                     let postPreflightDirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
                         current: dirtyTabGenerations(worktreeId: worktree.id),
                         acknowledgedAtConfirmation: dirtyTabsAtConfirmation[worktree.id] ?? [:]
@@ -9218,8 +9232,11 @@ final class AppState {
                         workspacesEnabled: config.workspacesEnabled,
                         workspacesCanMutate: workspacesManager.canMutate
                     ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                    let postPreflightBranchMatches =
+                        WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
                     guard postPreflightDirtyIsAcknowledged,
                           postPreflightSessionsAreAcknowledged,
+                          postPreflightBranchMatches,
                           projectsManager.operationState(for: worktree.id) == nil,
                           postPreflightOwnershipIsValid
                     else {
@@ -9498,6 +9515,7 @@ final class AppState {
         var forceReasons: [String: [String]] = [:]
         var preflightByWorktree: [String: WorktreeDeletePreflight] = [:]
         var unavailableReasons: [String: String] = [:]
+        var contentFingerprintsByWorktree: [String: String] = [:]
 
         for worktree in worktrees {
             guard Self.workspaceCleanupOwnershipAvailable(
@@ -9527,6 +9545,15 @@ final class AppState {
             preflightByWorktree[worktree.id] = preflight
 
             if preflight.requiresForce {
+                do {
+                    contentFingerprintsByWorktree[worktree.id] = try await Self.worktreeDeleteContentFingerprint(
+                        worktreePath: worktree.path
+                    )
+                } catch {
+                    unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    continue
+                }
+
                 forceWorktreeIDs.insert(worktree.id)
                 var reasons: [String] = []
                 if preflight.reasons.contains(.dirty) {
@@ -9558,7 +9585,8 @@ final class AppState {
             sessionIDsByWorktree: sessionIDsByWorktree,
             forceReasons: forceReasons,
             preflightByWorktree: preflightByWorktree,
-            unavailableReasons: unavailableReasons
+            unavailableReasons: unavailableReasons,
+            contentFingerprintsByWorktree: contentFingerprintsByWorktree
         )
     }
 
@@ -10367,6 +10395,55 @@ final class AppState {
             force: confirmation.force,
             allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
+    }
+
+    nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
+        let status = try await Process.git(
+            ["status", "--porcelain=v1", "--ignore-submodules=none", "--untracked-files=all"],
+            cwd: worktreePath
+        )
+        guard status.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(status.stderr) }
+
+        let diff = try await Process.git(
+            ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
+            cwd: worktreePath
+        )
+        guard diff.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(diff.stderr) }
+
+        let untracked = try await Process.git([
+            "ls-files", "--others", "--exclude-standard", "-z"
+        ], cwd: worktreePath)
+        guard untracked.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(untracked.stderr) }
+
+        var untrackedHashes: [String] = []
+        for path in untracked.stdout.split(separator: "\0", omittingEmptySubsequences: true).map(String.init).sorted() {
+            let hash = try await Process.git(["hash-object", "--", path], cwd: worktreePath)
+            guard hash.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(hash.stderr) }
+            untrackedHashes.append("\(path)\0\(hash.stdout)")
+        }
+
+        let submodules = try await Process.git([
+            "submodule", "foreach", "--quiet", "--recursive",
+            """
+            printf 'path=%s\\n' "$sm_path"
+            git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
+            git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
+            git ls-files --others --exclude-standard | while IFS= read -r path; do printf 'untracked=%s\\n' "$path"; git hash-object -- "$path"; done
+            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
+            git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
+            """
+        ], cwd: worktreePath)
+        guard submodules.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(submodules.stderr) }
+
+        let payload = [
+            "status", status.stdout,
+            "diff", diff.stdout,
+            "untracked", untrackedHashes.joined(separator: "\0"),
+            "submodules", submodules.stdout
+        ].joined(separator: "\0")
+        return SHA256.hash(data: Data(payload.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     nonisolated static func workspaceCleanupOwnershipAvailable(

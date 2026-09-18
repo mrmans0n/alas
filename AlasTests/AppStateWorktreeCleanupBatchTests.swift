@@ -211,6 +211,20 @@ struct AppStateWorktreeCleanupBatchTests {
         ))
     }
 
+    @Test func worktreeDeleteContentFingerprintChangesWhenDirtyContentChanges() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let scratch = target.path.appendingPathComponent("scratch.txt")
+        try "before".write(to: scratch, atomically: true, encoding: .utf8)
+        let firstFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+
+        try "after".write(to: scratch, atomically: true, encoding: .utf8)
+
+        let secondFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+        #expect(secondFingerprint != firstFingerprint)
+    }
+
     @Test func workspaceCleanupOwnershipIsAvailableWhenWorkspacePreviewIsDisabled() {
         #expect(AppState.workspaceCleanupOwnershipAvailable(
             workspacesEnabled: false,
