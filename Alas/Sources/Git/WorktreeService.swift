@@ -1009,6 +1009,14 @@ struct WorktreeService {
             if hasActivePendingRemoval {
                 WorktreeTrash.finishActivePendingRemoval(ticket)
             }
+            if let authorizedDeleteContentFingerprint {
+                let fallbackFingerprint = try await Self.worktreeDeleteContentFingerprint(
+                    worktreePath: worktree.path
+                )
+                guard fallbackFingerprint == authorizedDeleteContentFingerprint else {
+                    throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
+                }
+            }
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1223,7 +1231,7 @@ struct WorktreeService {
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
-            git ls-files --others --exclude-standard | while IFS= read -r path; do printf 'untracked=%s\\n' "$path"; git hash-object -- "$path"; done
+            git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked=$_\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
             git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             """

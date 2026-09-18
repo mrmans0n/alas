@@ -3960,11 +3960,14 @@ final class AppState {
 
     enum TerminalLaunchError: LocalizedError, Equatable {
         case checkpointRecoveryRequired
+        case worktreeOperationInProgress
 
         var errorDescription: String? {
             switch self {
             case .checkpointRecoveryRequired:
                 return "Recover the interrupted checkpoint restore before opening terminals."
+            case .worktreeOperationInProgress:
+                return "Wait for the current worktree operation to finish before opening terminals."
             }
         }
     }
@@ -6394,6 +6397,9 @@ final class AppState {
         try Task.checkCancellation()
         await prepareRemoteAccelerationIfNeeded(for: project)
         try Task.checkCancellation()
+        guard projectsManager.operationState(for: worktree.id) == nil else {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
@@ -6455,6 +6461,9 @@ final class AppState {
     ) throws -> Tab {
         guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
+        }
+        guard projectsManager.operationState(for: worktree.id) == nil else {
+            throw TerminalLaunchError.worktreeOperationInProgress
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
