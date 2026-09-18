@@ -319,8 +319,20 @@ struct AgentLauncherDialog: View {
             if case .loading = availability { return .loading }
             if case .failed(let message) = availability { return .failed(message) }
         }
-        let agents = rows
+        let agents = stageAgents
         return agents.isEmpty ? .empty : .list(agents)
+    }
+
+    /// Agents to render in the strip and to roam between with ←→. Stage 1
+    /// uses the query-filtered `rows` (typing narrows the strip). Stage 2
+    /// must not: its query field is reused to search sessions instead, so
+    /// filtering agents by it too could empty the strip — and break
+    /// `moveToNeighborAgent` — while a session search still matches
+    /// sessions just fine.
+    private var stageAgents: [AgentDefinition] {
+        guard chatAgent != nil else { return rows }
+        let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
+        return appState.agentLauncher.orderedPool(enabledAgents: availableAgents, preferredAgentID: preferredAgentID)
     }
 
     @ViewBuilder
@@ -343,13 +355,19 @@ struct AgentLauncherDialog: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
+                        // Derived from `chatAgent.id`, not `selectedIndex`,
+                        // while browsing sessions: entering/switching agents
+                        // clears `query`, whose `didSet` resets
+                        // `selectedIndex` to 0 — that would highlight the
+                        // first tile instead of the active agent.
+                        let isSelected = chatAgent.map { $0.id == agent.id } ?? (idx == appState.agentLauncher.selectedIndex)
                         AgentSwitcherTile(
                             size: tileSize,
-                            isSelected: idx == appState.agentLauncher.selectedIndex,
+                            isSelected: isSelected,
                             isDimmed: chatAgent != nil && chatAgent?.id != agent.id,
                             onTap: {
-                                appState.agentLauncher.selectedIndex = idx
                                 if chatAgent == nil {
+                                    appState.agentLauncher.selectedIndex = idx
                                     launch(agent)
                                 } else if agent.id != chatAgent?.id {
                                     switchChatAgent(to: agent)
@@ -814,11 +832,10 @@ struct AgentLauncherDialog: View {
     /// would otherwise auto-launch a chat and close the dialog underfoot.
     private func moveToNeighborAgent(reverse: Bool) {
         guard let chatAgent else { return }
-        let agents = rows
+        let agents = stageAgents
         guard let currentIndex = agents.firstIndex(where: { $0.id == chatAgent.id }) else { return }
         let newIndex = currentIndex + (reverse ? -1 : 1)
         guard agents.indices.contains(newIndex) else { return }
-        appState.agentLauncher.selectedIndex = newIndex
         switchChatAgent(to: agents[newIndex])
     }
 

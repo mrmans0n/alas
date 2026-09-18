@@ -46,17 +46,24 @@ final class AgentLauncherModel {
     /// query. Terminal mode shows every enabled agent; ACP mode shows
     /// only the subset for which `ACPLaunchCatalog` has a launch spec.
     func rows(enabledAgents: [AgentDefinition], preferredAgentID: String? = nil) -> [AgentDefinition] {
+        filtered(orderedPool(enabledAgents: enabledAgents, preferredAgentID: preferredAgentID))
+    }
+
+    /// `pool(enabledAgents:)` with the preferred agent (if any) hoisted to
+    /// the front, before the fuzzy `query` filter. Exposed separately so
+    /// callers that must not react to the live query — sizing the switcher
+    /// panel, or rendering/roaming its agent strip while `query` is being
+    /// reused to search an agent's sessions instead — get a stable list
+    /// without duplicating the mode-filter + preferred-ordering logic.
+    func orderedPool(enabledAgents: [AgentDefinition], preferredAgentID: String? = nil) -> [AgentDefinition] {
         let pool = pool(enabledAgents: enabledAgents)
         let preferred = pool.filter { $0.id == preferredAgentID }
         let remaining = pool.filter { $0.id != preferredAgentID }
-        return filtered(preferred + remaining)
+        return preferred + remaining
     }
 
     /// `enabledAgents` narrowed to the current `mode`, before the fuzzy
-    /// `query` filter. Exposed separately so callers that need a stable
-    /// count (e.g. sizing the switcher panel) aren't thrown off by a query
-    /// that's currently being used to filter something else, such as an
-    /// agent's session list while its query field is reused for both.
+    /// query filter or preferred-agent ordering.
     func pool(enabledAgents: [AgentDefinition]) -> [AgentDefinition] {
         switch mode {
         case .terminal:
