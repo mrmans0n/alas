@@ -1227,6 +1227,7 @@ struct WorktreeService {
         let submodules = try await Process.git([
             "submodule", "foreach", "--quiet", "--recursive",
             """
+            set -e
             printf 'path=%s\\n' "$sm_path"
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
