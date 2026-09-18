@@ -688,6 +688,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-file-browser/run.sh
 
+      - name: Test remote web repo filter
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-repo-filter/run.sh
+
       - name: Test remote web session ordering
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-session-ordering/run.sh

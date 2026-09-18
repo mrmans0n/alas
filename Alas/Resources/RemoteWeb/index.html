@@ -3,38 +3,55 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#151c20" />
+  <meta name="theme-color" content="#1b2127" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="Alas Remote" />
+  <meta name="apple-mobile-web-app-title" content="Alas" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
-  <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=47" />
+  <title>Alas</title>
+  <link rel="stylesheet" href="/style.css?v=48" />
 </head>
 <body>
   <header id="bar">
-    <button id="back" class="hidden" aria-label="Back to sessions">‹</button>
+    <button id="back" class="hidden" type="button" aria-label="Back">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
+    </button>
     <div id="detail-title-block" class="hidden">
       <span id="detail-title"></span>
       <span id="detail-subtitle"></span>
     </div>
-    <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
-    <span id="nav-title">Alas Remote</span>
+    <button id="detail-rename" class="iconbtn hidden" type="button" aria-label="Rename session">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.6l2.2 2.2-8 8-2.9.7.7-2.9z"/></svg>
+    </button>
+    <span id="nav-title">Alas</span>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
   <div id="detail-tabs" class="tabs hidden" role="tablist">
-    <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-label="Chat" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.3-.7L4 20l1.5-3.6A7 7 0 1 1 20 11.5Z"/></svg></button>
-    <button id="tab-changes" class="tab" role="tab" type="button" aria-label="Changes" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 3-4 4 4 4M3 7h12a6 6 0 0 1 6 6v1M17 21l4-4-4-4M21 17H9a6 6 0 0 1-6-6V10"/></svg><span id="tab-changes-count" class="tab-count hidden"></span></button>
-    <button id="tab-files" class="tab" role="tab" type="button" aria-label="Files" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/></svg></button>
+    <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-selected="true">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7.5a5 5 0 0 1 5-5h1a5 5 0 0 1 0 10H5l-2.5 2z"/></svg>
+      <span>Chat</span>
+    </button>
+    <button id="tab-changes" class="tab" role="tab" type="button" aria-selected="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13V5.5M4 5.5L2 7.5M4 5.5L6 7.5M12 3v7.5M12 10.5l2-2M12 10.5l-2-2"/></svg>
+      <span>Changes</span>
+      <span id="tab-changes-count" class="tab-count hidden"></span>
+    </button>
+    <button id="tab-files" class="tab" role="tab" type="button" aria-selected="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.5a1 1 0 011-1h3.5l1.5 1.5h5a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1z"/></svg>
+      <span>Files</span>
+    </button>
   </div>
   <main>
     <section id="sessions" class="view">
-      <div id="repo-search"><span class="repo-search-icon">⌕</span><input id="repo-search-input" type="search" autocomplete="off" placeholder="Search repos and worktrees" aria-label="Search repos and worktrees" /></div>
+      <div id="repo-search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/></svg>
+        <input id="repo-search-input" type="search" autocomplete="off" placeholder="Search repos and worktrees" aria-label="Search repos and worktrees" />
+      </div>
       <div id="repo-filters" role="group" aria-label="Filter repos">
         <button type="button" class="filter-chip is-active" data-filter="all">All<span class="filter-chip-n"></span></button>
-        <button type="button" class="filter-chip" data-filter="active">Active<span class="filter-chip-n"></span></button>
+        <button type="button" class="filter-chip" data-filter="running">Running<span class="filter-chip-n"></span></button>
         <button type="button" class="filter-chip" data-filter="dirty">Dirty<span class="filter-chip-n"></span></button>
       </div>
       <div id="session-list"></div>
@@ -43,33 +60,35 @@
       <div id="messages"></div>
       <div id="queued" class="hidden"></div>
       <div id="drivebar">
-        <button id="takeover" class="hidden">Take over</button>
+        <button id="takeover" class="hidden" type="button">Take over</button>
         <div id="composer" class="hidden">
           <div id="chips" class="hidden"></div>
           <div id="composer-row">
-            <button id="attach" class="hidden" aria-label="Attach image">
-              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.6 1.6 0 0 1-2.3-2.3l7.8-7.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-            <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
-            <button id="config" aria-label="Configure session">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </button>
-            <button id="send" aria-label="Send">
-              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div id="field">
+              <button id="attach" class="hidden" type="button" aria-label="Attach image">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 4L5 8.5a2.5 2.5 0 003.5 3.5l4.5-4.5a4 4 0 00-5.7-5.7L3 6.6"/></svg>
+              </button>
+              <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
+              <button id="config" type="button" aria-label="Configure session">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+              </button>
+            </div>
+            <button id="send" class="action-btn" type="button" aria-label="Send">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>
               <span id="send-badge" class="hidden"></span>
             </button>
             <div id="queue-capsule" class="hidden">
-              <button id="queue-primary" aria-label="Queue message">
-                <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <button id="queue-primary" type="button" aria-label="Queue message">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>
                 <span>Queue</span>
                 <span id="queue-badge" class="hidden"></span>
               </button>
-              <button id="queue-menu" aria-label="More send actions">
-                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <button id="queue-menu" type="button" aria-label="More send actions">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6L8 10.5 12.5 6"/></svg>
               </button>
             </div>
-            <button id="stop" class="hidden" aria-label="Stop">
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.6" fill="currentColor"/></svg>
+            <button id="stop" class="action-btn hidden" type="button" aria-label="Stop">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="3" fill="currentColor"/></svg>
             </button>
           </div>
           <input id="file" type="file" accept="image/*" multiple hidden />
@@ -103,14 +122,14 @@
   </main>
   <nav id="bottom-tabbar">
     <button type="button" id="tab-repos" class="bt-tab is-active" aria-label="Repos">
-      <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M5 2.5v11M5 6h9M5 10h9"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.6"/><path d="M5 2.5v11M5 6h9M5 10h9"/></svg>
       <span>Repos</span>
     </button>
     <div class="bt-fabwrap"><button type="button" id="fab-new-session" aria-label="New session">
-      <svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
     </button></div>
     <button type="button" id="tab-settings" class="bt-tab" aria-label="Settings" disabled>
-      <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
       <span>Settings</span>
     </button>
   </nav>
@@ -221,12 +240,12 @@
   </div>
   <script src="/marked.min.js?v=28"></script>
   <script src="/purify.min.js?v=28"></script>
-  <script src="/repo-filter.js?v=1"></script>
+  <script src="/repo-filter.js?v=2"></script>
   <script src="/session-ordering.js?v=2"></script>
   <script src="/worktree-creation.js?v=1"></script>
   <script src="/changes-view.js?v=8"></script>
   <script src="/file-browser.js?v=3"></script>
-  <script src="/app.js?v=82"></script>
+  <script src="/app.js?v=83"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
