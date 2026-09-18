@@ -49,7 +49,7 @@ struct EditorDisplayInputTests {
         #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [9])
         f.document.storage.delegate = nil
         f.buffer.undoManager.undo()
-        #expect(f.document.map.hintRuns.isEmpty) // Unowned/undo edits remain conservative.
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [10])
     }
 
     @Test func sourceEditRemovesShiftedCommandHoverUnderline() async throws {
@@ -317,6 +317,14 @@ struct EditorDisplayInputTests {
         #expect(!f.buffer.dirty)
         f.buffer.undoManager.redo()
         #expect(Array(f.view.sourceString.utf16) == Array("e\u{301}x".utf16))
+    }
+
+    @Test func rawSourceEditsRejectSurrogateBoundaries() async throws {
+        let f = try await Fixture("a🙂x")
+        defer { f.remove() }
+        #expect(!f.view.replaceSource(range: NSRange(location: 2, length: 0), with: "!"))
+        #expect(!f.view.replaceSource(range: NSRange(location: 1, length: 1), with: ""))
+        #expect(f.view.sourceString == "a🙂x")
     }
 
     @Test(arguments: [false, true], ["e\u{301}y", "e\u{301}x"]) func compositionRestoresExactUnicode(cancel: Bool, final: String) async throws {

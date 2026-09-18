@@ -69,6 +69,7 @@ final class EditorDisplayAdapter {
     /// Accepts only hints captured for the current source revision; composition defers projection.
     func updateHints(_ hints: [EditorDisplayHint], revision: Int) throws {
         guard revision == buffer.editGeneration else { return }
+        try EditorDisplayMap.validateHints(hints, in: buffer.storage.string as NSString)
         if composition.isActive { deferredHints = (revision, hints)
         return }
         guard document.map.revision != revision || document.map.hintRuns.map(\.hint) != hints else { return }
@@ -274,6 +275,13 @@ final class EditorDisplayAdapter {
 enum EditorSourceText {
     static func exactlyEqual(_ lhs: String, _ rhs: String) -> Bool {
         lhs.utf16.elementsEqual(rhs.utf16)
+    }
+
+    static func isValidBoundary(_ offset: Int, in text: NSString) -> Bool {
+        guard offset >= 0, offset <= text.length else { return false }
+        return offset == 0 || offset == text.length
+            || !((0xD800 ... 0xDBFF).contains(text.character(at: offset - 1))
+                && (0xDC00 ... 0xDFFF).contains(text.character(at: offset)))
     }
 }
 

@@ -201,10 +201,13 @@ final class EditorBuffer {
 
     @discardableResult
     func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil, attributes: [NSAttributedString.Key: Any] = [:]) -> Bool {
+        let source = storage.string as NSString
         guard acceptsSourceInput, compositionOwner == composition,
-              range.location >= 0, range.location <= storage.length, range.length >= 0,
-              range.length <= storage.length - range.location else { return false }
-        let previous = (storage.string as NSString).substring(with: range)
+              range.location >= 0, range.location <= source.length, range.length >= 0,
+              range.length <= source.length - range.location,
+              EditorSourceText.isValidBoundary(range.location, in: source),
+              EditorSourceText.isValidBoundary(NSMaxRange(range), in: source) else { return false }
+        let previous = source.substring(with: range)
         guard !EditorSourceText.exactlyEqual(previous, replacement) else { return true }
         if composition == nil {
             registerSourceInverse(range: NSRange(location: range.location, length: replacement.utf16.count), expected: replacement,
