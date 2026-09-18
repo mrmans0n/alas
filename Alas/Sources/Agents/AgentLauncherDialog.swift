@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// A ⌘⇥-style switcher: a centered, content-width panel with a horizontal
+/// strip of large agent icons. ⌘⌥T shows Terminal/Chat picker above the
+/// strip; ⌘⌥⇧T and ⌘⌥⇧C lock the mode and show a static label instead.
+/// Selecting an agent in Chat mode drops a vertical session list under a
+/// shrunk, dimmed strip rather than replacing the panel — ←→ keeps roaming
+/// between agents from inside that second stage.
 struct AgentLauncherDialog: View {
     @Bindable var appState: AppState
     let selectedWorktree: () -> Worktree?
@@ -14,6 +20,14 @@ struct AgentLauncherDialog: View {
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
 
+    private let agentTileSize: CGFloat = 64
+    private let sessionStageTileSize: CGFloat = 36
+    private let tileOuterPadding: CGFloat = 8   // matches AgentSwitcherTile's own padding
+    private let tileSpacing: CGFloat = 10       // matches the strip HStack's spacing
+    private let stripHorizontalInset: CGFloat = 20
+    private let minVisibleTileCount = 3
+    private let maxPanelWidth: CGFloat = 620
+
     var body: some View {
         Group {
             if appState.isAgentLauncherOpen {
@@ -23,29 +37,38 @@ struct AgentLauncherDialog: View {
                         .onTapGesture { close() }
 
                     VStack(spacing: 0) {
-                        inputRow
-                        if showsModePicker {
-                            modePicker
+                        header
+                        agentStrip
+                        captionArea
+                        if let chatAgent {
+                            Divider()
+                                .background(theme.color("line"))
+                                .padding(.horizontal, 18)
+                                .padding(.top, 10)
+                            sessionRowList(agent: chatAgent)
                         }
-                        Divider().background(theme.color("line"))
-                        rowList
-                        footer
+                        hintLine
+                            .padding(.top, 10)
+                            .padding(.bottom, 16)
                     }
-                    .frame(width: 460)
-                    // No outer height cap: a max-only frame grows to the
-                    // proposed height, so the panel would stay 420pt tall and
-                    // center shorter content — leaving dead background above
-                    // the field and below the footer whenever the mode picker
-                    // is hidden (⌘⌥⇧T / ⌘⌥⇧C). The row list carries the cap.
-                    .background(theme.color("bg-1").opacity(0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .frame(width: panelWidth)
+                    .background(hiddenQueryField)
+                    // Theme tint over a real system material, not a flat
+                    // fill — gives the panel the same frosted-glass read as
+                    // the actual ⌘⇥ switcher instead of a solid card.
+                    .background(theme.color("bg-1").opacity(0.78))
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(theme.color("line"), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                    .padding(.top, 70)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .overlay(alignment: .topLeading) {
+                        if chatAgent != nil {
+                            backButton.padding(10)
+                        }
+                    }
                     .onTapGesture { }
                     .onKeyPress { press in handleKey(press) }
                 }
@@ -103,14 +126,43 @@ struct AgentLauncherDialog: View {
         }
     }
 
+    private var preferredAgentID: String? {
+        selectedWorktree().flatMap {
+            appState.defaultAgentID(projectId: $0.projectId, worktreeRoot: $0.path)
+        }
+    }
+
     private var rows: [AgentDefinition] {
         let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
         return appState.agentLauncher.rows(
             enabledAgents: availableAgents,
-            preferredAgentID: selectedWorktree().flatMap {
-                appState.defaultAgentID(projectId: $0.projectId, worktreeRoot: $0.path)
-            }
+            preferredAgentID: preferredAgentID
         )
+    }
+
+    /// The current mode's agent count, ignoring the live query. Used only
+    /// for sizing — `rows` can't be used here because its query also
+    /// drives the session-search field once `chatAgent` is set, and the
+    /// panel must not resize while someone types a session search.
+    private var agentPoolCount: Int {
+        let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
+        return appState.agentLauncher.pool(enabledAgents: availableAgents).count
+    }
+
+    /// One fixed width for the whole panel, shared by both the agent strip
+    /// and the session list beneath it, so entering/leaving Chat mode's
+    /// session browser never resizes the dialog. Wide enough for at least
+    /// `minVisibleTileCount` full-size tiles, capped at `maxPanelWidth`.
+    private var panelWidth: CGFloat {
+        min(max(stripWidth(count: agentPoolCount), stripWidth(count: minVisibleTileCount)), maxPanelWidth)
+    }
+
+    private func stripWidth(count: Int) -> CGFloat {
+        guard count > 0 else { return stripWidth(count: 1) }
+        let tileOuter = agentTileSize + tileOuterPadding * 2
+        let tiles = CGFloat(count) * tileOuter
+        let gaps = CGFloat(count - 1) * tileSpacing
+        return tiles + gaps + stripHorizontalInset * 2
     }
 
     private var selectedAgentAvailability: AgentAvailabilityState? {
@@ -156,71 +208,66 @@ struct AgentLauncherDialog: View {
         chatAgent == nil && !appState.agentLauncher.isModeLocked
     }
 
-    private var inputRow: some View {
-        HStack(spacing: 8) {
-            if let chatAgent {
-                Button {
-                    backToAgents()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("Back to agents")
-                AgentLogoView(agent: chatAgent).frame(width: 16, height: 16)
-            } else {
-                Icon(name: "sparkle", size: 12, color: theme.color("fg-faint"))
+    /// Zero-size focused text field: there is no visible search box in the
+    /// switcher layout, but keystrokes still need a first responder. Typed
+    /// text surfaces in `captionArea`; ⇥ still swaps mode from here so the
+    /// intercept happens before SwiftUI hands the key to focus traversal.
+    private var hiddenQueryField: some View {
+        TextField("", text: Bindable(appState.agentLauncher).query)
+            .textFieldStyle(.plain)
+            .focused($inputFocused)
+            .frame(width: 0, height: 0)
+            .opacity(0.01)
+            .accessibilityHidden(true)
+            .onKeyPress(.tab) {
+                if showsModePicker { appState.agentLauncher.toggleMode() }
+                return .handled
             }
-            TextField(placeholder, text: Bindable(appState.agentLauncher).query)
-                .textFieldStyle(.plain)
-                .focused($inputFocused)
-                .font(.system(size: 14))
-                .foregroundColor(theme.color("fg"))
-                // Intercept tab BEFORE the TextField hands it to the
-                // system focus traversal. Without this the key would
-                // bounce out of the search field instead of toggling
-                // mode. Still swallowed when the picker is hidden (locked,
-                // or browsing sessions) — the alternative is focus escaping
-                // the field, and swapping mode under a visible session list
-                // would leave ↵ launching a chat on the Terminal surface.
-                .onKeyPress(.tab) {
-                    if showsModePicker { appState.agentLauncher.toggleMode() }
-                    return .handled
-                }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
     }
 
-    private var placeholder: String {
-        switch appState.agentLauncher.mode {
-        case .terminal: return "Launch agent in terminal…"
-        case .acp:
-            if let chatAgent { return "Search \(chatAgent.displayName) sessions…" }
-            return "Launch ACP chat session…"
+    @ViewBuilder
+    private var header: some View {
+        if chatAgent == nil {
+            if appState.agentLauncher.isModeLocked {
+                lockedModeLabel
+            } else {
+                modePicker
+            }
         }
+    }
+
+    private var lockedModeLabel: some View {
+        HStack(spacing: 6) {
+            Icon(
+                name: appState.agentLauncher.mode == .terminal ? "terminal" : "sparkle",
+                size: 11,
+                color: theme.color("fg-muted")
+            )
+            Text(appState.agentLauncher.mode == .terminal ? "Terminal" : "Chat")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(theme.color("fg-muted"))
+        }
+        .padding(.top, 18)
+        .padding(.bottom, 12)
     }
 
     /// Segmented control: terminal vs ACP chat. Styled to match the
     /// existing right-pane tab bar (rounded inset, soft pill on the
     /// active segment).
     private var modePicker: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 2) {
-                segment(.terminal, icon: "terminal", label: "Terminal")
-                segment(.acp,      icon: "sparkle",  label: "Chat")
-            }
-            .padding(2)
-            .background(theme.color("seg-container-bg"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            Spacer(minLength: 0)
+        HStack(spacing: 2) {
+            segment(.terminal, icon: "terminal", label: "Terminal")
+            segment(.acp,      icon: "sparkle",  label: "Chat")
         }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 10)
+        .padding(2)
+        .background(theme.color("seg-container-bg"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.top, 18)
+        .padding(.bottom, 12)
     }
 
     private func segment(_ mode: AppConfig.LauncherMode,
@@ -257,73 +304,259 @@ struct AgentLauncherDialog: View {
         .buttonStyle(.plain)
     }
 
+    /// Single source of truth for what the horizontal strip (and the
+    /// caption beneath it) should show: SSH availability is still loading,
+    /// failed to load, resolved to no agents, or resolved to a pickable list.
+    private enum AgentStripState {
+        case loading
+        case failed(String)
+        case empty
+        case list([AgentDefinition])
+    }
+
+    private var agentStripState: AgentStripState {
+        if let availability = selectedAgentAvailability {
+            if case .loading = availability { return .loading }
+            if case .failed(let message) = availability { return .failed(message) }
+        }
+        let agents = stageAgents
+        return agents.isEmpty ? .empty : .list(agents)
+    }
+
+    /// Agents to render in the strip and to roam between with ←→. Stage 1
+    /// uses the query-filtered `rows` (typing narrows the strip). Stage 2
+    /// must not: its query field is reused to search sessions instead, so
+    /// filtering agents by it too could empty the strip — and break
+    /// `moveToNeighborAgent` — while a session search still matches
+    /// sessions just fine.
+    private var stageAgents: [AgentDefinition] {
+        guard chatAgent != nil else { return rows }
+        let availableAgents = selectedAgentAvailability?.agents ?? appState.agentRegistry.enabled()
+        return appState.agentLauncher.orderedPool(enabledAgents: availableAgents, preferredAgentID: preferredAgentID)
+    }
+
     @ViewBuilder
-    private var rowList: some View {
-        if let chatAgent {
-            sessionRowList(agent: chatAgent)
-        } else {
-            agentRowList
+    private var agentStrip: some View {
+        switch agentStripState {
+        case .loading:
+            stripStatus("Checking agents on SSH host…", progress: true)
+        case .failed(let message):
+            stripFailedStatus(message)
+        case .empty:
+            stripEmptyState
+        case .list(let agents):
+            agentTileScroller(agents)
         }
     }
 
-    private var agentRowList: some View {
-        let agents = rows
+    private func agentTileScroller(_ agents: [AgentDefinition]) -> some View {
+        let tileSize = chatAgent == nil ? agentTileSize : sessionStageTileSize
         return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if let availability = selectedAgentAvailability,
-                       case .loading = availability {
-                        launcherStatusRow("Checking agents on SSH host…", progress: true)
-                    } else if let availability = selectedAgentAvailability,
-                              case .failed(let message) = availability {
-                        failedAvailabilityRow(message)
-                    } else if agents.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
-                            AgentLauncherRow(
-                                agent: agent,
-                                isSelected: idx == appState.agentLauncher.selectedIndex,
-                                onTap: {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
+                        // Derived from `chatAgent.id`, not `selectedIndex`,
+                        // while browsing sessions: entering/switching agents
+                        // clears `query`, whose `didSet` resets
+                        // `selectedIndex` to 0 — that would highlight the
+                        // first tile instead of the active agent.
+                        let isSelected = chatAgent.map { $0.id == agent.id } ?? (idx == appState.agentLauncher.selectedIndex)
+                        AgentSwitcherTile(
+                            label: agent.displayName,
+                            size: tileSize,
+                            isSelected: isSelected,
+                            isDimmed: chatAgent != nil && chatAgent?.id != agent.id,
+                            onTap: {
+                                if chatAgent == nil {
                                     appState.agentLauncher.selectedIndex = idx
                                     launch(agent)
-                                },
-                                onHover: { appState.agentLauncher.selectedIndex = idx }
-                            )
-                            // Data-based id, not the row position: a positional
-                            // id freezes LazyVStack rows against query filtering.
-                            .id(agent.id)
+                                } else if agent.id != chatAgent?.id {
+                                    switchChatAgent(to: agent)
+                                }
+                            },
+                            onHover: {
+                                if chatAgent == nil { appState.agentLauncher.selectedIndex = idx }
+                            }
+                        ) {
+                            switcherLogo(for: agent, size: tileSize)
                         }
+                        .id(agent.id)
                     }
                 }
+                .padding(.horizontal, 20)
                 .padding(.vertical, 4)
+                // `minWidth` (not just the ScrollView's own frame) so a
+                // strip narrower than the panel centers instead of hugging
+                // the leading edge — a horizontal ScrollView otherwise
+                // sizes its content to its own intrinsic width regardless
+                // of how wide the viewport around it is.
+                .frame(minWidth: panelWidth, alignment: .center)
             }
-            .frame(minHeight: 180, maxHeight: 320)
+            .frame(width: panelWidth)
             .onChange(of: appState.agentLauncher.scrollToSelectionTick) { _, _ in
                 let index = appState.agentLauncher.selectedIndex
                 if agents.indices.contains(index) {
-                    proxy.scrollTo(agents[index].id, anchor: .center)
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(agents[index].id, anchor: .center)
+                    }
                 }
             }
         }
     }
 
-    private func failedAvailabilityRow(_ message: String) -> some View {
+    @ViewBuilder
+    private func switcherLogo(for agent: AgentDefinition, size: CGFloat) -> some View {
+        switch AgentLogoPresentation.resolve(for: agent) {
+        case .asset:
+            AgentLogoView(agent: agent, size: size)
+        case .fallbackSymbol:
+            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                .fill(theme.color("bg-2"))
+                .frame(width: size, height: size)
+                .overlay(
+                    Icon(name: "sparkle", size: size * 0.42, color: theme.color("fg-muted"))
+                )
+        }
+    }
+
+    private func stripStatus(_ text: String, progress: Bool = false) -> some View {
         HStack(spacing: 8) {
-            Text(message).lineLimit(2)
-            Spacer()
+            if progress { ProgressView().controlSize(.small) }
+            Text(text)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(theme.color("fg-faint"))
+        .frame(maxWidth: .infinity, minHeight: 88)
+    }
+
+    private func stripFailedStatus(_ message: String) -> some View {
+        VStack(spacing: 6) {
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-faint"))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
             Button("Retry") {
-                Task {
-                    await loadSelectedAgentAvailability(force: true)
-                }
+                Task { await loadSelectedAgentAvailability(force: true) }
             }
             .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(theme.color("accent"))
         }
-        .font(.system(size: 11))
-        .foregroundStyle(theme.color("fg-faint"))
-        .padding(.horizontal, 14)
-        .frame(minHeight: 38)
+        .frame(maxWidth: .infinity, minHeight: 88)
+        .padding(.horizontal, 20)
+    }
+
+    private var stripEmptyState: some View {
+        VStack(spacing: 4) {
+            Text(emptyTitle)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(theme.color("fg-dim"))
+            if appState.agentLauncher.mode == .acp,
+               appState.agentLauncher.query.isEmpty {
+                Text("Enable an ACP-capable agent in Settings → Agents.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-faint"))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 88)
+    }
+
+    private var emptyTitle: String {
+        switch appState.agentLauncher.mode {
+        case .terminal: return "No enabled agents"
+        case .acp:      return "No ACP-capable agents enabled"
+        }
+    }
+
+    /// Below the strip: the selected agent's name (or the live query, while
+    /// typing) plus a status line. Skipped for the loading/failed/empty
+    /// strip states, which already carry their own inline text.
+    @ViewBuilder
+    private var captionArea: some View {
+        if let chatAgent {
+            sessionCaption(for: chatAgent)
+        } else if case .list = agentStripState {
+            stage1Caption
+        }
+    }
+
+    private var stage1Caption: some View {
+        VStack(spacing: 3) {
+            Text(stage1Title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(
+                    appState.agentLauncher.query.isEmpty ? theme.color("fg") : theme.color("accent")
+                )
+                .lineLimit(1)
+            if let subtitle = stage1Subtitle {
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 2)
+    }
+
+    private var stage1Title: String {
+        let query = appState.agentLauncher.query
+        if !query.isEmpty { return query }
+        return appState.agentLauncher.selectedAgent(in: rows)?.displayName ?? ""
+    }
+
+    private var stage1Subtitle: String? {
+        guard appState.agentLauncher.query.isEmpty,
+              let agent = appState.agentLauncher.selectedAgent(in: rows)
+        else { return nil }
+        if agent.id == preferredAgentID { return "Default for this worktree" }
+        switch appState.agentLauncher.mode {
+        case .terminal: return "Terminal"
+        case .acp: return "Chat"
+        }
+    }
+
+    private func sessionCaption(for agent: AgentDefinition) -> some View {
+        let query = appState.agentLauncher.query
+        return VStack(spacing: 3) {
+            Text(query.isEmpty ? agent.displayName : query)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(query.isEmpty ? theme.color("fg") : theme.color("accent"))
+                .lineLimit(1)
+            Text(sessionCaptionSubtitle)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 2)
+    }
+
+    private var sessionCaptionSubtitle: String {
+        switch discoveryModel?.phase ?? .idle {
+        case .idle, .loading:
+            return "Loading sessions…"
+        case .unsupported:
+            return "No session history available"
+        case .failed:
+            return "Couldn't load sessions"
+        case .ready:
+            let count = filteredDiscoveredSessions.count
+            return count == 1 ? "1 session" : "\(count) sessions"
+        }
+    }
+
+    private var backButton: some View {
+        Button(action: backToAgents) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(theme.color("bg-2")))
+        }
+        .buttonStyle(.plain)
+        .help("Back to agents")
     }
 
     private func sessionRowList(agent: AgentDefinition) -> some View {
@@ -466,49 +699,22 @@ struct AgentLauncherDialog: View {
         return "Agent history"
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 4) {
-            Text(emptyTitle)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(theme.color("fg-dim"))
-            if appState.agentLauncher.mode == .acp,
-               appState.agentLauncher.query.isEmpty {
-                Text("Enable an ACP-capable agent in Settings → Agents.")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-faint"))
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 160)
-    }
-
-    private var emptyTitle: String {
-        switch appState.agentLauncher.mode {
-        case .terminal: return "No enabled agents"
-        case .acp:      return "No ACP-capable agents enabled"
-        }
-    }
-
-    private var footer: some View {
-        HStack(spacing: 12) {
-            label("↑↓ navigate")
-            label(chatAgent == nil ? "↵ select" : "↵ open")
-            if showsModePicker { label("⇥ swap mode") }
-            label(chatAgent == nil ? "esc close" : "esc back")
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(theme.color("bg-2").opacity(0.5))
-        .overlay(
-            Rectangle().fill(theme.color("line-soft")).frame(height: 0.5),
-            alignment: .top
-        )
-    }
-
-    private func label(_ text: String) -> some View {
-        Text(text)
+    private var hintLine: some View {
+        Text(hintText)
             .font(.system(size: 11))
             .foregroundColor(theme.color("fg-faint"))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 12)
+    }
+
+    private var hintText: String {
+        if chatAgent != nil {
+            return "↑↓ pick session  ·  ←→ change agent  ·  ↵ open  ·  esc back"
+        }
+        var parts = ["←→ navigate", "↵ select"]
+        if showsModePicker { parts.append("⇥ swap mode") }
+        parts.append("esc close")
+        return parts.joined(separator: "  ·  ")
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
@@ -519,10 +725,10 @@ struct AgentLauncherDialog: View {
         case .escape:
             close()
             return .handled
-        case .upArrow:
+        case .leftArrow:
             appState.agentLauncher.moveSelectionUp(rowCount: rows.count)
             return .handled
-        case .downArrow:
+        case .rightArrow:
             appState.agentLauncher.moveSelectionDown(rowCount: rows.count)
             return .handled
         case .return:
@@ -537,8 +743,14 @@ struct AgentLauncherDialog: View {
 
     private func handleSessionKey(_ press: KeyPress) -> KeyPress.Result {
         switch press.key {
-        case .escape, .leftArrow:
+        case .escape:
             backToAgents()
+            return .handled
+        case .leftArrow:
+            moveToNeighborAgent(reverse: true)
+            return .handled
+        case .rightArrow:
+            moveToNeighborAgent(reverse: false)
             return .handled
         case .upArrow:
             selectedSessionIndex = max(0, selectedSessionIndex - 1)
@@ -611,6 +823,34 @@ struct AgentLauncherDialog: View {
         appState.agentLauncher.query = ""
         selectedSessionIndex = 0
         startDiscovery(for: agent)
+        requestInputFocus()
+    }
+
+    /// Roams to a neighbouring agent from inside the session browser (←→).
+    /// The ACP manager is per-worktree, not per-agent, so whatever manager
+    /// got us into the session browser already covers every other agent —
+    /// no need for `beginSessionBrowser`'s "no manager yet" fallback, which
+    /// would otherwise auto-launch a chat and close the dialog underfoot.
+    private func moveToNeighborAgent(reverse: Bool) {
+        guard let chatAgent else { return }
+        let agents = stageAgents
+        guard let currentIndex = agents.firstIndex(where: { $0.id == chatAgent.id }) else { return }
+        let newIndex = currentIndex + (reverse ? -1 : 1)
+        guard agents.indices.contains(newIndex) else { return }
+        switchChatAgent(to: agents[newIndex])
+    }
+
+    private func switchChatAgent(to agent: AgentDefinition) {
+        guard let manager = selectedACPManagerForLauncher() else { return }
+        chatAgent = agent
+        appState.agentLauncher.query = ""
+        selectedSessionIndex = 0
+        // Per-agent state: a deletion failure (or pending confirmation) for
+        // the agent we're leaving must not bleed into the next agent's
+        // session list.
+        deletionRequest = nil
+        deletionError = nil
+        startDiscovery(for: agent, manager: manager)
         requestInputFocus()
     }
 
@@ -809,27 +1049,37 @@ private struct AgentSessionLauncherRow: View {
     }
 }
 
-private struct AgentLauncherRow: View {
-    let agent: AgentDefinition
+/// A single icon tile in the horizontal switcher strip. `logo` is injected
+/// so the fallback (no vendor asset) can be wrapped in its own rounded chip
+/// while real vendor artwork renders edge-to-edge.
+private struct AgentSwitcherTile<Logo: View>: View {
+    let label: String
+    let size: CGFloat
     let isSelected: Bool
+    let isDimmed: Bool
     let onTap: () -> Void
     let onHover: () -> Void
+    @ViewBuilder let logo: () -> Logo
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 10) {
-            AgentLogoView(agent: agent)
-            Text(agent.displayName)
-                .font(.system(size: 13))
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 34)
-        .background(isSelected ? theme.color("bg-3") : .clear)
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
-        .onHover { hovering in if hovering { onHover() } }
+        logo()
+            .frame(width: size, height: size)
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isSelected ? theme.color("bg-3") : .clear)
+            )
+            .opacity(isDimmed ? 0.4 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+            .onHover { hovering in if hovering { onHover() } }
+            // The logo alone (an image, or a bare sparkle glyph for
+            // fallback agents) isn't distinguishable to VoiceOver, and a
+            // tap-gesture view isn't announced as activatable on its own.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction(.default, onTap)
     }
 }
