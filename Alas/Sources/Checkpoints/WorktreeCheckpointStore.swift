@@ -105,6 +105,28 @@ actor WorktreeCheckpointStore {
         }
     }
 
+    func publishAutomaticIfAbsent(_ publication: CheckpointPublication, stateKey: String, protecting additionalProtectedIDs: Set<CheckpointID> = []) throws -> WorktreeCheckpointSummary {
+        let manifest = publication.manifest
+        guard manifest.kind == .automatic, manifest.automaticStateKey == stateKey else {
+            throw CheckpointModelError.invalidAutomaticStateKey
+        }
+        try validate(manifest.lineageID)
+        try manifest.validate()
+        try prepare(manifest.lineageID)
+        return try withLineageLock(lineageID: manifest.lineageID) {
+            let catalog = try catalogUnlocked(lineageID: manifest.lineageID)
+            for summary in catalog.summaries where summary.kind == .automatic {
+                guard let existing = try? readManifest(id: summary.id, lineageID: manifest.lineageID) else { continue }
+                if existing.automaticStateKey == stateKey { return summary }
+            }
+            let published = try publishUnlocked(publication, protecting: additionalProtectedIDs)
+            guard let summary = published.summaries.first(where: { $0.id == manifest.id }) else {
+                throw CheckpointStoreError.checkpointNotFound
+            }
+            return summary
+        }
+    }
+
     private func publishUnlocked(_ publication: CheckpointPublication, protecting additionalProtectedIDs: Set<CheckpointID>) throws -> CheckpointCatalogSnapshot {
         let manifest = publication.manifest
         let layout = paths(manifest.lineageID)

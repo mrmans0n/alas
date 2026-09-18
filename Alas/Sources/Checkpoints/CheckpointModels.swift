@@ -234,6 +234,7 @@ enum CheckpointLeafKind: String, Codable, Equatable, Sendable {
 enum CheckpointModelError: Error, Equatable, Sendable {
     case invalidFileState(kind: CheckpointLeafKind, mode: String?, hasBlob: Bool)
     case invalidBlobReference
+    case invalidAutomaticStateKey
     case invalidLabel
     case unsupportedSchemaVersion(Int)
 }

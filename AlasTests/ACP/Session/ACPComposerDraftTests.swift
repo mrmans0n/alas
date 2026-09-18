@@ -57,4 +57,13 @@ struct ACPComposerDraftTests {
             text: "Look at  ",
             attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")]))
     }
+
+    @Test("persisted prompt matching ignores checkpoint references")
+    func persistedPromptMatchingIgnoresCheckpointReferences() {
+        let draft = ACPComposerDraft(segments: [.text("Ship it")])
+
+        #expect(draft.matchesPersistedUserPrompt(
+            text: "Ship it",
+            attachments: [.checkpointReference(id: UUID())]))
+    }
 }

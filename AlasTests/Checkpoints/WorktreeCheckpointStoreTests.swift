@@ -91,6 +91,20 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Manual"])
     }
 
+    @Test func automaticPublishReusesExistingStateKeyUnderStoreLock() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root)
+        let first = try publication(lineageID: lineageA, label: "Automatic 1", bytes: Data([1]), kind: .automatic)
+        let second = try publication(lineageID: lineageA, label: "Automatic 2", bytes: Data([2]), kind: .automatic)
+
+        let published = try await store.publishAutomaticIfAbsent(first, stateKey: "automatic-state-key")
+        let reused = try await store.publishAutomaticIfAbsent(second, stateKey: "automatic-state-key")
+
+        #expect(reused.id == published.id)
+        #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Automatic 1"])
+    }
+
     @Test func byteLimitRejectsIncomingCheckpointThatCannotFitByItself() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
