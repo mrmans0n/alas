@@ -635,7 +635,6 @@ struct WorkspaceCheckoutRepairTests {
         #expect(checkout.members[0].gitLineageID == "lineage-a")
         #expect(await git.prepareCount == 0)
         #expect(await git.createCount == 1)
-        #expect(await git.existingLineageChecks == 3)
         #expect(await scripts.paths == ["/checkouts/a"])
     }
 

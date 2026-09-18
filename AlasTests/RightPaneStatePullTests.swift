@@ -13,7 +13,8 @@ struct RightPaneStatePullTests {
             branch: branch,
             path: path,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: path)
         )
     }
 

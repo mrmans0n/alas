@@ -319,6 +319,9 @@ private final class WorktreeLaunchFixture {
         )
         #expect(!id.isEmpty)
         try await waitForOperationToClear(id: id)
+        if case .acp(_, let preparedPrompt?) = launchSurface {
+            try await waitForPreparedPrompt(preparedPrompt, worktreeID: id)
+        }
         return id
     }
 
@@ -333,5 +336,25 @@ private final class WorktreeLaunchFixture {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
+    }
+
+    private func waitForPreparedPrompt(
+        _ preparedPrompt: PreparedWorktreeACPPrompt,
+        worktreeID: String,
+        timeoutSeconds: Double = 10
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        let persistence = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: worktreeID).path)
+        while Date() < deadline {
+            let liveQueue = state.acpManager(forWorktreeId: worktreeID)?
+                .liveSession(for: preparedPrompt.sessionID)?.queue
+            let persistedQueue = try? await persistence.loadQueue(sessionId: preparedPrompt.sessionID)
+            if liveQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true,
+               persistedQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for the prepared ACP prompt to be queued")
     }
 }

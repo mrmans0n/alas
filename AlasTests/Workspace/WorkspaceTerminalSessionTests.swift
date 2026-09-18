@@ -410,6 +410,7 @@ struct WorkspaceTerminalSessionTests {
             workspaceStore: workspaceStore
         )
         state.config.workspacesEnabled = true
+        state.projectsManager.insertOptimisticWorktree(worktree)
         let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
         pane.nonterminalCheckpointJournals = [
             CheckpointRestoreJournal(

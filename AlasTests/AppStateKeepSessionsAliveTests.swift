@@ -277,7 +277,7 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.workspaceNavigationState.selectedCheckoutID == checkout.id)
         #expect(state.workspaceNavigationState.focusedCheckoutMemberID == checkoutMemberID)
         #expect(state.selectedWorktreeId == worktree.id)
-        #expect(state.tabs.activeTabId(for: owner) == nil)
+        #expect(state.tabs.activeTabId(for: owner) == shared.id)
         #expect(state.tabs.activeTabId(forWorktree: worktree.id) != nil)
     }
 

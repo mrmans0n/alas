@@ -25,9 +25,9 @@ private actor LandPreflightSuspension {
     }
 }
 
-private enum NoopCheckpointServiceError: Error { case unsupported }
+enum NoopCheckpointServiceError: Error { case unsupported }
 
-private actor NoopCheckpointService: WorktreeCheckpointServicing {
+actor NoopCheckpointService: WorktreeCheckpointServicing {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         .init(lineageID: target.lineageID, summaries: [], byteCount: 0)
     }

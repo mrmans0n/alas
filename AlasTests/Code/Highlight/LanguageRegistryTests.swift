@@ -179,7 +179,10 @@ struct LanguageRegistryTests {
             ("sql", "SELECT name FROM users WHERE id = 1;", .keyword),
             ("graphql", "query GetUser { user(id: 1) { name } }", .keyword),
             ("proto", "syntax = \"proto3\";\nmessage User { string name = 1; }", .keyword),
-            ("svelte", "<script>let name = 'x';</script>\n<h1>{name}</h1>", .keyword),
+            // tree-sitter-svelte-ng currently captures Svelte structure as
+            // punctuation. The plain-text fallback never emits punctuation,
+            // so this still proves the grammar and query executed.
+            ("svelte", "<script>let name = 'x';</script>\n<h1>{name}</h1>", .punctuation),
             // XML tag names capture as `@tag`, which folds into `.keyword`.
             ("xml", "<?xml version=\"1.0\"?>\n<root><child id=\"a\">t</child></root>", .keyword),
             ("ini", "[server]\nhost = localhost\nport = 8080", .property),

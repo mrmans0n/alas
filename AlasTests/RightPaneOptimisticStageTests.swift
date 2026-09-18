@@ -92,7 +92,8 @@ struct RightPaneOptimisticStageTests {
                 branch: "main",
                 path: path,
                 status: .clean,
-                lastActivity: Date()
+                lastActivity: Date(),
+                lineageID: WorktreeService.localLineageID(forWorktreeAt: path)
             ),
             baseBranch: "main"
         )

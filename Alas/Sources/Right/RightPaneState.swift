@@ -2145,12 +2145,12 @@ final class RightPaneState: GGSplitCommitServicing {
     func performGGDrop() {
         guard !checkpointMutationsDisabled else { return }
         guard let prepared = pendingGGDropPrepared else { return }
-        let actionGeneration = ggActionState.actionGeneration
         Task { @MainActor in
             guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
             pendingGGDrop = nil
             pendingGGDropPrepared = nil
             guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
+            let actionGeneration = ggActionState.actionGeneration
             do {
                 try await operation.value
             } catch let error as GGMutationError {
