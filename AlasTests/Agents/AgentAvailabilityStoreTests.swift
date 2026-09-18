@@ -80,6 +80,23 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
     }
 
+    @Test func loadRetryingFailureRefreshesCachedProbeFailure() async {
+        let counter = ProbeCounter()
+        let store = AgentAvailabilityStore { _, _, _ in
+            let attempt = await counter.increment()
+            return attempt == 1
+                ? ProcessResult(exitCode: 255, stdout: "", stderr: "offline")
+                : ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+        }
+        let candidates = [TestAgents.custom(id: "one", binary: "one")]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        await store.loadRetryingFailure(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+
+        #expect(await counter.value == 2)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
+    }
+
     @Test func localStateReturnsLocalAgentsWithoutProbe() {
         let local = [TestAgents.custom(id: "local", binary: "local")]
         let store = AgentAvailabilityStore { _, _, _ in

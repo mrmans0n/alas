@@ -89,6 +89,18 @@ final class AgentAvailabilityStore {
         await load(target: target, worktreePath: worktreePath, candidates: candidates)
     }
 
+    func loadRetryingFailure(
+        target: AgentExecutionTarget,
+        worktreePath: String,
+        candidates: [AgentDefinition]
+    ) async {
+        await load(target: target, worktreePath: worktreePath, candidates: candidates)
+        guard case .ssh(let host) = target else { return }
+        let key = cacheKey(host: host, worktreePath: worktreePath, candidates: candidates)
+        guard case .failed = states[key] else { return }
+        await retry(target: target, worktreePath: worktreePath, candidates: candidates)
+    }
+
     func invalidate(target: AgentExecutionTarget, worktreePath: String) {
         guard case .ssh(let host) = target else { return }
         let keys = Set(states.keys.filter { $0.host == host } + inFlight.keys.filter { $0.host == host })

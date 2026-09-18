@@ -721,6 +721,11 @@ final class AppState {
         ).agents.first { $0.id == id }
     }
 
+    private func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
+        await loadAgentAvailability(for: worktree, retryFailed: true)
+        return agentAvailability(for: worktree)
+    }
+
     func acpForkTargets(sourceAgentID: String, worktreePath: URL) -> [ACPSessionForkTarget] {
         ACPForkTargetPolicy.targets(
             sourceAgentID: sourceAgentID,
@@ -809,11 +814,12 @@ final class AppState {
         )
     }
 
-    func loadAgentAvailability(for worktree: Worktree, force: Bool = false) async {
+    func loadAgentAvailability(for worktree: Worktree, force: Bool = false, retryFailed: Bool = false) async {
         await loadAgentAvailability(
             worktreePath: worktree.path,
             remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
-            force: force
+            force: force,
+            retryFailed: retryFailed
         )
     }
 
@@ -836,7 +842,8 @@ final class AppState {
     func loadAgentAvailability(
         worktreePath: URL,
         remoteHost: String? = nil,
-        force: Bool = false
+        force: Bool = false,
+        retryFailed: Bool = false
     ) async {
         let target = AgentExecutionTarget.resolve(worktreePath: worktreePath, remoteHost: remoteHost)
         guard case .ssh = target else { return }
@@ -847,11 +854,19 @@ final class AppState {
         if force {
             agentAvailabilityStore.invalidate(target: target, worktreePath: worktreePath.path)
         }
-        await agentAvailabilityStore.load(
-            target: target,
-            worktreePath: worktreePath.path,
-            candidates: candidates
-        )
+        if retryFailed {
+            await agentAvailabilityStore.loadRetryingFailure(
+                target: target,
+                worktreePath: worktreePath.path,
+                candidates: candidates
+            )
+        } else {
+            await agentAvailabilityStore.load(
+                target: target,
+                worktreePath: worktreePath.path,
+                candidates: candidates
+            )
+        }
     }
 
     /// Build a registry view without running detection — used as the input
@@ -5862,8 +5877,7 @@ final class AppState {
                 availableAgents: { [weak self] _, worktree in
                     guard let self else { return [] }
                     let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    await self.loadAgentAvailability(for: worktree)
-                    let agents = self.agentAvailability(for: worktree).agents
+                    let agents = await self.loadAgentAvailabilityForDelegation(worktree).agents
                     return agents.map {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
