@@ -67,9 +67,9 @@ raise "audit must propagate infrastructure failures too" unless audit.fetch("ste
 end
 
 expected_runners = {
-  "ci-workflow-contract" => "ubuntu-24.04",
-  "rust-tests" => "ubuntu-24.04",
-  "remote-web-tests" => "ubuntu-24.04",
+  "ci-workflow-contract" => "ubuntu-26.04",
+  "rust-tests" => "ubuntu-26.04",
+  "remote-web-tests" => "ubuntu-26.04",
   "shell-harness-tests" => "macos-26"
 }
 

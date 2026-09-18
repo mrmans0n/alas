@@ -97,7 +97,6 @@ struct SidebarView: View {
                                         state.saveProjects()
                                     },
                                     spaces: state.spacesManager.spaces,
-                                    showsSpacesMenu: state.spacesManager.shouldShowSpaceAffordance,
                                     activeSpaceId: state.spacesManager.activeSpaceId,
                                     isProjectInSpace: { spaceId in
                                         state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
