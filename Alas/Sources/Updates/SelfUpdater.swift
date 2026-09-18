@@ -201,15 +201,14 @@ final class SelfUpdater {
         let existingLogLines = logLines
         let buffer = SelfUpdateOutputBuffer()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty {
+            let read = buffer.readAvailableData(from: handle)
+            if read.reachedEnd {
                 handle.readabilityHandler = nil
                 return
             }
-            let lines = buffer.feed(data)
             Task { @MainActor [weak self] in
                 guard let self, self.generation == myGeneration else { return }
-                let snapshot = existingLogLines + lines
+                let snapshot = existingLogLines + read.lines
                 if snapshot.count >= self.logLines.count {
                     self.logLines = snapshot
                 }
@@ -221,8 +220,7 @@ final class SelfUpdater {
         return await withCheckedContinuation { (continuation: CheckedContinuation<StepOutcome, Never>) in
             process.terminationHandler = { [weak self, buffer, pipe] proc in
                 pipe.fileHandleForReading.readabilityHandler = nil
-                let finalData = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-                let finalLines = buffer.finish(finalData)
+                let finalLines = buffer.finish(reading: pipe.fileHandleForReading)
                 Task { @MainActor [weak self] in
                     if let self, self.generation == myGeneration {
                         self.logLines = existingLogLines + finalLines
@@ -270,16 +268,19 @@ private final class SelfUpdateOutputBuffer: @unchecked Sendable {
     private var pending = Data()
     private var lines: [String] = []
 
-    func feed(_ data: Data) -> [String] {
+    func readAvailableData(from handle: FileHandle) -> (lines: [String], reachedEnd: Bool) {
         lock.lock()
         defer { lock.unlock() }
+        let data = handle.availableData
+        guard !data.isEmpty else { return (lines, true) }
         append(data)
-        return lines
+        return (lines, false)
     }
 
-    func finish(_ data: Data) -> [String] {
+    func finish(reading handle: FileHandle) -> [String] {
         lock.lock()
         defer { lock.unlock() }
+        let data = (try? handle.readToEnd()) ?? Data()
         append(data)
         if !pending.isEmpty {
             lines.append(String(decoding: pending, as: UTF8.self))
