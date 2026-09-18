@@ -1035,6 +1035,7 @@ final class AppState {
     struct WorktreeDeleteDecision: Equatable {
         let confirmation: WorktreeDeleteConfirmation
         let force: Bool
+        let allowsSubmoduleLocalState: Bool
     }
 
     @ObservationIgnored
@@ -9396,6 +9397,7 @@ final class AppState {
                 repoPath: repoPath,
                 deleteBranchIfMerged: deleteBranch,
                 force: decision.force,
+                allowsSubmoduleLocalState: decision.allowsSubmoduleLocalState,
                 removedIndex: removedIndex
             )
         }
@@ -9419,8 +9421,8 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             return .error("Could not find the project for this worktree.")
         }
+        let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
         if !force {
-            let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
             if preflight.requiresForce {
                 if preflight.reasons.contains(.dirty) {
                     return .error("worktree has local changes; rerun with --force to delete")
@@ -9431,6 +9433,7 @@ final class AppState {
                 return .error("worktree requires force delete; rerun with --force to delete")
             }
         }
+        let allowsSubmoduleLocalState = force && preflight.submoduleLocalState == .present
 
         let repoPath = URL(fileURLWithPath: project.path)
         let deleteBranch = Self.resolveDeleteBranchIfMerged(
@@ -9446,6 +9449,7 @@ final class AppState {
                 repoPath: repoPath,
                 deleteBranchIfMerged: deleteBranch,
                 force: force,
+                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 removedIndex: removedIndex
             )
             if pendingForceDeleteWorktree?.id == worktree.id {
@@ -9745,6 +9749,7 @@ final class AppState {
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         force: Bool,
+        allowsSubmoduleLocalState: Bool = false,
         removedIndex: Int,
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
@@ -9764,6 +9769,7 @@ final class AppState {
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
+                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
@@ -9875,6 +9881,7 @@ final class AppState {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool,
+        allowsSubmoduleLocalState: Bool = false,
         verifiedMergedBranchSHA: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
@@ -9894,6 +9901,7 @@ final class AppState {
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
+                    allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA
                 )
             }.value
@@ -9972,7 +9980,8 @@ final class AppState {
         )
         return WorktreeDeleteDecision(
             confirmation: confirmation,
-            force: confirmation.force
+            force: confirmation.force,
+            allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
     }
 

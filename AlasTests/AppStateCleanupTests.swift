@@ -1132,9 +1132,24 @@ struct AppStateCleanupTests {
                 keepBranch: false,
                 preflight: preflight
             ),
-            force: true
+            force: true,
+            allowsSubmoduleLocalState: false
         ))
         #expect(decision?.confirmation.buttonTitle == "Force Delete")
+    }
+
+    @Test func resolveDeleteDecisionAllowsReportedSubmoduleLocalState() {
+        let decision = AppState.resolveDeleteDecision(
+            branch: "feature/submodule",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(
+                reasons: [.containsInitializedSubmodules],
+                submoduleLocalState: .present
+            ),
+            userConfirmed: true
+        )
+
+        #expect(decision?.allowsSubmoduleLocalState == true)
     }
 
     @Test func resolveDeleteDecisionReturnsNilWhenCancelled() {
