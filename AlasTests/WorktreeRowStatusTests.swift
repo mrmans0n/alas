@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -94,6 +95,42 @@ struct WorktreeRowStatusTests {
                 #expect(!status.note.isEmpty)
             }
         }
+    }
+
+    @Test func commitQueryIdentityIgnoresRevision() {
+        let base = WorktreeRowView.CommitQuery(
+            path: URL(fileURLWithPath: "/repo/worktree"),
+            branch: "feature",
+            baseBranch: "main",
+            preferLocal: false,
+            revision: 1
+        )
+        let bumped = WorktreeRowView.CommitQuery(
+            path: base.path,
+            branch: base.branch,
+            baseBranch: base.baseBranch,
+            preferLocal: base.preferLocal,
+            revision: 2
+        )
+        // A revision bump alone — e.g. an unrelated ref change elsewhere in
+        // the project — must not read as a different subject, or an
+        // already-loaded commit count would blink out while it refetches.
+        #expect(base.identity == bumped.identity)
+
+        let differentBranch = WorktreeRowView.CommitQuery(
+            path: base.path,
+            branch: "other",
+            baseBranch: base.baseBranch,
+            preferLocal: base.preferLocal,
+            revision: 1
+        )
+        #expect(base.identity != differentBranch.identity)
+    }
+
+    @Test func zeroCommitsAreNotVisible() {
+        #expect(!WorktreeRowView.hasVisibleCommits(nil))
+        #expect(!WorktreeRowView.hasVisibleCommits(GitService.BranchCommitCount(count: 0, baseRef: "main")))
+        #expect(WorktreeRowView.hasVisibleCommits(GitService.BranchCommitCount(count: 1, baseRef: "main")))
     }
 
     @Test func noStateEverProducesTheWordClean() {
