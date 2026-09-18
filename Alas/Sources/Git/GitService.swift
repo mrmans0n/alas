@@ -80,6 +80,33 @@ enum HeadBlobTextResult: Equatable, Sendable {
 }
 
 extension GitService {
+    struct BranchCommitCount: Equatable, Sendable {
+        let count: Int
+        let baseRef: String
+    }
+
+    /// Counts all branch commits beyond the base, including already-pushed commits.
+    func branchCommitCount(
+        worktreePath: URL,
+        baseBranch: String,
+        preferLocal: Bool = false
+    ) async throws -> BranchCommitCount? {
+        guard let base = try await resolveBaseRef(
+            worktreePath: worktreePath, baseBranch: baseBranch, preferLocal: preferLocal
+        ) else { return nil }
+        let result = try await Process.git(
+            ["rev-list", "--count", "\(base.baseRef)..HEAD", "--"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+        guard let count = Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)), count >= 0 else {
+            return nil
+        }
+        return BranchCommitCount(count: count, baseRef: base.baseRef)
+    }
+
     struct UpstreamDivergence: Equatable, Sendable {
         let upstreamRef: String
         let ahead: Int

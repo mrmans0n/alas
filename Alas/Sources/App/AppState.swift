@@ -1754,6 +1754,7 @@ final class AppState {
                 }
             }
             var results: [String: WorktreeDirtyState] = [:]
+            var diffs: [String: WorktreeDiffStats] = [:]
             var targetedGenerationsByPath: [String: Int] = [:]
             var targetedWorktreeIDsByPath: [String: String] = [:]
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
@@ -1767,8 +1768,9 @@ final class AppState {
                     else { continue }
                     targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
                     targetedGenerationsByPath[worktree.path.path] = worktreeGeneration
-                    guard let state = await remoteWorktreeDirtyState(worktree: worktree) else { continue }
-                    results[worktree.path.path] = state
+                    guard let snapshot = await remoteWorktreeStatus(worktree: worktree) else { continue }
+                    results[worktree.path.path] = snapshot.state
+                    diffs[worktree.path.path] = snapshot.diff
                 }
             }
             guard !Task.isCancelled,
@@ -1785,6 +1787,7 @@ final class AppState {
                 )
             }
             WorktreeStatusStore.shared.apply(currentResults)
+            WorktreeStatusStore.shared.applyDiffStats(diffs.filter { currentResults[$0.key] != nil })
         }
     }
 
@@ -1807,19 +1810,23 @@ final class AppState {
             case nil, .preparingDelete, .launchFailed, .deleteFailed:
                 break
             }
-            guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
+            guard let snapshot = await self.remoteWorktreeStatus(worktree: worktree),
                   self.remoteWorktreeStatusRescanGenerations.isCurrent(worktreeScanToken)
             else { return }
-            WorktreeStatusStore.shared.apply([worktree.path.path: state])
+            WorktreeStatusStore.shared.apply([worktree.path.path: snapshot.state])
+            if let diff = snapshot.diff {
+                WorktreeStatusStore.shared.applyDiffStats([worktree.path.path: diff])
+            }
         }
     }
 
-    private func remoteWorktreeDirtyState(worktree: Worktree) async -> WorktreeDirtyState? {
+    private func remoteWorktreeStatus(worktree: Worktree) async -> (state: WorktreeDirtyState, diff: WorktreeDiffStats?)? {
         do {
             let changes = try await GitService().statusIdentity(worktreePath: worktree.path)
             let fileCount = Set(changes.map(\.path)).count
-            guard fileCount > 0 else { return .clean }
-            return .dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count)
+            guard fileCount > 0 else { return (.clean, WorktreeDiffStats(added: 0, deleted: 0)) }
+            let diff = try? await GitService().worktreeDiffStats(worktreePath: worktree.path)
+            return (.dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count), diff)
         } catch {
             return nil
         }

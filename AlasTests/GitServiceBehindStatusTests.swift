@@ -4,6 +4,27 @@ import Foundation
 
 @Suite(.serialized)
 struct GitServiceBehindStatusTests {
+    @Test func branchCommitCountIncludesPushedCommitsAndExcludesBaseHistory() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "one"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "two"], cwd: repo)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "feature"], cwd: repo)
+        let git = GitService()
+        let summary = try #require(try await git.branchCommitCount(worktreePath: repo, baseBranch: "main"))
+        #expect(summary.count == 2)
+        #expect(summary.baseRef == "origin/main")
+        #expect(try await git.branchCommitCount(worktreePath: repo, baseBranch: "missing") == nil)
+        _ = try await Process.git(["branch", "stack-base"], cwd: repo)
+        #expect(try await git.branchCommitCount(worktreePath: repo, baseBranch: "stack-base")?.count == 0)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "three"], cwd: repo)
+        #expect(try await git.branchCommitCount(worktreePath: repo, baseBranch: "stack-base")?.count == 1)
+    }
+
     private func makeRepoWithRemote() async throws -> (URL, URL) {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-behind-\(UUID().uuidString)")

@@ -97,6 +97,20 @@ struct WorktreeStatusStoreTests {
         #expect(freshStore().status(forPath: "/nope") == .unknown)
     }
 
+    @Test func diffTotalsMergeClearAndPruneIndependently() {
+        let store = WorktreeStatusStore()
+        store.applyDiffStats([
+            "/one": WorktreeDiffStats(added: 4, deleted: 2),
+            "/two": WorktreeDiffStats(added: 1, deleted: 0)
+        ])
+        store.applyDiffStats(["/one": WorktreeDiffStats(added: 0, deleted: 0)])
+        #expect(store.diffStats(forPath: "/one") == WorktreeDiffStats(added: 0, deleted: 0))
+        #expect(store.diffStats(forPath: "/two") == WorktreeDiffStats(added: 1, deleted: 0))
+        store.prune(keepingPaths: ["/two"])
+        #expect(store.diffStats(forPath: "/one") == nil)
+        #expect(store.diffStats(forPath: "/two") != nil)
+    }
+
     @Test func applyMergesRatherThanReplaces() {
         let store = freshStore()
         store.apply(["/a": .clean, "/b": .dirty(fileCount: 2, conflictCount: 0)])

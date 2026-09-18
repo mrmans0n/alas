@@ -186,8 +186,56 @@ struct WorktreeRowView: View {
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
+    var commitQuery: CommitQuery? = nil
     @Environment(\.theme) var theme
     @State private var hovering = false
+    @State private var loadedCommitQuery: CommitQuery?
+    @State private var branchCommits: GitService.BranchCommitCount?
+
+    struct CommitQuery: Hashable {
+        let path: URL
+        let branch: String
+        let baseBranch: String
+        let preferLocal: Bool
+        let revision: Int
+    }
+
+    nonisolated static func showsCommitCount(
+        harnessState: HarnessService.AggregatedState?,
+        worktreeStatus: WorktreeDirtyState,
+        isMain: Bool
+    ) -> Bool {
+        !isMain && harnessState == nil && worktreeStatus == .clean
+    }
+
+    nonisolated static func diffBarAdditionCount(added: Int, deleted: Int) -> Int? {
+        guard added > 0 || deleted > 0 else { return nil }
+        if added <= 0 { return 0 }
+        if deleted <= 0 { return 5 }
+        let fraction = Double(added) / (Double(added) + Double(deleted))
+        return min(4, max(1, Int((5 * fraction).rounded())))
+    }
+
+    private var activeCommitQuery: CommitQuery? {
+        guard !isMain,
+              operationState == nil,
+              Self.showsCommitCount(
+                harnessState: harnessSummary?.state,
+                worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                isMain: isMain
+              ) else { return nil }
+        return commitQuery
+    }
+
+    private var visibleBranchCommits: GitService.BranchCommitCount? {
+        guard loadedCommitQuery == activeCommitQuery,
+              Self.showsCommitCount(
+                harnessState: harnessSummary?.state,
+                worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                isMain: isMain
+              ) else { return nil }
+        return branchCommits
+    }
 
     nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
@@ -276,6 +324,21 @@ struct WorktreeRowView: View {
         .nativeContextMenu {
             contextMenuContent
         }
+        .task(id: activeCommitQuery) {
+            branchCommits = nil
+            loadedCommitQuery = nil
+            guard let query = activeCommitQuery else { return }
+            // Coalesce bursts of ref updates before launching Git.
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            let summary = try? await GitService().branchCommitCount(
+                worktreePath: query.path,
+                baseBranch: query.baseBranch,
+                preferLocal: query.preferLocal
+            )
+            guard !Task.isCancelled else { return }
+            loadedCommitQuery = query
+            branchCommits = summary
+        }
     }
 
     private func firstLine() -> some View {
@@ -324,10 +387,22 @@ struct WorktreeRowView: View {
     }
 
     private func secondLine(status: StatusPresentation?) -> some View {
+        ViewThatFits(in: .horizontal) {
+            subtitleContents(status: status, showsDiffBar: true)
+            subtitleContents(status: status, showsDiffBar: false)
+        }
+        .font(.system(size: 10))
+        .foregroundColor(theme.color("fg-dim"))
+        .padding(.leading, 19)
+    }
+
+    private var diffStats: WorktreeDiffStats {
+        WorktreeStatusStore.shared.diffStats(forPath: worktree.path.path)
+            ?? WorktreeDiffStats(added: worktree.addedLines, deleted: worktree.deletedLines)
+    }
+
+    private func subtitleContents(status: StatusPresentation?, showsDiffBar: Bool) -> some View {
         HStack(spacing: 7) {
-            // Dot and label render together or not at all. An idle worktree has
-            // nothing to report until the git status service lands, and a dot on
-            // its own reads as an unexplained decoration.
             if let workspaceCheckout {
                 HStack(spacing: 4) {
                     Icon(
@@ -350,6 +425,17 @@ struct WorktreeRowView: View {
                     Text(status.note)
                         .foregroundColor(theme.color(status.colorToken))
                 }
+                .fixedSize()
+            } else if let commits = visibleBranchCommits {
+                HStack(spacing: 4) {
+                    Icon(name: "commit", size: 10, color: theme.color("fg-dim"))
+                        .accessibilityHidden(true)
+                    Text("\(commits.count) commit\(commits.count == 1 ? "" : "s")")
+                }
+                .fixedSize()
+                .help("\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)")
             }
             ForEach(Self.upstreamStatusItems(upstreamStatus, isMain: isMain), id: \.text) { item in
                 Text(item.text)
@@ -358,25 +444,36 @@ struct WorktreeRowView: View {
                     .help(item.accessibilityLabel)
                     .accessibilityLabel(item.accessibilityLabel)
             }
-            if worktree.addedLines > 0 {
-                Text("+\(worktree.addedLines)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(theme.color("add"))
-            }
-            if worktree.deletedLines > 0 {
-                Text("−\(worktree.deletedLines)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(theme.color("del"))
+            if let additionTicks = Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) {
+                HStack(spacing: 5) {
+                    if showsDiffBar {
+                        HStack(spacing: 1.5) {
+                            ForEach(0..<5) { tick in
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(theme.color(tick < additionTicks ? "add" : "del"))
+                                    .frame(width: 2, height: 7)
+                            }
+                        }
+                        .accessibilityHidden(true)
+                    }
+                    if diffStats.added > 0 {
+                        Text("+\(diffStats.added)").foregroundColor(theme.color("add"))
+                    }
+                    if diffStats.deleted > 0 {
+                        Text("−\(diffStats.deleted)").foregroundColor(theme.color("del"))
+                    }
+                }
+                .font(.system(size: 10, design: .monospaced))
+                .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
             }
             stackSummaryView
             Spacer(minLength: 0)
             Text(relative(worktree.lastActivity))
                 .monospacedDigit()
+                .fixedSize()
         }
-        .font(.system(size: 10))
-        .foregroundColor(theme.color("fg-dim"))
-        // Aligns line 2 under the branch text, not under the row's icon.
-        .padding(.leading, 19)
     }
 
     private var operationLine: some View {

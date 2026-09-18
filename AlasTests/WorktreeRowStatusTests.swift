@@ -2,6 +2,24 @@ import Testing
 @testable import Alas
 
 struct WorktreeRowStatusTests {
+    @Test func commitFallbackOnlyAppearsForCleanIdleBranches() {
+        #expect(WorktreeRowView.showsCommitCount(harnessState: nil, worktreeStatus: .clean, isMain: false))
+        #expect(!WorktreeRowView.showsCommitCount(harnessState: .running, worktreeStatus: .clean, isMain: false))
+        #expect(!WorktreeRowView.showsCommitCount(harnessState: .awaiting, worktreeStatus: .clean, isMain: false))
+        #expect(!WorktreeRowView.showsCommitCount(harnessState: nil, worktreeStatus: .unknown, isMain: false))
+        #expect(!WorktreeRowView.showsCommitCount(harnessState: nil, worktreeStatus: .dirty(fileCount: 1, conflictCount: 0), isMain: false))
+        #expect(!WorktreeRowView.showsCommitCount(harnessState: nil, worktreeStatus: .clean, isMain: true))
+    }
+
+    @Test func diffBarsHandleOneSidedAndEmptyChanges() {
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 0, deleted: 0) == nil)
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 0, deleted: 12) == 0)
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 12, deleted: 0) == 5)
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 86, deleted: 12) == 4)
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 1, deleted: 1000) == 1)
+        #expect(WorktreeRowView.diffBarAdditionCount(added: 1000, deleted: 1) == 4)
+    }
+
     @Test func runningSessionShowsPulsingGreenChip() throws {
         let status = try #require(WorktreeRowView.statusPresentation(
             harnessState: .running, worktreeStatus: .clean))

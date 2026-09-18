@@ -22,6 +22,53 @@ private func withTimeout<T: Sendable>(seconds: Double, _ operation: @escaping @S
 @Suite(.serialized)
 @MainActor
 struct GitServiceRemoteChangesTests {
+    @Test func sidebarDiffStatsHandleUnbornAndDeletionOnlyWorktrees() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("file\tname.txt")
+        try "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        let git = GitService()
+        #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 2, deleted: 0))
+        _ = try await Process.git(["commit", "-qm", "initial"], cwd: repo)
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 0, deleted: 1))
+    }
+
+    @Test func untrackedLineCountStreamsLargeFiles() throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-line-count-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("large.txt")
+        let line = String(repeating: "x", count: 64) + "\n"
+        try String(repeating: line, count: 100_000).write(to: file, atomically: true, encoding: .utf8)
+        #expect(GitService.addedLineCount(worktreePath: repo, path: "large.txt") == 100_000)
+    }
+
+    @Test func sidebarDiffStatsCountPartiallyStagedFilesOnceAndClearAfterCommit() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let file = repo.appendingPathComponent("tracked.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "initial"], cwd: repo)
+        try "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        try "one\ntwo\nthree\n".write(to: file, atomically: true, encoding: .utf8)
+        try "new\n".write(to: repo.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        let git = GitService()
+        let stats = try await git.worktreeDiffStats(worktreePath: repo)
+        #expect(stats.added == 3)
+        #expect(stats.deleted == 0)
+        // Staged edits cancelled by unstaged edits have no net line diff.
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 1, deleted: 0))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "changes"], cwd: repo)
+        #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 0, deleted: 0))
+    }
+
     private func makeRepo() async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-remote-changes-\(UUID().uuidString)")

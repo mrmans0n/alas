@@ -142,6 +142,12 @@ struct WorktreeRowHeightTests {
         #expect(running == awaiting)
     }
 
+    @Test func diffBarAndCountsKeepTheTwoLineHeightAtNarrowWidths() throws {
+        let withoutDiff = try renderHeight(harnessSummary: nil)
+        let withDiff = try renderHeight(harnessSummary: nil, addedLines: 412, deletedLines: 88)
+        #expect(withDiff == withoutDiff)
+    }
+
     @Test func rowHeightIsStableWithActiveGGIndicator() throws {
         let inactive = try renderHeight(harnessSummary: nil)
         let active = try renderHeight(
@@ -184,7 +190,9 @@ struct WorktreeRowHeightTests {
             hasStackSummary: false
         ),
         stackSummary: GGStackSummary? = nil,
-        workspaceCheckout: WorktreeWorkspaceCheckoutPresentation? = nil
+        workspaceCheckout: WorktreeWorkspaceCheckoutPresentation? = nil,
+        addedLines: Int = 0,
+        deletedLines: Int = 0
     ) throws -> Int {
         let worktree = Worktree(
             id: "wt-1",
@@ -193,7 +201,9 @@ struct WorktreeRowHeightTests {
             branch: "feature/test",
             path: URL(fileURLWithPath: "/tmp/wt"),
             status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 0)
+            lastActivity: Date(timeIntervalSince1970: 0),
+            addedLines: addedLines,
+            deletedLines: deletedLines
         )
 
         GGStackSummaryStore.shared.summaries.removeAll()
