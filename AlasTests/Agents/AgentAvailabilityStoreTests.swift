@@ -145,6 +145,37 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
     }
 
+    @Test func successfulAvailabilitySchedulesRefreshAtExpiry() async {
+        let counter = ProbeCounter()
+        let scheduledRefresh = ScheduledRefreshCapture()
+        let store = AgentAvailabilityStore(
+            probe: { _, _, _ in
+                let attempt = await counter.increment()
+                return ProcessResult(
+                    exitCode: 0,
+                    stdout: attempt == 1 ? agentProbeLine(0) : "\(agentProbeLine(0))\(agentProbeLine(1))",
+                    stderr: ""
+                )
+            },
+            refreshScheduler: { delay, action in
+                #expect(delay == AgentAvailabilityStore.successfulProbeTTL)
+                return scheduledRefresh.schedule(action)
+            }
+        )
+        let candidates = [
+            TestAgents.custom(id: "one", binary: "one"),
+            TestAgents.custom(id: "two", binary: "two")
+        ]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
+
+        await scheduledRefresh.run()
+
+        #expect(await counter.value == 2)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
+    }
+
     @Test func localStateReturnsLocalAgentsWithoutProbe() {
         let local = [TestAgents.custom(id: "local", binary: "local")]
         let store = AgentAvailabilityStore { _, _, _ in
@@ -210,6 +241,20 @@ private actor ProbeCounter {
     }
 
     var value: Int { count }
+}
+
+@MainActor
+private final class ScheduledRefreshCapture {
+    private var action: (@MainActor @Sendable () async -> Void)?
+
+    func schedule(_ action: @escaping @MainActor @Sendable () async -> Void) -> Task<Void, Never> {
+        self.action = action
+        return Task { @MainActor in }
+    }
+
+    func run() async {
+        await action?()
+    }
 }
 
 @MainActor

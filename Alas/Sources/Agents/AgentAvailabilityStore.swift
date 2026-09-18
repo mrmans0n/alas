@@ -17,6 +17,10 @@ enum AgentAvailabilityState: Equatable {
 final class AgentAvailabilityStore {
     typealias Probe = @Sendable (String, String, [AgentDefinition]) async throws -> ProcessResult
     typealias Now = @MainActor () -> Date
+    typealias RefreshScheduler = @MainActor (
+        TimeInterval,
+        @escaping @MainActor @Sendable () async -> Void
+    ) -> Task<Void, Never>
 
     static let successfulProbeTTL: TimeInterval = 30
 
@@ -29,15 +33,19 @@ final class AgentAvailabilityStore {
     private(set) var generation = 0
     @ObservationIgnored private var inFlight: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private var loadedAt: [Key: Date] = [:]
+    @ObservationIgnored private var refreshTasks: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private let probe: Probe
     @ObservationIgnored private let now: Now
+    @ObservationIgnored private let refreshScheduler: RefreshScheduler
 
     init(
         probe: @escaping Probe = AgentAvailabilityStore.remoteProbe,
-        now: @escaping Now = { Date() }
+        now: @escaping Now = { Date() },
+        refreshScheduler: @escaping RefreshScheduler = AgentAvailabilityStore.defaultRefreshScheduler
     ) {
         self.probe = probe
         self.now = now
+        self.refreshScheduler = refreshScheduler
     }
 
     func state(
@@ -84,8 +92,21 @@ final class AgentAvailabilityStore {
             )
             guard !Task.isCancelled, let self else { return }
             self.states[key] = state
-            self.loadedAt[key] = self.now()
+            let loadedAt = self.now()
+            self.loadedAt[key] = loadedAt
             self.inFlight[key] = nil
+            if case .available = state {
+                self.scheduleSuccessfulRefresh(
+                    key: key,
+                    target: .ssh(host: host),
+                    worktreePath: worktreePath,
+                    candidates: candidates,
+                    loadedAt: loadedAt
+                )
+            } else {
+                self.refreshTasks[key]?.cancel()
+                self.refreshTasks[key] = nil
+            }
         }
         inFlight[key] = task
         await task.value
@@ -100,6 +121,8 @@ final class AgentAvailabilityStore {
         let key = cacheKey(host: host, worktreePath: worktreePath, candidates: candidates)
         inFlight[key]?.cancel()
         inFlight[key] = nil
+        refreshTasks[key]?.cancel()
+        refreshTasks[key] = nil
         states[key] = nil
         await load(target: target, worktreePath: worktreePath, candidates: candidates)
     }
@@ -127,7 +150,9 @@ final class AgentAvailabilityStore {
 
     func invalidateAll() {
         inFlight.values.forEach { $0.cancel() }
+        refreshTasks.values.forEach { $0.cancel() }
         inFlight = [:]
+        refreshTasks = [:]
         states = [:]
         loadedAt = [:]
         generation += 1
@@ -136,8 +161,45 @@ final class AgentAvailabilityStore {
     private func invalidate(_ key: Key) {
         inFlight[key]?.cancel()
         inFlight[key] = nil
+        refreshTasks[key]?.cancel()
+        refreshTasks[key] = nil
         states[key] = nil
         loadedAt[key] = nil
+    }
+
+    private func scheduleSuccessfulRefresh(
+        key: Key,
+        target: AgentExecutionTarget,
+        worktreePath: String,
+        candidates: [AgentDefinition],
+        loadedAt: Date
+    ) {
+        refreshTasks[key]?.cancel()
+        let scheduler = refreshScheduler
+        refreshTasks[key] = scheduler(Self.successfulProbeTTL) { [weak self] in
+            guard let self else { return }
+            await self.refreshSuccessfulAvailabilityIfCurrent(
+                key: key,
+                target: target,
+                worktreePath: worktreePath,
+                candidates: candidates,
+                loadedAt: loadedAt
+            )
+        }
+    }
+
+    private func refreshSuccessfulAvailabilityIfCurrent(
+        key: Key,
+        target: AgentExecutionTarget,
+        worktreePath: String,
+        candidates: [AgentDefinition],
+        loadedAt expectedLoadedAt: Date
+    ) async {
+        guard loadedAt[key] == expectedLoadedAt, case .available = states[key] else { return }
+        refreshTasks[key] = nil
+        states[key] = nil
+        loadedAt[key] = nil
+        await load(target: target, worktreePath: worktreePath, candidates: candidates)
     }
 
     private func shouldRefresh(state: AgentAvailabilityState, key: Key) -> Bool {
@@ -193,5 +255,17 @@ final class AgentAvailabilityStore {
             cwd: nil,
             command: RemoteAgentProbe.command(agents: agents, workingDirectory: worktreePath)
         )
+    }
+
+    private static func defaultRefreshScheduler(
+        delay: TimeInterval,
+        action: @escaping @MainActor @Sendable () async -> Void
+    ) -> Task<Void, Never> {
+        Task { @MainActor in
+            let nanoseconds = UInt64(max(0, delay) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled else { return }
+            await action()
+        }
     }
 }
