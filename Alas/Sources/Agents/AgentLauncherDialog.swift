@@ -362,6 +362,7 @@ struct AgentLauncherDialog: View {
                         // first tile instead of the active agent.
                         let isSelected = chatAgent.map { $0.id == agent.id } ?? (idx == appState.agentLauncher.selectedIndex)
                         AgentSwitcherTile(
+                            label: agent.displayName,
                             size: tileSize,
                             isSelected: isSelected,
                             isDimmed: chatAgent != nil && chatAgent?.id != agent.id,
@@ -844,6 +845,11 @@ struct AgentLauncherDialog: View {
         chatAgent = agent
         appState.agentLauncher.query = ""
         selectedSessionIndex = 0
+        // Per-agent state: a deletion failure (or pending confirmation) for
+        // the agent we're leaving must not bleed into the next agent's
+        // session list.
+        deletionRequest = nil
+        deletionError = nil
         startDiscovery(for: agent, manager: manager)
         requestInputFocus()
     }
@@ -1047,6 +1053,7 @@ private struct AgentSessionLauncherRow: View {
 /// so the fallback (no vendor asset) can be wrapped in its own rounded chip
 /// while real vendor artwork renders edge-to-edge.
 private struct AgentSwitcherTile<Logo: View>: View {
+    let label: String
     let size: CGFloat
     let isSelected: Bool
     let isDimmed: Bool
@@ -1067,5 +1074,12 @@ private struct AgentSwitcherTile<Logo: View>: View {
             .contentShape(Rectangle())
             .onTapGesture { onTap() }
             .onHover { hovering in if hovering { onHover() } }
+            // The logo alone (an image, or a bare sparkle glyph for
+            // fallback agents) isn't distinguishable to VoiceOver, and a
+            // tap-gesture view isn't announced as activatable on its own.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction(.default, onTap)
     }
 }
