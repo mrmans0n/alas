@@ -91,7 +91,7 @@ tree-sitter-groovy = { git = "https://github.com/murtaza64/tree-sitter-groovy", 
 # ever exist in the graph. This must stay compatible with every grammar that
 # depends on it non-optionally — currently tree-sitter-groovy (`~0.26.8`) — or
 # resolution fails outright. Bump it only alongside those.
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 # Lets the tests turn a raw `tree_sitter_*` entry point back into a
 # `tree_sitter::Language`, so every registered grammar can be exercised
 # generically rather than one hand-written test per language.
