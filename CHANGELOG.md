@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-09-18
+
+### ✨ Features
+
+- Add repository-local `.alas/` configuration for shared icons, MCP servers, and default agents (#1296).
+- Show the workspace checkout on worktree rows (#1301).
+
+### 🐛 Fixes
+
+- Correct Pi ACP background activity badges (#1298).
+- Restrict repository configuration reads to bounded regular files and use every discovered icon (#1304).
+- Recover stale remote Codex adapters after reconnecting (#1306).
+
+### 🏗️ Internal
+
+- Restore and stabilize Swift test coverage, split the suite into three CI lanes, and synchronize fake LSP transport messages (#1277, #1300, #1302, #1303).
+- Measure Swift compilation performance and cache compiler outputs in CI (#1305).
+
 ## [0.18.3] - 2026-09-17
 
 ### ✨ Features
