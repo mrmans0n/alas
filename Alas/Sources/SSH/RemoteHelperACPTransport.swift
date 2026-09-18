@@ -38,10 +38,11 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         onFreshProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
         onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in }
     ) {
+        let launch = Self.homeExpandedLaunch(command: command, arguments: arguments)
         self.host = host
         self.procId = procId
-        self.command = command
-        self.arguments = arguments
+        self.command = launch.command
+        self.arguments = launch.arguments
         self.cwd = cwd
         self.environment = environment
         self.pathPrefixDirectories = pathPrefixDirectories
@@ -54,6 +55,18 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
         self.incoming = AsyncStream { continuation = $0 }
         self.continuation = continuation
+    }
+
+    static func homeExpandedLaunch(command: String, arguments: [String]) -> (command: String, arguments: [String]) {
+        guard command.hasPrefix("~/") else {
+            return (command, arguments)
+        }
+        let suffix = String(command.dropFirst(2))
+        guard !suffix.isEmpty else {
+            return (command, arguments)
+        }
+        let script = "exec \"$HOME\"/\(SSHCommand.shellQuote(suffix)) \"$@\""
+        return ("/bin/sh", ["-lc", script, "alas-acp"] + arguments)
     }
 
     func start() throws {

@@ -36,6 +36,22 @@ struct RemoteHelperClientTests {
         #expect(gate.shouldAttempt(now: start.addingTimeInterval(10)))
     }
 
+    @Test func helperACPTransportExpandsHomeRelativeCommandThroughRemoteShell() {
+        let launch = RemoteHelperACPTransport.homeExpandedLaunch(
+            command: "~/bin/gemini acp",
+            arguments: ["--model", "pro"]
+        )
+
+        #expect(launch.command == "/bin/sh")
+        #expect(launch.arguments == [
+            "-lc",
+            #"exec "$HOME"/'bin/gemini acp' "$@""#,
+            "alas-acp",
+            "--model",
+            "pro",
+        ])
+    }
+
     @Test func pingUsesJSONRPCNewlineTransport() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
