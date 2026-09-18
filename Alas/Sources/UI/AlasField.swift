@@ -92,7 +92,13 @@ private struct AlasNSTextField: NSViewRepresentable {
     func updateNSView(_ nsView: AlasNSTextFieldView, context: Context) {
         context.coordinator.parent = self
         nsView.isEnabled = isEnabled
-        if !context.coordinator.isEditing, nsView.stringValue != text {
+        if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
+            let editingValue = context.coordinator.editingValue ?? editor.string
+            if editingValue != text {
+                context.coordinator.replaceEditorText(editor, with: text)
+                context.coordinator.editingValue = text
+            }
+        } else if nsView.stringValue != text {
             nsView.stringValue = text
         }
         if focusOnAppear, nsView.focusOnAppear, let window = nsView.window {
@@ -115,24 +121,29 @@ private struct AlasNSTextField: NSViewRepresentable {
     class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: AlasNSTextField
         var isEditing = false
+        var editingValue: String?
 
         init(_ parent: AlasNSTextField) {
             self.parent = parent
         }
 
         @objc func action(_ sender: NSTextField) {
-            let value = parent.inputFilter?.sanitize(sender.stringValue, mode: .editing) ?? sender.stringValue
+            let editingValue = (sender.currentEditor() as? NSTextView)?.string ?? sender.stringValue
+            let value = parent.inputFilter?.sanitize(editingValue, mode: .editing) ?? editingValue
             if sender.stringValue != value {
                 sender.stringValue = value
             }
+            self.editingValue = value
             if value != parent.text {
                 parent.text = value
             }
             parent.onSubmit?()
         }
 
-        func controlTextDidBeginEditing(_: Notification) {
+        func controlTextDidBeginEditing(_ obj: Notification) {
             isEditing = true
+            guard let field = obj.object as? NSTextField else { return }
+            editingValue = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -142,15 +153,9 @@ private struct AlasNSTextField: NSViewRepresentable {
             let editingValue = editor?.string ?? field.stringValue
             let value = parent.inputFilter?.sanitize(editingValue, mode: .editing) ?? editingValue
             if value != editingValue, let editor {
-                let selectedRange = editor.selectedRange()
-                editor.string = value
-                let length = (value as NSString).length
-                let location = min(selectedRange.location, length)
-                editor.setSelectedRange(NSRange(
-                    location: location,
-                    length: min(selectedRange.length, length - location)
-                ))
+                replaceEditorText(editor, with: value)
             }
+            self.editingValue = value
             if value != parent.text {
                 parent.text = value
             }
@@ -158,6 +163,18 @@ private struct AlasNSTextField: NSViewRepresentable {
 
         func controlTextDidEndEditing(_: Notification) {
             isEditing = false
+            editingValue = nil
+        }
+
+        func replaceEditorText(_ editor: NSTextView, with text: String) {
+            let selectedRange = editor.selectedRange()
+            editor.string = text
+            let length = (text as NSString).length
+            let location = min(selectedRange.location, length)
+            editor.setSelectedRange(NSRange(
+                location: location,
+                length: min(selectedRange.length, length - location)
+            ))
         }
 
         func control(
