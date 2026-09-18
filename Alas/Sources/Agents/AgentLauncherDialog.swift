@@ -464,7 +464,16 @@ struct AgentLauncherDialog: View {
         .frame(maxWidth: .infinity, minHeight: 88)
     }
 
+    /// Query-aware: a genuinely empty agent list ("No enabled agents") reads
+    /// very differently from a query that just matched nothing ("No agents
+    /// match") — the latter needs to tell the user their filter, not the
+    /// registry, is why the strip is empty.
     private var emptyTitle: String {
+        // `agentPoolCount`, not query emptiness: a genuinely empty mode
+        // pool needs the actionable "enable an agent" message regardless
+        // of what's typed, since clearing the query can't reveal an agent
+        // that was never in the pool to begin with.
+        guard agentPoolCount == 0 else { return "No agents match" }
         switch appState.agentLauncher.mode {
         case .terminal: return "No enabled agents"
         case .acp:      return "No ACP-capable agents enabled"
@@ -472,13 +481,19 @@ struct AgentLauncherDialog: View {
     }
 
     /// Below the strip: the selected agent's name (or the live query, while
-    /// typing) plus a status line. Skipped for the loading/failed/empty
-    /// strip states, which already carry their own inline text.
+    /// typing) plus a status line. Also shown over the empty strip state
+    /// while a query is active — the query field itself is invisible, so
+    /// without this the user's typed text (and the reason the strip is
+    /// empty) would disappear entirely. Skipped for loading/failed, which
+    /// already carry their own inline status text, and for a genuinely
+    /// empty (no query) agent list, which needs no caption above it.
     @ViewBuilder
     private var captionArea: some View {
         if let chatAgent {
             sessionCaption(for: chatAgent)
         } else if case .list = agentStripState {
+            stage1Caption
+        } else if case .empty = agentStripState, !appState.agentLauncher.query.isEmpty {
             stage1Caption
         }
     }
