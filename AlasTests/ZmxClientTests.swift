@@ -276,8 +276,8 @@ struct ZmxClientTests {
     func systemRunnerDoesNotWaitForDescendantsHoldingOutputPipesOpen() {
         let started = Date()
         let result = SubprocessRunner.system.run(
-            URL(fileURLWithPath: "/bin/sh"),
-            ["-c", "sleep 10 & printf '%d' $!"],
+            URL(fileURLWithPath: "/usr/bin/perl"),
+            ["-e", "defined(my $pid=fork) or die 'fork failed'; if ($pid == 0) { sleep 10; exit 0; } print $pid; exit 0;"],
             ProcessInfo.processInfo.environment,
             5.0
         )
