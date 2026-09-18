@@ -6,24 +6,42 @@ import Testing
 @Suite
 @MainActor
 struct NativeContextMenuTests {
-    @Test func nativeContextMenuPopulatesDynamicSubmenus() throws {
-        let view = Color.clear.nativeContextMenu {
-            Menu("Parent") {
-                ForEach(["One", "Two"], id: \.self) { title in
-                    Button(title) {}
+    @Test func nativeContextMenuRefreshesDynamicSubmenus() throws {
+        func makeView(_ titles: [String]) -> some View {
+            Color.clear.nativeContextMenu {
+                Menu("Parent") {
+                    ForEach(titles, id: \.self) { title in
+                        Button(title) {}
+                    }
                 }
             }
         }
-        let controller = NSHostingController(rootView: view)
+
+        let controller = NSHostingController(rootView: makeView(["One"]))
         controller.view.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
         controller.view.layoutSubtreeIfNeeded()
+        controller.rootView = makeView(["Two", "Three"])
+        controller.view.layoutSubtreeIfNeeded()
 
-        let menuView = try #require(descendants(of: controller.view).first { $0.menu != nil })
+        let menuView = try #require(descendants(of: controller.view).first {
+            $0.accessibilityRole() == .menuButton
+        })
         #expect(menuView.frame.size == controller.view.bounds.size)
         #expect(menuView.isAccessibilityElement())
-        let menu = try #require(menuView.menu)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+        let menu = try #require(menuView.menu(for: event))
         let submenu = try #require(menu.items.first { $0.title == "Parent" }?.submenu)
-        #expect(submenu.items.map(\.title) == ["One", "Two"])
+        #expect(submenu.items.map(\.title) == ["Two", "Three"])
     }
 
     private func descendants(of view: NSView) -> [NSView] {
