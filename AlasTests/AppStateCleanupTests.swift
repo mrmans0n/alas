@@ -1208,6 +1208,27 @@ struct AppStateCleanupTests {
         #expect(pending?.reason == .containsSubmodules)
     }
 
+    @Test func confirmedForceDeleteAllowsObservedInitializedSubmoduleState() {
+        #expect(AppState.allowsSubmoduleLocalStateForForcedDeletion(
+            force: true,
+            preflight: WorktreeDeletePreflight(
+                reasons: [.containsInitializedSubmodules],
+                submoduleLocalState: .present
+            )
+        ))
+        #expect(!AppState.allowsSubmoduleLocalStateForForcedDeletion(
+            force: true,
+            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none)
+        ))
+        #expect(!AppState.allowsSubmoduleLocalStateForForcedDeletion(
+            force: true,
+            preflight: WorktreeDeletePreflight(
+                reasons: [.containsInitializedSubmodules],
+                submoduleLocalState: .unknown
+            )
+        ))
+    }
+
     @Test func cancelForceDeleteClearsPendingState() async throws {
         let repo = try await makeRepo(name: "cancel-force")
         defer { try? FileManager.default.removeItem(at: repo) }

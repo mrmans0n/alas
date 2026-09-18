@@ -61,6 +61,7 @@ final class WorktreeCleanupModel {
     private(set) var selectedIds: Set<String> = []
     private(set) var results: [WorktreeBatchResult] = []
     private(set) var isRunning = false
+    private(set) var isPreparingDelete = false
     private(set) var isScanning = false
     private(set) var scanProgress: WorktreeCleanupScanProgress?
     private(set) var scanError: String?
@@ -216,6 +217,8 @@ final class WorktreeCleanupModel {
     /// keeps a main or remote worktree out of any batch.
     func toggle(_ id: String) {
         guard !isScanning,
+              !isPreparingDelete,
+              !isRunning,
               let candidate = candidates.first(where: { $0.id == id }),
               candidate.isSelectable
         else { return }
@@ -271,7 +274,9 @@ final class WorktreeCleanupModel {
               scanError == nil
         else { return }
 
+        isPreparingDelete = true
         let authorization = await authorizeDelete(requestedTargets)
+        isPreparingDelete = false
         let targets = requestedTargets.filter { authorization.unavailableReasons[$0.id] == nil }
         results = requestedTargets.compactMap { worktree in
             authorization.unavailableReasons[worktree.id].map {

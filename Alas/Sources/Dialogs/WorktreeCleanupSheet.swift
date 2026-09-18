@@ -13,21 +13,28 @@ struct WorktreeCleanupSheet: View {
             subtitle: subtitle,
             width: DialogContainerLayout.projectWidth,
             headerAccessory: {
+                if model.isPreparingDelete || model.isRunning {
+                    Spinner(lineWidth: 1.4, duration: 0.8)
+                        .frame(width: 14, height: 14)
+                }
                 DialogHeaderIconButton(
                     icon: "arrow.clockwise",
                     tooltip: "Rescan worktrees"
                 ) {
                     Task { await model.refresh() }
                 }
-                .disabled(model.isScanning || model.isRunning)
+                .disabled(model.isScanning || model.isPreparingDelete || model.isRunning)
             },
             content: { content },
             cancelTitle: "Close",
-            confirmTitle: "Delete Selected…",
+            confirmTitle: model.isPreparingDelete
+                ? "Preparing…"
+                : model.isRunning ? "Deleting…" : "Delete Selected…",
             confirmStyle: .primary,
             onCancel: onClose,
             onConfirm: { Task { await model.deleteSelected() } },
             confirmEnabled: !model.selectedIds.isEmpty
+                && !model.isPreparingDelete
                 && !model.isRunning
                 && !model.isScanning
                 && model.scanError == nil
@@ -35,6 +42,12 @@ struct WorktreeCleanupSheet: View {
     }
 
     private var subtitle: String? {
+        if model.isPreparingDelete {
+            return "Checking deletion risks before confirmation…"
+        }
+        if model.isRunning {
+            return "Deleting selected worktrees…"
+        }
         if model.isScanning {
             guard let progress = model.scanProgress, progress.total > 0 else {
                 return "Checking worktrees…"
@@ -82,7 +95,9 @@ struct WorktreeCleanupSheet: View {
                         WorktreeCleanupRow(
                             row: row,
                             isSelected: model.selectedIds.contains(row.id),
-                            isSelectionDisabled: model.isScanning,
+                            isSelectionDisabled: model.isScanning
+                                || model.isPreparingDelete
+                                || model.isRunning,
                             result: model.results.first { $0.worktreeId == row.id },
                             onToggle: { model.toggle(row.id) },
                             onOpenCheckout: onOpenCheckout
@@ -104,6 +119,7 @@ struct WorktreeCleanupSheet: View {
                 }
                 .disabled(
                     model.selectedIds.isEmpty
+                        || model.isPreparingDelete
                         || model.isRunning
                         || model.isScanning
                         || model.scanError != nil

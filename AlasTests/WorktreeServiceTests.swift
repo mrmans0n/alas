@@ -609,6 +609,33 @@ extension WorktreeServiceTests {
         #expect(preflight.submoduleLocalState == .present)
     }
 
+    @Test func fastLocalForceRemoveDiscardsInitializedSubmoduleLocalState() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "force-remove-submodule-local-state")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.repo)
+            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
+            try? FileManager.default.removeItem(at: fixture.worktree.path)
+        }
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodulePath)
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: true,
+            allowsSubmoduleLocalState: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
+    }
+
     @Test func deletePreflightReportsUnknownSubmoduleLocalStateWhenCheckFails() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-broken")
         defer {

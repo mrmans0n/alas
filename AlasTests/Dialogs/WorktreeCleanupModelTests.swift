@@ -350,6 +350,32 @@ struct WorktreeCleanupModelTests {
         #expect(deleteBatchCalls == 0)
     }
 
+    @Test func deletePreparationIsVisibleBeforeAuthorization() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        var observedPreparation = false
+        var model: WorktreeCleanupModel!
+        model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in false },
+            authorizeDelete: { _ in
+                observedPreparation = model.isPreparingDelete
+                return .init()
+            }
+        )
+        model.applyScanResult([a])
+
+        await model.deleteSelected()
+
+        #expect(observedPreparation)
+        #expect(!model.isPreparingDelete)
+    }
+
     /// A row carrying a `.mergedOnForge` signal — the scan matched its exact
     /// HEAD SHA against a confirmed-merged review request — is trusted
     /// enough to force-delete its branch, regardless of that row's overall

@@ -9183,6 +9183,7 @@ final class AppState {
             }
 
             let force: Bool
+            let allowsSubmoduleLocalState: Bool
             if let authorization {
                 do {
                     let preflight = try await Task.detached {
@@ -9205,6 +9206,10 @@ final class AppState {
                         continue
                     }
                     force = preflight.requiresForce
+                    allowsSubmoduleLocalState = Self.allowsSubmoduleLocalStateForForcedDeletion(
+                        force: force,
+                        preflight: preflight
+                    )
                 } catch {
                     results.append(WorktreeBatchResult(
                         worktreeId: worktree.id,
@@ -9215,6 +9220,7 @@ final class AppState {
                 }
             } else {
                 force = false
+                allowsSubmoduleLocalState = false
             }
 
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -9229,6 +9235,7 @@ final class AppState {
                     keepBranch: keepBranch
                 ),
                 force: force,
+                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 removedIndex: removedIndex,
                 // One refresh at the end, not one per item.
                 refreshAfter: false,
@@ -10205,6 +10212,7 @@ final class AppState {
                 repoPath: pending.repoPath,
                 deleteBranchIfMerged: pending.deleteBranchIfMerged,
                 force: true,
+                allowsSubmoduleLocalState: pending.reason == .containsSubmodules,
                 removedIndex: pending.removedIndex
             )
         }
@@ -10322,6 +10330,13 @@ final class AppState {
             force: confirmation.force,
             allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
+    }
+
+    nonisolated static func allowsSubmoduleLocalStateForForcedDeletion(
+        force: Bool,
+        preflight: WorktreeDeletePreflight
+    ) -> Bool {
+        force && preflight.submoduleLocalState == .present
     }
 
     nonisolated static func pendingForceDelete(
