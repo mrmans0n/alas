@@ -233,6 +233,42 @@ struct WorktreeCleanupModelTests {
         await scanTask.value
     }
 
+    @Test func deleteSelectedIgnoresConcurrentPreparation() async {
+        let candidate = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let gate = WorktreeCleanupScanGate()
+        var authorizationCount = 0
+        var deleteBatchCount = 0
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [candidate.worktree],
+            keepBranches: false,
+            loadWorktrees: { [candidate.worktree] },
+            scan: { _, _ in .success([candidate]) },
+            deleteBatch: { _, _, _ in
+                deleteBatchCount += 1
+                return []
+            },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true },
+            authorizeDelete: { _ in
+                authorizationCount += 1
+                await gate.pause()
+                return .init()
+            }
+        )
+        model.applyScanResult([candidate])
+
+        let firstDelete = Task { await model.deleteSelected() }
+        await gate.waitUntilPaused()
+        await model.deleteSelected()
+
+        #expect(authorizationCount == 1)
+        #expect(deleteBatchCount == 0)
+        await gate.resume()
+        await firstDelete.value
+        #expect(deleteBatchCount == 1)
+    }
+
     /// Drives a rescan through `runScan()` itself, not `applyScanResult`
     /// directly — this is the entry point the Refresh button and any
     /// production rescan actually use. The model is already marked as scanning
@@ -348,6 +384,82 @@ struct WorktreeCleanupModelTests {
 
         #expect(confirmButtons == ["Delete"])
         #expect(deleteBatchCalls == 0)
+    }
+
+    @Test func deletePreparationIsVisibleBeforeAuthorization() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        var observedPreparation = false
+        var model: WorktreeCleanupModel!
+        model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in false },
+            authorizeDelete: { _ in
+                observedPreparation = model.isPreparingDelete
+                return .init()
+            }
+        )
+        model.applyScanResult([a])
+
+        await model.deleteSelected()
+
+        #expect(observedPreparation)
+        #expect(!model.isPreparingDelete)
+    }
+
+    @Test func deleteConfirmationIncludesNewlyAuthorizedSessions() {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+        model.applyScanResult([a])
+
+        let message = model.confirmationMessage(authorization: .init(
+            sessionIDsByWorktree: [a.id: ["terminal", "agent"]]
+        ))
+
+        #expect(message.contains("2 attached sessions will close"))
+    }
+
+    @Test func deleteConfirmationListsOnlyAuthorizedTargets() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .candidate(confidence: .high))
+        var confirmation: (title: String, message: String)?
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree, b.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree, b.worktree] },
+            scan: { _, _ in .success([a, b]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { title, message, _ in
+                confirmation = (title, message)
+                return false
+            },
+            authorizeDelete: { _ in
+                .init(unavailableReasons: [b.id: "Workspace Checkout ownership could not be verified"])
+            }
+        )
+        model.applyScanResult([a, b])
+
+        await model.deleteSelected()
+
+        #expect(confirmation?.title == "Delete 1 worktree?")
+        #expect(confirmation?.message.contains("• a") == true)
+        #expect(confirmation?.message.contains("• b") == false)
     }
 
     /// A row carrying a `.mergedOnForge` signal — the scan matched its exact

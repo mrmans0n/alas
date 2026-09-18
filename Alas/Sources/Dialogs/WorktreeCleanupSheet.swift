@@ -3,8 +3,8 @@ import SwiftUI
 struct WorktreeCleanupSheet: View {
     @Bindable var model: WorktreeCleanupModel
     let showKeepBranchOption: Bool
+    let onOpenCheckout: (UUID) -> Void
     let onClose: () -> Void
-
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -13,28 +13,42 @@ struct WorktreeCleanupSheet: View {
             subtitle: subtitle,
             width: DialogContainerLayout.projectWidth,
             headerAccessory: {
+                if model.isPreparingDelete || model.isRunning {
+                    Spinner(lineWidth: 1.4, duration: 0.8)
+                        .frame(width: 14, height: 14)
+                }
                 DialogHeaderIconButton(
                     icon: "arrow.clockwise",
                     tooltip: "Rescan worktrees"
                 ) {
                     Task { await model.refresh() }
                 }
-                .disabled(model.isScanning || model.isRunning)
+                .disabled(model.isScanning || model.isPreparingDelete || model.isRunning)
             },
             content: { content },
             cancelTitle: "Close",
-            confirmTitle: "Delete Selected…",
+            confirmTitle: model.isPreparingDelete
+                ? "Preparing…"
+                : model.isRunning ? "Deleting…" : "Delete Selected…",
             confirmStyle: .primary,
             onCancel: onClose,
             onConfirm: { Task { await model.deleteSelected() } },
             confirmEnabled: !model.selectedIds.isEmpty
+                && !model.isPreparingDelete
                 && !model.isRunning
                 && !model.isScanning
-                && model.scanError == nil
+                && model.scanError == nil,
+            cancelEnabled: !model.isPreparingDelete && !model.isRunning
         )
     }
 
     private var subtitle: String? {
+        if model.isPreparingDelete {
+            return "Checking deletion risks before confirmation…"
+        }
+        if model.isRunning {
+            return "Deleting selected worktrees…"
+        }
         if model.isScanning {
             guard let progress = model.scanProgress, progress.total > 0 else {
                 return "Checking worktrees…"
@@ -82,9 +96,12 @@ struct WorktreeCleanupSheet: View {
                         WorktreeCleanupRow(
                             row: row,
                             isSelected: model.selectedIds.contains(row.id),
-                            isSelectionDisabled: model.isScanning,
+                            isSelectionDisabled: model.isScanning
+                                || model.isPreparingDelete
+                                || model.isRunning,
                             result: model.results.first { $0.worktreeId == row.id },
-                            onToggle: { model.toggle(row.id) }
+                            onToggle: { model.toggle(row.id) },
+                            onOpenCheckout: onOpenCheckout
                         )
                     }
                 }
@@ -103,6 +120,7 @@ struct WorktreeCleanupSheet: View {
                 }
                 .disabled(
                     model.selectedIds.isEmpty
+                        || model.isPreparingDelete
                         || model.isRunning
                         || model.isScanning
                         || model.scanError != nil
@@ -124,7 +142,7 @@ private struct WorktreeCleanupRow: View {
     let isSelectionDisabled: Bool
     let result: WorktreeBatchResult?
     let onToggle: () -> Void
-
+    let onOpenCheckout: (UUID) -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -164,13 +182,22 @@ private struct WorktreeCleanupRow: View {
                     ForEach(candidate.signals, id: \.self) { signal in
                         HStack(spacing: 5) {
                             Icon(
-                                name: signal.isBlocking ? "x" : "check",
+                                name: signal.isHardBlocker ? "x" : signal.isBlocking ? "alert" : "check",
                                 size: 9,
-                                color: theme.color(signal.isBlocking ? "fg-muted" : "add")
+                                color: theme.color(
+                                    signal.isHardBlocker ? "del" : signal.isBlocking ? "mod" : "add"
+                                )
                             )
                             Text(signal.label)
                                 .font(.system(size: 11))
                                 .foregroundColor(theme.color("fg-dim"))
+                            if case .workspaceCheckout(let owner) = signal {
+                                AlasButton(title: "Open Checkout", style: .normal) {
+                                    onOpenCheckout(owner.id)
+                                }
+                                .disabled(isSelectionDisabled)
+                                .opacity(isSelectionDisabled ? 0.5 : 1)
+                            }
                         }
                     }
                 } else {
@@ -195,14 +222,18 @@ private struct WorktreeCleanupRow: View {
     }
 
     private func verdictLabel(_ verdict: WorktreeCleanupVerdict) -> String {
+        if row.candidate?.isSelectable == true,
+           row.candidate?.signals.contains(where: \.isBlocking) == true {
+            return "Needs confirmation"
+        }
         switch verdict {
         case .candidate(.high):   return "Merged"
         case .candidate(.medium): return "Merged locally"
         case .candidate(.low):    return "Stale"
-        case .busy:               return "Busy"
+        case .busy:               return "Blocked"
         case .dirty:              return "Has changes"
         case .active:             return "Active"
-        case .excluded:           return "Excluded"
+        case .excluded:           return "Blocked"
         }
     }
 
@@ -241,6 +272,10 @@ struct WorktreeCleanupSheetHost: View {
                 WorktreeCleanupSheet(
                     model: model,
                     showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
+                    onOpenCheckout: { checkoutID in
+                        state.selectWorkspaceCheckout(id: checkoutID)
+                        onClose()
+                    },
                     onClose: onClose
                 )
             } else {

@@ -17,6 +17,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
     let onCancel: () -> Void
     let onConfirm: () -> Void
     let confirmEnabled: Bool
+    let cancelEnabled: Bool
 
     @Environment(\.theme) var theme
 
@@ -31,7 +32,8 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         confirmStyle: AlasButtonStyle,
         onCancel: @escaping () -> Void,
         onConfirm: @escaping () -> Void,
-        confirmEnabled: Bool
+        confirmEnabled: Bool,
+        cancelEnabled: Bool = true
     ) {
         self.title = title
         self.subtitle = subtitle
@@ -44,6 +46,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         self.onCancel = onCancel
         self.onConfirm = onConfirm
         self.confirmEnabled = confirmEnabled
+        self.cancelEnabled = cancelEnabled
     }
 
     var body: some View {
@@ -68,6 +71,8 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
             HStack(spacing: 8) {
                 Spacer()
                 AlasButton(title: cancelTitle, style: .subtle, action: onCancel)
+                    .disabled(!cancelEnabled)
+                    .opacity(cancelEnabled ? 1 : 0.5)
                 AlasButton(title: confirmTitle, style: confirmStyle, action: onConfirm)
                     .disabled(!confirmEnabled)
                     .opacity(confirmEnabled ? 1 : 0.5)

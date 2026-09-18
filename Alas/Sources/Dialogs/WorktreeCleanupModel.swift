@@ -13,6 +13,46 @@ struct WorktreeCleanupRowState: Identifiable, Equatable {
     var id: String { worktree.id }
 }
 
+struct WorktreeCleanupDeleteAuthorization {
+    let forceWorktreeIDs: Set<String>
+    let dirtyTabsByWorktree: [String: [TabID: Int]]
+    let sessionIDsByWorktree: [String: Set<String>]
+    let forceReasons: [String: [String]]
+    let preflightByWorktree: [String: WorktreeDeletePreflight]
+    let unavailableReasons: [String: String]
+    let contentFingerprintsByWorktree: [String: String]
+
+    init(
+        forceWorktreeIDs: Set<String> = [],
+        dirtyTabsByWorktree: [String: [TabID: Int]] = [:],
+        sessionIDsByWorktree: [String: Set<String>] = [:],
+        forceReasons: [String: [String]] = [:],
+        preflightByWorktree: [String: WorktreeDeletePreflight] = [:],
+        unavailableReasons: [String: String] = [:],
+        contentFingerprintsByWorktree: [String: String] = [:]
+    ) {
+        self.forceWorktreeIDs = forceWorktreeIDs
+        self.dirtyTabsByWorktree = dirtyTabsByWorktree
+        self.sessionIDsByWorktree = sessionIDsByWorktree
+        self.forceReasons = forceReasons
+        self.preflightByWorktree = preflightByWorktree
+        self.unavailableReasons = unavailableReasons
+        self.contentFingerprintsByWorktree = contentFingerprintsByWorktree
+    }
+}
+
+enum WorktreeCleanupArchiveBufferResolution: Equatable {
+    case save
+    case discard
+}
+
+struct WorktreeCleanupArchiveAuthorization {
+    let dirtyTabsByWorktree: [String: [TabID: Int]]
+    let sessionIDsByWorktree: [String: Set<String>]
+    let unavailableReasons: [String: String]
+    let bufferResolution: WorktreeCleanupArchiveBufferResolution
+}
+
 /// Drives the cleanup sheet: runs scans, tracks selection and per-item results.
 /// Everything here is deliberately view-free so the selection and confirmation
 /// rules can be tested without rendering.
@@ -24,6 +64,7 @@ final class WorktreeCleanupModel {
     private(set) var selectedIds: Set<String> = []
     private(set) var results: [WorktreeBatchResult] = []
     private(set) var isRunning = false
+    private(set) var isPreparingDelete = false
     private(set) var isScanning = false
     private(set) var scanProgress: WorktreeCleanupScanProgress?
     private(set) var scanError: String?
@@ -47,7 +88,11 @@ final class WorktreeCleanupModel {
     /// passed in because both destructive batch actions route through the same
     /// prompt, and an archive confirmation must not offer a "Delete" button.
     private let confirm: (String, String, String) -> Bool
+    private let authorizeDelete: ([Worktree]) async -> WorktreeCleanupDeleteAuthorization
+    private let authorizedDeleteBatch: ((WorktreeCleanupDeleteAuthorization, [Worktree], Bool, [String: String]) async -> [WorktreeBatchResult])?
     /// Tracks whether a scan has ever completed, independent of the transient
+    private let authorizeArchive: (([Worktree]) async -> WorktreeCleanupArchiveAuthorization?)?
+    private let authorizedArchiveBatch: ((WorktreeCleanupArchiveAuthorization, [Worktree]) async -> [WorktreeBatchResult])?
     /// loading state, so rescans preserve manual selection while the first
     /// successful scan seeds the default selection.
     private var hasCompletedAScan = false
@@ -63,7 +108,11 @@ final class WorktreeCleanupModel {
         ) async -> Result<[WorktreeCleanupCandidate], Error>,
         deleteBatch: @escaping ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult],
         archiveBatch: @escaping ([Worktree]) -> [WorktreeBatchResult],
-        confirm: @escaping (String, String, String) -> Bool
+        confirm: @escaping (String, String, String) -> Bool,
+        authorizeDelete: @escaping ([Worktree]) async -> WorktreeCleanupDeleteAuthorization = { _ in .init() },
+        authorizedDeleteBatch: ((WorktreeCleanupDeleteAuthorization, [Worktree], Bool, [String: String]) async -> [WorktreeBatchResult])? = nil,
+        authorizeArchive: (([Worktree]) async -> WorktreeCleanupArchiveAuthorization?)? = nil,
+        authorizedArchiveBatch: ((WorktreeCleanupArchiveAuthorization, [Worktree]) async -> [WorktreeBatchResult])? = nil
     ) {
         self.projectId = projectId
         self.rows = worktrees.map {
@@ -75,6 +124,10 @@ final class WorktreeCleanupModel {
         self.deleteBatch = deleteBatch
         self.archiveBatch = archiveBatch
         self.confirm = confirm
+        self.authorizeDelete = authorizeDelete
+        self.authorizedDeleteBatch = authorizedDeleteBatch
+        self.authorizeArchive = authorizeArchive
+        self.authorizedArchiveBatch = authorizedArchiveBatch
     }
 
     var candidates: [WorktreeCleanupCandidate] {
@@ -167,6 +220,8 @@ final class WorktreeCleanupModel {
     /// keeps a main or remote worktree out of any batch.
     func toggle(_ id: String) {
         guard !isScanning,
+              !isPreparingDelete,
+              !isRunning,
               let candidate = candidates.first(where: { $0.id == id }),
               candidate.isSelectable
         else { return }
@@ -185,9 +240,36 @@ final class WorktreeCleanupModel {
             .map(\.worktree)
     }
 
-    func confirmationMessage() -> String {
-        let branches = selectedWorktrees().map(\.branch)
-        let list = branches.map { "• \($0)" }.joined(separator: "\n")
+    func confirmationMessage(
+        authorization: WorktreeCleanupDeleteAuthorization = .init(),
+        targetIds: Set<String>? = nil
+    ) -> String {
+        let selected = candidates.filter { candidate in
+            selectedIds.contains(candidate.id) && (targetIds?.contains(candidate.id) ?? true)
+        }
+        let list = selected.map { candidate in
+            var warnings = candidate.signals
+                .filter(\.isBlocking)
+                .filter { signal in
+                    if case .idleSessions = signal { return false }
+                    if case .busySessions = signal { return false }
+                    return true
+                }
+                .map(\.label)
+            let sessionCount = authorization.sessionIDsByWorktree[candidate.id]?.count ?? 0
+            if sessionCount > 0 {
+                warnings.append("\(sessionCount) attached \(sessionCount == 1 ? "session" : "sessions") will close")
+            }
+            let forceReasons = authorization.forceReasons[candidate.id] ?? []
+            let bufferCount = authorization.dirtyTabsByWorktree[candidate.id]?.count ?? 0
+            var lines = ["• \(candidate.worktree.branch)"]
+            lines.append(contentsOf: warnings.map { "  • \($0)" })
+            lines.append(contentsOf: forceReasons.map { "  • \($0)" })
+            if bufferCount > 0 {
+                lines.append("  • \(bufferCount) unsaved editor \(bufferCount == 1 ? "buffer" : "buffers") will be discarded")
+            }
+            return lines.joined(separator: "\n")
+        }.joined(separator: "\n")
         let branchPolicy = keepBranches
             ? "Local branches will be kept."
             : "Local branches will be deleted if merged."
@@ -198,6 +280,78 @@ final class WorktreeCleanupModel {
 
         \(branchPolicy)
         """
+    }
+    func deleteSelected() async {
+        let requestedTargets = selectedWorktrees()
+        guard !requestedTargets.isEmpty,
+              !isRunning,
+              !isScanning,
+              !isPreparingDelete,
+              scanError == nil
+        else { return }
+
+        isPreparingDelete = true
+        let authorization = await authorizeDelete(requestedTargets)
+        isPreparingDelete = false
+        let targets = requestedTargets.filter { authorization.unavailableReasons[$0.id] == nil }
+        results = requestedTargets.compactMap { worktree in
+            authorization.unavailableReasons[worktree.id].map {
+                WorktreeBatchResult(worktreeId: worktree.id, branch: worktree.branch, outcome: .skipped(reason: $0))
+            }
+        }
+        guard !targets.isEmpty else {
+            await runScan()
+            return
+        }
+
+        let hasWarnings = candidates.contains {
+            selectedIds.contains($0.id) && $0.signals.contains(where: \.isBlocking)
+        } || !authorization.dirtyTabsByWorktree.isEmpty
+        let buttonTitle: String
+        if !authorization.forceWorktreeIDs.isEmpty {
+            buttonTitle = "Force Delete"
+        } else if hasWarnings {
+            buttonTitle = "Delete Despite Warnings"
+        } else {
+            buttonTitle = "Delete"
+        }
+        guard confirm(
+            "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
+            confirmationMessage(
+                authorization: authorization,
+                targetIds: Set(targets.map(\.id))
+            ),
+            buttonTitle
+        ) else {
+            results = []
+            return
+        }
+
+        var forgeConfirmedMergedBranchSHAs: [String: String] = [:]
+        for candidate in candidates where selectedIds.contains(candidate.id) {
+            for signal in candidate.signals {
+                if case .mergedOnForge(_, _, let headSHA) = signal {
+                    forgeConfirmedMergedBranchSHAs[candidate.id] = headSHA
+                    break
+                }
+            }
+        }
+
+        isRunning = true
+        let executionResults: [WorktreeBatchResult]
+        if let authorizedDeleteBatch {
+            executionResults = await authorizedDeleteBatch(
+                authorization,
+                targets,
+                keepBranches,
+                forgeConfirmedMergedBranchSHAs
+            )
+        } else {
+            executionResults = await deleteBatch(targets, keepBranches, forgeConfirmedMergedBranchSHAs)
+        }
+        results.append(contentsOf: executionResults)
+        isRunning = false
+        await runScan()
     }
 
     /// Archive-flavoured counterpart to `confirmationMessage()`: nothing is
@@ -212,68 +366,45 @@ final class WorktreeCleanupModel {
         disk and can be restored later, but open terminals and agent sessions \
         will be closed:
 
+
         \(list)
         """
     }
-
-    func deleteSelected() async {
-        let targets = selectedWorktrees()
-        guard !targets.isEmpty,
+    func archiveSelected() async {
+        let requestedTargets = selectedWorktrees()
+        guard !requestedTargets.isEmpty,
               !isRunning,
               !isScanning,
+              !isPreparingDelete,
               scanError == nil
         else { return }
-        guard confirm(
-            "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
-            confirmationMessage(),
-            "Delete"
-        ) else { return }
 
-        // A `.mergedOnForge` signal means the scan matched this worktree's
-        // exact HEAD SHA against a confirmed-merged review request on the
-        // code host — the strongest evidence the scanner produces, and the
-        // only case trusted enough to override git's own local-ancestry
-        // branch check. This is read straight off each *selected* row's own
-        // signals, not gated on the row's overall verdict: a clean,
-        // forge-merged worktree that is not yet idle carries this signal
-        // while its verdict is `.active` rather than `.candidate(.high)`,
-        // and remains manually selectable. Gating on the verdict would drop
-        // its SHA and silently fall back to `git branch -d`, which fails
-        // for a squash or rebase merge and leaves the branch behind despite
-        // the confirmation promising it will be deleted. The SHA itself
-        // travels along so the batch can re-verify, right before deleting,
-        // that the branch tip hasn't moved since this scan.
-        var forgeConfirmedMergedBranchSHAs: [String: String] = [:]
-        for candidate in candidates where selectedIds.contains(candidate.id) {
-            for signal in candidate.signals {
-                if case .mergedOnForge(_, _, let headSHA) = signal {
-                    forgeConfirmedMergedBranchSHAs[candidate.id] = headSHA
-                    break
+        if let authorizeArchive, let authorizedArchiveBatch {
+            guard let authorization = await authorizeArchive(requestedTargets) else { return }
+            let targets = requestedTargets.filter { authorization.unavailableReasons[$0.id] == nil }
+            results = requestedTargets.compactMap { worktree in
+                authorization.unavailableReasons[worktree.id].map {
+                    WorktreeBatchResult(worktreeId: worktree.id, branch: worktree.branch, outcome: .skipped(reason: $0))
                 }
             }
+            guard !targets.isEmpty else {
+                await runScan()
+                return
+            }
+            isRunning = true
+            results.append(contentsOf: await authorizedArchiveBatch(authorization, targets))
+            isRunning = false
+            await runScan()
+            return
         }
 
-        isRunning = true
-        results = await deleteBatch(targets, keepBranches, forgeConfirmedMergedBranchSHAs)
-        isRunning = false
-        await runScan()
-    }
-
-    func archiveSelected() async {
-        let targets = selectedWorktrees()
-        guard !targets.isEmpty,
-              !isRunning,
-              !isScanning,
-              scanError == nil
-        else { return }
         guard confirm(
-            "Archive \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
+            "Archive \(requestedTargets.count) \(requestedTargets.count == 1 ? "worktree" : "worktrees")?",
             archiveConfirmationMessage(),
             "Archive"
         ) else { return }
-
         isRunning = true
-        results = archiveBatch(targets)
+        results = archiveBatch(requestedTargets)
         isRunning = false
         await runScan()
     }

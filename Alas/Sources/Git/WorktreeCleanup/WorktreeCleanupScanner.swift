@@ -29,7 +29,10 @@ private struct WorktreeCleanupProbeResult: Sendable {
     let index: Int
     let facts: WorktreeCleanupGitFacts
     let activeSessionCount: Int
+    let busySessionCount: Int
     let operationInFlight: Bool
+    let workspaceOwners: [WorktreeCleanupWorkspaceOwner]
+    let workspaceOwnershipAvailable: Bool
 }
 
 /// Merged review requests for one repository, keyed by head branch. A branch
@@ -68,7 +71,10 @@ struct WorktreeCleanupScanner: Sendable {
         /// (open tabs, harness activity, in-flight operations) while the
         /// scanner itself is not main-actor isolated.
         var activeSessionCount: @Sendable (String) async -> Int
+        var busySessionCount: @Sendable (String) async -> Int = { _ in 0 }
         var operationInFlight: @Sendable (String) async -> Bool
+        var workspaceOwners: @Sendable (Worktree) async -> [WorktreeCleanupWorkspaceOwner] = { _ in [] }
+        var workspaceOwnershipAvailable: @Sendable () async -> Bool = { true }
     }
 
     /// Concurrent git probes in flight. Thirty worktrees must not mean thirty
@@ -138,7 +144,10 @@ struct WorktreeCleanupScanner: Sendable {
                     worktree: worktree,
                     facts: probe.facts,
                     activeSessionCount: probe.activeSessionCount,
+                    busySessionCount: probe.busySessionCount,
                     operationInFlight: probe.operationInFlight,
+                    workspaceOwners: probe.workspaceOwners,
+                    workspaceOwnershipAvailable: probe.workspaceOwnershipAvailable,
                     baseBranch: baseBranch,
                     indexResult: indexResult,
                     now: now,
@@ -177,19 +186,31 @@ struct WorktreeCleanupScanner: Sendable {
                         async let facts = dependencies.gitFacts(worktree)
                         async let activeSessionCount =
                             dependencies.activeSessionCount(worktree.id)
+                        async let busySessionCount =
+                            dependencies.busySessionCount(worktree.id)
                         async let operationInFlight =
                             dependencies.operationInFlight(worktree.id)
+                        async let workspaceOwners =
+                            dependencies.workspaceOwners(worktree)
+                        async let workspaceOwnershipAvailable =
+                            dependencies.workspaceOwnershipAvailable()
 
                         let inputs = await (
                             facts,
                             activeSessionCount,
-                            operationInFlight
+                            busySessionCount,
+                            operationInFlight,
+                            workspaceOwners,
+                            workspaceOwnershipAvailable
                         )
                         return WorktreeCleanupProbeResult(
                             index: index,
                             facts: inputs.0,
                             activeSessionCount: inputs.1,
-                            operationInFlight: inputs.2
+                            busySessionCount: inputs.2,
+                            operationInFlight: inputs.3,
+                            workspaceOwners: inputs.4,
+                            workspaceOwnershipAvailable: inputs.5
                         )
                     }
                 }
@@ -258,9 +279,12 @@ struct WorktreeCleanupScanner: Sendable {
             unpushedCommitCount: 0,
             stashCount: 0,
             activeSessionCount: 0,
+            busySessionCount: 0,
             operationInFlight: false,
             lastActivity: worktree.lastActivity,
-            mergeState: .unknown(reason: "remote worktree")
+            mergeState: .unknown(reason: "remote worktree"),
+            workspaceOwners: [],
+            workspaceOwnershipAvailable: true
         )
     }
 
@@ -268,7 +292,10 @@ struct WorktreeCleanupScanner: Sendable {
         worktree: Worktree,
         facts: WorktreeCleanupGitFacts,
         activeSessionCount: Int,
+        busySessionCount: Int,
         operationInFlight: Bool,
+        workspaceOwners: [WorktreeCleanupWorkspaceOwner],
+        workspaceOwnershipAvailable: Bool,
         baseBranch: String,
         indexResult: Result<WorktreeForgeMergeIndex, Error>,
         now: Date,
@@ -298,6 +325,7 @@ struct WorktreeCleanupScanner: Sendable {
             unpushedCommitCount: unpushedCommitCount,
             stashCount: facts.stashCount,
             activeSessionCount: activeSessionCount,
+            busySessionCount: busySessionCount,
             operationInFlight: operationInFlight,
             // The cached activity can be stale, while branch history can
             // predate the checkout. The worktree cannot be idle before it
@@ -306,7 +334,9 @@ struct WorktreeCleanupScanner: Sendable {
                 facts.lastActivity ?? worktree.lastActivity,
                 worktree.createdAt
             ),
-            mergeState: mergeState
+            mergeState: mergeState,
+            workspaceOwners: workspaceOwners,
+            workspaceOwnershipAvailable: workspaceOwnershipAvailable
         )
         return WorktreeCleanupClassifier.classify(
             worktree: worktree,

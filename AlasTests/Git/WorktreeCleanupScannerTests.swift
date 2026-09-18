@@ -61,6 +61,7 @@ struct WorktreeCleanupScannerTests {
             .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
         },
         activeSessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 },
+        busySessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 },
         operationInFlight: @escaping @Sendable (String) async -> Bool = { _ in false }
     ) -> WorktreeCleanupScanner {
         WorktreeCleanupScanner(
@@ -68,6 +69,7 @@ struct WorktreeCleanupScannerTests {
                 gitFacts: facts,
                 mergeIndex: mergeIndex,
                 activeSessionCount: activeSessionCount,
+                busySessionCount: busySessionCount,
                 operationInFlight: operationInFlight
             )
         )
@@ -308,14 +310,18 @@ struct WorktreeCleanupScannerTests {
         #expect(await probeCount.value == 0)
     }
 
-    @Test func activeSessionsAreCarriedIntoTheProbe() async {
-        let scanner = Self.scanner(activeSessionCount: { _ in 2 })
+    @Test func sessionsAreCarriedIntoSelectableWarnings() async {
+        let scanner = Self.scanner(
+            activeSessionCount: { _ in 2 },
+            busySessionCount: { _ in 1 }
+        )
         let results = await Self.scan(
             scanner,
             worktrees: [Self.worktree(branch: "feature/a")]
         )
-        #expect(results[0].verdict == .busy)
-        #expect(results[0].signals.contains(.activeSessions(count: 2)))
+        #expect(results[0].isSelectable)
+        #expect(results[0].signals.contains(.busySessions(count: 1)))
+        #expect(results[0].signals.contains(.idleSessions(count: 1)))
     }
 
     /// `Worktree.lastActivity` is cached from the last topology refresh, not
