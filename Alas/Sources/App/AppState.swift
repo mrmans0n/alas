@@ -10518,6 +10518,13 @@ final class AppState {
                     retainActivePrompt: retainActivePrompt
                 )
             },
+            onCheckpointCapture: { [weak self] in
+                guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
+                return try? await self.automaticCheckpointService.createAutomatic(
+                    target: target,
+                    label: "Before agent prompt"
+                ).id
+            },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }
                 let project = self.projects.first(where: { $0.id == worktree.projectId })
@@ -10527,13 +10534,6 @@ final class AppState {
                     treatsHomeAsRemote: project?.host != nil,
                     useBypassPermissions: project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false
                 )
-            },
-            onCheckpointCapture: { [weak self] in
-                guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
-                return try? await self.automaticCheckpointService.createAutomatic(
-                    target: target,
-                    label: "Before agent prompt"
-                ).id
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL

@@ -699,7 +699,6 @@ struct WorktreeCheckpointStoreTests {
             repositoryName: "Alas",
             branch: "main",
             headOID: String(repeating: "f", count: 40),
-            automaticStateKey: kind == .automatic ? "automatic-state-key" : nil,
             exclusions: [], groups: [],
             paths: [.init(relativePath: "New.swift", head: .absent, index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
         )
@@ -794,6 +793,7 @@ struct WorktreeCheckpointStoreTests {
             repositoryName: "Alas",
             branch: "main",
             headOID: String(repeating: "f", count: 40),
+            automaticStateKey: kind == .automatic ? "automatic-state-key" : nil,
             exclusions: [], groups: [],
             paths: [.init(relativePath: "File.swift", head: .regular(blob: blob, executable: false), index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
         )
