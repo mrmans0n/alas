@@ -49,6 +49,16 @@ struct RunReportTabView: View {
                     Text("\(entry.branch) • \(entry.target.hostLabel) • \(entry.finishedAt.formatted(date: .abbreviated, time: .shortened)) • \(RunTabPresentation.format(duration: entry.duration))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    Text(entry.target.workingDirectory)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if let endpoint = entry.endpoint {
+                        Text(endpoint.absoluteString)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
                 Spacer()
                 Text(outcomeText(entry.outcome))
