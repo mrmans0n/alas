@@ -569,7 +569,6 @@ private struct ACPSessionView: View {
             session: session,
             manager: manager,
             worktreeRoot: worktree.path,
-            agentLookup: { state.agent(id: $0) },
             sendOnEnter: state.config.harness.acpSendOnEnter,
             dictationLocale: state.config.harness.acpDictationLocale,
             onSelectDictationLocale: { [state] identifier in

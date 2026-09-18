@@ -135,7 +135,6 @@ struct ACPComposer: View {
     @ObservedObject private var composer: ACPComposerState
     let manager: ACPSessionManager
     let worktreeRoot: URL
-    let agentLookup: (String) -> AgentDefinition?
     /// Current value of the `acpSendOnEnter` setting. Threaded down to
     /// `ACPInputField` so its placeholder reflects whichever action ⏎
     /// triggers under the current mapping.
@@ -166,7 +165,6 @@ struct ACPComposer: View {
         session: ACPSession,
         manager: ACPSessionManager,
         worktreeRoot: URL,
-        agentLookup: @escaping (String) -> AgentDefinition?,
         sendOnEnter: Bool,
         dictationLocale: String = "",
         onSelectDictationLocale: @escaping (String) -> Void = { _ in },
@@ -183,7 +181,6 @@ struct ACPComposer: View {
         self._composer = ObservedObject(wrappedValue: session.composer)
         self.manager = manager
         self.worktreeRoot = worktreeRoot
-        self.agentLookup = agentLookup
         self.sendOnEnter = sendOnEnter
         self.dictationLocale = dictationLocale
         self.onSelectDictationLocale = onSelectDictationLocale
@@ -419,16 +416,7 @@ struct ACPComposer: View {
 
     private func hintContent(showShortcuts: Bool) -> some View {
         HStack(spacing: 6) {
-            // Pulse + agent identity (icon + ACP label). Pulse moved here
-            // from the toolbar so the "live agent" cue sits next to the
-            // composer where focus is.
-            ACPPulseDot(color: session.agentState == .disconnected ? theme.color("del") : theme.color("add"))
-            if let agent = agentLookup(session.agentId) {
-                AgentLogoView(agent: agent, size: 14)
-                    .frame(width: 14, height: 14)
-            }
             if showShortcuts {
-                Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
                 kbdLabel("⏎")
                 Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
                 kbdLabel("⇧⏎")
