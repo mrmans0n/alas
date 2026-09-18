@@ -455,11 +455,12 @@ struct WorktreeRowView: View {
             Button("Copy Path", action: onCopyPath)
         } else if case .launchFailed = operationState {
             Button("Retry Launch", action: onRetryLaunch)
-            Divider()
             if let errorMessage {
+                Divider()
                 Button("Copy Error") { onCopyError(errorMessage) }
             }
-            Button("Copy Path", action: onCopyPath)
+            Divider()
+            availableWorktreeContextMenuContent
         } else if case .deleteFailed = operationState {
             if Self.showsRemovalActions(isMain: isMain) {
                 Button("Retry Delete", action: onRetryDelete)
@@ -472,38 +473,43 @@ struct WorktreeRowView: View {
             Button("Copy Path", action: onCopyPath)
             Button("Copy Branch Name", action: onCopyBranch)
         } else if !isPending {
-            Button("Open in Terminal", action: onOpenTerminal)
-            if let onOpenIssue {
-                Button("Open Issue", action: onOpenIssue)
-                Divider()
+            availableWorktreeContextMenuContent
+        }
+    }
+
+    @ViewBuilder
+    private var availableWorktreeContextMenuContent: some View {
+        Button("Open in Terminal", action: onOpenTerminal)
+        if let onOpenIssue {
+            Button("Open Issue", action: onOpenIssue)
+            Divider()
+        }
+        Button("Copy Path", action: onCopyPath)
+        Button("Copy Branch Name", action: onCopyBranch)
+        if !worktree.path.isRemoteAlasPath {
+            Button("Reveal in Finder", action: onRevealInFinder)
+        }
+        Divider()
+        if ggMenuModel.isVisible {
+            Menu(Self.ggModeMenuTitle) {
+                // Static buttons: a data-driven ForEach inside a hover-revealed
+                // context-menu submenu renders empty on macOS.
+                let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
+                ggModeMenuButton(items[0])
+                ggModeMenuButton(items[1])
+                ggModeMenuButton(items[2])
             }
-            Button("Copy Path", action: onCopyPath)
-            Button("Copy Branch Name", action: onCopyBranch)
-            if !worktree.path.isRemoteAlasPath {
-                Button("Reveal in Finder", action: onRevealInFinder)
+            if let explanation = ggMenuModel.inactiveExplanation {
+                Divider()
+                Text(explanation)
             }
             Divider()
-            if ggMenuModel.isVisible {
-                Menu(Self.ggModeMenuTitle) {
-                    // Static buttons: a data-driven ForEach inside a hover-revealed
-                    // context-menu submenu renders empty on macOS.
-                    let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
-                    ggModeMenuButton(items[0])
-                    ggModeMenuButton(items[1])
-                    ggModeMenuButton(items[2])
-                }
-                if let explanation = ggMenuModel.inactiveExplanation {
-                    Divider()
-                    Text(explanation)
-                }
-                Divider()
-            }
-            if Self.showsRemovalActions(isMain: isMain) {
-                Button("Archive", action: onArchive)
-                Button("Delete Worktree…", role: .destructive, action: onDelete)
-                if showKeepBranchOption {
-                    Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
-                }
+        }
+        if Self.showsRemovalActions(isMain: isMain) {
+            Button("Archive", action: onArchive)
+            Button("Delete Worktree…", role: .destructive, action: onDelete)
+            if showKeepBranchOption {
+                Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
             }
         }
     }
