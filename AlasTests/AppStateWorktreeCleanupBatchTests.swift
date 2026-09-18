@@ -211,6 +211,20 @@ struct AppStateWorktreeCleanupBatchTests {
         ))
     }
 
+    @Test func workspaceCleanupOwnershipIsAvailableWhenWorkspacePreviewIsDisabled() {
+        #expect(AppState.workspaceCleanupOwnershipAvailable(
+            workspacesEnabled: false,
+            workspacesCanMutate: false
+        ))
+        #expect(AppState.workspaceCleanupOwnershipAvailable(
+            workspacesEnabled: true,
+            workspacesCanMutate: true
+        ))
+        #expect(!AppState.workspaceCleanupOwnershipAvailable(
+            workspacesEnabled: true,
+            workspacesCanMutate: false
+        ))
+    }
     @Test func submoduleRiskCanOnlyStayTheSameOrDecreaseAfterConfirmation() {
         #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .none))
         #expect(AppState.submoduleRiskDidNotIncrease(current: .none, acknowledged: .present))

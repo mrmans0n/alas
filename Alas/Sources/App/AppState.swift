@@ -9333,7 +9333,10 @@ final class AppState {
                         },
                         workspaceOwnershipAvailable: {
                             await MainActor.run {
-                                self.workspacesManager.canMutate
+                                Self.workspaceCleanupOwnershipAvailable(
+                                    workspacesEnabled: self.config.workspacesEnabled,
+                                    workspacesCanMutate: self.workspacesManager.canMutate
+                                )
                             }
                         }
                     )
@@ -9472,7 +9475,10 @@ final class AppState {
         var unavailableReasons: [String: String] = [:]
 
         for worktree in worktrees {
-            guard workspacesManager.canMutate else {
+            guard Self.workspaceCleanupOwnershipAvailable(
+                workspacesEnabled: config.workspacesEnabled,
+                workspacesCanMutate: workspacesManager.canMutate
+            ) else {
                 unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
                 continue
             }
@@ -9539,7 +9545,10 @@ final class AppState {
         var unavailableReasons: [String: String] = [:]
 
         for worktree in worktrees {
-            guard workspacesManager.canMutate else {
+            guard Self.workspaceCleanupOwnershipAvailable(
+                workspacesEnabled: config.workspacesEnabled,
+                workspacesCanMutate: workspacesManager.canMutate
+            ) else {
                 unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
                 continue
             }
@@ -10330,6 +10339,13 @@ final class AppState {
             force: confirmation.force,
             allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
+    }
+
+    nonisolated static func workspaceCleanupOwnershipAvailable(
+        workspacesEnabled: Bool,
+        workspacesCanMutate: Bool
+    ) -> Bool {
+        !workspacesEnabled || workspacesCanMutate
     }
 
     nonisolated static func allowsSubmoduleLocalStateForForcedDeletion(

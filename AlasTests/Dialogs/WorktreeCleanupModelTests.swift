@@ -376,6 +376,27 @@ struct WorktreeCleanupModelTests {
         #expect(!model.isPreparingDelete)
     }
 
+    @Test func deleteConfirmationIncludesNewlyAuthorizedSessions() {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: [a.worktree],
+            keepBranches: false,
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
+            deleteBatch: { _, _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+        model.applyScanResult([a])
+
+        let message = model.confirmationMessage(authorization: .init(
+            sessionIDsByWorktree: [a.id: ["terminal", "agent"]]
+        ))
+
+        #expect(message.contains("2 attached sessions will close"))
+    }
+
     /// A row carrying a `.mergedOnForge` signal — the scan matched its exact
     /// HEAD SHA against a confirmed-merged review request — is trusted
     /// enough to force-delete its branch, regardless of that row's overall

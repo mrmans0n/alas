@@ -242,9 +242,18 @@ final class WorktreeCleanupModel {
     ) -> String {
         let selected = candidates.filter { selectedIds.contains($0.id) }
         let list = selected.map { candidate in
-            let warnings = candidate.signals
+            var warnings = candidate.signals
                 .filter(\.isBlocking)
+                .filter { signal in
+                    if case .idleSessions = signal { return false }
+                    if case .busySessions = signal { return false }
+                    return true
+                }
                 .map(\.label)
+            let sessionCount = authorization.sessionIDsByWorktree[candidate.id]?.count ?? 0
+            if sessionCount > 0 {
+                warnings.append("\(sessionCount) attached \(sessionCount == 1 ? "session" : "sessions") will close")
+            }
             let forceReasons = authorization.forceReasons[candidate.id] ?? []
             let bufferCount = authorization.dirtyTabsByWorktree[candidate.id]?.count ?? 0
             var lines = ["• \(candidate.worktree.branch)"]
