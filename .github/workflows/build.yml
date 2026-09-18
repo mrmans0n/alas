@@ -327,6 +327,16 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      - name: Upload compact Swift build summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-build-summary-${{ github.run_attempt }}
+          path: |
+            .build/xcode/build-metrics/run.json
+            .build/xcode/build-metrics/summary.json
+          if-no-files-found: warn
+
       - name: Locate compiled test plan
         run: |
           xctestrun_count="$(find .build/xcode/DerivedData/Build/Products -name '*.xctestrun' -type f | wc -l | tr -d ' ')"
@@ -423,6 +433,14 @@ jobs:
         timeout-minutes: 8
         run: python3 scripts/ci_swift_tests.py run --batch 5 --lane ordinary
 
+      - name: Upload Swift coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-reports-${{ github.run_attempt }}-0
+          path: .build/xcode/results/*.report.json
+          if-no-files-found: warn
+
       - name: Upload Swift test result bundles
         if: always()
         timeout-minutes: 10
@@ -513,6 +531,14 @@ jobs:
       - name: Run measured Swift shard
         run: python3 scripts/ci_swift_tests.py run-shard --shard ${{ matrix.shard }}
 
+      - name: Upload Swift shard coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-test-reports-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: .build/xcode/results/*.report.json
+          if-no-files-found: warn
+
       - name: Upload Swift shard diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -528,6 +554,9 @@ jobs:
 
   swift-coverage:
     name: Swift coverage audit
+    permissions:
+      contents: read
+      actions: read
     needs: [build-test, swift-tests]
     if: always()
     runs-on: ubuntu-24.04
@@ -541,10 +570,10 @@ jobs:
           name: swift-test-plan-${{ github.run_attempt }}
           path: .build/xcode/results
 
-      - name: Download every Swift shard result
+      - name: Download every Swift shard coverage report
         uses: actions/download-artifact@v8
         with:
-          pattern: swift-test-results-${{ github.run_attempt }}-*
+          pattern: swift-test-reports-${{ github.run_attempt }}-*
           path: .build/xcode/results/shards
 
       - name: Reconcile Swift coverage and publish timings
@@ -565,7 +594,34 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: swift-test-summary-${{ github.run_attempt }}
-          path: .build/xcode/results/summary.md
+          path: |
+            .build/xcode/results/summary.md
+            .build/xcode/results/timings.json
+          if-no-files-found: warn
+
+      - name: Download compact Swift build summary
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: swift-build-summary-${{ github.run_attempt }}
+          path: .build/xcode/build-summary
+
+      - name: Report CI queue and execution timings
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_run_metrics.py
+
+      - name: Upload CI timing report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-run-metrics-${{ github.run_attempt }}
+          path: .build/xcode/run-metrics
           if-no-files-found: warn
 
   ci-workflow-contract:

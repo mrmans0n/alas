@@ -1,5 +1,5 @@
 {
-  "source": "https://github.com/mrmans0n/alas/actions/runs/35254121181",
+  "source": "https://github.com/mrmans0n/alas/actions/runs/35339077070/attempts/1",
   "invocations": [
     {
       "selectors": [
@@ -7,7 +7,7 @@
         "AlasTests/ACPRemoteFileServerTests",
         "AlasTests/ACPSessionTerminalRoutingTests"
       ],
-      "seconds": 11.97
+      "seconds": 31.48
     },
     {
       "selectors": [
@@ -15,7 +15,7 @@
         "AlasTests/AppConfigTerminalTests",
         "AlasTests/AppStateCLIRoutingTests"
       ],
-      "seconds": 19.48
+      "seconds": 30.52
     },
     {
       "selectors": [
@@ -23,7 +23,7 @@
         "AlasTests/CheckpointRestorePreparationTests",
         "AlasTests/CheckpointRestorePreviewTests"
       ],
-      "seconds": 242.82
+      "seconds": 298.29
     },
     {
       "selectors": [
@@ -31,7 +31,7 @@
         "AlasTests/GitIgnoreServiceTests",
         "AlasTests/GitInvocationTests"
       ],
-      "seconds": 8.65
+      "seconds": 11.62
     },
     {
       "selectors": [
@@ -39,7 +39,7 @@
         "AlasTests/GitServiceStashTests",
         "AlasTests/GitServiceUpstreamTests"
       ],
-      "seconds": 27.15
+      "seconds": 28.62
     },
     {
       "selectors": [
@@ -47,7 +47,7 @@
         "AlasTests/ProcessGitDataTests",
         "AlasTests/ProcessGitTests"
       ],
-      "seconds": 11.32
+      "seconds": 13.66
     },
     {
       "selectors": [
@@ -55,7 +55,7 @@
         "AlasTests/RightPaneGGRefreshSchedulingTests",
         "AlasTests/RightPaneGGStackErrorPresentationTests"
       ],
-      "seconds": 16.55
+      "seconds": 22.65
     },
     {
       "selectors": [
@@ -63,7 +63,7 @@
         "AlasTests/RunScriptStoreTests",
         "AlasTests/RunScriptTemplateTests"
       ],
-      "seconds": 7.72
+      "seconds": 21.73
     },
     {
       "selectors": [
@@ -89,7 +89,7 @@
         "AlasTests/WorkspaceTerminalSessionTests/remoteCheckoutCwdContainmentRejectsSymlinkEscapes()",
         "AlasTests/WorkspaceTerminalSessionTests/worktreeIdentityKeepsItsExistingZmxName()"
       ],
-      "seconds": 11.67
+      "seconds": 18.36
     },
     {
       "selectors": [
@@ -97,7 +97,7 @@
         "AlasTests/ACPStdioTerminalDispatchTests",
         "AlasTests/ACPTerminalCRLFTests"
       ],
-      "seconds": 8.4
+      "seconds": 14.39
     },
     {
       "selectors": [
@@ -105,7 +105,7 @@
         "AlasTests/AppStateCreateWorktreeSymlinkTests",
         "AlasTests/AppStateGGACPWorktreeContextTests"
       ],
-      "seconds": 7.74
+      "seconds": 12.67
     },
     {
       "selectors": [
@@ -113,7 +113,7 @@
         "AlasTests/CodeHostProviderTests",
         "AlasTests/CommitDetailsTests"
       ],
-      "seconds": 16.66
+      "seconds": 20.29
     },
     {
       "selectors": [
@@ -121,15 +121,16 @@
         "AlasTests/GitLabCLIProviderVerdictTests",
         "AlasTests/GitNameValidatorTests"
       ],
-      "seconds": 8.07
+      "seconds": 7.65
     },
     {
       "selectors": [
         "AlasTests/GitStatusCacheTests",
         "AlasTests/GitTypesTests",
-        "AlasTests/HookCommandShellTests"
+        "AlasTests/HookCommandShellTests/claudeBusyCommand_sendsValidEvent()",
+        "AlasTests/HookCommandShellTests/commandWithoutEnvVars_exitsSilently()"
       ],
-      "seconds": 10.23
+      "seconds": 11.72
     },
     {
       "selectors": [
@@ -137,17 +138,15 @@
         "AlasTests/ProcessTransportTerminationTests",
         "AlasTests/ProjectGitWatcherTests"
       ],
-      "seconds": 8.36
+      "seconds": 10.29
     },
     {
       "selectors": [
-        "AlasTests/RightPaneOptimisticStageTests/mutationProjectsEveryEntryForItsPathAndLeavesOthersUnchanged()",
-        "AlasTests/RightPaneOptimisticStageTests/orderedMutationsUseLatestStageForOverlappingPaths()",
+        "AlasTests/RightPaneOptimisticStageTests",
         "AlasTests/RightPaneStateBaseBranchTests",
-        "AlasTests/RightPaneStateDiscardTests/cancelDiscardClearsStateAndLeavesRepoUntouched()",
-        "AlasTests/RightPaneStateDiscardTests/requestDiscardFileForUnknownPathIsNoOp()"
+        "AlasTests/RightPaneStateDiscardTests"
       ],
-      "seconds": 16.61
+      "seconds": 21.91
     },
     {
       "selectors": [
@@ -155,7 +154,7 @@
         "AlasTests/SSHCommandTests",
         "AlasTests/SSHConfigParserTests"
       ],
-      "seconds": 6.14
+      "seconds": 10.25
     },
     {
       "selectors": [
@@ -163,7 +162,7 @@
         "AlasTests/WorktreeCleanupFixtureTests",
         "AlasTests/WorktreeCreateFetchTests"
       ],
-      "seconds": 17.89
+      "seconds": 17.65
     },
     {
       "selectors": [
@@ -171,20 +170,15 @@
         "AlasTests/ACPTerminalTests",
         "AlasTests/AgentHookSocketServerCLITests"
       ],
-      "seconds": 25.22
+      "seconds": 27.69
     },
     {
       "selectors": [
-        "AlasTests/AppStateKeepSessionsAliveTests/reloadTabsKeepsTerminalTabsWhenKeepAliveTrue()",
-        "AlasTests/AppStateKeepSessionsAliveTests/reloadTabsPrunesAllTerminalTabsWhenKeepAliveFalse()",
-        "AlasTests/AppStateKeepSessionsAliveTests/restoreDropsPersistedTerminalTabWhenKeepAliveFalse()",
-        "AlasTests/AppStateKeepSessionsAliveTests/restoreKeepsPersistedTerminalTabWhenKeepAliveTrue()",
-        "AlasTests/AppStateKeepSessionsAliveTests/terminateAllTerminalSessionsClosesCheckoutOwnedTerminalTabs()",
-        "AlasTests/AppStateKeepSessionsAliveTests/topologyRefreshDoesNotPruneUnrelatedTerminalTabsWhenKeepAliveFalse()",
+        "AlasTests/AppStateKeepSessionsAliveTests",
         "AlasTests/AppStatePersistenceTests",
         "AlasTests/AppStateRunScriptCreationTests"
       ],
-      "seconds": 12.5
+      "seconds": 15.91
     },
     {
       "selectors": [
@@ -192,7 +186,7 @@
         "AlasTests/CommitsAheadTests",
         "AlasTests/CommitsOlderTests"
       ],
-      "seconds": 21.39
+      "seconds": 16.63
     },
     {
       "selectors": [
@@ -200,7 +194,7 @@
         "AlasTests/GitServiceBehindStatusTests",
         "AlasTests/GitServiceCommitEditingTests"
       ],
-      "seconds": 21.1
+      "seconds": 29.28
     },
     {
       "selectors": [
@@ -208,83 +202,31 @@
         "AlasTests/ImageDiffEndToEndTests",
         "AlasTests/ImageDiffPairLoaderTests"
       ],
-      "seconds": 11.0
+      "seconds": 11.06
     },
     {
       "selectors": [
         "AlasTests/ProjectsManagerGGWorktreeModeTests",
         "AlasTests/ProjectsManagerWorktreeOrderingTests",
-        "AlasTests/RemoteAppStateAccessTests/appStateRemoteServerPublishesAndRefreshesConfiguredAccessState()",
-        "AlasTests/RemoteAppStateAccessTests/createRemoteSessionRejectsMissingWorktree()",
-        "AlasTests/RemoteAppStateAccessTests/readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable()",
-        "AlasTests/RemoteAppStateAccessTests/readRemoteWorktreeFileRawFixtureWouldSucceedIfReadLocally()",
-        "AlasTests/RemoteAppStateAccessTests/remoteAgentsIncludeEnabledACPCapableAgentsOnly()",
-        "AlasTests/RemoteAppStateAccessTests/remoteAgentsPreserveNativeACPLaunchOrder()",
-        "AlasTests/RemoteAppStateAccessTests/remoteBranchesRejectsMissingProject()",
-        "AlasTests/RemoteAppStateAccessTests/remoteBranchesReturnsBranchesAndPrefersMain()",
-        "AlasTests/RemoteAppStateAccessTests/remoteChangeListMatchesUnstagedTabPathCountsByRawPath()",
-        "AlasTests/RemoteAppStateAccessTests/remoteChangeListReportsSessionUnknownForAnUnknownSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteChangeListReportsUnstagedCountsAgainstTheIndex()",
-        "AlasTests/RemoteAppStateAccessTests/remoteChangeListReportsWorktreeUnavailableWhenProjectAndWorktreeReturnsNil()",
-        "AlasTests/RemoteAppStateAccessTests/remoteCreateWorktreeSessionPreservesWorktreeWhenSessionCreationFails()",
-        "AlasTests/RemoteAppStateAccessTests/remoteCreateWorktreeSessionRejectsMissingProjectAndInvalidBranchSafely()",
-        "AlasTests/RemoteAppStateAccessTests/remoteCreateWorktreeSessionRejectsRemoteDestinationBeforeCreating()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsAndDiffRejectAGitignoredFile()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsAndDiffRejectAGitignoredFileWithAWhitespacePaddedPath()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsAndDiffServeATrackedFileNormally()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsRejectsButDiffSafelyShowsATrackedSymlinkAliasingAGitignoredTarget()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsReportsSessionUnknownForAnUnknownSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileContentsSucceedsWhenLiveSessionRacesAheadOfPersistedSessionRows()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileDiffReportsBinaryForABinaryFileDeletedSinceTheComparisonRef()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileDiffReportsSessionUnknownForAnUnknownSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileDiffUsesOriginalPathForAnUnstagedRename()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileDiffUsesTheIndexForAMissingUnstagedDiffBinaryCheck()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileDiffUsesTheIndexForAStagedDiffBinaryCheck()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileTreeBadgesACommittedChangeEvenWithACleanWorkingTree()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileTreeChildrenBadgesACommittedChangeInASubdirectory()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileTreeReportsSessionUnknownForAnUnknownSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileTreeSurfacesAnIgnoredRootDirectoryWithATrackedDescendant()",
-        "AlasTests/RemoteAppStateAccessTests/remoteFileTreeVerifiesRemoteContainmentBeforeListingANonRootDirectory()",
-        "AlasTests/RemoteAppStateAccessTests/remoteProjectsPreserveConfiguredProjectIDsAndNames()",
-        "AlasTests/RemoteAppStateAccessTests/remoteRenameSessionRejectsArchivedSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteRenameSessionRejectsEmptyAndUnknownSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteRenameSessionUpdatesManualSessionTitleAndOpenTab()",
-        "AlasTests/RemoteAppStateAccessTests/remoteRenameSessionUpdatesMirrorSessionWithoutWriterLease()",
-        "AlasTests/RemoteAppStateAccessTests/remoteRenameSessionUpdatesNonLiveRecentSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteSessionSummariesCollapseRowsForSameRemoteSession()",
-        "AlasTests/RemoteAppStateAccessTests/remoteSessionSummariesKeepDifferentAgentsWithSameRemoteSessionId()",
-        "AlasTests/RemoteAppStateAccessTests/remoteSessionSummariesMarkStoredRowsWithoutTabsInactive()",
-        "AlasTests/RemoteAppStateAccessTests/remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate()",
-        "AlasTests/RemoteAppStateAccessTests/remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt()",
-        "AlasTests/RemoteAppStateAccessTests/remoteWorktreesFilterTransientOperationStates()",
-        "AlasTests/RemoteAppStateAccessTests/remoteWorktreesIncludeVisibleProjectWorktrees()"
+        "AlasTests/RemoteAppStateAccessTests"
       ],
-      "seconds": 51.5
+      "seconds": 61.67
     },
     {
       "selectors": [
         "AlasTests/RightPaneStateLoadOlderTests",
-        "AlasTests/RightPaneStatePullTests/forcedRefreshBypassesThrottleAndUpdatesBehindUpstream()",
-        "AlasTests/RightPaneStatePullTests/pullNoOpsWhenNoUpstream()",
-        "AlasTests/RightPaneStatePullTests/refreshThrottleSurvivesClearedBehindState()",
+        "AlasTests/RightPaneStatePullTests",
         "AlasTests/RightPaneStateSyncStatusTests"
       ],
-      "seconds": 37.05
+      "seconds": 33.36
     },
     {
       "selectors": [
         "AlasTests/SSHHostSuggestionsTests",
-        "AlasTests/SelfUpdaterTests/cancelBetweenStepsStopsSequence()",
-        "AlasTests/SelfUpdaterTests/cancelRunning()",
-        "AlasTests/SelfUpdaterTests/failingStepStopsSequence()",
-        "AlasTests/SelfUpdaterTests/homebrewCommandShape()",
-        "AlasTests/SelfUpdaterTests/missingExecutableFails()",
-        "AlasTests/SelfUpdaterTests/multiStepSequenceRunsInOrder()",
-        "AlasTests/SelfUpdaterTests/resetClears()",
-        "AlasTests/SelfUpdaterTests/startWhileRunningThrows()",
+        "AlasTests/SelfUpdaterTests",
         "AlasTests/ShellEnvResolverTests"
       ],
-      "seconds": 7.4
+      "seconds": 12.92
     },
     {
       "selectors": [
@@ -292,7 +234,7 @@
         "AlasTests/WorktreeTrashTests",
         "AlasTests/ZmxClientTests"
       ],
-      "seconds": 22.07
+      "seconds": 21.68
     },
     {
       "selectors": [
@@ -307,7 +249,7 @@
         "AlasTests/AgentRunnerInvocationTests",
         "AlasTests/AgentRunnerParseTests"
       ],
-      "seconds": 12.35
+      "seconds": 11.47
     },
     {
       "selectors": [
@@ -315,7 +257,7 @@
         "AlasTests/AppStateTabAvailabilityTests",
         "AlasTests/AppStateWorktreeArchiveBatchTests"
       ],
-      "seconds": 15.98
+      "seconds": 11.07
     },
     {
       "selectors": [
@@ -323,7 +265,7 @@
         "AlasTests/DiffPaneViewTests",
         "AlasTests/FileIndexTests"
       ],
-      "seconds": 28.44
+      "seconds": 34.63
     },
     {
       "selectors": [
@@ -331,19 +273,15 @@
         "AlasTests/GitServiceHeadMessageTests",
         "AlasTests/GitServiceMergeTests"
       ],
-      "seconds": 18.73
+      "seconds": 27.46
     },
     {
       "selectors": [
-        "AlasTests/IssueWorktreeLaunchTests/dialogBuildsPreparedPromptOnlyForFinalChatSelection()",
-        "AlasTests/IssueWorktreeLaunchTests/noTabLaunchPersistsAttachmentWithoutCreatingAcpPrompt()",
-        "AlasTests/IssueWorktreeLaunchTests/reloadRestoresAttachmentAndPreparedAcpState()",
-        "AlasTests/IssueWorktreeLaunchTests/retryWithSamePreparedPromptDoesNotDuplicateTheQueuedPrompt()",
-        "AlasTests/IssueWorktreeLaunchTests/terminalLaunchPersistsAttachmentWithoutCreatingAcpPrompt()",
+        "AlasTests/IssueWorktreeLaunchTests",
         "AlasTests/JSONRPCFramerBoundsTests",
         "AlasTests/JSONRPCStdioFramingFailureTests"
       ],
-      "seconds": 9.02
+      "seconds": 8.94
     },
     {
       "selectors": [
@@ -351,7 +289,7 @@
         "AlasTests/RemoteFileStatsTests",
         "AlasTests/RemoteTerminalLaunchTests"
       ],
-      "seconds": 6.77
+      "seconds": 7.18
     },
     {
       "selectors": [
@@ -359,7 +297,7 @@
         "AlasTests/RunScriptCompletionMonitorTests",
         "AlasTests/RunScriptCreationTests"
       ],
-      "seconds": 11.41
+      "seconds": 11.33
     },
     {
       "selectors": [
@@ -367,7 +305,7 @@
         "AlasTests/TerminalIntegrationActionsTests",
         "AlasTests/TerminalServiceZmxTests"
       ],
-      "seconds": 20.27
+      "seconds": 22.46
     },
     {
       "selectors": [
@@ -375,7 +313,7 @@
         "AlasTests/ZmxSessionNameTests",
         "AlasTests/ZmxSunPathBudgetTests"
       ],
-      "seconds": 6.91
+      "seconds": 10.01
     },
     {
       "selectors": [
@@ -383,7 +321,7 @@
         "AlasTests/AlasCLICommandRouterTests",
         "AlasTests/AlasCLIEnvInjectionTests"
       ],
-      "seconds": 8.54
+      "seconds": 8.08
     },
     {
       "selectors": [
@@ -391,7 +329,7 @@
         "AlasTests/BeautifulMermaidBackendTests",
         "AlasTests/BeautifulMermaidSmokeTests"
       ],
-      "seconds": 10.22
+      "seconds": 10.79
     },
     {
       "selectors": [
@@ -399,7 +337,7 @@
         "AlasTests/GGReorderModelTests",
         "AlasTests/GGServiceTests"
       ],
-      "seconds": 23.69
+      "seconds": 26.52
     },
     {
       "selectors": [
@@ -457,11 +395,14 @@
         "AlasTests/GitServiceRemoteChangesTests/shouldClassifyRemotelyDiscoveredEntry_classifiesADirectoryWithNoTrackedDescendant()",
         "AlasTests/GitServiceRemoteChangesTests/shouldClassifyRemotelyDiscoveredEntry_skipsADirectoryWithATrackedDescendant()",
         "AlasTests/GitServiceRemoteChangesTests/shouldClassifyRemotelyDiscoveredEntry_skipsOnlyForADirectDescendantNotAPrefixCollision()",
+        "AlasTests/GitServiceRemoteChangesTests/sidebarDiffStatsCountPartiallyStagedFilesOnceAndClearAfterCommit()",
+        "AlasTests/GitServiceRemoteChangesTests/sidebarDiffStatsHandleUnbornAndDeletionOnlyWorktrees()",
         "AlasTests/GitServiceRemoteChangesTests/statusCountsStagedFilesWithTabsInTheirPath()",
         "AlasTests/GitServiceRemoteChangesTests/statusForRemoteChangeListCountsUntrackedRecreationContent()",
+        "AlasTests/GitServiceRemoteChangesTests/untrackedLineCountStreamsLargeFiles()",
         "AlasTests/GitServiceRemoteForFetchTests"
       ],
-      "seconds": 19.1
+      "seconds": 25.33
     },
     {
       "selectors": [
@@ -469,7 +410,7 @@
         "AlasTests/LSPTransportFramingTests",
         "AlasTests/LegacyHookSweepTests"
       ],
-      "seconds": 5.54
+      "seconds": 7.83
     },
     {
       "selectors": [
@@ -477,7 +418,7 @@
         "AlasTests/RemoteZmxInstallerTests",
         "AlasTests/RepositoryImportServiceTests"
       ],
-      "seconds": 5.15
+      "seconds": 10.14
     },
     {
       "selectors": [
@@ -485,7 +426,7 @@
         "AlasTests/RunScriptFailureTests",
         "AlasTests/RunScriptLaunchTests"
       ],
-      "seconds": 23.05
+      "seconds": 28.57
     },
     {
       "selectors": [
@@ -493,7 +434,7 @@
         "AlasTests/TerminalTabStateCodableTests",
         "AlasTests/WorkspaceCheckoutLifecycleTests"
       ],
-      "seconds": 10.64
+      "seconds": 14.85
     },
     {
       "selectors": [
@@ -501,7 +442,7 @@
         "AlasTests/AlasCLIReviewTargetResolverTests",
         "AlasTests/AlasCLIWorktreeResolverTests"
       ],
-      "seconds": 9.5
+      "seconds": 7.79
     },
     {
       "selectors": [
@@ -509,7 +450,7 @@
         "AlasTests/CheckpointDiffLoaderTests",
         "AlasTests/CheckpointRestoreIntegrationTests"
       ],
-      "seconds": 62.92
+      "seconds": 66.58
     },
     {
       "selectors": [
@@ -517,7 +458,7 @@
         "AlasTests/GitEventFilterTests",
         "AlasTests/GitHubCLIProviderTests"
       ],
-      "seconds": 8.07
+      "seconds": 6.97
     },
     {
       "selectors": [
@@ -525,7 +466,7 @@
         "AlasTests/GitServiceStackCommitTests",
         "AlasTests/GitServiceStagedTests"
       ],
-      "seconds": 11.72
+      "seconds": 9.59
     },
     {
       "selectors": [
@@ -533,7 +474,7 @@
         "AlasTests/MergeOperationStateTests",
         "AlasTests/NewRunScriptDialogTests"
       ],
-      "seconds": 23.51
+      "seconds": 19.23
     },
     {
       "selectors": [
@@ -541,7 +482,7 @@
         "AlasTests/ReviewSessionLoaderTests",
         "AlasTests/RevisionSnapshotCacheTests"
       ],
-      "seconds": 27.04
+      "seconds": 24.67
     },
     {
       "selectors": [
@@ -549,49 +490,15 @@
         "AlasTests/RunScriptPaletteModelTests",
         "AlasTests/RunScriptStackCatalogTests"
       ],
-      "seconds": 10.02
+      "seconds": 13.51
     },
     {
       "selectors": [
         "AlasTests/WorkspaceCheckoutLocalIntegrationTests",
         "AlasTests/WorkspaceCheckoutRemoteInvocationTests",
-        "AlasTests/WorkspaceCheckoutRepairTests/concurrentResumeCreationRejectsTheSecondRepairClaim()",
-        "AlasTests/WorkspaceCheckoutRepairTests/concurrentRetrySetupRejectsTheSecondLiveSetup()",
-        "AlasTests/WorkspaceCheckoutRepairTests/deleteSnapshotCanDiscardAPlanlessIdentityConflictWithConfirmation()",
-        "AlasTests/WorkspaceCheckoutRepairTests/deleteSnapshotRevalidatesMemberStateAfterObservedConflict()",
-        "AlasTests/WorkspaceCheckoutRepairTests/localDanglingSymlinkDestinationIsIdentityConflictNotMissing()",
-        "AlasTests/WorkspaceCheckoutRepairTests/localSymlinkToMovedWorktreeOutsideRootIsIdentityConflict()",
-        "AlasTests/WorkspaceCheckoutRepairTests/reconciliationDoesNotAdoptAnIdentityConflict()",
-        "AlasTests/WorkspaceCheckoutRepairTests/reconciliationOnlyReportsAVerifiedFrozenWorktree()",
-        "AlasTests/WorkspaceCheckoutRepairTests/recreateMemberOnlyUsesTheSelectedFrozenMemberPlan()",
-        "AlasTests/WorkspaceCheckoutRepairTests/recreationClearsStaleCleanupBeforePersistingNewLineage()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationAcceptsInterruptedCreatingCheckout()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationAcceptsPersistedRepairingCheckoutAfterRelaunch()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationContinuesFromBranchPreparedWithoutPreparingAgain()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationDoesNotResetCompletedSiblingUnlessItsFrozenPathIsAbsent()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationDoesNotRunSetupWhenTheFrozenWorktreeLineageNoLongerMatches()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationNeverReplaysGitAfterASetupFailure()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRejectsLiveSetupRetryOwnership()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRestoresACompletedAdvancedWorktreeAfterItsStorageReturns()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRetainsAnAdvancedBranchBeforeClearingAMissingWorktreeRegistration()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRetriesFailedWorktreeCreationWhenTheFrozenPathIsMissing()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRetriesSetupFromWorktreeCreatedWithoutRepeatingGit()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationRetriesSetupRunningWithoutRepeatingGit()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationReusesAnAlreadyCreatedWorktreeAtTheCreatingCheckpoint()",
-        "AlasTests/WorkspaceCheckoutRepairTests/resumeCreationUsesThePersistedFrozenPlan()",
-        "AlasTests/WorkspaceCheckoutRepairTests/retryPreservesFailureDetailsAndClearsOnlyResolvedMemberErrors(hasDuplicateName:)",
-        "AlasTests/WorkspaceCheckoutRepairTests/retrySetupDoesNotRunInheritedGlobalSetupTwice()",
-        "AlasTests/WorkspaceCheckoutRepairTests/retrySetupDoesNotRunWhenTheFrozenWorktreeLineageNoLongerMatches()",
-        "AlasTests/WorkspaceCheckoutRepairTests/retrySetupDoesNotRunWhileCheckoutDeletionIsInProgress()",
-        "AlasTests/WorkspaceCheckoutRepairTests/retrySetupUsesTheFrozenWorktreeAndNeverRepeatsASuccess()",
-        "AlasTests/WorkspaceCheckoutRepairTests/sshAbsentDestinationIsMissingButUnmarkedExistingDestinationIsConflict()",
-        "AlasTests/WorkspaceCheckoutRepairTests/sshConnectionFailureIsUnavailableNotMissing()",
-        "AlasTests/WorkspaceCheckoutRepairTests/sshObservationChecksCanonicalDestinationContainment()",
-        "AlasTests/WorkspaceCheckoutRepairTests/useExistingRepairCandidateCommitsAfterFreshExactLineage()",
-        "AlasTests/WorkspaceCheckoutRepairTests/useExistingRepairCandidateOnlyAcceptsExactFrozenLineage()",
-        "AlasTests/WorkspaceCheckoutRepairTests/useExistingRepairCandidateReobservesLineageBeforeCommitting()"
+        "AlasTests/WorkspaceCheckoutRepairTests"
       ],
-      "seconds": 10.68
+      "seconds": 8.2
     }
   ]
 }

@@ -1,7 +1,7 @@
 require "yaml"
 
 workflow_path = File.expand_path("../../../.github/workflows/build.yml", __dir__)
-workflow = YAML.safe_load_file(workflow_path, aliases: true)
+workflow = YAML.safe_load(File.read(workflow_path), aliases: true)
 jobs = workflow.fetch("jobs")
 
 swift_job = jobs.fetch("build-test")
@@ -49,6 +49,18 @@ raise "retain build evidence even after compiler failure" unless builder_steps.a
   step["if"] == "always()" && step.dig("with", "path") == ".build/xcode/build-metrics"
 end
 audit = jobs.fetch("swift-coverage")
+audit_download = audit.fetch("steps").find { |step| step.dig("with", "pattern") }
+raise "coverage audit must download compact reports, not diagnostic bundles" unless
+  audit_download&.dig("with", "pattern") == "swift-test-reports-${{ github.run_attempt }}-*"
+[swift_job, workers].each do |job|
+  reports = job.fetch("steps").find { |step| step.dig("with", "name")&.start_with?("swift-test-reports-") }
+  raise "each lane must publish reports even after failure" unless
+    reports && reports["if"] == "always()" && reports.dig("with", "path") == ".build/xcode/results/*.report.json"
+  raise "keep full result bundles for diagnosis" unless job.fetch("steps").any? do |step|
+    step["if"] == "always()" && step.dig("with", "name")&.start_with?("swift-test-results-")
+  end
+end
+raise "run timing inspection requires read-only Actions access" unless audit.dig("permissions", "actions") == "read"
 raise "audit must run even if any Swift lane fails" unless audit["if"] == "always()" && audit["needs"].sort == ["build-test", "swift-tests"]
 raise "audit must propagate infrastructure failures too" unless audit.fetch("steps").any? do |step|
   step["if"] == "always()" && step.dig("env", "SHARD_RESULT") == "${{ needs.swift-tests.result }}"

@@ -119,11 +119,15 @@ the old prototype's runner-minute adoption criterion does not fit this deliberat
 tradeoff. Record actual queue, wait, setup, transfer, test, and upload durations
 before declaring the experiment successful.
 
-`scripts/ci-swift-test-timings.json` records exact invocation selectors and elapsed
-seconds from that passing baseline. Planning places the longest subprocess
-invocations first on the least-loaded worker. Baseline estimates are 535.36s and
-530.57s. Changed or new selector groups use their invocation timeout as a
-conservative estimate and remain scheduled. Ordinary work stays on lane zero.
+`scripts/ci-swift-test-timings.json` records invocation selectors and elapsed
+seconds from a passing run, linked in its `source` field. Planning assigns the
+longest estimated subprocess invocations to the least-loaded worker. Estimates
+first use exact selector matches, then the same suite group regardless of which
+individual tests are quarantined. Regrouped suites use an equal share of their
+previous invocation time; unknown suites use the median of those per-suite
+estimates, or ten seconds when no history exists. These approximations affect
+assignment only. Invocation deadlines and test selection remain independent.
+Ordinary work stays on lane zero.
 No global Swift Testing parallelism is enabled. Each worker executes sequentially,
 so host preferences, environment, pasteboard, and process state are not shared
 between simultaneously executing invocations on the same host.
@@ -135,6 +139,12 @@ The coverage audit runs even after a failed lane, requires every Swift job to
 succeed, and reconciles all invocation reports. Every lane uploads diagnostics
 even on failure. Artifact names include the run attempt to reject stale evidence;
 use **Re-run all jobs**, not a partial rerun, for this coordinated experiment.
+
+Each lane publishes a compact `swift-test-reports-<attempt>-<lane>` artifact
+containing only its JSON invocation reports. The coverage audit downloads these
+reports; it does not download the full diagnostic artifacts. Missing, duplicate,
+or stale reports still fail reconciliation. Full result bundles and logs remain
+available in the separate `swift-test-results-<attempt>-<lane>` artifacts.
 
 Each invocation stores its selectors, expected tests, duration, exit status, logs,
 result bundle, and structured test outcomes. The final audit rejects missing tests,
@@ -162,3 +172,46 @@ Use a fresh output directory per run. `SWIFT_TEST_DERIVED_DATA` can select an
 existing local build for focused verification. CI uses `.build/xcode/DerivedData`.
 Local sequential execution remains available through `run --lane … --batch …`.
 CI workers use `run-shard --shard 1` and `run-shard --shard 2` with the shared plan.
+
+## September 18 scheduling update
+
+The passing [#1309 run](https://github.com/mrmans0n/alas/actions/runs/35339077070)
+took 54m25s from workflow creation to completion. The builder started 22m41s
+after workflow creation, including 22m06s between job creation and runner start.
+Compilation took 663s. The ordinary lane took 434s; subprocess workers took
+901s and 366s. Nine of 52 invocation groups missed the old timing lookup and
+received 120s timeout budgets as estimates, although several took only 9–22s.
+The final audit spent another 125s downloading diagnostics it did not read.
+
+The timing baseline now uses that run. Replaying its recorded durations with the
+new assignments gives 633.93s and 633.22s, compared with 900.79s and 366.36s under
+the original assignments. This is a scheduling simulation, not a measured CI
+speedup. All 52 invocation selections, their timeout limits, and test coverage
+are unchanged in the replay. Validate the improvement on source-changing PRs.
+The workflow is part of the compiler-cache compatibility key, so the first run
+after a workflow edit may need to seed a new cache.
+
+The coverage summary compares predicted and observed lane times and reports how
+many invocation estimates came from exact matches, suite groups, or approximations.
+After complete, passing coverage reconciliation with valid durations, the
+`swift-test-summary-<attempt>` artifact also contains `timings.json`, ready to
+review and copy to `scripts/ci-swift-test-timings.json`. Refresh from a successful
+representative run when the estimates drift. Failed or incomplete audits never
+export a replacement timing baseline.
+
+The audit also publishes `ci-run-metrics-<attempt>`, containing JSON and Markdown
+for that attempt's job queue times, runner times, step durations, build duration,
+and compiler-cache hit/miss counters. A compact build-summary artifact carries
+the counters without downloading compiler logs or result bundles. Missing build
+evidence is shown as unavailable. Timing collection is advisory and cannot turn
+a coverage failure into success. The audit's own duration is incomplete in a
+snapshot collected before it finishes. Jobs and steps overlap, so do not sum
+them to infer workflow latency.
+
+Use these reports to compare macOS queue delays and worker artifact waits before
+changing runner count or provisioning. The existing three-lane layout queues
+workers alongside the builder to avoid a second queue after compilation, but
+occupies workers while they wait. Queue measurements alone do not establish
+whether repository demand, account limits, or hosted-runner supply caused a delay.
+Likewise, compare compiler hit/miss counters on source-changing commits rather
+than extrapolating from unchanged-revision cache replay.
