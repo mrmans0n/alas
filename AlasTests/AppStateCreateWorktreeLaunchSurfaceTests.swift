@@ -5,6 +5,10 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStateCreateWorktreeLaunchSurfaceTests {
+    private struct TerminalOpenFailure: LocalizedError {
+        var errorDescription: String? { "Terminal failed to open" }
+    }
+
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-launchsurface-\(name)-\(UUID().uuidString)")
@@ -25,6 +29,61 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
+    }
+
+    @Test
+    func terminalLaunchSurfaceRecordsLaunchFailureWhenTerminalOpenFails() async throws {
+        let repo = try await makeRepo(name: "terminal-open-fails")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                throw TerminalOpenFailure()
+            }
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "terminal-open-fails",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: ["claude"]
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-terminal-open-fails-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "terminal-open-fails",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .terminal(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .launchFailed = operation { return true }
+            return false
+        }
+
+        guard case .launchFailed(_, let message, let launchSurface) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected launchFailed state")
+            return
+        }
+        #expect(message == TerminalOpenFailure().localizedDescription)
+        #expect(launchSurface == .terminal(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
     }
 
     @Test

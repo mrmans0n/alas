@@ -4023,7 +4023,7 @@ final class AppState {
                 project: project,
                 refreshAvailability: refreshAvailability
             )
-            _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
+            _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
                 for: worktree,
                 startupScriptSuffix: suffix
             )
