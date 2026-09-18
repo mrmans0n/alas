@@ -26,53 +26,54 @@ struct SubprocessRunner: Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        // Drain each pipe with a blocking `readDataToEndOfFile()` on its own
-        // background queue. This avoids the readabilityHandler race where
-        // `waitUntilExit()` can return before the asynchronous EOF callback
-        // has flushed the final buffered chunk — and it still prevents
-        // pipe-buffer deadlocks because the readers run concurrently with
-        // the child. After the direct child exits, normal EOF delivery gets
-        // a bounded grace period before inherited readers are closed.
+        // Drain each pipe incrementally. A descendant can retain an inherited
+        // writer after the direct child exits, so EOF is not a reliable
+        // prerequisite for returning the output emitted so far.
         let stdoutBox = OutputBox()
         let stderrBox = OutputBox()
-        let stdoutDrain = DispatchGroup()
-        let stderrDrain = DispatchGroup()
-        stdoutDrain.enter()
-        stderrDrain.enter()
-        DispatchQueue.global().async {
-            defer { stdoutDrain.leave() }
-            stdoutBox.append(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutBox.markClosed()
+            } else {
+                stdoutBox.append(data)
+            }
         }
-        DispatchQueue.global().async {
-            defer { stderrDrain.leave() }
-            stderrBox.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrBox.markClosed()
+            } else {
+                stderrBox.append(data)
+            }
         }
 
-        // A subprocess can leave descendants behind with inherited pipe
-        // writers. Once the direct child is gone, give normal EOF delivery a
-        // short grace period, then close our readers instead of blocking a
-        // cooperative task indefinitely while joining the drain queues.
         func finishDrainingPipes() {
-            let drains = [
-                (stdoutDrain, stdoutPipe.fileHandleForReading),
-                (stderrDrain, stderrPipe.fileHandleForReading),
+            let pipes = [
+                (stdoutBox, stdoutPipe.fileHandleForReading),
+                (stderrBox, stderrPipe.fileHandleForReading),
             ]
-            for (drain, reader) in drains where drain.wait(timeout: .now() + .milliseconds(250)) == .timedOut {
-                try? reader.close()
-                _ = drain.wait(timeout: .now() + .milliseconds(250))
+            for (output, reader) in pipes {
+                _ = output.waitForClose(timeout: .now() + .milliseconds(250))
+                reader.readabilityHandler = nil
             }
         }
 
         do {
             try process.run()
         } catch {
-            // Spawn failed: close the pipe write ends so the drain threads
-            // hit EOF and let the drain queues finish.
             try? stdoutPipe.fileHandleForWriting.close()
             try? stderrPipe.fileHandleForWriting.close()
             finishDrainingPipes()
             return Result(exitCode: nil, stdout: "", stderr: "\(error)")
         }
+
+        // Without closing our copies after Process duplicates them into the
+        // child, a normal direct-child exit can never produce EOF here.
+        try? stdoutPipe.fileHandleForWriting.close()
+        try? stderrPipe.fileHandleForWriting.close()
 
         let deadline = DispatchTime.now() + timeout
         let exitGroup = DispatchGroup()
@@ -108,6 +109,12 @@ struct SubprocessRunner: Sendable {
 private final class OutputBox: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
+    private var closed = false
+    private let closeGroup = DispatchGroup()
+
+    init() {
+        closeGroup.enter()
+    }
 
     func append(_ chunk: Data) {
         lock.lock()
@@ -119,5 +126,20 @@ private final class OutputBox: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    func markClosed() {
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return
+        }
+        closed = true
+        lock.unlock()
+        closeGroup.leave()
+    }
+
+    func waitForClose(timeout: DispatchTime) -> DispatchTimeoutResult {
+        closeGroup.wait(timeout: timeout)
     }
 }
