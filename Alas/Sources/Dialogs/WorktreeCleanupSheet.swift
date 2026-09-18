@@ -195,6 +195,8 @@ private struct WorktreeCleanupRow: View {
                                 AlasButton(title: "Open Checkout", style: .normal) {
                                     onOpenCheckout(owner.id)
                                 }
+                                .disabled(isSelectionDisabled)
+                                .opacity(isSelectionDisabled ? 0.5 : 1)
                             }
                         }
                     }
