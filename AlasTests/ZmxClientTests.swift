@@ -271,4 +271,26 @@ struct ZmxClientTests {
             ZmxSessionInfo(name: "alas-bad", startDir: nil, pid: 12, clients: nil, created: nil, cmd: nil),
         ])
     }
+
+    @Test
+    func systemRunnerDoesNotWaitForDescendantsHoldingOutputPipesOpen() {
+        let started = Date()
+        let result = SubprocessRunner.system.run(
+            URL(fileURLWithPath: "/usr/bin/perl"),
+            ["-e", "use POSIX qw(_exit); $|=1; defined(my $pid=fork) or die 'fork failed'; if ($pid == 0) { sleep 10; _exit(0); } print $pid; _exit(0);"],
+            ProcessInfo.processInfo.environment,
+            5.0
+        )
+        let elapsed = Date().timeIntervalSince(started)
+        guard let pid = Int32(result.stdout) else {
+            Issue.record("Expected the inherited-pipe child PID")
+            return
+        }
+        let childWasRunning = kill(pid, 0) == 0
+        kill(pid, SIGTERM)
+
+        #expect(result.exitCode == 0)
+        #expect(childWasRunning)
+        #expect(elapsed < 5.0, "Pipe drainage must remain bounded after the direct child exits")
+    }
 }
