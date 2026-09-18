@@ -17,6 +17,16 @@ struct ACPRemoteLaunchTests {
         #expect(command.hasSuffix("'claude-agent-acp' '--flag' 'va l'"))
     }
 
+    @Test func agentCommandPreservesRemoteHomeExpansionForTildeCommand() {
+        let command = ACPRemoteLaunch.agentCommand(
+            command: "~/bin/gemini acp",
+            arguments: ["--flag value"]
+        )
+
+        #expect(command.hasSuffix("~/'bin/gemini acp' '--flag value'"))
+        #expect(!command.contains("'~/bin/gemini acp'"))
+    }
+
     @Test func channelInvocationRunsBatchSSHInWorktree() {
         let invocation = ACPRemoteLaunch.channelInvocation(
             host: "devbox", worktreePath: "/srv/repo",
@@ -63,6 +73,11 @@ struct ACPRemoteLaunchTests {
             == "command -v 'gemini'")
         #expect(ACPRemoteLaunch.setupProbeCommand(command: "codex-acp")
             == "command -v 'codex-acp'")
+    }
+
+    @Test func setupProbePreservesRemoteHomeExpansionForTildeBinary() {
+        #expect(ACPRemoteLaunch.setupProbeCommand(check: .binaryOnPath(name: "~/bin/gemini"))
+            == "command -v ~/'bin/gemini'")
     }
 
     @Test func setupProbePreservesPackageChecks() {

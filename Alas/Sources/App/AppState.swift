@@ -10927,7 +10927,7 @@ final class AppState {
                 guard !home.isEmpty else { return treatsHomeAsRemote ? nil : trimmed }
                 return "/\(home)/\(trimmed.dropFirst(2))"
             }
-            guard treatsHomeAsRemote == false else { return nil }
+            guard treatsHomeAsRemote == false else { return trimmed }
         }
         return (trimmed as NSString).expandingTildeInPath
     }

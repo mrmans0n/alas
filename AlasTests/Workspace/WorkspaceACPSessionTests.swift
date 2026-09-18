@@ -269,7 +269,7 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
-    @Test func checkoutLaunchSpecDoesNotLocallyExpandMissingRemoteHomeOverride() throws {
+    @Test func checkoutLaunchSpecPreservesHomeRelativeRemoteOverrideWithoutRemoteHome() throws {
         let state = AppState(store: MemoryStore())
         state.config.agents.builtinState["gemini"] = .init(
             isEnabled: true,
@@ -285,8 +285,12 @@ struct WorkspaceACPSessionTests {
             useBypassPermissions: false
         )
 
-        #expect(transformed.command == spec.command)
-        #expect(transformed.setupCheck == spec.setupCheck)
+        #expect(transformed.command == "~/bin/gemini")
+        if case .binaryOnPath(let name) = transformed.setupCheck {
+            #expect(name == "~/bin/gemini")
+        } else {
+            Issue.record("expected setup to check the remote-home-relative override")
+        }
     }
 
     @MainActor
