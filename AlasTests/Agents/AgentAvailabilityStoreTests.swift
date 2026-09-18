@@ -145,7 +145,7 @@ struct AgentAvailabilityStoreTests {
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
     }
 
-    @Test func successfulAvailabilitySchedulesRefreshAtExpiry() async {
+    @Test func successfulAvailabilityAdvancesGenerationAtExpiry() async {
         let counter = ProbeCounter()
         let scheduledRefresh = ScheduledRefreshCapture()
         let store = AgentAvailabilityStore(
@@ -168,11 +168,57 @@ struct AgentAvailabilityStoreTests {
         ]
 
         await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        let loadedGeneration = store.generation
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
 
         await scheduledRefresh.run()
 
+        #expect(await counter.value == 1)
+        #expect(store.generation == loadedGeneration + 1)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+
         #expect(await counter.value == 2)
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
+    }
+
+    @Test func staleSuccessfulAvailabilityStaysVisibleDuringRefresh() async {
+        let counter = ProbeCounter()
+        let clock = TestClock()
+        let probe = PausedProbe()
+        let store = AgentAvailabilityStore(
+            probe: { _, _, _ in
+                let attempt = await counter.increment()
+                if attempt == 2 {
+                    await probe.waitUntilReleased()
+                }
+                return ProcessResult(
+                    exitCode: 0,
+                    stdout: attempt == 1 ? agentProbeLine(0) : "\(agentProbeLine(0))\(agentProbeLine(1))",
+                    stderr: ""
+                )
+            },
+            now: { clock.now }
+        )
+        let candidates = [
+            TestAgents.custom(id: "one", binary: "one"),
+            TestAgents.custom(id: "two", binary: "two")
+        ]
+
+        await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        clock.advance(by: AgentAvailabilityStore.successfulProbeTTL)
+
+        let refresh = Task {
+            await store.load(target: .ssh(host: "dev"), worktreePath: "/srv/repo", candidates: candidates)
+        }
+        await probe.waitUntilPaused()
+
+        #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one"])
+
+        await probe.release()
+        await refresh.value
+
         #expect(store.state(target: .ssh(host: "dev"), worktreePath: "/srv/repo", localAgents: []).agents.map(\.id) == ["one", "two"])
     }
 
@@ -241,6 +287,42 @@ private actor ProbeCounter {
     }
 
     var value: Int { count }
+}
+
+private actor PausedProbe {
+    private var pausedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var paused = false
+    private var released = false
+
+    func waitUntilReleased() async {
+        await withCheckedContinuation { continuation in
+            paused = true
+            pausedContinuation?.resume()
+            pausedContinuation = nil
+            if released {
+                continuation.resume()
+            } else {
+                releaseContinuation = continuation
+            }
+        }
+    }
+
+    func waitUntilPaused() async {
+        await withCheckedContinuation { continuation in
+            if paused {
+                continuation.resume()
+            } else {
+                pausedContinuation = continuation
+            }
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
 }
 
 @MainActor
