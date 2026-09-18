@@ -2974,6 +2974,15 @@ final class AppState {
                 worktreePath: planned.destinationPath
             )
         }
+        let enabledAgentIDs: Set<String> = switch plan.executionLocation.normalized {
+        case .local:
+            Set(agentRegistry.enabled().map(\.id))
+        case .ssh:
+            Set(AgentConfiguredCatalog.enabled(
+                builtinState: config.agents.builtinState,
+                customs: config.agents.custom
+            ).map(\.id))
+        }
         return WorkspaceConfigurationResolver.resolve(.init(
             globalTerminal: config.terminal,
             globalLaunchPreference: .init(
@@ -2985,10 +2994,7 @@ final class AppState {
             workspaceConfiguration: workspace.configuration,
             members: members,
             availableLauncherModes: Set(AppConfig.LauncherMode.allCases),
-            enabledAgentIDs: Set(AgentConfiguredCatalog.enabled(
-                builtinState: config.agents.builtinState,
-                customs: config.agents.custom
-            ).map(\.id))
+            enabledAgentIDs: enabledAgentIDs
         ))
     }
 

@@ -535,7 +535,9 @@ final class ProjectsManager {
                     reconciled.append(existing)
                 }
             case .launchFailed:
-                continue
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
+                }
             case .deleteFailed:
                 // If git still sees the worktree, keep it visible with the failed
                 // state so the user can retry or remove. If the worktree is gone

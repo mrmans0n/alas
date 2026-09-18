@@ -1,11 +1,15 @@
 import Testing
 @testable import Alas
 
+private func agentProbeLine(_ index: Int) -> String {
+    "__ALAS_AGENT_PROBE_AVAILABLE__ \(index)\n"
+}
+
 @MainActor
 struct AgentAvailabilityStoreTests {
     @Test func remoteLoadPublishesFilteredCatalogInCatalogOrder() async {
         let store = AgentAvailabilityStore { _, _, _ in
-            ProcessResult(exitCode: 0, stdout: "1\n0\n", stderr: "")
+            ProcessResult(exitCode: 0, stdout: "\(agentProbeLine(1))\(agentProbeLine(0))", stderr: "")
         }
         let candidates = [
             TestAgents.custom(id: "one", binary: "one"),
@@ -19,7 +23,7 @@ struct AgentAvailabilityStoreTests {
 
     @Test func hostsDoNotShareAvailability() async {
         let store = AgentAvailabilityStore { host, _, _ in
-            ProcessResult(exitCode: 0, stdout: host == "dev-a" ? "0\n" : "1\n", stderr: "")
+            ProcessResult(exitCode: 0, stdout: host == "dev-a" ? agentProbeLine(0) : agentProbeLine(1), stderr: "")
         }
         let candidates = [
             TestAgents.custom(id: "one", binary: "one"),
@@ -35,7 +39,7 @@ struct AgentAvailabilityStoreTests {
 
     @Test func relativeExecutablesSeparateWorktreeCacheKeys() async {
         let store = AgentAvailabilityStore { _, path, _ in
-            ProcessResult(exitCode: 0, stdout: path == "/srv/one" ? "0\n" : "", stderr: "")
+            ProcessResult(exitCode: 0, stdout: path == "/srv/one" ? agentProbeLine(0) : "", stderr: "")
         }
         let candidates = [TestAgents.custom(id: "repo-agent", binary: "tools/agent")]
 
@@ -51,7 +55,7 @@ struct AgentAvailabilityStoreTests {
         let store = AgentAvailabilityStore { _, _, _ in
             await counter.increment()
             try await Task.sleep(for: .milliseconds(50))
-            return ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+            return ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "one", binary: "one")]
 
@@ -68,7 +72,7 @@ struct AgentAvailabilityStoreTests {
             let attempt = await counter.increment()
             return attempt == 1
                 ? ProcessResult(exitCode: 255, stdout: "", stderr: "offline")
-                : ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+                : ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "one", binary: "one")]
 
@@ -86,7 +90,7 @@ struct AgentAvailabilityStoreTests {
             let attempt = await counter.increment()
             return attempt == 1
                 ? ProcessResult(exitCode: 255, stdout: "", stderr: "offline")
-                : ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+                : ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "one", binary: "one")]
 
@@ -109,7 +113,7 @@ struct AgentAvailabilityStoreTests {
 
     @Test func invalidationRemovesOnlyTheMatchingHost() async {
         let store = AgentAvailabilityStore { _, _, _ in
-            ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+            ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "one", binary: "one")]
 
@@ -123,7 +127,7 @@ struct AgentAvailabilityStoreTests {
 
     @Test func invalidationClearsEveryWorktreeCacheKeyForTheHost() async {
         let store = AgentAvailabilityStore { _, _, _ in
-            ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+            ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "repo-agent", binary: "tools/agent")]
 
@@ -138,7 +142,7 @@ struct AgentAvailabilityStoreTests {
 
     @Test func invalidationAdvancesGenerationForMountedViewTasks() async {
         let store = AgentAvailabilityStore { _, _, _ in
-            ProcessResult(exitCode: 0, stdout: "0\n", stderr: "")
+            ProcessResult(exitCode: 0, stdout: agentProbeLine(0), stderr: "")
         }
         let candidates = [TestAgents.custom(id: "one", binary: "one")]
 

@@ -616,6 +616,39 @@ extension ProjectsManagerTests {
         ))
     }
 
+    @Test func refreshClearsLaunchFailedWorktreeWhenGitNoLongerSeesIt() async throws {
+        let repo = try await makeRepo(name: "launch-failed-gone")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "launch-failed-gone", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-launch-failed")
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "launch-failed",
+            branch: "launch-failed",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        mgr.insertOptimisticWorktree(optimistic)
+        mgr.setOperationState(
+            id: optimistic.id,
+            state: .launchFailed(
+                projectId: project.id,
+                message: "agent missing",
+                launchSurface: .terminal(agentId: "codex")
+            )
+        )
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == optimistic.id })
+        #expect(mgr.operationState(for: optimistic.id) == nil)
+    }
+
     @Test(arguments: [GGWorktreeMode.on, .off, .inherit])
     func refreshPromotesCreateFailedGGModeWhenWorktreeAppears(mode: GGWorktreeMode) async throws {
         let repo = try await makeRepo(name: "create-failed-live-\(mode.rawValue)")
