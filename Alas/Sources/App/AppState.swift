@@ -10858,7 +10858,8 @@ final class AppState {
         )
         let configuredAgent = agents.first(where: { $0.id == spec.agentID })
         var launchSpec = spec
-        if let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
+        if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) == nil,
+           let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
            !binaryOverride.isEmpty,
            let command = Self.normalizedACPBinaryOverride(
             binaryOverride,
