@@ -193,6 +193,22 @@ struct SidebarView: View {
                                             destinationId: destinationId
                                         )
                                         state.saveSpaces()
+                                    },
+                                    commitQuery: { wt in
+                                        guard !state.projectsManager.isMain(wt, in: project) else { return nil }
+                                        let pane = state.rightPaneStore.activeState(worktreeId: wt.id)
+                                        let override = pane.flatMap { pane in
+                                            pane.userOverrodeBaseBranch
+                                                && pane.lastConfigBaseBranch == state.config.worktrees.baseBranch
+                                                ? pane.baseBranch : nil
+                                        }
+                                        return WorktreeRowView.CommitQuery(
+                                            path: wt.path,
+                                            branch: wt.branch,
+                                            baseBranch: override ?? state.config.worktrees.baseBranch,
+                                            preferLocal: override != nil,
+                                            revision: state.revisionChangeGeneration(worktreeID: wt.id)
+                                        )
                                     }
                                 )
                             }

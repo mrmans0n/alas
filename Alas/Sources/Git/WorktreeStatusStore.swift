@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+struct WorktreeDiffStats: Equatable, Sendable {
+    let added: Int
+    let deleted: Int
+}
+
 /// Worktree path → working-tree status, written by `WorktreeStatusScanner` and
 /// read by the sidebar row.
 ///
@@ -14,6 +19,17 @@ final class WorktreeStatusStore {
     static let shared = WorktreeStatusStore()
 
     private(set) var statuses: [String: WorktreeDirtyState] = [:]
+    private var diffs: [String: WorktreeDiffStats] = [:]
+
+    func diffStats(forPath path: String) -> WorktreeDiffStats? {
+        diffs[path]
+    }
+
+    func applyDiffStats(_ scanned: [String: WorktreeDiffStats]) {
+        for (path, stats) in scanned where diffs[path] != stats {
+            diffs[path] = stats
+        }
+    }
 
     func status(forPath path: String) -> WorktreeDirtyState {
         statuses[path] ?? .unknown
@@ -34,6 +50,8 @@ final class WorktreeStatusStore {
     /// Drops entries for worktrees that no longer exist. Value-diffed so a
     /// no-op prune does not invalidate observers.
     func prune(keepingPaths: Set<String>) {
+        let prunedDiffs = diffs.filter { keepingPaths.contains($0.key) }
+        if prunedDiffs.count != diffs.count { diffs = prunedDiffs }
         let pruned = statuses.filter { keepingPaths.contains($0.key) }
         if pruned.count != statuses.count { statuses = pruned }
     }

@@ -14,7 +14,7 @@ actor WorktreeStatusScanner {
     /// around 34 for a typical setup — on every app activation.
     static let maxConcurrentScans = 4
 
-    /// Per-worktree ceiling. A pathological repo should not stall the pass.
+    /// Per-process ceiling. A pathological repo should not stall the pass.
     static let perScanTimeout: TimeInterval = 10
     static let statusArguments = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
 
@@ -71,20 +71,37 @@ actor WorktreeStatusScanner {
     /// showing dirt does not blank on a transient git error.
     nonisolated static func statuses(for paths: [URL]) async -> [String: WorktreeDirtyState] {
         var results: [String: WorktreeDirtyState] = [:]
-        await withTaskGroup(of: (String, WorktreeDirtyState?).self) { group in
+        var diffs: [String: WorktreeDiffStats] = [:]
+        await withTaskGroup(of: (String, WorktreeDirtyState?, WorktreeDiffStats?).self) { group in
             var iterator = paths.makeIterator()
 
             func addNext() {
                 guard let path = iterator.next() else { return }
-                group.addTask { (path.path, await status(at: path)) }
+                group.addTask {
+                    let state = await status(at: path)
+                    let stats: WorktreeDiffStats?
+                    if state == .clean {
+                        stats = WorktreeDiffStats(added: 0, deleted: 0)
+                    } else if state != nil {
+                        stats = try? await GitService().worktreeDiffStats(
+                            worktreePath: path, usesRemoteHostRegistry: false
+                        )
+                    } else {
+                        stats = nil
+                    }
+                    return (path.path, state, stats)
+                }
             }
 
             for _ in 0..<maxConcurrentScans { addNext() }
-            while let (path, status) = await group.next() {
+            while let (path, status, stats) = await group.next() {
                 if let status { results[path] = status }
+                if let stats { diffs[path] = stats }
                 addNext()
             }
         }
+        let scannedDiffs = diffs
+        await MainActor.run { WorktreeStatusStore.shared.applyDiffStats(scannedDiffs) }
         return results
     }
 

@@ -1,10 +1,45 @@
 import Foundation
 
-/// Base-relative views used by the remote changes surface. Unlike the desktop
-/// Changes panel (working tree vs index/HEAD), these compare the whole
-/// worktree — commits plus uncommitted work — against the comparison ref, so
-/// the remote client shows everything an agent did on this branch.
+/// Diff metrics shared by the sidebar and remote changes views.
+/// Base-relative queries include committed and uncommitted changes;
+/// sidebar totals measure uncommitted changes against HEAD.
 extension GitService {
+    /// Net uncommitted changes, counting a partially staged path only once.
+    func worktreeDiffStats(
+        worktreePath: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> WorktreeDiffStats {
+        func git(_ args: [String]) async throws -> ProcessResult {
+            try await Process.git(args, cwd: worktreePath,
+                                  usesRemoteHostRegistry: usesRemoteHostRegistry,
+                                  timeout: WorktreeStatusScanner.perScanTimeout)
+        }
+        let head = try await git(["rev-parse", "--verify", "--quiet", "HEAD"])
+        let base = head.exitCode == 0 ? "HEAD" : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        let numstat = try await git(["diff", "--no-ext-diff", "--numstat", "-z", base, "--"])
+        guard numstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
+        }
+        let counts = Self.parseNumstatZOutput(numstat.stdout)
+        let untracked = try await git(["ls-files", "--others", "--exclude-standard", "-z"])
+        guard untracked.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(untracked.exitCode, untracked.stderr)
+        }
+        let paths = untracked.stdout.split(separator: "\0").map(String.init)
+        let untrackedAdditions: Int
+        if usesRemoteHostRegistry,
+           let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            let remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: paths)
+            untrackedAdditions = remoteCounts.values.reduce(0, +)
+        } else {
+            untrackedAdditions = paths.reduce(0) { $0 + Self.addedLineCount(worktreePath: worktreePath, path: $1) }
+        }
+        return WorktreeDiffStats(
+            added: counts.add.values.reduce(0, +) + untrackedAdditions,
+            deleted: counts.del.values.reduce(0, +)
+        )
+    }
+
     /// Changed files between `ref` and the working tree, plus untracked files.
     /// A nil `ref` (unborn branch, no resolvable base) falls back to `status`.
     func changedFilesAgainstRef(

@@ -54,6 +54,7 @@ struct RepoGroupView: View {
     let onRemoveFailed: (Worktree) -> Void
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
+    var commitQuery: (Worktree) -> WorktreeRowView.CommitQuery? = { _ in nil }
     @Environment(\.theme) var theme
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
@@ -169,7 +170,8 @@ struct RepoGroupView: View {
                             onRetryCreate: { onRetryCreate(wt) },
                             onRetryDelete: { onRetryDelete(wt) },
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
-                            workspaceCheckout: workspaceCheckout(wt)
+                            workspaceCheckout: workspaceCheckout(wt),
+                            commitQuery: commitQuery(wt)
                         )
                         .draggable(wt.id)
                         .dropDestination(for: String.self) { ids, _ in

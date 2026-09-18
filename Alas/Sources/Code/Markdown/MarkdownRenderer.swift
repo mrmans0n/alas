@@ -102,7 +102,7 @@ final class MarkdownRenderer {
     }
 
     func render(
-        document: Document,
+        document: Markdown.Document,
         frontmatter: MarkdownFrontmatter? = nil,
         theme: Theme,
         monospacedFontFamily: String,
