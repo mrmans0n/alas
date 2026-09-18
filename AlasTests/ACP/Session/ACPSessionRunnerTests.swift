@@ -74,6 +74,25 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("send attaches its checkpoint before the prompt RPC")
+    func sendAttachesCheckpointBeforePrompt() async throws {
+        let checkpointID = UUID()
+        let (runner, mock) = try makeRunner(onCheckpointCapture: { checkpointID })
+        mock.script(method: "session/prompt") { _ in
+            guard case .user(_, _, _, let attachments, _) = runner.session.transcript.messages.last,
+                  attachments.map(\.checkpointID) == [checkpointID] else {
+                throw JSONRPCError(code: -32000, message: "checkpoint missing", data: nil)
+            }
+            return Data("{}".utf8)
+        }
+
+        let succeeded = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { continuation.resume(returning: $0) }
+        }
+
+        #expect(succeeded)
+    }
+
     @Test("user cancellation clears retryable Codex status")
     func userCancellationClearsRetryStatus() async throws {
         let (runner, _) = try makeRunner()
@@ -2782,7 +2801,8 @@ struct ACPSessionRunnerTests {
     }
 
     private func makeRunner(
-        onUserCancel: (() -> Void)? = nil
+        onUserCancel: (() -> Void)? = nil,
+        onCheckpointCapture: (@MainActor () async -> CheckpointID?)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2798,7 +2818,8 @@ struct ACPSessionRunnerTests {
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
-            onUserCancel: onUserCancel
+            onUserCancel: onUserCancel,
+            onCheckpointCapture: onCheckpointCapture
         )
         return (runner, mock)
     }

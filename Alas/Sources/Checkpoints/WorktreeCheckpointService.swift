@@ -6,6 +6,7 @@ protocol WorktreeCheckpointServicing: Sendable {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal]
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary
+    func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot
     func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID, coordination: CheckpointCoordinationSnapshot,
@@ -337,6 +338,29 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         throw CheckpointCaptureError.unstableWorktree
     }
 
+    func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+        let label = try normalizedLabel(label)
+        for number in 1...2 {
+            do {
+                let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
+                try await hooks.afterPayloadStaging(number)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false)
+                guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
+                let stateKey = try automaticStateKey(for: attempt.snapshot)
+                let catalog = try await store.catalog(lineageID: target.lineageID)
+                for existing in catalog.summaries where existing.kind == .automatic {
+                    guard let manifest = try? await store.load(id: existing.id, lineageID: target.lineageID) else { continue }
+                    if manifest.automaticStateKey == stateKey { return existing }
+                }
+                return try await publish(target: target, attempt: attempt, paths: Set(attempt.snapshot.paths.keys),
+                                         kind: .automatic, label: label, automaticStateKey: stateKey)
+            } catch CheckpointSnapshotError.stateChanged {
+                continue
+            }
+        }
+        throw CheckpointCaptureError.unstableWorktree
+    }
+
     // Restore preflight supplies the selected current states, including clean
     // and absent paths which a dirty-worktree snapshot may not contain.
     func createRecovery(target: CheckpointWorktreeTarget, current: WorktreeStateSnapshot,
@@ -537,6 +561,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     private func publish(target: CheckpointWorktreeTarget, attempt: CheckpointCaptureAttempt,
                          paths selectedPaths: Set<String>, kind: CheckpointKind, label: String,
+                         automaticStateKey: String? = nil,
                          protecting: Set<CheckpointID> = []) async throws -> WorktreeCheckpointSummary {
         let snapshot = attempt.snapshot
         let paths = try selectedPaths.sorted().map { path in
@@ -562,7 +587,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             byteCount: blobs.keys.reduce(0) { $0 + $1.byteCount }, lineageID: target.lineageID,
             capturedPath: target.path.path, repositoryName: target.repositoryName,
             branch: snapshot.branch, headOID: snapshot.headOID,
-            exclusions: kind == .manual ? snapshot.exclusions : [], groups: groups, paths: paths
+            automaticStateKey: automaticStateKey,
+            exclusions: kind == .recovery ? [] : snapshot.exclusions, groups: groups, paths: paths
         )
         let catalog = try await store.publish(.init(manifest: manifest, blobs: blobs), protecting: protecting)
         cachedCatalogs[target.lineageID] = catalog
@@ -570,5 +596,22 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             throw CheckpointStoreError.checkpointNotFound
         }
         return summary
+    }
+
+    private func automaticStateKey(for snapshot: WorktreeStateSnapshot) throws -> String {
+        struct State: Encodable {
+            let lineageID: String
+            let headOID: String
+            let capturePolicyVersion: Int
+            let paths: [CheckpointPathState]
+            let exclusions: [CheckpointExclusion]
+        }
+        return CheckpointBlobReference.make(for: try JSONEncoder.checkpoints.encode(State(
+            lineageID: snapshot.lineageID,
+            headOID: snapshot.headOID,
+            capturePolicyVersion: WorktreeCheckpointManifest.currentCapturePolicyVersion,
+            paths: snapshot.paths.values.sorted { $0.relativePath < $1.relativePath },
+            exclusions: snapshot.exclusions.sorted { $0.relativePath < $1.relativePath }
+        ))).sha256
     }
 }

@@ -432,6 +432,8 @@ final class AppState {
     @ObservationIgnored
     var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
     var runScriptCatalogGeneration = 0
+    @ObservationIgnored
+    private let automaticCheckpointService = WorktreeCheckpointService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     /// Settle window before a harness awaiting/permission transition reaches
@@ -10525,6 +10527,13 @@ final class AppState {
                     treatsHomeAsRemote: project?.host != nil,
                     useBypassPermissions: project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false
                 )
+            },
+            onCheckpointCapture: { [weak self] in
+                guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
+                return try? await self.automaticCheckpointService.createAutomatic(
+                    target: target,
+                    label: "Before agent prompt"
+                ).id
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL

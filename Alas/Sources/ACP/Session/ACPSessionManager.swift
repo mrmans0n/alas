@@ -138,6 +138,7 @@ final class ACPSessionManager: ObservableObject {
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
+    private let onCheckpointCapture: (@MainActor () async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -614,6 +615,7 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
+         onCheckpointCapture: (@MainActor () async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -648,6 +650,7 @@ final class ACPSessionManager: ObservableObject {
         self.onInputAwaiting = onInputAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
+        self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { $0 }
@@ -3675,6 +3678,7 @@ extension ACPSessionManager {
                                                 followsTail: true
                                               )
                                           },
+                                          onCheckpointCapture: onCheckpointCapture,
                                           ownerInstanceId: instanceId,
                                           persistence: persistence,
                                           persistedMessageCount: session.transcript.messages.count,

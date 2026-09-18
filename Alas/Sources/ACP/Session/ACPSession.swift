@@ -351,14 +351,15 @@ final class ACPSession: ObservableObject, Identifiable {
         text: String,
         attachments: [ACPMessage.Attachment],
         delegatedSource: ACPDelegatedPromptSource? = nil
-    ) {
+    ) -> UUID {
         // Materialise any held replay candidate before the new prompt so
         // stranded live text from the just-ended turn keeps its place ahead
         // of the user message instead of being dropped. The runner persists
         // from the pre-call message count, so the flushed rows are saved too.
         _ = flushPendingReplayCandidates()
+        let id = UUID()
         transcript.appendMessage(.user(
-            id: UUID(),
+            id: id,
             messageId: nil,
             text: text,
             attachments: attachments,
@@ -378,6 +379,27 @@ final class ACPSession: ObservableObject, Identifiable {
                 titleSource = .generated
             }
         }
+        return id
+    }
+
+    @discardableResult
+    func attachCheckpoint(_ checkpointID: CheckpointID, toUserMessage id: UUID) -> Bool {
+        guard let index = transcript.messages.firstIndex(where: {
+            guard case .user(let messageID, _, _, _, _) = $0 else { return false }
+            return messageID == id
+        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource) = transcript.messages[index]
+        else { return false }
+
+        let updatedAttachments = attachments.filter { !$0.isCheckpointReference }
+            + [.checkpointReference(id: checkpointID)]
+        transcript.replaceMessage(at: index, with: .user(
+            id: messageID,
+            messageId: remoteMessageID,
+            text: text,
+            attachments: updatedAttachments,
+            delegatedSource: delegatedSource
+        ))
+        return true
     }
 
     private static func removingAlasWorkspaceContext(from text: String) -> String {

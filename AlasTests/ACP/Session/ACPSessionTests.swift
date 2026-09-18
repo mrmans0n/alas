@@ -1262,6 +1262,20 @@ struct ACPSessionTests {
         else { Issue.record("expected user message") }
     }
 
+    @Test("checkpoint capture attaches to its recorded prompt")
+    func checkpointCaptureAttachesToRecordedPrompt() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let promptID = session.recordUserPrompt(text: "hi", attachments: [])
+        let checkpointID = UUID()
+
+        #expect(session.attachCheckpoint(checkpointID, toUserMessage: promptID))
+        guard case .user(_, _, _, let attachments, _) = session.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(attachments.map(\.checkpointID) == [checkpointID])
+    }
+
     @Test("generated title ignores Alas workspace context and uses the remaining prompt")
     func generatedTitleIgnoresAlasWorkspaceContext() async {
         let session = ACPSession(

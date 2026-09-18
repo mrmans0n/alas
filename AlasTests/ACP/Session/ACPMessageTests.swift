@@ -5,6 +5,22 @@ import Testing
 @MainActor
 @Suite("ACPMessage")
 struct ACPMessageTests {
+    @Test("checkpoint references persist as internal user attachments")
+    func checkpointReferenceRoundtrip() throws {
+        let checkpointID = UUID()
+        let attachment = ACPMessage.Attachment.checkpointReference(id: checkpointID)
+        let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [attachment])
+
+        let payload = try ACPMessageCodec.encode(message)
+        guard case .user(_, _, _, let attachments, _) = try ACPMessageCodec.decode(kind: "user", payload: payload) else {
+            Issue.record("expected user message")
+            return
+        }
+
+        #expect(attachments.first?.checkpointID == checkpointID)
+        #expect(attachments.first?.isCheckpointReference == true)
+    }
+
     @Test("user message round-trips through JSON")
     func userRoundtrip() throws {
         let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])

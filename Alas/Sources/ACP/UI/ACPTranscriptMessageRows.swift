@@ -18,9 +18,10 @@ struct UserMessageRow: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
-                if !attachments.isEmpty {
-                    let images = attachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
-                    let others = attachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
+                let visibleAttachments = attachments.filter { !$0.isCheckpointReference }
+                if !visibleAttachments.isEmpty {
+                    let images = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
+                    let others = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
                     if !images.isEmpty {
                         HStack(spacing: 6) {
                             // Key by index, not uri: content-addressed staging

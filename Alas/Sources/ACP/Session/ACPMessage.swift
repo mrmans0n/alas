@@ -102,6 +102,8 @@ enum ACPMessage: Equatable {
     }
 
     struct Attachment: Codable, Equatable, Hashable, Sendable {
+        private static let checkpointReferencePrefix = "alas-checkpoint://"
+
         let uri: String
         let name: String?
         /// Image MIME type (e.g. `image/png`) when this attachment is an
@@ -115,6 +117,17 @@ enum ACPMessage: Equatable {
             self.name = name
             self.mimeType = mimeType
         }
+
+        static func checkpointReference(id: CheckpointID) -> Self {
+            .init(uri: checkpointReferencePrefix + id.uuidString, name: nil)
+        }
+
+        var checkpointID: CheckpointID? {
+            guard uri.hasPrefix(Self.checkpointReferencePrefix) else { return nil }
+            return UUID(uuidString: String(uri.dropFirst(Self.checkpointReferencePrefix.count)))
+        }
+
+        var isCheckpointReference: Bool { checkpointID != nil }
     }
 
     struct ToolCallAsset: Codable, Equatable, Hashable, Sendable {

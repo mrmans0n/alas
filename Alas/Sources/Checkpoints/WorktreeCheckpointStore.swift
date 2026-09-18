@@ -36,6 +36,7 @@ private struct VerifiedBlobIdentity: Equatable, Sendable {
 actor WorktreeCheckpointStore {
     struct Limits: Equatable, Sendable {
         var manualCount = 20
+        var automaticCount = 50
         var recoveryCount = 5
         var bytes: Int64 = 2 * 1024 * 1024 * 1024
     }
@@ -126,7 +127,7 @@ actor WorktreeCheckpointStore {
         var reachable = Set(candidates.flatMap { references(in: $0) })
         var bytes = try storageByteCount(manifests: candidates, reachable: reachable, layout: layout, incoming: publication.blobs)
         if bytes > limits.bytes {
-            for victim in byteLimitVictims(from: candidates, protected: protected, incomingID: manifest.id) {
+            for victim in byteLimitVictims(from: candidates, protected: protected, incoming: manifest) {
                 victims.append(victim)
                 candidates.removeAll { $0.id == victim.id }
                 reachable = Set(candidates.flatMap { references(in: $0) })
@@ -660,8 +661,12 @@ actor WorktreeCheckpointStore {
 
     private func retentionVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>, incomingID: CheckpointID) -> [WorktreeCheckpointManifest] {
         var victims: [WorktreeCheckpointManifest] = []
-        for kind in [CheckpointKind.recovery, .manual] {
-            let limit = kind == .recovery ? limits.recoveryCount : limits.manualCount
+        for kind in [CheckpointKind.automatic, .recovery, .manual] {
+            let limit = switch kind {
+            case .automatic: limits.automaticCount
+            case .recovery: limits.recoveryCount
+            case .manual: limits.manualCount
+            }
             let count = manifests.filter { $0.kind == kind }.count
             let ordered = manifests
                 .filter { $0.kind == kind && $0.id != incomingID }
@@ -678,10 +683,13 @@ actor WorktreeCheckpointStore {
         return victims
     }
 
-    private func byteLimitVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>, incomingID: CheckpointID) -> [WorktreeCheckpointManifest] {
-        [CheckpointKind.recovery, .manual].flatMap { kind in
+    private func byteLimitVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>, incoming: WorktreeCheckpointManifest) -> [WorktreeCheckpointManifest] {
+        let kinds: [CheckpointKind] = incoming.kind == .automatic
+            ? [.automatic]
+            : [.automatic, .recovery, .manual]
+        return kinds.flatMap { kind in
             manifests
-                .filter { $0.kind == kind && $0.id != incomingID && !protected.contains($0.id) }
+                .filter { $0.kind == kind && $0.id != incoming.id && !protected.contains($0.id) }
                 .sorted { $0.createdAt < $1.createdAt }
         }
     }

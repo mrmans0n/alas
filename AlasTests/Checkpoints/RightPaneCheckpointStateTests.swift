@@ -81,6 +81,10 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
         return summary
     }
 
+    func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+        throw RecordingCheckpointServiceError.unsupported
+    }
+
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
         callCount += 1
         guard id == summary.id else { throw RecordingCheckpointServiceError.unsupported }

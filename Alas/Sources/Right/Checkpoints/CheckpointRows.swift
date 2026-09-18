@@ -38,11 +38,15 @@ enum CheckpointPresentation {
     }
 
     static func kind(_ kind: CheckpointKind) -> String {
-        kind == .manual ? "Manual" : "Recovery"
+        switch kind {
+        case .manual: "Manual"
+        case .automatic: "Automatic"
+        case .recovery: "Recovery"
+        }
     }
 
     static func footer(storageUsage: Int64) -> String {
-        "\(bytes(storageUsage)) used · 20 manual · 5 recovery · 2 GiB per worktree"
+        "\(bytes(storageUsage)) used · 50 automatic · 20 manual · 5 recovery · 2 GiB per worktree"
     }
 
     static func rowID(checkpointID: CheckpointID) -> String { "checkpoint-\(checkpointID.uuidString)" }
