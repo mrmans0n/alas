@@ -205,6 +205,8 @@ Open `Alas.xcodeproj` in Xcode for normal development. Rerun `xcodegen` after an
 change to `project.yml`. Tests use Swift Testing. CI also checks formatting with
 `swiftformat Alas AlasTests --lint`; install `swiftformat` to run it locally.
 See [AGENTS.md](AGENTS.md) for contributor conventions and cache troubleshooting.
+See [Swift build measurements](docs/swift-build-performance.md) for per-worktree
+DerivedData reuse, targeted test commands, and measured CI cache behavior.
 
 ## Stack
 

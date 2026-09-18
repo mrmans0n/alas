@@ -626,6 +626,63 @@ struct RemoteHelperClientTests {
         ))
     }
 
+    @Test func remoteHelperACPTransportRecyclesReusedAdapterAfterDeadCodexInitialize() throws {
+        let tracker = RemoteHelperACPTransport.InitializationRecoveryTracker()
+        let initialize = Data(#"{"jsonrpc":"2.0","id":"attach:1","method":"initialize","params":{}}"#.utf8)
+        tracker.observeOutbound(initialize)
+
+        let action = tracker.action(
+            forInbound: Data(#"{"jsonrpc":"2.0","id":"attach:1","error":{"code":1001,"message":"Codex process has exited with code 0:\nlast output"}}"#.utf8),
+            attachedToFreshSpawn: false
+        )
+
+        #expect(action == .recycleAndReplay(initialize))
+    }
+
+    @Test func remoteHelperACPTransportRecyclesReusedAlreadyInitializedAdapterOnlyOnce() throws {
+        let tracker = RemoteHelperACPTransport.InitializationRecoveryTracker()
+        let initialize = Data(#"{"jsonrpc":"2.0","id":"attach:1","method":"initialize","params":{}}"#.utf8)
+        let staleResponse = Data(#"{"jsonrpc":"2.0","id":"attach:1","error":{"code":-32603,"message":"Internal error","data":{"details":"Already initialized"}}}"#.utf8)
+        tracker.observeOutbound(initialize)
+
+        #expect(tracker.action(
+            forInbound: staleResponse,
+            attachedToFreshSpawn: false
+        ) == .recycleAndReplay(initialize))
+        #expect(tracker.action(
+            forInbound: staleResponse,
+            attachedToFreshSpawn: false
+        ) == .forward)
+    }
+
+    @Test func remoteHelperACPTransportDoesNotRecycleFreshOrUnrelatedFailures() throws {
+        let initialize = Data(#"{"jsonrpc":"2.0","id":"attach:1","method":"initialize","params":{}}"#.utf8)
+        let deadCodex = Data(#"{"jsonrpc":"2.0","id":"attach:1","error":{"code":1001,"message":"Codex process has exited with code 0:\nlast output"}}"#.utf8)
+        let failedCodex = Data(#"{"jsonrpc":"2.0","id":"attach:1","error":{"code":1001,"message":"Codex process has exited with code 1: failed to initialize state"}}"#.utf8)
+        let unrelated = Data(#"{"jsonrpc":"2.0","id":"attach:2","error":{"code":1001,"message":"Codex process has exited with code 0:\nlast output"}}"#.utf8)
+
+        let freshTracker = RemoteHelperACPTransport.InitializationRecoveryTracker()
+        freshTracker.observeOutbound(initialize)
+        #expect(freshTracker.action(
+            forInbound: deadCodex,
+            attachedToFreshSpawn: true
+        ) == .forward)
+
+        let unrelatedTracker = RemoteHelperACPTransport.InitializationRecoveryTracker()
+        unrelatedTracker.observeOutbound(initialize)
+        #expect(unrelatedTracker.action(
+            forInbound: unrelated,
+            attachedToFreshSpawn: false
+        ) == .forward)
+
+        let failedTracker = RemoteHelperACPTransport.InitializationRecoveryTracker()
+        failedTracker.observeOutbound(initialize)
+        #expect(failedTracker.action(
+            forInbound: failedCodex,
+            attachedToFreshSpawn: false
+        ) == .forward)
+    }
+
     @Test func procWriteUsesExpectedOffsetAndReturnsAcknowledgedOffset() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
