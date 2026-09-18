@@ -82,7 +82,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
     }
 
     @Test
-    func terminalLaunchSurfaceWithUnavailableAgentLeavesCreateFailure() async throws {
+    func terminalLaunchSurfaceWithUnavailableAgentLeavesLaunchFailure() async throws {
         let repo = try await makeRepo(name: "terminal-unavailable-agent")
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -117,14 +117,14 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(!id.isEmpty)
 
         try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
-            if case .createFailed = operation { return true }
+            if case .launchFailed = operation { return true }
             return false
         }
 
-        guard case .createFailed(_, let message, _, _, let launchSurface, _) =
+        guard case .launchFailed(_, let message, let launchSurface) =
             state.projectsManager.operationState(for: id)
         else {
-            Issue.record("Expected createFailed state")
+            Issue.record("Expected launchFailed state")
             return
         }
         #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)
@@ -133,7 +133,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
     }
 
     @Test
-    func acpLaunchSurfaceWithUnavailableAgentLeavesCreateFailure() async throws {
+    func acpLaunchSurfaceWithUnavailableAgentLeavesLaunchFailure() async throws {
         let repo = try await makeRepo(name: "acp-unavailable-agent")
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -168,14 +168,14 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(!id.isEmpty)
 
         try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
-            if case .createFailed = operation { return true }
+            if case .launchFailed = operation { return true }
             return false
         }
 
-        guard case .createFailed(_, let message, _, _, let launchSurface, _) =
+        guard case .launchFailed(_, let message, let launchSurface) =
             state.projectsManager.operationState(for: id)
         else {
-            Issue.record("Expected createFailed state")
+            Issue.record("Expected launchFailed state")
             return
         }
         #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)

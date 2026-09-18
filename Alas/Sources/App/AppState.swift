@@ -1726,7 +1726,7 @@ final class AppState {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .deleteFailed:
+                case nil, .preparingDelete, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
                     else { continue }
                     targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
@@ -1768,7 +1768,7 @@ final class AppState {
             switch self.projectsManager.operationState(for: worktree.id) {
             case .creating, .deleting, .createFailed:
                 return
-            case nil, .preparingDelete, .deleteFailed:
+            case nil, .preparingDelete, .launchFailed, .deleteFailed:
                 break
             }
             guard let state = await self.remoteWorktreeDirtyState(worktree: worktree),
@@ -2094,7 +2094,7 @@ final class AppState {
                     switch self.projectsManager.operationState(for: $0.id) {
                     case .creating, .deleting, .createFailed:
                         return false
-                    case nil, .preparingDelete, .deleteFailed:
+                    case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
                     }
                 }
@@ -3647,35 +3647,15 @@ final class AppState {
                         selectWorktree(id: newWorktree.id)
                     }
 
-                    switch launchSurface {
-                    case .none:
-                        break
-                    case .terminal(let agentId):
-                        let suffix = try await self.worktreeAgentStartupSuffix(
-                            agentId: agentId,
+                    do {
+                        try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
+                    } catch {
+                        self.markWorktreeLaunchFailed(
                             worktree: newWorktree,
-                            project: project
+                            projectId: projectId,
+                            error: error,
+                            launchSurface: launchSurface
                         )
-                        _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
-                            for: newWorktree,
-                            startupScriptSuffix: suffix
-                        )
-                    case .acp(let agentId, let preparedPrompt):
-                        try await self.validateWorktreeACPAgent(
-                            agentID: agentId,
-                            worktree: newWorktree
-                        )
-                        if let preparedPrompt {
-                            await openPreparedWorktreeACPSession(
-                                worktree: newWorktree,
-                                agentID: agentId,
-                                preparedPrompt: preparedPrompt
-                            )
-                        } else {
-                            openNewACPSession(agentID: agentId)
-                        }
-                    case .delegated:
-                        break
                     }
                 } catch {
                     discardUnpersistedGGWorktreeMode(
@@ -4016,6 +3996,74 @@ final class AppState {
         await loadAgentAvailability(for: worktree)
         guard availableAgent(id: agentID, for: worktree) != nil else {
             throw WorktreeAgentStartupError.agentUnavailable
+        }
+    }
+
+    private func launchWorktreeSurface(
+        _ launchSurface: WorktreeLaunchSurface,
+        worktree: Worktree,
+        project: ProjectConfig
+    ) async throws {
+        switch launchSurface {
+        case .none, .delegated:
+            break
+        case .terminal(let agentId):
+            let suffix = try await worktreeAgentStartupSuffix(
+                agentId: agentId,
+                worktree: worktree,
+                project: project
+            )
+            _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
+                for: worktree,
+                startupScriptSuffix: suffix
+            )
+        case .acp(let agentId, let preparedPrompt):
+            try await validateWorktreeACPAgent(
+                agentID: agentId,
+                worktree: worktree
+            )
+            if let preparedPrompt {
+                await openPreparedWorktreeACPSession(
+                    worktree: worktree,
+                    agentID: agentId,
+                    preparedPrompt: preparedPrompt
+                )
+            } else {
+                openNewACPSession(agentID: agentId)
+            }
+        }
+    }
+
+    private func markWorktreeLaunchFailed(
+        worktree: Worktree,
+        projectId: String,
+        error: Error,
+        launchSurface: WorktreeLaunchSurface
+    ) {
+        projectsManager.setOperationState(
+            id: worktree.id,
+            state: .launchFailed(
+                projectId: projectId,
+                message: error.localizedDescription,
+                launchSurface: launchSurface
+            )
+        )
+    }
+
+    func retryWorktreeLaunch(_ worktree: Worktree, project: ProjectConfig) async {
+        guard case .launchFailed(_, _, let launchSurface) = projectsManager.operationState(for: worktree.id) else {
+            return
+        }
+        do {
+            try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
+            projectsManager.setOperationState(id: worktree.id, state: nil)
+        } catch {
+            markWorktreeLaunchFailed(
+                worktree: worktree,
+                projectId: project.id,
+                error: error,
+                launchSurface: launchSurface
+            )
         }
     }
 
@@ -5175,8 +5223,8 @@ final class AppState {
             guard case .createFailed(
                 let failedProjectId,
                 _,
-                let failedBase,
-                let failedMode,
+                _,
+                _,
                 let launchSurface,
                 let issueAttachment
             ) = state,
@@ -5200,61 +5248,15 @@ final class AppState {
                 selectWorktree(id: worktree.id)
             }
 
-            switch launchSurface {
-            case .none, .delegated:
-                break
-            case .terminal(let agentId):
-                do {
-                    let suffix = try await self.worktreeAgentStartupSuffix(
-                        agentId: agentId,
-                        worktree: worktree,
-                        project: project
-                    )
-                    _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
-                        for: worktree,
-                        startupScriptSuffix: suffix
-                    )
-                } catch {
-                    projectsManager.setOperationState(
-                        id: worktree.id,
-                        state: .createFailed(
-                            projectId: projectId,
-                            message: error.localizedDescription,
-                            base: failedBase,
-                            ggWorktreeMode: failedMode,
-                            launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
-                        )
-                    )
-                }
-            case .acp(let agentId, let preparedPrompt):
-                do {
-                    try await self.validateWorktreeACPAgent(
-                        agentID: agentId,
-                        worktree: worktree
-                    )
-                    if let preparedPrompt {
-                        await openPreparedWorktreeACPSession(
-                            worktree: worktree,
-                            agentID: agentId,
-                            preparedPrompt: preparedPrompt
-                        )
-                    } else {
-                        openNewACPSession(agentID: agentId)
-                    }
-                } catch {
-                    projectsManager.setOperationState(
-                        id: worktree.id,
-                        state: .createFailed(
-                            projectId: projectId,
-                            message: error.localizedDescription,
-                            base: failedBase,
-                            ggWorktreeMode: failedMode,
-                            launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
-                        )
-                    )
-                }
+            do {
+                try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
+            } catch {
+                markWorktreeLaunchFailed(
+                    worktree: worktree,
+                    projectId: projectId,
+                    error: error,
+                    launchSurface: launchSurface
+                )
             }
         }
         return changed
@@ -12393,7 +12395,7 @@ extension AppState: RemoteSessionsProvider {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .deleteFailed:
+                case nil, .preparingDelete, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
                 }
             }
@@ -12443,7 +12445,7 @@ extension AppState: RemoteSessionsProvider {
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:
             return .failure("Worktree is no longer available.")
-        case nil, .preparingDelete, .deleteFailed:
+        case nil, .preparingDelete, .launchFailed, .deleteFailed:
             break
         }
 

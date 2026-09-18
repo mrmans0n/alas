@@ -86,6 +86,7 @@ struct RepoGroupViewLayoutTests {
             onActivateHarness: { _, _ in },
             onCopyError: { _ in },
             onRetryCreate: { _ in },
+            onRetryLaunch: { _ in },
             onRetryDelete: { _ in },
             onSetGGWorktreeMode: { _, _ in },
             onRemoveFailed: { _ in },

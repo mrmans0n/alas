@@ -49,6 +49,7 @@ enum WorktreeOperationState: Equatable {
         launchSurface: WorktreeLaunchSurface,
         issueAttachment: IssueAttachment?
     )
+    case launchFailed(projectId: String, message: String, launchSurface: WorktreeLaunchSurface)
     case deleteFailed(message: String)
 }
 
@@ -533,6 +534,8 @@ final class ProjectsManager {
                     // Preserve failed rows so they remain visible for retry/removal.
                     reconciled.append(existing)
                 }
+            case .launchFailed:
+                continue
             case .deleteFailed:
                 // If git still sees the worktree, keep it visible with the failed
                 // state so the user can retry or remove. If the worktree is gone
@@ -657,7 +660,7 @@ final class ProjectsManager {
             if let op = worktreeOperationStates[worktree.id] {
                 switch op {
                 case .creating, .createFailed: return false
-                case .preparingDelete, .deleting, .deleteFailed: return true
+                case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true
                 }
             }
             return true

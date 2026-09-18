@@ -42,6 +42,8 @@ struct CenterSelectionStateResolver {
             case .creating:
                 if let wt = findWorktree(by: id) { return .creating(wt) }
                 return .empty
+            case .launchFailed:
+                break
             case .deleteFailed(let message):
                 if let wt = findWorktree(by: id) { return .deleteFailed(wt, message: message) }
                 return .empty
@@ -74,7 +76,7 @@ struct CenterSelectionStateResolver {
                     switch op {
                     case .creating, .deleting, .createFailed:
                         return nil
-                    case .preparingDelete, .deleteFailed:
+                    case .preparingDelete, .launchFailed, .deleteFailed:
                         break
                     }
                 }

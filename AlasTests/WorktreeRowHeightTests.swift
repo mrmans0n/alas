@@ -54,7 +54,7 @@ struct WorktreeRowHeightTests {
             onCopyPath: { _ in }, onCopyBranch: { _ in }, onRevealInFinder: { _ in }, onArchive: { _ in },
             onCleanupWorktrees: {},
             onDelete: { _ in }, onDeleteKeepBranch: { _ in }, showKeepBranchOption: false,
-            onActivateHarness: { _, _ in }, onCopyError: { _ in }, onRetryCreate: { _ in }, onRetryDelete: { _ in },
+            onActivateHarness: { _, _ in }, onCopyError: { _ in }, onRetryCreate: { _ in }, onRetryLaunch: { _ in }, onRetryDelete: { _ in },
             onSetGGWorktreeMode: { _, _ in }, onRemoveFailed: { _ in }, onDropWorktree: { _, _ in },
             onDropProject: { _, _ in }
         ).environment(\.theme, try ThemeStore().current)
@@ -225,6 +225,7 @@ struct WorktreeRowHeightTests {
             onCopyError: { _ in },
             onRemoveFailed: {},
             onRetryCreate: {},
+            onRetryLaunch: {},
             onRetryDelete: {},
             onSetGGWorktreeMode: { _ in },
             workspaceCheckout: workspaceCheckout

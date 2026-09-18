@@ -182,6 +182,7 @@ struct WorktreeRowView: View {
     let onCopyError: (String) -> Void
     let onRemoveFailed: () -> Void
     let onRetryCreate: () -> Void
+    let onRetryLaunch: () -> Void
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
@@ -201,6 +202,7 @@ struct WorktreeRowView: View {
         case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
         case .createFailed(_, let msg, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
+        case .launchFailed(_, let msg, _): return "Launch failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
         case .none: return ""
         }
@@ -209,7 +211,7 @@ struct WorktreeRowView: View {
     nonisolated static func showsProgress(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
         case .preparingDelete, .deleting: return true
-        case .creating, .createFailed, .deleteFailed, .none: return false
+        case .creating, .createFailed, .launchFailed, .deleteFailed, .none: return false
         }
     }
 
@@ -219,7 +221,7 @@ struct WorktreeRowView: View {
 
     private var errorMessage: String? {
         switch operationState {
-        case .createFailed(_, let message, _, _, _, _), .deleteFailed(let message):
+        case .createFailed(_, let message, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
             return message
         case .creating, .preparingDelete, .deleting, .none:
             return nil
@@ -446,6 +448,13 @@ struct WorktreeRowView: View {
         if case .createFailed = operationState {
             Button("Retry Create", action: onRetryCreate)
             Button("Remove from List", role: .destructive, action: onRemoveFailed)
+            Divider()
+            if let errorMessage {
+                Button("Copy Error") { onCopyError(errorMessage) }
+            }
+            Button("Copy Path", action: onCopyPath)
+        } else if case .launchFailed = operationState {
+            Button("Retry Launch", action: onRetryLaunch)
             Divider()
             if let errorMessage {
                 Button("Copy Error") { onCopyError(errorMessage) }
