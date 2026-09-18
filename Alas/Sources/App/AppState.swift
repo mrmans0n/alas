@@ -2921,7 +2921,18 @@ final class AppState {
                 _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
             }
         case .acp:
-            guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
+            guard let agentID = preference.agentID else { return }
+            let checkoutRoot = URL(fileURLWithPath: checkout.rootPath)
+            if let remoteHost = checkout.executionLocation.sshHost {
+                await loadAgentAvailability(worktreePath: checkoutRoot, remoteHost: remoteHost)
+            }
+            guard availableAgent(
+                id: agentID,
+                worktreePath: checkoutRoot,
+                remoteHost: checkout.executionLocation.sshHost
+            ) != nil else {
+                return
+            }
             _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
         }
     }
@@ -3635,6 +3646,10 @@ final class AppState {
                             startupScriptSuffix: suffix
                         )
                     case .acp(let agentId, let preparedPrompt):
+                        try await self.validateWorktreeACPAgent(
+                            agentID: agentId,
+                            worktree: newWorktree
+                        )
                         if let preparedPrompt {
                             await openPreparedWorktreeACPSession(
                                 worktree: newWorktree,
@@ -3977,6 +3992,16 @@ final class AppState {
             throw WorktreeAgentStartupError.agentUnavailable
         }
         return agentStartupCommand(for: agent, project: project)
+    }
+
+    private func validateWorktreeACPAgent(
+        agentID: String,
+        worktree: Worktree
+    ) async throws {
+        await loadAgentAvailability(for: worktree)
+        guard availableAgent(id: agentID, for: worktree) != nil else {
+            throw WorktreeAgentStartupError.agentUnavailable
+        }
     }
 
     @discardableResult
@@ -5188,14 +5213,32 @@ final class AppState {
                     )
                 }
             case .acp(let agentId, let preparedPrompt):
-                if let preparedPrompt {
-                    await openPreparedWorktreeACPSession(
-                        worktree: worktree,
+                do {
+                    try await self.validateWorktreeACPAgent(
                         agentID: agentId,
-                        preparedPrompt: preparedPrompt
+                        worktree: worktree
                     )
-                } else {
-                    openNewACPSession(agentID: agentId)
+                    if let preparedPrompt {
+                        await openPreparedWorktreeACPSession(
+                            worktree: worktree,
+                            agentID: agentId,
+                            preparedPrompt: preparedPrompt
+                        )
+                    } else {
+                        openNewACPSession(agentID: agentId)
+                    }
+                } catch {
+                    projectsManager.setOperationState(
+                        id: worktree.id,
+                        state: .createFailed(
+                            projectId: projectId,
+                            message: error.localizedDescription,
+                            base: failedBase,
+                            ggWorktreeMode: failedMode,
+                            launchSurface: launchSurface,
+                            issueAttachment: issueAttachment
+                        )
+                    )
                 }
             }
         }
@@ -5805,6 +5848,16 @@ final class AppState {
                         return worktree
                     }
                     return nil
+                },
+                configuredAgents: { [weak self] in
+                    guard let self else { return [] }
+                    let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
+                    return AgentConfiguredCatalog.enabled(
+                        builtinState: self.config.agents.builtinState,
+                        customs: self.config.agents.custom
+                    ).map {
+                        ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
+                    }
                 },
                 availableAgents: { [weak self] _, worktree in
                     guard let self else { return [] }

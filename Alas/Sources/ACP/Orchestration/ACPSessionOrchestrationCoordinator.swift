@@ -18,6 +18,7 @@ final class ACPSessionOrchestrationCoordinator {
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
+        let configuredAgents: () -> [ACPOrchestrationAgent]
         let availableAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent]
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
@@ -107,11 +108,8 @@ final class ACPSessionOrchestrationCoordinator {
         }
 
         let prompt: String
-        let requestedAgentID: String
         do {
             prompt = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
-            let trimmed = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            requestedAgentID = trimmed?.isEmpty == false ? trimmed! : parentSession.agentId
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")
         } catch {
@@ -185,6 +183,18 @@ final class ACPSessionOrchestrationCoordinator {
             guard let destination = environment.newWorktreeDestination(origin.projectId, branch) else {
                 return .error("The project is no longer available.")
             }
+            let agentID: String
+            do {
+                agentID = try ACPSessionOrchestrationPolicy.resolveAgent(
+                    requestedId: request.agentId,
+                    parentAgentId: parentSession.agentId,
+                    available: environment.configuredAgents()
+                )
+            } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
+                return .error("Agent is not enabled or ACP-capable: \(id)")
+            } catch {
+                return .error("Could not validate delegated session request.")
+            }
             let optimisticID = "pending-\(childID)"
             let record = ACPDelegationRecord(
                 childSessionId: childID,
@@ -192,7 +202,7 @@ final class ACPSessionOrchestrationCoordinator {
                 projectId: origin.projectId,
                 parentWorktreeId: origin.worktreeId,
                 childWorktreeId: nil,
-                agentId: requestedAgentID,
+                agentId: agentID,
                 worktreeRequest: .new(
                     branch: branch,
                     base: base,

@@ -132,6 +132,57 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(state.tabs.tabs(forWorktree: id).isEmpty)
     }
 
+    @Test
+    func acpLaunchSurfaceWithUnavailableAgentLeavesCreateFailure() async throws {
+        let repo = try await makeRepo(name: "acp-unavailable-agent")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "acp-unavailable-agent",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.config.agents.builtinState["claude"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: []
+        )
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-acp-unavailable-\(UUID().uuidString)")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "acp-unavailable",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .acp(agentId: "claude")
+        )
+        #expect(!id.isEmpty)
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+            if case .createFailed = operation { return true }
+            return false
+        }
+
+        guard case .createFailed(_, let message, _, _, let launchSurface, _) =
+            state.projectsManager.operationState(for: id)
+        else {
+            Issue.record("Expected createFailed state")
+            return
+        }
+        #expect(message == AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription)
+        #expect(launchSurface == .acp(agentId: "claude"))
+        #expect(state.tabs.tabs(forWorktree: id).isEmpty)
+    }
+
     private func waitForOperationStateMatching(
         _ mgr: ProjectsManager,
         id: String,

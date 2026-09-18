@@ -42,6 +42,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
             availableAgents: { _, _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
@@ -109,6 +112,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
             availableAgents: { _, _ in
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
             },
@@ -141,6 +147,76 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         #expect(record.failureMessage == "branch exists")
         #expect(record.pendingInitialPrompt == "Investigate the parser.")
+    }
+
+    @Test("delegated new worktree rejects invalid agents before creation")
+    func delegatedNewWorktreeRejectsInvalidAgentBeforeCreation() async throws {
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-\(UUID().uuidString).sqlite")
+            .path
+        let sessionPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-coordinator-session-\(UUID().uuidString).sqlite")
+            .path
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
+        let sessionStore = try ACPSessionStore(path: sessionPath)
+        let manager = ACPSessionManager(
+            worktreeId: "worktree",
+            worktreePath: "/tmp/worktree",
+            store: sessionStore,
+            setupEvaluator: { _ in .ready }
+        )
+        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        let worktree = Worktree(
+            id: "worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/worktree"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        var didCreateWorktree = false
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence,
+            instanceId: "instance",
+            now: { 100 },
+            makeID: { "child" },
+            worktree: { $0 == worktree.id ? worktree : nil },
+            existingWorktree: { _, _ in nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
+            availableAgents: { _, _ in
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
+            sessionLocation: { sessionId in
+                sessionId == "parent"
+                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
+                    : nil
+            },
+            manager: { _ in manager },
+            newWorktreeDestination: { _, _ in URL(fileURLWithPath: "/tmp/feature") },
+            createWorktree: { _, _, _ in
+                didCreateWorktree = true
+                return .failure(.init(message: "unused"))
+            },
+            rememberParent: { _, _ in },
+            autoRunDefault: { false },
+            notifyChanged: {}
+        ))
+
+        let response = await coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Investigate the parser.", agentId: "codxe", worktree: .new(branch: "feature", base: "main"))
+        )
+
+        guard case .error(let message) = response else {
+            Issue.record("Expected invalid agent to be rejected")
+            return
+        }
+        #expect(message == "Agent is not enabled or ACP-capable: codxe")
+        #expect(!didCreateWorktree)
+        #expect(try await persistence.delegation(childSessionId: "child") == nil)
     }
 
     @Test("delegated creation awaits agent availability before validation")
@@ -177,6 +253,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
             availableAgents: { _, _ in
                 didLoadAgents = true
                 return [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -249,6 +328,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == origin.id ? origin : nil },
             existingWorktree: { _, id in id == destination.id ? destination : nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
             availableAgents: { _, worktree in
                 checkedWorktreeIDs.append(worktree.id)
                 if worktree.id == destination.id {
@@ -316,6 +398,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
+            configuredAgents: {
+                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
+            },
             availableAgents: { _, destination in
                 destination.id == worktree.id
                     ? [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
