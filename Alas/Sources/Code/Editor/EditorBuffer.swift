@@ -202,9 +202,8 @@ final class EditorBuffer {
     @discardableResult
     func replaceSource(range: NSRange, with replacement: String, selections: [NSValue], finalSelections: [NSValue], composition: UUID? = nil, attributes: [NSAttributedString.Key: Any] = [:]) -> Bool {
         guard acceptsSourceInput, compositionOwner == composition,
-              range.location >= 0, range.location <= storage.length, range.length >= 0, range.length <= storage.length - range.location,
-              let map = try? EditorDisplayMap(source: storage.string, revision: editGeneration, hints: []),
-              (try? map.displaySegments(forSource: range)) != nil else { return false }
+              range.location >= 0, range.location <= storage.length, range.length >= 0,
+              range.length <= storage.length - range.location else { return false }
         let previous = (storage.string as NSString).substring(with: range)
         guard !EditorSourceText.exactlyEqual(previous, replacement) else { return true }
         if composition == nil {
