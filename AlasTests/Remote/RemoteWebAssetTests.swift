@@ -1197,4 +1197,52 @@ struct RemoteWebAssetTests {
         #expect(boot.contains(#"history.replaceState({}, "", "/");"#))
         #expect(boot.contains("pairAndAdd(fromLink, { activate: true })"))
     }
+
+    @Test func settingsTabRendersTheHubServerList() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"<div id="hub-section" class="hidden">"#))
+        #expect(html.contains(#"id="server-list""#))
+        #expect(html.contains(#"id="add-server""#))
+        #expect(html.contains(#"id="settings-placeholder""#))
+        #expect(html.contains(#"id="tab-settings-badge" class="tab-count hidden""#))
+        #expect(html.contains(#"id="add-server-sheet" class="sheet hidden" role="dialog""#))
+        #expect(html.contains(#"id="add-server-link""#))
+        #expect(html.contains(#"id="add-server-address""#))
+        #expect(html.contains(#"id="add-server-code""#))
+        #expect(html.contains(#"id="add-server-error" class="sheet-error hidden""#))
+        #expect(html.contains(#"id="server-actions-sheet" class="sheet hidden" role="dialog""#))
+        #expect(html.contains(#"id="server-repair""#))
+        #expect(html.contains(#"id="server-forget""#))
+        #expect(html.contains(#"id="gate-pair" class="hidden""#))
+
+        #expect(js.contains("function renderServerList()"))
+        #expect(js.contains("function renderSettingsBadge()"))
+        #expect(js.contains("function showAddServerSheet(targetId)"))
+        #expect(js.contains("async function submitAddServer()"))
+        #expect(js.contains("function forgetServer(id)"))
+        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId)"))
+        #expect(js.contains(#"$("tab-settings").disabled = !enabled;"#))
+        #expect(js.contains(#"$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };"#))
+
+        #expect(css.contains(".server-row {"))
+        #expect(css.contains(".server-row.is-active"))
+        #expect(css.contains("#tab-settings-badge"))
+        #expect(css.contains(".dot.off"))
+        #expect(css.contains(".dot.warn"))
+    }
+
+    // Flag off must look exactly like today: the tab stays disabled and no
+    // server row is ever rendered.
+    @Test func hubSurfacesStayHiddenUntilTheFlagIsOn() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings" disabled"#))
+        let body = try #require(js.range(of: "function applyHubFlag(enabled) {").map { js[$0.lowerBound...].prefix(600) })
+        #expect(body.contains(#"$("hub-section").classList.toggle("hidden", !enabled);"#))
+        #expect(body.contains(#"$("settings-placeholder").classList.toggle("hidden", enabled);"#))
+        #expect(body.contains("if (enabled) links.connectAll(); else links.suspendIdle();"))
+    }
 }

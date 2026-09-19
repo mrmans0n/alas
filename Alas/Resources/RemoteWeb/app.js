@@ -204,11 +204,13 @@ function showPairAgainGate(link) {
   const server = hub.servers.find((s) => s.id === link.id);
   const name = server ? (server.name || server.lastOrigin) : "This Mac";
   showGate("Pair again", `${name} no longer recognizes this device. Copy a fresh pairing link from Alas → Settings → Remote and paste it here.`, false);
+  $("gate-pair").classList.remove("hidden");
 }
 
 function showPairGate() {
   clearEscalation();
   showGate("Pair this device", "On your Mac, open Alas → Settings → Remote and scan the QR code shown there.", false);
+  $("gate-pair").classList.remove("hidden");
 }
 
 function handleLinkHello(link, hello) {
@@ -232,16 +234,22 @@ function handleLinkHello(link, hello) {
 }
 
 // Flag off → single-server client: no idle sockets, no Settings tab, chip as
-// before. Task 10 extends this with the Settings tab and chip surfaces.
+// before. Flag on → server list, add sheet, badges, tappable server chip.
 function applyHubFlag(enabled) {
   hubUIEnabled = enabled;
+  $("tab-settings").disabled = !enabled;
+  $("hub-section").classList.toggle("hidden", !enabled);
+  $("settings-placeholder").classList.toggle("hidden", enabled);
+  $("status").classList.toggle("is-server", enabled);
+  if (!enabled && topLevelTab === "settings") showRepos();
   if (enabled) links.connectAll(); else links.suspendIdle();
   refreshHubViews();
 }
 
-// Re-renders every hub-only surface. Nothing to render until Task 10 adds
-// the Settings tab server list and badge.
-function refreshHubViews() {}
+function refreshHubViews() {
+  renderServerList();
+  renderSettingsBadge();
+}
 
 function send(obj) { links.sendActive(obj); }
 
@@ -292,6 +300,7 @@ function switchServer(id) {
   RemoteHubRegistry.save(localStorage, hub);
   if (!links.get(id)) links.add(target);
   everConnected = false;
+  $("gate-pair").classList.add("hidden");
   const link = links.setActive(id);
   applyHubFlag(target.hubEnabled === true);
   if (link.state === "online") return;   // setActive's own notify already ran onActiveOpen() for us
@@ -1240,17 +1249,177 @@ function showRepos() {
 }
 
 function showSettings() {
-  if (currentSession) return;   // tab bar is hidden during session detail; guard anyway
+  if (currentSession || !hubUIEnabled) return;   // tab bar is hidden during session detail; the tab is disabled flag-off
   topLevelTab = "settings";
   $("tab-settings").classList.add("is-active");
   $("tab-repos").classList.remove("is-active");
   $("sessions").classList.add("hidden");
   $("settings").classList.remove("hidden");
+  renderServerList();
 }
 
 $("tab-repos").addEventListener("click", showRepos);
 $("tab-settings").addEventListener("click", showSettings);
 $("fab-new-session").onclick = showCreateSheet;
+$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };
+
+// --- hub settings ------------------------------------------------------------
+
+function serverDotClass(link) {
+  if (!link) return "off";
+  switch (link.state) {
+    case "online": return link.counts.running > 0 ? "run" : "idle";
+    case "connecting": return "connecting";
+    case "unauthorized": return "warn";
+    default: return "off";
+  }
+}
+
+function serverSubtitle(server, link) {
+  const where = (link && link.lastOrigin) || server.lastOrigin || server.origins[0];
+  if (!link) return where;
+  switch (link.state) {
+    case "online": return link.legacy ? `${where} · Older Alas` : where;
+    case "connecting": return `${where} · Connecting…`;
+    case "unauthorized": return "Pair again";
+    case "offline": return `${where} · Offline`;
+    default: return where;
+  }
+}
+
+function renderServerList() {
+  if (!hubUIEnabled) return;
+  const box = $("server-list");
+  box.innerHTML = "";
+  for (const server of hub.servers) {
+    const link = links.get(server.id);
+    const row = el("div", "server-row" + (server.id === hub.activeId ? " is-active" : ""));
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.append(el("span", "dot " + serverDotClass(link)));
+    const main = el("div", "server-main");
+    main.append(el("div", "server-name", server.name || server.lastOrigin));
+    main.append(el("div", "server-origin", serverSubtitle(server, link)));
+    row.append(main);
+    if (link && link.counts.attention > 0) row.append(el("span", "tab-count", String(link.counts.attention)));
+    const menu = el("button", "iconbtn server-menu", "⋯");
+    menu.type = "button";
+    menu.setAttribute("aria-label", `Actions for ${server.name || server.lastOrigin}`);
+    menu.onclick = (e) => { e.stopPropagation(); showServerActions(server.id); };
+    row.append(menu);
+    const activate = () => { if (server.id !== hub.activeId) { switchServer(server.id); showRepos(); } };
+    row.onclick = activate;
+    row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); } };
+    box.append(row);
+  }
+}
+
+function renderSettingsBadge() {
+  const badge = $("tab-settings-badge");
+  const total = hubUIEnabled ? RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId) : 0;
+  badge.textContent = total > 0 ? String(total) : "";
+  badge.classList.toggle("hidden", total === 0);
+}
+
+let addServerTarget = null;   // client id when re-pairing a specific server, else null
+let addServerBusy = false;
+
+function showAddServerSheet(targetId) {
+  addServerTarget = targetId || null;
+  const target = addServerTarget ? hub.servers.find((s) => s.id === addServerTarget) : null;
+  $("add-server-title").textContent = target ? `Re-pair ${target.name || target.lastOrigin}` : "Add server";
+  $("add-server-link").value = "";
+  $("add-server-address").value = target ? (target.lastOrigin || "") : "";
+  $("add-server-code").value = "";
+  $("add-server-manual").open = false;
+  $("add-server-error").classList.add("hidden");
+  $("add-server-submit").disabled = false;
+  $("add-server-sheet").classList.remove("hidden");
+  $("add-server-link").focus();
+}
+
+function hideAddServerSheet() {
+  if (addServerBusy) return;
+  $("add-server-sheet").classList.add("hidden");
+  addServerTarget = null;
+}
+
+function showAddServerError(message) {
+  const box = $("add-server-error");
+  box.textContent = message;
+  box.classList.remove("hidden");
+}
+
+async function submitAddServer() {
+  if (addServerBusy) return;
+  let input = RemoteHubRegistry.parsePairingLink($("add-server-link").value);
+  if (!input) input = RemoteHubRegistry.parseManualPairing($("add-server-address").value, $("add-server-code").value);
+  if (!input) { showAddServerError("That doesn't look like an Alas pairing link."); return; }
+  addServerBusy = true;
+  $("add-server-submit").disabled = true;
+  $("add-server-error").classList.add("hidden");
+  const wasEmpty = !hub.activeId;
+  try {
+    const server = await pairAndAdd(input, { activate: wasEmpty || addServerTarget === hub.activeId });
+    addServerBusy = false;
+    hideAddServerSheet();
+    if (wasEmpty) hideGate();
+    if (!wasEmpty && server.id !== hub.activeId) renderServerList();
+  } catch (err) {
+    addServerBusy = false;
+    $("add-server-submit").disabled = false;
+    showAddServerError(pairingErrorMessage(err));
+  }
+}
+
+let serverActionsTarget = null;
+
+function showServerActions(id) {
+  const server = hub.servers.find((s) => s.id === id);
+  if (!server) return;
+  serverActionsTarget = id;
+  $("server-actions-title").textContent = server.name || server.lastOrigin;
+  $("server-actions-sheet").classList.remove("hidden");
+}
+
+function hideServerActions() {
+  $("server-actions-sheet").classList.add("hidden");
+  serverActionsTarget = null;
+}
+
+function forgetServer(id) {
+  const wasActive = hub.activeId === id;
+  if (wasActive) resetServerScopedState();
+  RemoteHubRegistry.forgetServer(hub, id);
+  RemoteHubRegistry.save(localStorage, hub);
+  links.remove(id);
+  if (!wasActive) { refreshHubViews(); return; }
+  const online = links.all().filter((l) => l.state === "online").map((l) => l.id);
+  const next = RemoteHubRegistry.fallbackActiveId(hub, online);
+  if (next) { switchServer(next); return; }
+  applyHubFlag(false);
+  showPairGate();
+}
+
+$("add-server").onclick = () => showAddServerSheet(null);
+$("add-server-submit").onclick = submitAddServer;
+$("add-server-cancel").onclick = hideAddServerSheet;
+$("add-server-sheet").onclick = (e) => { if (e.target.id === "add-server-sheet") hideAddServerSheet(); };
+listen("add-server-link", "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitAddServer(); } });
+listen("add-server-code", "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitAddServer(); } });
+$("server-repair").onclick = () => { const id = serverActionsTarget; hideServerActions(); showAddServerSheet(id); };
+$("server-forget").onclick = () => {
+  const id = serverActionsTarget;
+  const server = hub.servers.find((s) => s.id === id);
+  hideServerActions();
+  if (server && confirm(`Forget ${server.name || server.lastOrigin}? You will need a new pairing link to add it again.`)) forgetServer(id);
+};
+$("server-actions-close").onclick = hideServerActions;
+$("server-actions-sheet").onclick = (e) => { if (e.target.id === "server-actions-sheet") hideServerActions(); };
+$("gate-pair").onclick = () => {
+  const active = hub.activeId ? links.get(hub.activeId) : null;
+  showAddServerSheet(active && active.state === "unauthorized" ? hub.activeId : null);
+};
 
 function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";

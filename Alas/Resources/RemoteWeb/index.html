@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=48" />
+  <link rel="stylesheet" href="/style.css?v=49" />
 </head>
 <body>
   <header id="bar">
@@ -117,7 +117,12 @@
     </section>
     <section id="settings" class="view hidden">
       <h1>Settings</h1>
-      <p class="placeholder-card">Settings are coming soon.</p>
+      <div id="hub-section" class="hidden">
+        <p class="sheet-label">Servers</p>
+        <div id="server-list"></div>
+        <button id="add-server" class="option-btn" type="button">Add server…</button>
+      </div>
+      <p id="settings-placeholder" class="placeholder-card">Settings are coming soon.</p>
     </section>
   </main>
   <nav id="bottom-tabbar">
@@ -131,6 +136,7 @@
     <button type="button" id="tab-settings" class="bt-tab" aria-label="Settings" disabled>
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
       <span>Settings</span>
+      <span id="tab-settings-badge" class="tab-count hidden"></span>
     </button>
   </nav>
   <div id="permission" class="sheet hidden">
@@ -230,12 +236,36 @@
       <button id="rename-cancel" class="sheet-close">Cancel</button>
     </div>
   </div>
+  <div id="add-server-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="add-server-title">
+    <div class="sheet-card">
+      <p id="add-server-title" class="sheet-title">Add server</p>
+      <div id="add-server-error" class="sheet-error hidden" role="alert" aria-live="assertive"></div>
+      <label class="sheet-label" for="add-server-link">Pairing link</label>
+      <input id="add-server-link" class="sheet-input" type="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste the link from Alas → Settings → Remote" />
+      <details id="add-server-manual">
+        <summary class="sheet-label">Enter an address and code instead</summary>
+        <input id="add-server-address" class="sheet-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="100.64.1.5:8765" aria-label="Server address" />
+        <input id="add-server-code" class="sheet-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Pairing code" aria-label="Pairing code" />
+      </details>
+      <button id="add-server-submit" class="btn-submit" type="button">Pair</button>
+      <button id="add-server-cancel" class="sheet-close" type="button">Cancel</button>
+    </div>
+  </div>
+  <div id="server-actions-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="server-actions-title">
+    <div class="sheet-card">
+      <p id="server-actions-title" class="sheet-title">Server</p>
+      <button id="server-repair" class="option-btn" type="button">Re-pair…</button>
+      <button id="server-forget" class="option-btn is-destructive" type="button">Forget this server</button>
+      <button id="server-actions-close" class="sheet-close" type="button">Close</button>
+    </div>
+  </div>
   <div id="gate" class="hidden">
     <div class="gate-card">
       <div class="gate-icon" id="gate-icon">⚠</div>
       <h2 id="gate-title">Pair this device</h2>
       <p id="gate-msg"></p>
       <button id="gate-retry" class="hidden">Try again</button>
+      <button id="gate-pair" class="hidden">Paste a pairing link</button>
     </div>
   </div>
   <script src="/marked.min.js?v=28"></script>
@@ -247,7 +277,7 @@
   <script src="/file-browser.js?v=3"></script>
   <script src="/hub-registry.js?v=1"></script>
   <script src="/hub-links.js?v=1"></script>
-  <script src="/app.js?v=85"></script>
+  <script src="/app.js?v=86"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
