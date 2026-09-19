@@ -18,6 +18,9 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     private var createShouldFail = false
     private var loadShouldFail = false
     private var summaryUnavailable = false
+    private var suspendNextSummary = false
+    private var suspendedSummaryContinuation: CheckedContinuation<Void, Never>?
+    private var summarySuspendedWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(target: CheckpointWorktreeTarget) throws {
         self.target = target
@@ -64,7 +67,21 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
                 unavailableReason: "blob missing"
             )
             : summary
-        return .init(lineageID: target.lineageID, summaries: created ? [currentSummary] : [], byteCount: created ? 12 : 0)
+        let snapshot = CheckpointCatalogSnapshot(
+            lineageID: target.lineageID,
+            summaries: created ? [currentSummary] : [],
+            byteCount: created ? 12 : 0
+        )
+        if suspendNextSummary {
+            suspendNextSummary = false
+            await withCheckedContinuation { continuation in
+                suspendedSummaryContinuation = continuation
+                let waiters = summarySuspendedWaiters
+                summarySuspendedWaiters = []
+                waiters.forEach { $0.resume() }
+            }
+        }
+        return snapshot
     }
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
@@ -142,6 +159,17 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     func calls() -> Int { callCount }
     func failNextCreate() { createShouldFail = true }
     func failLoads(_ value: Bool) { loadShouldFail = value }
+    func makeSummaryAvailable() { created = true }
+    func suspendNextSummaryLoad() { suspendNextSummary = true }
+    func waitUntilSummaryLoadIsSuspended() async {
+        guard suspendedSummaryContinuation == nil else { return }
+        await withCheckedContinuation { summarySuspendedWaiters.append($0) }
+    }
+    func resumeSuspendedSummaryLoad() {
+        let continuation = suspendedSummaryContinuation
+        suspendedSummaryContinuation = nil
+        continuation?.resume()
+    }
     func markSummaryUnavailable() {
         created = true
         summaryUnavailable = true
@@ -181,6 +209,42 @@ struct RightPaneCheckpointStateTests {
         #expect(createdManifest?.id == UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
         #expect(state.checkpointSummaries.map(\.label) == ["Before edit"])
         #expect(state.checkpointManifests.values.flatMap(\.exclusions).map(\.relativePath) == [".env"])
+    }
+
+    @Test func targetedCheckpointRefreshPublishesExternalAutomaticCaptures() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+
+        await state.refreshCheckpoints()
+        #expect(state.checkpointSummaries.isEmpty)
+
+        await service.makeSummaryAvailable()
+        await state.refreshCheckpoints()
+
+        #expect(state.checkpointSummaries.map(\.id) == [
+            UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        ])
+    }
+
+    @Test func targetedCheckpointRefreshCannotBeReplacedByAnOlderFullRefresh() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+
+        await service.suspendNextSummaryLoad()
+        let staleRefresh = Task { await state.refresh() }
+        await service.waitUntilSummaryLoadIsSuspended()
+
+        await service.makeSummaryAvailable()
+        await state.refreshCheckpoints()
+        #expect(state.checkpointSummaries.count == 1)
+
+        await service.resumeSuspendedSummaryLoad()
+        _ = await staleRefresh.value
+        #expect(state.checkpointSummaries.count == 1)
     }
 
     @Test func remoteWorktreesExposeTheApprovedReasonWithoutCallingTheService() async throws {

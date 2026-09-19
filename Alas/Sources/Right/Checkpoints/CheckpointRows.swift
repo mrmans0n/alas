@@ -27,7 +27,12 @@ enum CheckpointPresentation {
     }
 
     static func summary(_ checkpoint: WorktreeCheckpointSummary) -> String {
-        "\(checkpoint.stagedFileCount) staged, \(checkpoint.unstagedFileCount) unstaged, \(checkpoint.untrackedFileCount) untracked"
+        let parts = [
+            checkpoint.stagedFileCount > 0 ? "\(checkpoint.stagedFileCount) staged" : nil,
+            checkpoint.unstagedFileCount > 0 ? "\(checkpoint.unstagedFileCount) unstaged" : nil,
+            checkpoint.untrackedFileCount > 0 ? "\(checkpoint.untrackedFileCount) untracked" : nil
+        ].compactMap { $0 }
+        return parts.isEmpty ? "Clean" : parts.joined(separator: " · ")
     }
 
     static func statusLine(_ checkpoint: WorktreeCheckpointSummary, now: Date = .now) -> String {
@@ -46,8 +51,10 @@ enum CheckpointPresentation {
     }
 
     static func footer(storageUsage: Int64) -> String {
-        "\(bytes(storageUsage)) used · 50 automatic · 20 manual · 5 recovery · 2 GiB per worktree"
+        "\(bytes(storageUsage)) used"
     }
+
+    static let retentionHelp = "Keeps up to 50 automatic, 20 manual, and 5 recovery checkpoints within 2 GiB per worktree."
 
     static func rowID(checkpointID: CheckpointID) -> String { "checkpoint-\(checkpointID.uuidString)" }
     static func groupRowID(checkpointID: CheckpointID, groupID: UUID) -> String {
@@ -72,9 +79,11 @@ struct CheckpointSummaryRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(checkpoint.label).font(.system(size: 12, weight: .medium))
-                        Text(CheckpointPresentation.kind(checkpoint.kind))
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(theme.color("fg-muted"))
+                        if checkpoint.kind != .automatic {
+                            Text(CheckpointPresentation.kind(checkpoint.kind))
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(theme.color("fg-muted"))
+                        }
                     }
                     Text(CheckpointPresentation.statusLine(checkpoint))
                         .font(.system(size: 10))
@@ -104,6 +113,39 @@ struct CheckpointSummaryRow: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .contentShape(Rectangle())
+    }
+}
+
+struct AutomaticCheckpointGroupRow: View {
+    let count: Int
+    let expanded: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 6) {
+                Text("Automatic")
+                    .font(.system(size: 11, weight: .medium))
+                Text("\(count)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.color("fg-muted"))
+                Spacer(minLength: 0)
+                Icon(
+                    name: expanded ? "chevron.down" : "chevron.right",
+                    size: 9,
+                    color: theme.color("fg-faint")
+                )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 12)
+        .padding(.trailing, 40)
+        .padding(.vertical, 6)
+        .accessibilityLabel("Automatic checkpoints, \(count)")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     }
 }
 
@@ -171,6 +213,7 @@ struct CheckpointFooterRow: View {
             .font(.system(size: 10))
             .foregroundColor(theme.color("fg-muted"))
             .padding(.horizontal, 12).padding(.vertical, 7)
+            .help(CheckpointPresentation.retentionHelp)
     }
 }
 

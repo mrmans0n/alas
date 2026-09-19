@@ -528,6 +528,18 @@ private struct ACPSessionView: View {
                     )
                 }
             },
+            onRestoreCheckpoint: { checkpointID in
+                guard let pane = state.rightPaneStore.activeState(worktreeId: worktree.id) else {
+                    session.lastError = "Checkpoint restore is unavailable for this worktree."
+                    return
+                }
+                Task {
+                    await pane.previewCheckpointRestore(id: checkpointID)
+                    if let error = pane.lastCheckpointError {
+                        session.lastError = error
+                    }
+                }
+            },
             onOpenForkSource: { sourceSessionID in
                 Task {
                     if let owner {
