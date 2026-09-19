@@ -255,6 +255,34 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(sockets.length, 3, "connectAll() reconnects the idle link once the hub is back on");
   }
 
+  // --- update() respects idleAllowed for non-active links --------------------
+  {
+    // Regression (Codex review, PR #1337): app.js's handleLinkHello calls
+    // disableIdle() and then, in its duplicate-merge branch, links.update()
+    // on the surviving idle link — which used to reconnect unconditionally,
+    // resurrecting the socket disableIdle() had just suspended.
+    const { sockets, links } = harness();
+    links.add(serverA);
+    links.add(serverB);
+    links.setActive("a");
+    links.connectAll();
+    sockets[0].open();
+    sockets[1].open();
+    links.disableIdle();
+    assert.equal(sockets[1].closed, true, "the idle link is torn down by disableIdle()");
+
+    links.update({ ...serverB, token: "tok-b2" });
+    assert.equal(sockets.length, 2, "update() must not reconnect an idle link while the hub is disabled");
+    assert.equal(links.get("b").token, "tok-b2", "the link's data is still refreshed");
+    assert.equal(links.get("b").state, "idle");
+
+    links.update({ ...serverA, token: "tok-a2" });
+    assert.equal(sockets.length, 3, "update() always reconnects the active link, hub flag or not");
+
+    links.connectAll();
+    assert.equal(sockets.length, 4, "connectAll() reconnects the idle link once the hub is back on");
+  }
+
   // --- role switching --------------------------------------------------------
   {
     const { sockets, links } = harness();

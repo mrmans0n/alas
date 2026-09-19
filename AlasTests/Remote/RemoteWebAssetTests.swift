@@ -1273,4 +1273,17 @@ struct RemoteWebAssetTests {
         let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
         #expect(switchServer.contains(#"if (link.state === "blocked") { showOriginBlockedGate(link); return; }"#))
     }
+
+    // Regression (Codex review, PR #1337): handleLinkHello's duplicate-merge
+    // branch calls links.update() on the surviving idle link right after
+    // disableIdle() may have just suspended it — update() used to reconnect
+    // unconditionally, resurrecting that socket. See the node-executed
+    // "update() respects idleAllowed for non-active links" coverage in
+    // test-hub-links.js.
+    @Test func updateOnlyReconnectsIdleLinksWhenTheHubIsEnabled() throws {
+        let js = try asset("hub-links.js")
+        let update = try #require(js.range(of: "function update(server) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(update.contains(#"if (link.role === "active" || idleAllowed) connect(link.id);"#))
+        #expect(!update.contains("    connect(link.id);\n    return link;"), "update() must not reconnect unconditionally")
+    }
 }

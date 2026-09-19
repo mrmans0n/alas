@@ -113,7 +113,12 @@ function createLinks(deps, hooks) {
     link.reconnectDelay = INITIAL_RECONNECT_MS;
     link.state = "idle";
     notify(link);
-    connect(link.id);
+    // The active link always reconnects; an idle link only does when the
+    // hub is actually enabled — otherwise this would resurrect a socket
+    // disableIdle() (via applyHubFlag(false)) just suspended, e.g. when
+    // handleLinkHello's duplicate-merge branch calls update() right after
+    // the fresh hello turned the aggregate hub flag off.
+    if (link.role === "active" || idleAllowed) connect(link.id);
     return link;
   }
 
