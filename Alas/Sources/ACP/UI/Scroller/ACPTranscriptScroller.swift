@@ -486,7 +486,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let rows = renderRows ?? Self.renderRows(host: host)
+            // The fallback must fold with the SAME expansion state the
+            // header specs below read, or a caller that passes only
+            // `expansionSeeds` gets headers rendering "Hide N tools" with
+            // no member rows behind them.
+            let rows = renderRows ?? Self.renderRows(host: host, expansionSeeds: expansionSeeds)
             let fork = Self.readyFork(host: host)
             let forkBoundaryIndex = fork.map { $0.inheritedMessageCount - 1 }
             var forkDividerEmitted = false
@@ -506,37 +510,37 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 let lastIndex: Int
                 switch renderRow {
                 case .message(let row):
-                    guard transcript.messages.indices.contains(row.index) else { continue }
-                    let message = transcript.messages[row.index]
-                    let rowToken = token(Self.messageRowKey(
-                        host: host, row: row, message: message,
+                    guard let spec = Self.messageRowSpec(
+                        host: host, row: row, inToolCallGroup: false,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
-                    ), host: host)
-                    specs.append(ACPTranscriptRowSpec(
-                        id: row.stableId,
-                        equalityToken: rowToken,
-                        build: {
-                            wrapRow(host: host) {
-                                Self.messageRow(
-                                    host: host,
-                                    row: row,
-                                    message: message,
-                                    availableRowContentWidth: availableRowContentWidth,
-                                    availableTrailingGutterWidth: availableTrailingGutterWidth
-                                )
-                            }
-                        }
-                    ))
+                    ) else { continue }
+                    specs.append(spec)
                     lastIndex = row.index
-                case .toolCallGroup(let group):
-                    specs.append(Self.toolCallGroupSpec(
-                        host: host, group: group,
+                case .toolCallGroupMember(let row, _):
+                    guard let spec = Self.messageRowSpec(
+                        host: host, row: row, inToolCallGroup: true,
                         availableRowContentWidth: availableRowContentWidth,
-                        availableTrailingGutterWidth: availableTrailingGutterWidth,
-                        expansionSeeds: expansionSeeds
+                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                    ) else { continue }
+                    specs.append(spec)
+                    lastIndex = row.index
+                case .toolCallGroup(let group), .toolCallGroupHeader(let group):
+                    specs.append(Self.toolCallGroupHeaderSpec(
+                        host: host, group: group, expansionSeeds: expansionSeeds
                     ))
-                    lastIndex = group.members[group.members.count - 1].index
+                    if case .toolCallGroup = renderRow {
+                        // A collapsed bundle stands in for every member, so
+                        // the fork divider following it clears the whole run.
+                        lastIndex = group.members[group.members.count - 1].index
+                    } else {
+                        // An EXPANDED header is followed by its own member
+                        // rows, which carry the real indices. Reporting any
+                        // member's index here would let the divider land
+                        // between the header and its first card; the last
+                        // member row emits it at the right place instead.
+                        lastIndex = .min
+                    }
                 }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
@@ -553,9 +557,65 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private static func firstIndex(of renderRow: ACPTranscriptRenderRow) -> Int {
             switch renderRow {
-            case .message(let row): row.index
-            case .toolCallGroup(let group): group.members[0].index
+            case .message(let row), .toolCallGroupMember(let row, _): row.index
+            case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members[0].index
             }
+        }
+
+        /// One transcript message as its own row. `inToolCallGroup` marks it
+        /// as a member of an expanded bundle, which only changes the
+        /// decoration (the shared accent lane) — the row id, token inputs
+        /// and card content are identical either way, which is exactly why
+        /// expanding or collapsing a bundle never disturbs a member's
+        /// identity.
+        private static func messageRowSpec(
+            host: ACPTranscriptScroller,
+            row: ACPTranscriptVisibleRow,
+            inToolCallGroup: Bool,
+            availableRowContentWidth: CGFloat,
+            availableTrailingGutterWidth: CGFloat
+        ) -> ACPTranscriptRowSpec? {
+            let transcript = host.transcript
+            guard transcript.messages.indices.contains(row.index) else { return nil }
+            let message = transcript.messages[row.index]
+            let rowToken = token(
+                MessageRowTokenInputs(
+                    key: Self.messageRowKey(
+                        host: host, row: row, message: message,
+                        availableRowContentWidth: availableRowContentWidth,
+                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                    ),
+                    inToolCallGroup: inToolCallGroup
+                ),
+                host: host
+            )
+            return ACPTranscriptRowSpec(
+                id: row.stableId,
+                equalityToken: rowToken,
+                build: {
+                    wrapRow(host: host) {
+                        let card = Self.messageRow(
+                            host: host,
+                            row: row,
+                            message: message,
+                            availableRowContentWidth: availableRowContentWidth,
+                            availableTrailingGutterWidth: availableTrailingGutterWidth
+                        )
+                        if inToolCallGroup {
+                            ACPToolCallGroupMemberRow { card }
+                        } else {
+                            card
+                        }
+                    }
+                }
+            )
+        }
+
+        private struct MessageRowTokenInputs: Equatable {
+            let key: ACPTranscriptRowContent.EqualityKey
+            /// Part of the token so a row that moves into or out of a
+            /// bundle re-renders with (or without) the accent lane.
+            let inToolCallGroup: Bool
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
@@ -578,7 +638,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// runs folded per `groupingOptions`. Same builder the coordinator's
         /// memoized lookup uses, so row ids agree between the spec list and
         /// the scroll-anchor / minimap mapping.
-        static func renderRows(host: ACPTranscriptScroller) -> [ACPTranscriptRenderRow] {
+        static func renderRows(
+            host: ACPTranscriptScroller,
+            expansionSeeds: ACPToolCallGroupExpansionSeeds? = nil
+        ) -> [ACPTranscriptRenderRow] {
             let transcript = host.transcript
             let rows = ACPTranscriptVisibleRow.rows(
                 messages: transcript.messages,
@@ -588,7 +651,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             return ACPToolCallGrouping.fold(
                 rows: rows, messages: transcript.messages,
-                options: groupingOptions(host: host)
+                options: groupingOptions(host: host),
+                isExpanded: { group in expansionSeeds?.isExpanded(group) ?? false }
             )
         }
 
@@ -613,37 +677,33 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        /// One collapsed row for a run of finished tool calls. The token folds
-        /// every member's message-row key so a late status/duration/content
-        /// update on any bundled call still re-renders the row (and, when
-        /// expanded, the card inside it), plus the expanded flag itself: the
-        /// row renders whatever the store says, and a toggle reaches the
-        /// screen by producing a spec whose token differs.
-        private static func toolCallGroupSpec(
+        /// The "Ran N tools" / "Hide N tools" toggle row for a run of
+        /// finished tool calls — collapsed or expanded, it is the same row
+        /// id, so toggling updates it in place while its member rows are
+        /// inserted or removed around it.
+        ///
+        /// The token carries only the summary and the expanded flag. It
+        /// deliberately does NOT fold in the members' own row keys: the
+        /// header renders none of their content, and when expanded each
+        /// member is its own row that re-renders itself. A late status or
+        /// output update on one bundled call therefore re-renders that one
+        /// card instead of the whole run. Anything about a member that the
+        /// header DOES show — how many there are, how many failed — is
+        /// already part of `summary`.
+        private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
-            availableRowContentWidth: CGFloat,
-            availableTrailingGutterWidth: CGFloat,
             expansionSeeds: ACPToolCallGroupExpansionSeeds
         ) -> ACPTranscriptRowSpec {
             let transcript = host.transcript
-            let members: [ToolCallGroupMember] = group.members.compactMap { row in
-                guard transcript.messages.indices.contains(row.index) else { return nil }
-                return ToolCallGroupMember(row: row, message: transcript.messages[row.index])
-            }
-            let toolCalls: [ACPMessage.ToolCall] = members.compactMap { member in
-                if case .toolCall(let toolCall) = member.message { return toolCall }
-                return nil
+            let toolCalls: [ACPMessage.ToolCall] = group.members.compactMap { row in
+                guard transcript.messages.indices.contains(row.index),
+                      case .toolCall(let toolCall) = transcript.messages[row.index]
+                else { return nil }
+                return toolCall
             }
             let summary = ACPToolCallGroupSummary(toolCalls: toolCalls)
-            let memberKeys = members.map { member in
-                messageRowKey(
-                    host: host, row: member.row, message: member.message,
-                    availableRowContentWidth: availableRowContentWidth,
-                    availableTrailingGutterWidth: availableTrailingGutterWidth
-                )
-            }
-            let memberStableIds = members.map { $0.row.stableId }
+            let memberStableIds = group.members.map(\.stableId)
             // Folds any member not yet tagged (e.g. newly revealed by
             // backfill) into the run's existing lineage before reading it,
             // so a later collapse from whichever subset happens to be
@@ -654,26 +714,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
-                    ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys, expanded: expanded),
+                    ToolCallGroupTokenInputs(summary: summary, expanded: expanded),
                     host: host
                 ),
                 build: {
                     wrapRow(host: host) {
-                        ACPToolCallGroupRow(
+                        ACPToolCallGroupHeaderRow(
                             summary: summary,
                             expanded: expanded,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
-                        ) {
-                            ForEach(members) { member in
-                                Self.messageRow(
-                                    host: host,
-                                    row: member.row,
-                                    message: member.message,
-                                    availableRowContentWidth: availableRowContentWidth,
-                                    availableTrailingGutterWidth: availableTrailingGutterWidth
-                                )
-                            }
-                        }
+                        )
                     }
                 }
             )
@@ -681,14 +731,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
-            let memberKeys: [ACPTranscriptRowContent.EqualityKey]
             let expanded: Bool
-        }
-
-        private struct ToolCallGroupMember: Identifiable {
-            let row: ACPTranscriptVisibleRow
-            let message: ACPMessage
-            var id: String { row.stableId }
         }
 
         static func messageRow(
@@ -1383,7 +1426,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
                 grouping: Self.groupingOptions(host: host),
-                build: { Self.renderRows(host: host) }
+                expansion: toolCallGroupExpansionSeeds.generation,
+                build: { Self.renderRows(host: host, expansionSeeds: self.toolCallGroupExpansionSeeds) }
             )
         }
 
@@ -1395,7 +1439,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
                 grouping: Self.groupingOptions(host: host),
-                build: { Self.renderRows(host: host) }
+                expansion: toolCallGroupExpansionSeeds.generation,
+                build: { Self.renderRows(host: host, expansionSeeds: self.toolCallGroupExpansionSeeds) }
             )
         }
 
@@ -1404,8 +1449,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
                   let row = tiling.row(withId: id) else { return nil }
             let lookup = currentRowLookup(host: host)
-            guard let localSpan = lookup.localIndexSpan(forRowId: id),
-                  let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            guard let localSpan = lookup.localIndexSpan(forRowId: id) else {
+                // A row with an anchor index but no span of its own: an
+                // expanded bundle's header, which stands for no message.
+                // It holds the position of the member that follows rather
+                // than advancing across its own height — otherwise the
+                // logical position would walk forward by one while
+                // scrolling the header and then jump BACK on entering the
+                // first member row, which owns that same index.
+                guard let anchorIndex = lookup.transcriptIndex(for: id),
+                      let globalAnchor = host.transcript.globalIndex(forLocalIndex: anchorIndex)
+                else { return nil }
+                return CGFloat(globalAnchor)
+            }
+            guard let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
             else { return nil }
             // A folded tool-call group's row displays `localSpan.count`
             // messages in the height of one row; scale the within-row
@@ -1443,9 +1500,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// see `ACPTranscriptScrollerReconciler.restoreScrollAnchor`'s doc
         /// comment) or not.
         ///
-        /// A resolved GROUP id only implies head growth while collapsing
-        /// stays enabled: decoding one succeeds because its first member
-        /// changed WITHIN an ongoing group. If grouping was disabled
+        /// A resolved GROUP id implies head growth only when it resolves to
+        /// ANOTHER BUNDLE ROW and collapsing stays enabled: decoding one
+        /// succeeds because its first member changed WITHIN an ongoing
+        /// collapsed group, which is the case where the replacement really
+        /// did grow at its head. When the decoded member is tiled as its own
+        /// row instead — the run is expanded, so a stale header resolves to
+        /// a member CARD — see the guard at the bottom of the
+        /// implementation. If grouping was disabled
         /// instead, the group id vanished because grouping stopped entirely
         /// — a short collapsed bundle can become a much taller plain tool
         /// card, the opposite of "grew a little at the head" — so
@@ -1461,6 +1523,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// run of finished calls — the bundle grew below it, and
         /// bottom-relative restoration would drag the viewport down by the
         /// height of every later member; top-relative is right there.
+        ///
+        /// Note a MEMBER's own stale id only ever arises from a COLLAPSED
+        /// bundle, which is the only kind that swallows its members' row
+        /// ids. An expanded bundle tiles each member as its own row keyed
+        /// by its own stable id (see `ACPTranscriptRenderRow`), so
+        /// expanding, collapsing or disabling the setting while parked on
+        /// one of its cards leaves that card's row id untouched. A stale
+        /// GROUP id can still arise either way, since a bundle's id follows
+        /// its first member and two runs merging re-keys the later one.
         static func resolveStaleRowId(
             _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
         ) -> StaleRowIdResolution? {
@@ -1472,6 +1543,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
                   let resolved = lookup.rowId(forStableId: staleStableId)
             else { return nil }
+            // The decoded member is tiled as its own row, so the run is
+            // EXPANDED (or grouping stopped): the replacement is that member
+            // CARD, not another bundle row. The stale header sat immediately
+            // above the card, so align tops. Bottom-relative here would drop
+            // the viewport to the bottom of a card that can be many
+            // viewports tall — the header is short, the card need not be.
+            guard resolved != staleStableId else {
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: false)
+            }
             return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: groupingEnabled)
         }
 
@@ -1680,6 +1760,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// guessing from assumed row sizes.
         func rowFrameForTesting(id: String) -> (minY: CGFloat, height: CGFloat)? {
             tiling.row(withId: id).map { ($0.minY, $0.height) }
+        }
+
+        /// The logical (fractional global message) position the minimap and
+        /// logical scrollbar would report for a scroll offset, so a test can
+        /// sweep a range of offsets and assert the mapping stays monotonic.
+        func globalMessagePositionForTesting(at y: CGFloat) -> CGFloat? {
+            globalMessagePosition(at: y)
         }
         #endif
     }

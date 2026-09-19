@@ -25,16 +25,40 @@ struct ACPTranscriptToolCallGroup: Equatable {
     }
 }
 
-/// What the scroller actually tiles: either one transcript message or a
-/// bundle of finished tool calls folded into a single row.
+/// What the scroller actually tiles.
+///
+/// A COLLAPSED bundle is one row standing in for all its members
+/// (`toolCallGroup`). An EXPANDED bundle is a header row carrying the
+/// "Hide N tools" toggle (`toolCallGroupHeader`) followed by one row per
+/// member (`toolCallGroupMember`) — deliberately NOT one tall row with the
+/// cards nested inside it.
+///
+/// Giving each expanded member its own tiled row is what makes the
+/// scroller's geometry exact rather than estimated: the member has a real
+/// measured frame, its own index span of exactly one message, and a row id
+/// (its own stable id) identical to the one it would have if collapsing
+/// were switched off entirely. So window compaction can name the member
+/// actually under the viewport, and expanding, collapsing or disabling the
+/// setting never leaves a scroll anchor pointing at a row id that no longer
+/// exists. With the members nested inside a single row instead, none of
+/// that information exists and every one of those operations has to guess
+/// from a fraction of the bundle's total height.
 enum ACPTranscriptRenderRow: Equatable, Identifiable {
     case message(ACPTranscriptVisibleRow)
     case toolCallGroup(ACPTranscriptToolCallGroup)
+    case toolCallGroupHeader(ACPTranscriptToolCallGroup)
+    case toolCallGroupMember(ACPTranscriptVisibleRow, groupId: String)
 
+    /// The header deliberately shares the collapsed bundle's id: toggling
+    /// expansion then updates that one row in place (its token carries the
+    /// expanded flag) while the member rows are inserted or removed around
+    /// it, so the toggle never invalidates the bundle's own scroll anchor.
     var id: String {
         switch self {
         case .message(let row): row.stableId
         case .toolCallGroup(let group): group.id
+        case .toolCallGroupHeader(let group): group.id
+        case .toolCallGroupMember(let row, _): row.stableId
         }
     }
 }
@@ -69,10 +93,18 @@ enum ACPToolCallGrouping {
         return true
     }
 
+    /// `isExpanded` decides, per assembled run, whether the bundle is
+    /// emitted as one collapsed row or as a header row plus one row per
+    /// member. Expansion therefore shapes the ROW LIST itself, not just how
+    /// a row draws — that is the whole point of the design (see
+    /// `ACPTranscriptRenderRow`). Callers that memoize the result must
+    /// include the expansion state in their cache key; `ACPVisibleRowsCache`
+    /// does this via `ACPToolCallGroupExpansionSeeds.generation`.
     static func fold(
         rows: [ACPTranscriptVisibleRow],
         messages: [ACPMessage],
-        options: Options
+        options: Options,
+        isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false }
     ) -> [ACPTranscriptRenderRow] {
         guard options.enabled else { return rows.map(ACPTranscriptRenderRow.message) }
 
@@ -82,7 +114,15 @@ enum ACPToolCallGrouping {
 
         func flushRun() {
             if !run.isEmpty {
-                result.append(.toolCallGroup(ACPTranscriptToolCallGroup(members: run)))
+                let group = ACPTranscriptToolCallGroup(members: run)
+                if isExpanded(group) {
+                    result.append(.toolCallGroupHeader(group))
+                    for member in group.members {
+                        result.append(.toolCallGroupMember(member, groupId: group.id))
+                    }
+                } else {
+                    result.append(.toolCallGroup(group))
+                }
             }
             run.removeAll(keepingCapacity: true)
         }
@@ -169,9 +209,17 @@ struct ACPToolCallGroupSummary: Equatable {
 @MainActor
 final class ACPToolCallGroupExpansionSeeds {
     /// Fired after every `setExpanded`, so the owning Coordinator can
-    /// rebuild specs (the expanded flag lives in the row's token) without
-    /// this store having to know about SwiftUI or the scroller.
+    /// rebuild the row list without this store having to know about
+    /// SwiftUI or the scroller.
     var onChange: (() -> Void)?
+
+    /// Bumped on every `setExpanded`. Expansion decides whether a bundle
+    /// folds into one row or a header plus per-member rows, so anything
+    /// memoizing the folded row list has to invalidate when it changes;
+    /// a counter is the cheapest key for that (see `ACPVisibleRowsCache`).
+    /// `syncLineage` deliberately does NOT bump it: it only re-tags members
+    /// of a run that is already expanded, which cannot change the row list.
+    private(set) var generation: UInt64 = 0
 
     /// Every member ever recorded as part of an expanded run, tagged with
     /// that run's lineage. Bare member-id overlap alone can't tell "the
@@ -205,7 +253,14 @@ final class ACPToolCallGroupExpansionSeeds {
             guard !lineages.isEmpty else { return }
             lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
         }
+        generation &+= 1
         onChange?()
+    }
+
+    /// Whether `group` should render expanded. Convenience over
+    /// `isExpanded(members:)` for the fold, which works in whole groups.
+    func isExpanded(_ group: ACPTranscriptToolCallGroup) -> Bool {
+        isExpanded(members: group.members.map(\.stableId))
     }
 
     /// Folds `members` into whichever lineage is already present among
