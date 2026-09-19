@@ -45,6 +45,24 @@ final class ACPTranscriptScrollerReconciler {
     private var lastFollowsTail = false
     private let widthSettleTimer: DebounceTimer
 
+    /// Consulted by `restoreScrollAnchor` when the anchor's captured row id
+    /// no longer exists in the new geometry — set by the owning Coordinator
+    /// to remap a folded tool-call bundle's row id to its replacement.
+    ///
+    /// A bundle's row id is derived from its first member, which is stable
+    /// while a run grows at its tail but changes when a `.reset`-classified
+    /// update (e.g. the final head-pagination step) also reveals an older,
+    /// adjacent finished call that becomes the new first member. Without
+    /// this hook, an anchor captured on the bundle's OLD id simply finds no
+    /// row under that id post-reset and silently no-ops (see this class's
+    /// `restoreScrollAnchor` doc comment) — leaving `scroller`'s numeric
+    /// scroll offset unchanged against a document whose geometry above the
+    /// viewport just shifted, a hard jump into whatever the newly revealed
+    /// rows happen to occupy that same numeric range. This reconciler has
+    /// no notion of tool-call bundles itself (it operates on opaque row
+    /// ids); the Coordinator, which does, supplies the remap.
+    var resolveStaleRowId: (String) -> String? = { _ in nil }
+
     /// True for the entire duration of `apply()` (and the deferred
     /// width-settle reset). Suppresses `remeasureRow`'s reentrant path:
     /// AppKit/SwiftUI can synchronously invalidate a hosting view's
@@ -512,9 +530,11 @@ final class ACPTranscriptScrollerReconciler {
     }
 
     /// Puts the anchored position back where it was on screen. A nil
-    /// anchor, or a `.row` anchor whose row no longer exists in the new
-    /// geometry, leaves the offset alone — there is nothing better to aim
-    /// at, and `setScrollY`'s clamp still keeps it inside the new document.
+    /// anchor leaves the offset alone — there is nothing better to aim at,
+    /// and `setScrollY`'s clamp still keeps it inside the new document. A
+    /// `.row` anchor whose row no longer exists in the new geometry first
+    /// tries `resolveStaleRowId` (see its doc comment); only if that also
+    /// comes up empty does it fall back to leaving the offset alone.
     ///
     /// For `.row`, the offset is capped at the anchor row's NEW height: a
     /// row that shrank across the reset (a tall tool-output row collapsing,
@@ -531,7 +551,7 @@ final class ACPTranscriptScrollerReconciler {
         guard let anchor else { return }
         switch anchor {
         case .row(let id, let offsetWithinRow):
-            guard let row = tiling.row(withId: id) else { return }
+            guard let row = tiling.row(withId: id) ?? resolveStaleRowId(id).flatMap(tiling.row(withId:)) else { return }
             scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
         case .bottomRelative(let distance):
             scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)

@@ -849,6 +849,41 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
     }
 
+    /// Regression test for the Codex finding: a folded tool-call bundle's
+    /// row id is derived from its first member, so a `.reset` that also
+    /// reveals an older adjacent finished call (which becomes the new first
+    /// member) changes that id. Without a remap, an anchor captured on the
+    /// bundle's OLD id finds nothing post-reset and restoration silently
+    /// no-ops — leaving `scroller`'s numeric offset unchanged against a
+    /// document whose geometry above the viewport just shifted, a hard
+    /// jump. `resolveStaleRowId` is the seam the owning Coordinator uses to
+    /// remap the old id to the bundle's replacement (this reconciler itself
+    /// has no notion of tool-call bundles, hence a plain closure hook here
+    /// rather than anything group-specific).
+    @Test("a stale group anchor is remapped to its replacement row instead of being dropped")
+    func resetRemapsStaleGroupAnchorViaResolver() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tcg-tc-5")
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? "tcg-tc-3" : nil }
+
+        // Ids change at both ends at once (the head sentinel replaced, the
+        // bundle's id renamed) so this is a `.reset`.
+        let new = [spec("mA"), spec("tcg-tc-3", token: 1, height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id)) == .reset
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-3")!
+        #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
+    }
+
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")
     func resetAnchorSkipsSyntheticRows() {
         // The head pagination spinner occupies row 0 (minY 24, maxY 38), so

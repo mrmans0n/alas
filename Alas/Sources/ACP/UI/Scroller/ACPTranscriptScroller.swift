@@ -137,9 +137,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         func attach(scroller: ACPTranscriptScrollerView, host: ACPTranscriptScroller) {
             self.scroller = scroller
-            self.reconciler = ACPTranscriptScrollerReconciler(
+            let reconciler = ACPTranscriptScrollerReconciler(
                 tiling: tiling, pool: pool, scroller: scroller
             )
+            reconciler.resolveStaleRowId = { [weak self] staleId in
+                guard let self, let host = self.host,
+                      let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId)
+                else { return nil }
+                return self.currentRowLookup(host: host).rowId(forStableId: staleStableId)
+            }
+            self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
                 self?.handleScroll(
                     previousY: previousY, newY: newY,
