@@ -77,6 +77,17 @@ let fileTreeTruncatedPaths = new Set();
 let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
+const AGENT_LOGO_PATHS = Object.freeze({
+  claude: "/agent-icons/agent-claude.png",
+  codex: "/agent-icons/agent-codex.svg",
+  "cursor-agent": "/agent-icons/agent-cursor.png",
+  pi: "/agent-icons/agent-pi.png",
+  omp: "/agent-icons/agent-omp.svg",
+  opencode: "/agent-icons/agent-opencode.png",
+  gemini: "/agent-icons/agent-gemini.png",
+  copilot: "/agent-icons/agent-copilot.png"
+});
+
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
 function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
 function showGate(title, msg, retry) {
@@ -707,11 +718,17 @@ function worktreeRow1(section, worktree, singleSession, expanded) {
   const iconWrap = el("span", "ico" + (RemoteRepoFilter.worktreeIsRunning(worktree) ? " run" : ""));
   iconWrap.append(icon(isPrimary ? "home" : "branch"));
   row.append(iconWrap, el("span", "br", summary.branch));
-  if (RemoteRepoFilter.worktreeIsRunning(worktree)) {
-    const agent = el("span", "agent");
-    agent.title = "Agent running";
-    agent.append(icon("agent"));
-    row.append(agent);
+  const runningAgentIds = [...new Set(
+    worktree.activeSessions
+      .filter(RemoteRepoFilter.sessionIsRunning)
+      .map(session => session.agentId)
+      .filter(Boolean)
+  )];
+  if (runningAgentIds.length) {
+    const agents = el("span", "running-agents");
+    agents.title = `${runningAgentIds.join(", ")} running`;
+    runningAgentIds.forEach(agentId => agents.append(agentLogo(agentId)));
+    row.append(agents);
   }
   if (!singleSession) appendSessionDisclosure(row, worktree, expanded);
   return row;
@@ -759,7 +776,7 @@ function sessionCard(session) {
 
   const identity = el("div", "r1");
   const iconWrap = el("span", "ico" + (running ? " run" : ""));
-  iconWrap.append(icon("agent"));
+  iconWrap.append(agentLogo(session.agentId));
   identity.append(iconWrap, el("span", "session-title", sessionTitles.get(session.id) || session.title));
 
   const status = el("div", "r2");
@@ -2104,7 +2121,7 @@ const ICON_SVG = {
   chevR: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4.5 4-4.5 4"/></svg>',
   home: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7.2 8 2.8l5.5 4.4V12.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/></svg>',
   branch: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="6" r="1.5"/><path d="M4 5v6"/><path d="M12 7.5c0 2.5-2 3-4 3"/></svg>',
-  agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5.5" width="10" height="7.5" rx="2"/><path d="M8 2v3.5M5.8 9h.01M10.2 9h.01"/></svg>',
+  sparkle: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.8 1.5c.35 2.9 1.3 3.85 4.2 4.2-2.9.35-3.85 1.3-4.2 4.2-.35-2.9-1.3-3.85-4.2-4.2 2.9-.35 3.85-1.3 4.2-4.2Z"/><path d="M12.5 9.5c.18 1.5.67 2 2.17 2.17-1.5.18-2 .67-2.17 2.17-.18-1.5-.67-2-2.17-2.17 1.5-.18 2-.67 2.17-2.17Z"/></svg>',
   check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>',
   cross: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   stop: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
@@ -2125,6 +2142,27 @@ function icon(name, cls) {
   if (name === "pips") { span.append(pipsEl()); return span; }
   span.innerHTML = ICON_SVG[name] || "";
   return span;
+}
+
+function agentLogo(agentId) {
+  const logo = el("span", "agent-logo");
+  const path = AGENT_LOGO_PATHS[agentId];
+  if (!path) {
+    logo.append(icon("sparkle"));
+    return logo;
+  }
+
+  const image = document.createElement("img");
+  image.src = path;
+  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
+  image.decoding = "async";
+  image.draggable = false;
+  image.onerror = () => {
+    logo.replaceChildren(icon("sparkle"));
+  };
+  logo.append(image);
+  return logo;
 }
 
 function linkifyBareUrls(text) {

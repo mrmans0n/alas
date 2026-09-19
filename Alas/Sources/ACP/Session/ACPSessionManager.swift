@@ -138,7 +138,7 @@ final class ACPSessionManager: ObservableObject {
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
-    private let onCheckpointCapture: (@MainActor () async -> CheckpointID?)?
+    private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -630,7 +630,7 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
-         onCheckpointCapture: (@MainActor () async -> CheckpointID?)? = nil,
+         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,

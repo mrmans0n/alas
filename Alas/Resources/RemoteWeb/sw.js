@@ -1,8 +1,8 @@
-const CACHE_NAME = "alas-remote-shell-v69";
+const CACHE_NAME = "alas-remote-shell-v70";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/style.css?v=51",
+  "/style.css?v=52",
   "/repo-filter.js?v=3",
   "/session-ordering.js?v=2",
   "/worktree-creation.js?v=1",
@@ -10,14 +10,22 @@ const SHELL_ASSETS = [
   "/file-browser.js?v=3",
   "/hub-registry.js?v=1",
   "/hub-links.js?v=1",
-  "/app.js?v=87",
+  "/app.js?v=88",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",
   "/icon.svg",
   "/icon-180.png",
   "/icon-192.png",
-  "/icon-512.png"
+  "/icon-512.png",
+  "/agent-icons/agent-claude.png",
+  "/agent-icons/agent-codex.svg",
+  "/agent-icons/agent-cursor.png",
+  "/agent-icons/agent-pi.png",
+  "/agent-icons/agent-omp.svg",
+  "/agent-icons/agent-opencode.png",
+  "/agent-icons/agent-gemini.png",
+  "/agent-icons/agent-copilot.png",
 ];
 
 self.addEventListener("install", (event) => {

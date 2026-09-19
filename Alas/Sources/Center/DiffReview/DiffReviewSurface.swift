@@ -89,6 +89,14 @@ struct DiffReviewSurface: View {
     var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.reviewDraftSummaryRailStatus) private var summaryRailStatus
+    @State private var inlineSummaryActionRelay = ReviewDraftSummaryInlineActionRelay()
+    /// The draft-summary editor's in-progress state, mirrored from whichever
+    /// presentation (rail or inline) is currently mounted so a resize that
+    /// crosses the placement threshold mid-edit hands the unsaved text to
+    /// the other presentation instead of discarding it.
+    @State private var summaryEditingCommentID: String?
+    @State private var summaryEditingBody = ""
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
@@ -238,7 +246,21 @@ struct DiffReviewSurface: View {
     var body: some View {
         Group {
             if let firstFileID = session.summary.files.first?.id {
-                reviewSurface(firstFileID: firstFileID)
+                // The summary rail only stays when the diff keeps a readable
+                // width next to it; otherwise its content moves after the
+                // diff stack. Decided from the surface's own width so the
+                // choice tracks window and pane resizes.
+                GeometryReader { proxy in
+                    reviewSurface(
+                        firstFileID: firstFileID,
+                        summaryPlacement: DiffReviewSummaryPlacement.resolve(
+                            availableWidth: proxy.size.width,
+                            fileRailCollapsed: railCollapsed,
+                            summaryRailCollapsed: reviewSummaryCollapsed
+                        )
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
             } else {
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -253,7 +275,10 @@ struct DiffReviewSurface: View {
         }
     }
 
-    private func reviewSurface(firstFileID: DiffReviewFileID) -> some View {
+    private func reviewSurface(
+        firstFileID: DiffReviewFileID,
+        summaryPlacement: DiffReviewSummaryPlacement
+    ) -> some View {
         let selectedBinding = Binding<DiffReviewFileID>(
             get: { selectedFileID ?? firstFileID },
             set: { selectedFileID = $0 }
@@ -272,8 +297,8 @@ struct DiffReviewSurface: View {
                 threads: threads,
                 onSelectFile: scrollToFile
             )
-            appKitMainReviewStream(session)
-            if shouldShowReviewSummaryRail {
+            appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
+            if shouldShowReviewSummaryRail, summaryPlacement == .rail {
                 ReviewDraftSummaryRail(
                     comments: allDraftComments,
                     bundle: reviewFeedbackBundle,
@@ -283,13 +308,22 @@ struct DiffReviewSurface: View {
                     onSelectDraftComment: onSelectDraftComment,
                     inlineFeedbackByFileID: inlineFeedbackByFileID,
                     focusedFeedbackID: focusedFeedbackID,
-                    onSelectInlineFeedback: onSelectInlineFeedback
+                    onSelectInlineFeedback: onSelectInlineFeedback,
+                    initialEditingCommentID: summaryEditingCommentID,
+                    initialEditingBody: summaryEditingBody,
+                    onEditingStateChange: { id, body in
+                        summaryEditingCommentID = id
+                        summaryEditingBody = body
+                    }
                 )
             }
         }
     }
 
-    private func appKitMainReviewStream(_ session: DiffReviewLoadedSession) -> some View {
+    private func appKitMainReviewStream(
+        _ session: DiffReviewLoadedSession,
+        trailingRows: [AppKitDiffRowSpec]
+    ) -> some View {
         AppKitDiffReviewScroller(
             inputs: appKitRowInputs(for: session),
             fileCommand: scrollCommand,
@@ -298,9 +332,97 @@ struct DiffReviewSurface: View {
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
             onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll,
-            onDraftCommentReveal: onDraftCommentReveal
+            onDraftCommentReveal: onDraftCommentReveal,
+            trailingRows: trailingRows
         )
         .background(theme.color("bg-1"))
+    }
+
+    /// The draft review summary as a single scroller row after the diff
+    /// stack. Empty unless the surface is too narrow for the trailing rail.
+    private func inlineSummaryRows(for placement: DiffReviewSummaryPlacement) -> [AppKitDiffRowSpec] {
+        guard placement == .inline, shouldShowReviewSummaryRail else { return [] }
+        let comments = allDraftComments
+        let bundle = reviewFeedbackBundle
+        let token = ReviewDraftSummaryInlineRowToken(
+            comments: comments,
+            bundle: bundle,
+            availability: comments.map(draftCommentActions.availability),
+            canPublishReview: draftCommentActions.canPublishReview(),
+            agentTargets: draftCommentActions.agentTargets(),
+            focusedDraftCommentID: focusedDraftCommentID,
+            inlineFeedbackByFileID: inlineFeedbackByFileID,
+            focusedFeedbackID: focusedFeedbackID,
+            status: summaryRailStatus,
+            theme: theme,
+            editingCommentID: summaryEditingCommentID,
+            editingBody: summaryEditingBody
+        )
+        // Refreshed on every body evaluation regardless of whether the row
+        // gets rebuilt below, mirroring how per-file rows keep
+        // `AppKitDiffReviewFileState.actionRelay` current. The built row
+        // wires through the relay's `forwarding*` closures rather than
+        // capturing these directly, so it keeps calling the latest handlers
+        // even when the AppKit hosting pool skips a rebuild because the
+        // equality token's derived values (comments, availability, etc.)
+        // didn't change.
+        inlineSummaryActionRelay.update(
+            draftCommentActions: draftCommentActions,
+            onSelectDraftComment: onSelectDraftComment,
+            onSelectInlineFeedback: onSelectInlineFeedback
+        )
+        // Hosted rows do not inherit this view's SwiftUI environment, so the
+        // theme and send status travel with the row explicitly.
+        let theme = theme
+        let status = summaryRailStatus
+        let relay = inlineSummaryActionRelay
+        // Captured by value at this render pass so a fresh mount (the
+        // moment placement actually switches to inline) seeds the editor
+        // with whichever presentation last held the in-progress edit. Safe
+        // to reference `summaryEditingCommentID`/`summaryEditingBody`
+        // directly in the callback below even from a stale build closure:
+        // unlike the injected action closures, these are local `@State` on
+        // this view, so any captured reference always resolves to the
+        // current storage regardless of which render captured it.
+        let initialEditingCommentID = summaryEditingCommentID
+        let initialEditingBody = summaryEditingBody
+        let feedbackCount = inlineFeedbackByFileID.values.reduce(0) { $0 + $1.count }
+        return [
+            AppKitDiffRowSpec(
+                id: AppKitDiffReviewRowID.reviewSummary,
+                ownerID: nil,
+                equalityToken: .init(token),
+                contentSignature: 0,
+                estimatedHeight: ReviewDraftSummaryRail.estimatedInlineHeight(
+                    commentCount: comments.count,
+                    feedbackCount: feedbackCount
+                ),
+                build: {
+                    AnyView(
+                        ReviewDraftSummaryRail(
+                            comments: comments,
+                            bundle: bundle,
+                            collapsed: .constant(false),
+                            focusedDraftCommentID: token.focusedDraftCommentID,
+                            draftCommentActions: relay.forwardingDraftCommentActions,
+                            onSelectDraftComment: relay.forwardingOnSelectDraftComment,
+                            inlineFeedbackByFileID: token.inlineFeedbackByFileID,
+                            focusedFeedbackID: token.focusedFeedbackID,
+                            onSelectInlineFeedback: relay.forwardingOnSelectInlineFeedback,
+                            presentation: .inline,
+                            initialEditingCommentID: initialEditingCommentID,
+                            initialEditingBody: initialEditingBody,
+                            onEditingStateChange: { id, body in
+                                summaryEditingCommentID = id
+                                summaryEditingBody = body
+                            }
+                        )
+                        .environment(\.theme, theme)
+                        .environment(\.reviewDraftSummaryRailStatus, status)
+                    )
+                }
+            ),
+        ]
     }
 
     private func appKitRowInputs(for session: DiffReviewLoadedSession) -> [AppKitDiffReviewRowInput] {

@@ -3,6 +3,21 @@ import Foundation
 
 typealias CheckpointID = UUID
 
+enum AutomaticCheckpointLabel {
+    private static let excerptLimit = 80
+
+    static func make(prompt: String, hasAttachments: Bool) -> String {
+        let normalized = prompt.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !normalized.isEmpty else {
+            return hasAttachments ? "Before request with attachments" : "Before request"
+        }
+        guard normalized.count > excerptLimit else { return "Before: \(normalized)" }
+        let excerpt = String(normalized.prefix(excerptLimit - 1))
+            .trimmingCharacters(in: .whitespaces)
+        return "Before: \(excerpt)…"
+    }
+}
+
 struct CheckpointCoordinationSnapshot: Equatable, Sendable {
     let dirtyEditorPaths: Set<String>
     let activeTerminalCount: Int

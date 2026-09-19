@@ -15,13 +15,18 @@ struct CheckpointPresentationTests {
         #expect(CheckpointPresentation.bytes(2 * 1_073_741_824) == "2 GiB")
     }
 
-    @Test func summaryKeepsEachChangeScopeDistinct() {
+    @Test func summaryOmitsZeroCountsAndUsesCompactSeparators() {
         let summary = WorktreeCheckpointSummary(
             id: UUID(), kind: .manual, label: "Before edit", createdAt: .now, byteCount: 0,
-            stagedFileCount: 2, unstagedFileCount: 3, untrackedFileCount: 4, unavailableReason: nil
+            stagedFileCount: 2, unstagedFileCount: 0, untrackedFileCount: 4, unavailableReason: nil
         )
-        #expect(CheckpointPresentation.summary(summary) == "2 staged, 3 unstaged, 4 untracked")
+        #expect(CheckpointPresentation.summary(summary) == "2 staged · 4 untracked")
         #expect(CheckpointPresentation.statusLine(summary).contains(CheckpointPresentation.summary(summary)))
+        let clean = WorktreeCheckpointSummary(
+            id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: summary.byteCount,
+            stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: nil
+        )
+        #expect(CheckpointPresentation.summary(clean) == "Clean")
         let unavailable = WorktreeCheckpointSummary(
             id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: summary.byteCount,
             stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: "Checkpoint data is missing."
@@ -29,13 +34,29 @@ struct CheckpointPresentationTests {
         #expect(CheckpointPresentation.statusLine(unavailable) == "Checkpoint data is missing.")
     }
 
-    @Test func labelsAndFooterDescribeTheCheckpointPolicy() {
+    @Test func footerKeepsRetentionDetailsOutOfTheVisibleCopy() {
         #expect(CheckpointPresentation.kind(.manual) == "Manual")
         #expect(CheckpointPresentation.kind(.recovery) == "Recovery")
-        let footer = CheckpointPresentation.footer(storageUsage: 0)
-        #expect(footer.contains("20 manual"))
-        #expect(footer.contains("5 recovery"))
-        #expect(footer.contains("2 GiB"))
+        #expect(CheckpointPresentation.footer(storageUsage: 0) == "0 B used")
+        #expect(CheckpointPresentation.retentionHelp.contains("50 automatic"))
+        #expect(CheckpointPresentation.retentionHelp.contains("2 GiB"))
+    }
+
+    @Test func automaticLabelsUseACompactPromptExcerpt() {
+        #expect(AutomaticCheckpointLabel.make(
+            prompt: "  Replace\n the sidebar  ",
+            hasAttachments: false
+        ) == "Before: Replace the sidebar")
+        #expect(AutomaticCheckpointLabel.make(
+            prompt: " ",
+            hasAttachments: true
+        ) == "Before request with attachments")
+        let long = AutomaticCheckpointLabel.make(
+            prompt: String(repeating: "word ", count: 50),
+            hasAttachments: false
+        )
+        #expect(long.count <= 120)
+        #expect(long.hasSuffix("…"))
     }
 
     @Test func remoteReasonAndRowIDsAreStable() {

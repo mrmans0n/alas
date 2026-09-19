@@ -38,6 +38,94 @@ extension EnvironmentValues {
     }
 }
 
+/// How the draft review summary is laid out.
+enum ReviewDraftSummaryPresentation: Equatable {
+    /// A fixed-width, collapsible rail on the trailing edge of the review
+    /// surface with its own scroll view.
+    case rail
+    /// A full-width section appended after the diff stack. It has no scroll
+    /// view or collapse control because the surrounding scroller owns both.
+    case inline
+}
+
+/// Keeps the inline draft-summary row's action closures fresh even when the
+/// AppKit hosting pool skips rebuilding the row body because its equality
+/// token (derived values only, see `ReviewDraftSummaryInlineRowToken`) is
+/// unchanged. The surface calls `update` on every body evaluation, mirroring
+/// how per-file rows refresh `AppKitDiffReviewFileState.actionRelay`. The
+/// row's build closure wires through `forwarding*`, so a controller swap
+/// that only changes closure identity — not the token's derived values —
+/// still reaches the latest handlers instead of the ones captured at the
+/// row's last rebuild.
+@MainActor
+final class ReviewDraftSummaryInlineActionRelay {
+    private var draftCommentActions = ReviewDraftCommentActions()
+    private var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
+    private var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+
+    func update(
+        draftCommentActions: ReviewDraftCommentActions,
+        onSelectDraftComment: @escaping (ReviewDraftComment) -> Void,
+        onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void
+    ) {
+        self.draftCommentActions = draftCommentActions
+        self.onSelectDraftComment = onSelectDraftComment
+        self.onSelectInlineFeedback = onSelectInlineFeedback
+    }
+
+    /// Forwards through this relay's current closures at call time rather
+    /// than capturing them, so a view built once keeps invoking whichever
+    /// handlers the most recent `update` installed.
+    var forwardingDraftCommentActions: ReviewDraftCommentActions {
+        ReviewDraftCommentActions(
+            availability: { [weak self] comment in self?.draftCommentActions.availability(comment) ?? .none },
+            canPublishReview: { [weak self] in self?.draftCommentActions.canPublishReview() ?? false },
+            edit: { [weak self] comment, body in self?.draftCommentActions.edit(comment, body) },
+            delete: { [weak self] comment in self?.draftCommentActions.delete(comment) },
+            resolve: { [weak self] comment in self?.draftCommentActions.resolve(comment) },
+            dismiss: { [weak self] comment in self?.draftCommentActions.dismiss(comment) },
+            copyPrompt: { [weak self] bundle in self?.draftCommentActions.copyPrompt(bundle) },
+            publishProvider: { [weak self] comment in self?.draftCommentActions.publishProvider(comment) },
+            publishReview: { [weak self] in self?.draftCommentActions.publishReview() },
+            agent: { [weak self] target in self?.draftCommentActions.agent(target) },
+            agentTargets: { [weak self] in self?.draftCommentActions.agentTargets() ?? [] },
+            sendToAgent: { [weak self] bundle, target in self?.draftCommentActions.sendToAgent(bundle, target) }
+        )
+    }
+
+    var forwardingOnSelectDraftComment: (ReviewDraftComment) -> Void {
+        { [weak self] comment in self?.onSelectDraftComment(comment) }
+    }
+
+    var forwardingOnSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void {
+        { [weak self] item in self?.onSelectInlineFeedback(item) }
+    }
+}
+
+/// Everything the inline summary row renders from. Used as the row's equality
+/// token so the AppKit scroller only rebuilds the hosted view when one of
+/// these inputs changes.
+struct ReviewDraftSummaryInlineRowToken: Equatable {
+    let comments: [ReviewDraftComment]
+    let bundle: ReviewFeedbackBundle
+    let availability: [ReviewDraftCommentActionAvailability]
+    let canPublishReview: Bool
+    let agentTargets: [ReviewFeedbackAgentTarget]
+    let focusedDraftCommentID: String?
+    let inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]]
+    let focusedFeedbackID: String?
+    let status: ReviewDraftSummaryRailStatus
+    let theme: Theme
+    // Included so every keystroke forces AppKitDiffScrollerReconciler.apply
+    // to refresh its stored spec instead of short-circuiting on an
+    // unchanged token. Without this, scrolling the row out of the mount
+    // band and back while mid-edit rebuilds it from a `build` closure that
+    // captured editingCommentID/editingBody from an earlier keystroke,
+    // silently reverting to older unsaved text.
+    let editingCommentID: String?
+    let editingBody: String
+}
+
 struct ReviewDraftSummaryRail: View {
     let comments: [ReviewDraftComment]
     let bundle: ReviewFeedbackBundle
@@ -48,6 +136,60 @@ struct ReviewDraftSummaryRail: View {
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var focusedFeedbackID: String?
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+    var presentation: ReviewDraftSummaryPresentation = .rail
+    /// Seeds the in-progress editor when this view is (re)created, e.g. when
+    /// the surface switches between the rail and inline presentations. The
+    /// two presentations are separate view instances with independent
+    /// `@State`, so without this a resize that crosses the placement
+    /// threshold mid-edit would silently discard unsaved text.
+    var initialEditingCommentID: String?
+    var initialEditingBody: String = ""
+    /// Fired whenever the in-progress edit changes, so a caller that
+    /// recreates this view for the other presentation can pass the latest
+    /// state back in as `initialEditingCommentID`/`initialEditingBody`.
+    var onEditingStateChange: (String?, String) -> Void = { _, _ in }
+
+    static let inlineAccessibilityIdentifier = "review-draft-summary-inline"
+
+    /// Rough height for the inline section before the scroller measures it.
+    static func estimatedInlineHeight(commentCount: Int, feedbackCount: Int) -> CGFloat {
+        let header: CGFloat = 96
+        let comment: CGFloat = 108
+        let feedback: CGFloat = 84
+        return header + CGFloat(commentCount) * comment + CGFloat(feedbackCount) * feedback
+    }
+
+    init(
+        comments: [ReviewDraftComment],
+        bundle: ReviewFeedbackBundle,
+        collapsed: Binding<Bool>,
+        focusedDraftCommentID: String? = nil,
+        draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
+        onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
+        inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
+        focusedFeedbackID: String? = nil,
+        onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void = { _ in },
+        presentation: ReviewDraftSummaryPresentation = .rail,
+        initialEditingCommentID: String? = nil,
+        initialEditingBody: String = "",
+        onEditingStateChange: @escaping (String?, String) -> Void = { _, _ in }
+    ) {
+        self.comments = comments
+        self.bundle = bundle
+        self._collapsed = collapsed
+        self.focusedDraftCommentID = focusedDraftCommentID
+        self.draftCommentActions = draftCommentActions
+        self.onSelectDraftComment = onSelectDraftComment
+        self.inlineFeedbackByFileID = inlineFeedbackByFileID
+        self.focusedFeedbackID = focusedFeedbackID
+        self.onSelectInlineFeedback = onSelectInlineFeedback
+        self.presentation = presentation
+        self.initialEditingCommentID = initialEditingCommentID
+        self.initialEditingBody = initialEditingBody
+        self.onEditingStateChange = onEditingStateChange
+        self._editingCommentID = State(initialValue: initialEditingCommentID)
+        self._editingBody = State(initialValue: initialEditingBody)
+    }
 
     @Environment(\.theme) private var theme
     @Environment(\.reviewDraftSummaryRailStatus) private var sendStatus
@@ -103,6 +245,23 @@ struct ReviewDraftSummaryRail: View {
     }
 
     var body: some View {
+        Group {
+            switch presentation {
+            case .rail:
+                railBody
+            case .inline:
+                inlineBody
+            }
+        }
+        .onChange(of: editingCommentID) { _, newValue in
+            onEditingStateChange(newValue, editingBody)
+        }
+        .onChange(of: editingBody) { _, newValue in
+            onEditingStateChange(editingCommentID, newValue)
+        }
+    }
+
+    private var railBody: some View {
         VStack(spacing: 0) {
             if collapsed {
                 collapsedBody
@@ -110,7 +269,7 @@ struct ReviewDraftSummaryRail: View {
                 expandedBody
             }
         }
-        .frame(width: collapsed ? 44 : 260)
+        .frame(width: collapsed ? DiffReviewRailMetrics.collapsedWidth : DiffReviewRailMetrics.expandedWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(width: 0.5), alignment: .leading)
@@ -118,6 +277,35 @@ struct ReviewDraftSummaryRail: View {
         .background(
             DiffReviewAccessibilityMarker(
                 identifier: "review-draft-summary-rail",
+                label: "Draft review summary"
+            )
+        )
+    }
+
+    private var inlineBody: some View {
+        VStack(spacing: 0) {
+            expandedHeader
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(groupedComments) { group in
+                    commentGroup(group)
+                }
+                if hasFeedback {
+                    feedbackSection
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-2"))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.color("line"), lineWidth: 0.5)
+        )
+        .accessibilityIdentifier(Self.inlineAccessibilityIdentifier)
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: Self.inlineAccessibilityIdentifier,
                 label: "Draft review summary"
             )
         )
@@ -182,7 +370,9 @@ struct ReviewDraftSummaryRail: View {
                     activeCountPill(compact: false)
                 }
                 Spacer(minLength: 8)
-                collapseButton
+                if presentation == .rail {
+                    collapseButton
+                }
             }
 
             HStack(spacing: 6) {
