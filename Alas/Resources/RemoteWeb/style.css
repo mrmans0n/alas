@@ -56,6 +56,11 @@ a:hover { color: var(--accent-hover); }
 #status[data-state="bad"] { color: oklch(0.85 0.12 25); background: color-mix(in oklab, var(--del) 14%, transparent); }
 #status[data-state="bad"]::before { background: var(--del); }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 oklch(0.78 0.14 155 / 0.5); } 55% { box-shadow: 0 0 0 5px oklch(0.78 0.14 155 / 0); } }
+@media (max-width: 360px) {
+  #bar { gap: 7px; padding-left: 9px; padding-right: 9px; }
+  #status.chip { font-size: 0; gap: 0; padding: 7px; }
+  #status.chip::before { width: 8px; height: 8px; }
+}
 
 #bar.is-detail { padding: calc(env(safe-area-inset-top) + 4px) 12px 8px; }
 #bar.is-detail #status[data-state="ok"] { display: none; }   /* the pill only earns its space when something is wrong */
