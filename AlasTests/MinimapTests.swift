@@ -20,6 +20,28 @@ private final class MinimapWheelScrollView: MinimapScrollView {
     override func scrollWheel(with event: NSEvent) { wheelEvent = event }
 }
 
+/// Stands in for AppKit filling layout holes: measuring a glyph position
+/// resizes the document view, which posts the frame change that drives the
+/// editor minimap viewport update.
+@MainActor
+private final class MinimapResizingLayoutManager: NSLayoutManager {
+    weak var resizedView: NSView?
+    var remainingResizes = 40
+    private var depth = 0
+    private(set) var maximumDepth = 0
+
+    override func glyphIndex(for point: NSPoint, in container: NSTextContainer) -> Int {
+        depth += 1
+        maximumDepth = max(maximumDepth, depth)
+        defer { depth -= 1 }
+        if remainingResizes > 0, let resizedView {
+            remainingResizes -= 1
+            resizedView.setFrameSize(NSSize(width: resizedView.frame.width, height: resizedView.frame.height + 1))
+        }
+        return super.glyphIndex(for: point, in: container)
+    }
+}
+
 @MainActor
 private final class MinimapColorReferenceView: NSView {
     override var isFlipped: Bool { true }
@@ -61,6 +83,28 @@ struct MinimapTests {
         #expect(!material.isHidden)
         #expect(material.frame == scroll.minimap.frame)
         #expect(container.subviews.last === scroll.minimap)
+    }
+
+    @Test("A document resize during a viewport measurement does not recurse")
+    @MainActor func viewportReentrancy() throws {
+        let layout = MinimapResizingLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        layout.addTextContainer(container)
+        let storage = NSTextStorage(string: String(repeating: "let value = 42\n", count: 200))
+        storage.addLayoutManager(layout)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 2000), textContainer: container)
+        layout.resizedView = textView
+        let scroll = CodeEditorScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        scroll.documentView = textView
+        let host = MinimapContainerView(scrollView: scroll)
+        host.layoutSubtreeIfNeeded()
+
+        scroll.configureMinimap(shown: true, theme: try ThemeStore().current)
+
+        #expect(layout.maximumDepth > 0, "The viewport update never measured a glyph position")
+        #expect(layout.maximumDepth <= 2, "Viewport updates re-entered \(layout.maximumDepth) levels deep")
+        #expect(layout.remainingResizes > 0, "The document view kept resizing without settling")
+        scroll.configureMinimap(shown: false, theme: try ThemeStore().current)
     }
 
     @Test("Drag release does not navigate twice when the viewport changes")
