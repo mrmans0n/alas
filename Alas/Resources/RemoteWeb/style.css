@@ -119,6 +119,9 @@ a:hover { color: var(--accent-hover); }
 .wt.tap { cursor: pointer; }
 .wt.tap:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
 .wt.tap:active, .wt.sel { background: color-mix(in oklab, var(--accent) 15%, transparent); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 42%, transparent); }
+.wt-summary { display: flex; flex-direction: column; justify-content: center; gap: 5px; min-width: 0; min-height: 44px; width: calc(100% + 12px); margin: -5px -6px; padding: 5px 6px; border: none; border-radius: 9px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wt-summary:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -2px; }
+.wt-summary:active { background: var(--fill); }
 .wt.closed .r1 { opacity: 0.6; }
 .r1 { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .r2 { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 11.5px; color: var(--fg-dim); white-space: nowrap; }
@@ -137,21 +140,19 @@ a:hover { color: var(--accent-hover); }
 .bar { display: inline-flex; gap: 2px; align-items: center; flex-shrink: 0; }
 .bar i { display: block; width: 2.5px; height: 9px; border-radius: 1px; background: oklch(1 0 0 / 0.14); }
 .bar i.a { background: var(--add); } .bar i.d { background: var(--del); }
+.session-count { flex: 0 0 auto; color: var(--fg-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.worktree-chev { width: 14px; flex: 0 0 14px; color: var(--fg-faint); display: grid; place-items: center; }
+.worktree-chev svg { width: 12px; height: 12px; }
 
-/* A worktree with several sessions lists them inside its card. */
-.ss-list { display: flex; flex-direction: column; margin: 6px -6px -6px; padding-top: 4px; border-top: 0.5px solid var(--line); }
-.ss { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; padding: 8px 6px; border: none; border-radius: 9px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-.ss:active { background: var(--fill); }
-.ss:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -2px; }
-.ss.closed { opacity: 0.55; }
-.ss-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ss-when { flex: 0 0 auto; font-size: 11px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-.session-closed { margin: 4px -6px -6px; }
-.session-closed-summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 8px 6px; color: var(--fg-faint); font-size: 11.5px; font-weight: 600; cursor: pointer; }
-.session-closed-summary::-webkit-details-marker { display: none; }
-.session-closed-summary svg { width: 12px; height: 12px; transition: transform .15s; }
-.session-closed[open] > .session-closed-summary svg { transform: rotate(90deg); }
-.session-closed .ss-list { margin: 0; padding-top: 0; border-top: none; }
+/* Multi-session worktrees expand into the same two-row card language, inset
+   just enough to keep the worktree/session hierarchy visible. */
+.session-card-list { display: flex; flex-direction: column; gap: 5px; margin: 7px 0 -2px 12px; padding-left: 8px; border-left: 1px solid var(--line); }
+.session-card { display: flex; flex-direction: column; gap: 5px; min-width: 0; width: 100%; min-height: 54px; padding: 9px 10px; border: none; border-radius: 11px; background: var(--well); box-shadow: inset 0 0 0 0.5px var(--ring); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.session-card:active { background: var(--fill-strong); }
+.session-card:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+.session-card.closed .r1 { opacity: 0.55; }
+.session-title { flex: 1; min-width: 0; color: var(--fg); font-size: 13px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-agent { min-width: 0; color: var(--fg-faint); font-family: var(--font-mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- Bottom tab bar: Repos / new-session FAB / Settings ---- */
 #bottom-tabbar { flex: 0 0 auto; display: flex; align-items: flex-start; padding: 8px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--bg-bar); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: inset 0 0.5px 0 var(--line); }
