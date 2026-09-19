@@ -67,7 +67,7 @@ const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the se
 const AGENT_LOGO_PATHS = Object.freeze({
   claude: "/agent-icons/agent-claude.png",
   codex: "/agent-icons/agent-codex.svg",
-  cursor: "/agent-icons/agent-cursor.png",
+  "cursor-agent": "/agent-icons/agent-cursor.png",
   pi: "/agent-icons/agent-pi.png",
   omp: "/agent-icons/agent-omp.svg",
   opencode: "/agent-icons/agent-opencode.png",
