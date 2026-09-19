@@ -1,11 +1,48 @@
 name: Build
 
+# Skip the whole workflow when a push or PR only touches files that no CI job
+# builds, tests, or reads: docs, agent skill/config directories, marketing art,
+# and the other workflows. `paths` is used instead of `paths-ignore` because
+# only `paths` supports re-including a subtree after excluding its parent
+# (`.alas/scripts/**` is exercised by the alas-build harness). Keep both event
+# lists identical; scripts/tests/ci-workflow enforces that. No branch protection
+# requires these checks, so a skipped run leaves PRs mergeable.
 on:
   push:
     branches:
       - main
       - master
+    paths:
+      - "**"
+      - "!**.md"
+      - "!docs/**"
+      - "!LICENSE"
+      - "!art/**"
+      - "!assets/**"
+      - "!renovate.json"
+      - "!.agents/**"
+      - "!.claude/**"
+      - "!.github/workflows/nightly.yml"
+      - "!.github/workflows/release.yml"
+      - "!.github/workflows/update-cask.py"
+      - "!.alas/**"
+      - ".alas/scripts/**"
   pull_request:
+    paths:
+      - "**"
+      - "!**.md"
+      - "!docs/**"
+      - "!LICENSE"
+      - "!art/**"
+      - "!assets/**"
+      - "!renovate.json"
+      - "!.agents/**"
+      - "!.claude/**"
+      - "!.github/workflows/nightly.yml"
+      - "!.github/workflows/release.yml"
+      - "!.github/workflows/update-cask.py"
+      - "!.alas/**"
+      - ".alas/scripts/**"
 
 # Cancel superseded runs on the same ref (e.g. force-push to a PR branch).
 # Saves CI minutes and frees the macos-26 queue when iterating fast.
