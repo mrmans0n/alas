@@ -271,6 +271,83 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!before.isEqual(to: after))
     }
 
+    @Test("group row token changes when the bundle's expanded state changes")
+    func groupTokenChangesOnExpansion() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        let collapsed = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, expansionSeeds: seeds)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        let expanded = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, expansionSeeds: seeds)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        // The expanded flag is store-owned and folded into the token: a
+        // toggle must yield a different token or the reconciler would keep
+        // the stale row content on screen.
+        #expect(!collapsed.isEqual(to: expanded))
+    }
+
+    @Test("caller-supplied render rows drive the spec list")
+    func suppliedRenderRowsDriveSpecs() {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        // Hand in a fold that deliberately differs from what `renderRows`
+        // would produce; the specs must follow the supplied rows, proving
+        // the memoized path is actually consumed rather than recomputed.
+        let supplied: [ACPTranscriptRenderRow] = [
+            .message(ACPTranscriptVisibleRow(index: 0, stableId: "tc-a")),
+            .toolCallGroup(ACPTranscriptToolCallGroup(members: [
+                ACPTranscriptVisibleRow(index: 1, stableId: "tc-b"),
+                ACPTranscriptVisibleRow(index: 2, stableId: "tc-c"),
+            ])),
+        ]
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, renderRows: supplied).map(\.id)
+        #expect(ids == ["tc-a", "tcg-tc-b", "__composer_spacer__"])
+    }
+
+    @Test("the fork divider is still emitted when the boundary message has no row")
+    func forkDividerEmittedAcrossRowlessBoundary() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 2, inheritedMessageCount: 2,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: true)
+        // The boundary (index 1) is a `.plan`, which never becomes a row.
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        host.transcript.messages = [tool("a"), plan, tool("c"), tool("d")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
+    }
+
+    @Test("the fork divider is emitted once when the boundary row is followed by a later row")
+    func forkDividerEmittedOnce() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 1, inheritedMessageCount: 1,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: false)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tc-a", "__fork_divider__", "tc-b", "tc-c", "__composer_spacer__"])
+    }
+
     @Test("the fork divider follows the group that ends at the fork boundary")
     func forkDividerFollowsGroupAtBoundary() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -998,6 +1075,38 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         // the viewport.
         #expect(session.transcript.visibleHead > ACPTranscript.tailWindow)
         #expect(session.transcript.visibleHead < leading.count + toolCalls.count)
+    }
+
+    @Test("toggling a mounted bundle's expansion re-tiles the row without a model update")
+    func togglingExpansionRetilesMountedRow() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let toolCalls: [ACPMessage] = (0..<5).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)", title: "Read file \(index)", kind: "read", status: "completed"
+            ))
+        }
+        session.replaceTranscriptMessages(toolCalls)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        let groupId = "tcg-" + toolCalls[0].stableId
+        let collapsedHeight = try #require(coordinator.rowFrameForTesting(id: groupId)).height
+
+        // Flip the store after mount, exactly as the row's own disclosure
+        // button does. The expanded flag lives in the row token, so the
+        // store must drive a fresh spec list on its own — nothing else
+        // (no message change, no width change) calls `update(host:)` here.
+        coordinator.setToolCallGroupExpandedForTesting(true, memberStableIds: toolCalls.map(\.stableId))
+        scroller.layoutSubtreeIfNeeded()
+
+        let expandedHeight = try #require(coordinator.rowFrameForTesting(id: groupId)).height
+        #expect(expandedHeight > collapsedHeight)
     }
 
     private func attach(

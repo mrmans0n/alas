@@ -121,6 +121,23 @@ struct ACPToolCallGroupingTests {
         #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-c"])
     }
 
+    @Test("the run still breaks at the fork boundary when the boundary message has no row")
+    func breakAfterIndexSplitsRunAcrossRowlessBoundary() {
+        // The boundary message is a `.plan`, which never becomes a row: no
+        // row's index equals `breakAfterIndex`, so only a "crossed the
+        // boundary" check keeps inherited and post-fork calls apart.
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        let folded = fold([tool("a"), plan, tool("c"), tool("d")], breakAfterIndex: 1)
+        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-c"])
+    }
+
+    @Test("a run that starts after the fork boundary is not split by it")
+    func runStartingPastBoundaryIsNotSplit() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
+        let folded = fold([user, tool("b"), tool("c"), tool("d")], breakAfterIndex: 0)
+        #expect(ids(folded) == ["acp-user:u1", "tcg-tc-b"])
+    }
+
     @Test("the group id stays stable while the run grows at the tail")
     func groupIdStableAsRunGrows() {
         let before = fold([tool("a"), tool("b")])
@@ -159,10 +176,21 @@ struct ACPToolCallGroupSummaryTests {
     @Test("counts members and failures")
     func countsMembersAndFailures() {
         let summary = ACPToolCallGroupSummary(toolCalls: [
-            tool("a"), tool("b", status: "failed"), tool("c", status: "error"),
+            tool("a"), tool("b", status: "failed"), tool("c", status: "canceled"),
         ])
         #expect(summary.count == 3)
-        #expect(summary.failedCount == 2)
+        #expect(summary.failedCount == 1)
+    }
+
+    @Test("only the terminal 'failed' status counts as a failure")
+    func failedPredicateMatchesGroupingAllowlist() {
+        // "error" is not a terminal status per `ACPToolCallGrouping.isFinished`,
+        // so a call carrying it can never be a bundle member; counting it
+        // here would be dead code that suggests otherwise.
+        #expect(ACPToolCallGroupSummary.isFailed(status: "failed"))
+        #expect(!ACPToolCallGroupSummary.isFailed(status: "error"))
+        #expect(!ACPToolCallGroupSummary.isFailed(status: "canceled"))
+        #expect(!ACPToolCallGroupSummary.isFailed(status: "completed"))
     }
 
     @Test("collapsed label pluralizes and appends the failure count")
@@ -174,10 +202,13 @@ struct ACPToolCallGroupSummaryTests {
         ]).collapsedLabel == "Ran 3 tools · 1 failed")
     }
 
-    @Test("expanded label offers to hide the bundle")
+    @Test("expanded label offers to hide the bundle and keeps the failure count")
     func expandedLabel() {
         #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide 3 tools")
         #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide 1 tool")
+        #expect(ACPToolCallGroupSummary(toolCalls: [
+            tool("a"), tool("b", status: "failed"), tool("c"),
+        ]).expandedLabel == "Hide 3 tools · 1 failed")
     }
 }
 
@@ -207,14 +238,31 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
         #expect(lookup.transcriptIndex(for: "missing") == nil)
     }
 
-    @Test("a stale plain member id that has since been bundled resolves to its group")
-    func staleResolutionForBundledPlainId() {
+    @Test("a stale plain id bundled as the group's last member resolves as head growth")
+    func staleResolutionForBundledPlainIdAsLastMember() {
+        // "tc-b" is the bundle's last member: every other member sits above
+        // it, so the old card's bottom edge is the bundle's bottom edge and
+        // bottom-relative restoration is exact.
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
         let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
             "tc-b", lookup: lookup, groupingEnabled: true
         )
         #expect(resolution?.rowId == "tcg-tc-a")
         #expect(resolution?.assumeHeadGrowth == true)
+    }
+
+    @Test("a stale plain id bundled as the group's first member does not assume head growth")
+    func staleResolutionForBundledPlainIdAsFirstMember() {
+        // Turning the setting on while parked on the first of a run of
+        // finished calls: the bundle grew BELOW the anchored card, so
+        // bottom-relative restoration would drag the viewport down by the
+        // height of every later member. Top-relative is right here.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tc-a", lookup: lookup, groupingEnabled: true
+        )
+        #expect(resolution?.rowId == "tcg-tc-a")
+        #expect(resolution?.assumeHeadGrowth == false)
     }
 
     @Test("a stale group id whose first member changed resolves via its old first member")
@@ -467,5 +515,27 @@ struct ACPToolCallGroupExpansionSeedsTests {
         let seeds = ACPToolCallGroupExpansionSeeds()
         seeds.syncLineage(members: ["tc-a", "tc-b"])
         #expect(!seeds.isExpanded(members: ["tc-a", "tc-b"]))
+    }
+
+    @Test("every setExpanded notifies onChange, so the owner can rebuild specs")
+    func setExpandedNotifiesOnChange() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        var changes = 0
+        seeds.onChange = { changes += 1 }
+        seeds.setExpanded(true, members: ["tc-a"])
+        seeds.setExpanded(false, members: ["tc-a"])
+        #expect(changes == 2)
+    }
+
+    @Test("syncLineage does not notify onChange")
+    func syncLineageDoesNotNotify() {
+        // Called from inside spec building on every render; re-entering
+        // `update(host:)` from there would loop.
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a"])
+        var changes = 0
+        seeds.onChange = { changes += 1 }
+        seeds.syncLineage(members: ["tc-a", "tc-b"])
+        #expect(changes == 0)
     }
 }

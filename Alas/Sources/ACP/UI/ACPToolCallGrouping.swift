@@ -52,14 +52,11 @@ enum ACPToolCallGrouping {
     /// An explicit allowlist, not a blocklist: an adapter-specific status
     /// Alas doesn't yet recognize (e.g. a future "awaiting_permission")
     /// must stay visible rather than being silently folded into a
-    /// collapsed bundle. Mirrors `ACPSession.isFinalStatus`'s own allowlist
-    /// (private to that file, so duplicated here rather than shared) and
-    /// `ACPToolCallCard`'s deliberate choice to render unknown statuses.
+    /// collapsed bundle. Delegates to the session's own terminal-status
+    /// predicate so the two can never drift; `ACPToolCallCard` likewise
+    /// deliberately renders unknown statuses.
     static func isFinished(status: String) -> Bool {
-        switch status {
-        case "completed", "failed", "canceled", "cancelled": true
-        default: false
-        }
+        ACPSession.isFinalStatus(status)
     }
 
     /// Finished ordinary tool calls only. Active calls, context-compaction
@@ -93,6 +90,17 @@ enum ACPToolCallGrouping {
         for row in rows {
             let collapsible = messages.indices.contains(row.index) && isCollapsible(messages[row.index])
             if collapsible {
+                // A run that began at or before the fork boundary must not
+                // continue past it. Checking "crossed" rather than only
+                // "landed exactly on" it matters when the boundary message
+                // itself never becomes a row (a `.plan`, or a replayed
+                // duplicate deduped away): no row carries that index, so an
+                // equality check alone would let inherited and post-fork
+                // calls fuse into one bundle.
+                if let boundary = options.breakAfterIndex, let first = run.first,
+                   first.index <= boundary, row.index > boundary {
+                    flushRun()
+                }
                 run.append(row)
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
@@ -115,40 +123,56 @@ struct ACPToolCallGroupSummary: Equatable {
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
     }
 
+    /// Only "failed" can reach a bundle: "error" is not a terminal status
+    /// per `ACPToolCallGrouping.isFinished`, so such a call is never a
+    /// member in the first place.
     static func isFailed(status: String) -> Bool {
-        status == "failed" || status == "error"
+        status == "failed"
     }
 
     var collapsedLabel: String {
-        var label = "Ran \(count) \(count == 1 ? "tool" : "tools")"
-        if failedCount > 0 { label += " · \(failedCount) failed" }
-        return label
+        "Ran \(count) \(count == 1 ? "tool" : "tools")" + failureSuffix
     }
 
+    /// Keeps the failure count visible while open: it's the reason a reader
+    /// most likely expanded the bundle in the first place.
     var expandedLabel: String {
-        "Hide \(count) \(count == 1 ? "tool" : "tools")"
+        "Hide \(count) \(count == 1 ? "tool" : "tools")" + failureSuffix
+    }
+
+    private var failureSuffix: String {
+        failedCount > 0 ? " · \(failedCount) failed" : ""
     }
 }
 
-/// Persists which tool-call bundles are expanded, keyed by member stable ids
-/// rather than by a bundle's own row id.
+/// The single source of truth for which tool-call bundles are expanded,
+/// keyed by member stable ids rather than by a bundle's own row id.
 ///
 /// A group's row id is derived from its first member (see
 /// `ACPTranscriptToolCallGroup.id`), which stays fixed while a run grows at
 /// its tail (the common case: watching a live turn run through more tools)
 /// but changes when history backfill reveals an earlier, adjacent finished
-/// call that becomes the new first member. A changed row id makes the
-/// reconciler treat the bundle as a brand-new row, discarding its
-/// `@State`-held expanded flag.
+/// call that becomes the new first member. Keying by the same message
+/// stable ids the scroll anchor already uses keeps the bundle open across
+/// that regroup, and means two unrelated bundles that land in the same
+/// structural position after a logical-scrollbar jump never inherit each
+/// other's state: they share no member ids.
 ///
-/// Seeding a freshly (re)mounted row's initial state from this store —
-/// keyed by the same message stable ids the scroll anchor already uses —
-/// keeps the bundle open across that regroup. Keying by member id rather
-/// than by a fixed placeholder row id also means two unrelated bundles that
-/// happen to land in the same structural position after a logical-scrollbar
-/// jump never inherit each other's expanded state: they share no member ids.
+/// The row itself holds no expanded state of its own: `toolCallGroupSpec`
+/// reads this store, folds the answer into the row's equality token, and
+/// the row's toggle writes back here and requests a fresh update (via
+/// `onChange`). One owner, so a mounted row and the store can never
+/// disagree — which they would if the row cached a copy, since the hosting
+/// pool keeps a mounted row's SwiftUI state across in-place content updates
+/// while the store can move on independently (a regroup re-tagging
+/// members, a collapse elsewhere invalidating a shared lineage).
 @MainActor
 final class ACPToolCallGroupExpansionSeeds {
+    /// Fired after every `setExpanded`, so the owning Coordinator can
+    /// rebuild specs (the expanded flag lives in the row's token) without
+    /// this store having to know about SwiftUI or the scroller.
+    var onChange: (() -> Void)?
+
     /// Every member ever recorded as part of an expanded run, tagged with
     /// that run's lineage. Bare member-id overlap alone can't tell "the
     /// same still-expanded run growing" apart from "a collapsed run
@@ -181,6 +205,7 @@ final class ACPToolCallGroupExpansionSeeds {
             guard !lineages.isEmpty else { return }
             lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
         }
+        onChange?()
     }
 
     /// Folds `members` into whichever lineage is already present among

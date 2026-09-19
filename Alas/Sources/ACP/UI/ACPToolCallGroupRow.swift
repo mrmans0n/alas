@@ -5,26 +5,28 @@ import SwiftUI
 /// `ACPThoughtView`'s accent-bar-plus-faint-header idiom so bundles read as
 /// the same kind of de-emphasized detail as thinking.
 ///
-/// `expanded` is view-local state, like the thinking row: it survives the
-/// bundle growing (the hosting pool swaps the root view in place when the
-/// row's token changes) but resets once the row is unmounted off-band.
+/// Unlike the thinking row, `expanded` is NOT view-local state: it is a
+/// plain input, owned by `ACPToolCallGroupExpansionSeeds` and folded into
+/// the row's equality token, so toggling goes store → fresh spec → this
+/// view rebuilt with the new value. Caching a copy here would let a
+/// mounted row and the store disagree — see that type's doc comment.
 struct ACPToolCallGroupRow<Content: View>: View {
     let summary: ACPToolCallGroupSummary
+    let expanded: Bool
     let onToggle: (Bool) -> Void
     @ViewBuilder let content: () -> Content
-    @State private var expanded: Bool
     @Environment(\.theme) private var theme
 
     init(
         summary: ACPToolCallGroupSummary,
-        initiallyExpanded: Bool = false,
+        expanded: Bool = false,
         onToggle: @escaping (Bool) -> Void = { _ in },
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.summary = summary
+        self.expanded = expanded
         self.onToggle = onToggle
         self.content = content
-        _expanded = State(initialValue: initiallyExpanded)
     }
 
     var body: some View {
@@ -35,8 +37,7 @@ struct ACPToolCallGroupRow<Content: View>: View {
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 10) {
                 Button {
-                    expanded.toggle()
-                    onToggle(expanded)
+                    onToggle(!expanded)
                 } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "wrench.and.screwdriver")

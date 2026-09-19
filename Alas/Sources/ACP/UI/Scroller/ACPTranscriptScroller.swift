@@ -148,6 +148,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ) else { return nil }
                 return (resolution.rowId, resolution.assumeHeadGrowth)
             }
+            // A bundle's expanded flag lives in its row token, so a toggle
+            // must produce a fresh spec list to take effect on screen.
+            toolCallGroupExpansionSeeds.onChange = { [weak self] in
+                guard let self, let host = self.host else { return }
+                self.update(host: host)
+            }
             self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
                 self?.handleScroll(
@@ -296,7 +302,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     contentViewWidth: contentWidth,
                     contentMaxWidth: host.contentMaxWidth
                 ),
-                expansionSeeds: toolCallGroupExpansionSeeds
+                expansionSeeds: toolCallGroupExpansionSeeds,
+                // Same memoized fold the scroll-anchor and minimap lookups
+                // read, so a width-only or expand-toggle update doesn't
+                // re-slice and re-fold the whole window.
+                renderRows: currentRenderRows(host: host)
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -443,11 +453,17 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         /// Message rows from the render window + synthetic tail rows, in the
         /// same order the legacy VStack rendered them.
+        ///
+        /// `renderRows` lets the coordinator hand in its memoized fold (see
+        /// `currentRenderRows`); when nil, the rows are computed fresh — the
+        /// same result either way, so callers without a cache (tests, the
+        /// static helpers) can omit it.
         static func rowSpecs(
             host: ACPTranscriptScroller,
             availableRowContentWidth: CGFloat? = nil,
             availableTrailingGutterWidth: CGFloat? = nil,
-            expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
+            expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
+            renderRows: [ACPTranscriptRenderRow]? = nil
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -469,8 +485,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let rows = Self.renderRows(host: host)
+            let rows = renderRows ?? Self.renderRows(host: host)
+            let fork = Self.readyFork(host: host)
+            let forkBoundaryIndex = fork.map { $0.inheritedMessageCount - 1 }
+            var forkDividerEmitted = false
             for renderRow in rows {
+                // The divider normally follows its boundary row (below). But
+                // when the boundary message never becomes a row — a `.plan`,
+                // or a replayed duplicate deduped away — no row's last index
+                // equals the boundary, so the after-row emission never
+                // fires. Emit it here instead, ahead of the first row that
+                // starts past the boundary, so the divider still separates
+                // inherited from post-fork content.
+                if let fork, let boundary = forkBoundaryIndex, !forkDividerEmitted,
+                   Self.firstIndex(of: renderRow) > boundary {
+                    specs.append(Self.forkDividerSpec(host: host, fork: fork))
+                    forkDividerEmitted = true
+                }
                 let lastIndex: Int
                 switch renderRow {
                 case .message(let row):
@@ -509,13 +540,21 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
                 // a bundle can end exactly there but never straddle it.
-                if let fork = Self.readyFork(host: host), lastIndex == fork.inheritedMessageCount - 1 {
+                if let fork, !forkDividerEmitted, lastIndex == forkBoundaryIndex {
                     specs.append(Self.forkDividerSpec(host: host, fork: fork))
+                    forkDividerEmitted = true
                 }
             }
 
             specs.append(contentsOf: Self.syntheticTailSpecs(host: host))
             return specs
+        }
+
+        private static func firstIndex(of renderRow: ACPTranscriptRenderRow) -> Int {
+            switch renderRow {
+            case .message(let row): row.index
+            case .toolCallGroup(let group): group.members[0].index
+            }
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
@@ -576,7 +615,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// One collapsed row for a run of finished tool calls. The token folds
         /// every member's message-row key so a late status/duration/content
         /// update on any bundled call still re-renders the row (and, when
-        /// expanded, the card inside it).
+        /// expanded, the card inside it), plus the expanded flag itself: the
+        /// row renders whatever the store says, and a toggle reaches the
+        /// screen by producing a spec whose token differs.
         private static func toolCallGroupSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
@@ -608,15 +649,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // visible still clears the whole run — see
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
-            let initiallyExpanded = expansionSeeds.isExpanded(members: memberStableIds)
+            let expanded = expansionSeeds.isExpanded(members: memberStableIds)
             return ACPTranscriptRowSpec(
                 id: group.id,
-                equalityToken: token(ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys), host: host),
+                equalityToken: token(
+                    ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys, expanded: expanded),
+                    host: host
+                ),
                 build: {
                     wrapRow(host: host) {
                         ACPToolCallGroupRow(
                             summary: summary,
-                            initiallyExpanded: initiallyExpanded,
+                            expanded: expanded,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
                         ) {
                             ForEach(members) { member in
@@ -637,6 +681,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
             let memberKeys: [ACPTranscriptRowContent.EqualityKey]
+            let expanded: Bool
         }
 
         private struct ToolCallGroupMember: Identifiable {
@@ -1340,6 +1385,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
+        /// The memoized render rows themselves, for `rowSpecs` — same cache
+        /// entry `currentRowLookup` derives its mapping from.
+        private func currentRenderRows(host: ACPTranscriptScroller) -> [ACPTranscriptRenderRow] {
+            visibleRowsCache.rows(
+                generation: host.transcript.messagesGeneration,
+                head: host.transcript.visibleHead,
+                tail: host.transcript.visibleTailBound,
+                grouping: Self.groupingOptions(host: host),
+                build: { Self.renderRows(host: host) }
+            )
+        }
+
         private func globalMessagePosition(at y: CGFloat) -> CGFloat? {
             guard let host,
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
@@ -1382,20 +1439,33 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// `assumeHeadGrowth` tells the reconciler whether the replacement
         /// row is taller because content was prepended at its head (true —
         /// see `ACPTranscriptScrollerReconciler.restoreScrollAnchor`'s doc
-        /// comment) or not. A resolved GROUP id only implies head growth
-        /// while collapsing stays enabled: decoding one succeeds because
-        /// its first member changed WITHIN an ongoing group. If grouping
-        /// was disabled instead, the group id vanished because grouping
-        /// stopped entirely — a short collapsed bundle can become a much
-        /// taller plain tool card, the opposite of "grew a little at the
-        /// head" — so restoration must not assume bottom-relative there. A
-        /// resolved PLAIN id (Codex hasn't reported an equivalent gap for
-        /// this branch) is left `true`, matching prior behavior.
+        /// comment) or not.
+        ///
+        /// A resolved GROUP id only implies head growth while collapsing
+        /// stays enabled: decoding one succeeds because its first member
+        /// changed WITHIN an ongoing group. If grouping was disabled
+        /// instead, the group id vanished because grouping stopped entirely
+        /// — a short collapsed bundle can become a much taller plain tool
+        /// card, the opposite of "grew a little at the head" — so
+        /// restoration must not assume bottom-relative there.
+        ///
+        /// A resolved PLAIN id (a card that has since been folded into a
+        /// bundle) implies head growth only when that card is now the
+        /// bundle's LAST member: everything else in the bundle sits above
+        /// it, so the old card's bottom edge is the bundle's bottom edge and
+        /// bottom-relative restoration is exact. If the card landed anywhere
+        /// else in the bundle — typically its FIRST member, as when the
+        /// setting is turned on with the reader parked on the first of a
+        /// run of finished calls — the bundle grew below it, and
+        /// bottom-relative restoration would drag the viewport down by the
+        /// height of every later member; top-relative is right there.
         static func resolveStaleRowId(
             _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
         ) -> StaleRowIdResolution? {
             if let resolved = lookup.rowId(forStableId: staleId) {
-                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: true)
+                let isLastMember = lookup.transcriptIndex(for: staleId) != nil
+                    && lookup.transcriptIndex(for: staleId) == lookup.localIndexSpan(forRowId: resolved)?.upperBound
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: isLastMember)
             }
             guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
                   let resolved = lookup.rowId(forStableId: staleStableId)
@@ -1586,10 +1656,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        /// Seeds tool-call bundle expand state before the first `attach`/
-        /// `update`, so a test can exercise an expanded (and therefore
-        /// tall) group without simulating a real click on its disclosure
-        /// button.
+        /// Writes tool-call bundle expand state exactly as the row's own
+        /// disclosure button does, so a test can exercise an expanded (and
+        /// therefore tall) group without simulating a real click. Works
+        /// both before the first `attach` (seeding) and after (the store's
+        /// `onChange` re-tiles the mounted row).
         func setToolCallGroupExpandedForTesting(_ expanded: Bool, memberStableIds: [String]) {
             toolCallGroupExpansionSeeds.setExpanded(expanded, members: memberStableIds)
         }

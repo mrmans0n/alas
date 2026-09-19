@@ -6,8 +6,8 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ACPToolCallGroupRowTests {
-    @Test("initiallyExpanded renders the member content without needing a click")
-    func initiallyExpandedRendersTaller() throws {
+    @Test("expanded renders the member content without needing a click")
+    func expandedRendersTaller() throws {
         let theme = try ThemeStore().current
         #expect(height(expanded: true, theme: theme) > height(expanded: false, theme: theme))
     }
@@ -15,7 +15,7 @@ struct ACPToolCallGroupRowTests {
     private func height(expanded: Bool, theme: Theme) -> CGFloat {
         let row = ACPToolCallGroupRow(
             summary: ACPToolCallGroupSummary(toolCalls: [.init(toolCallId: "a", title: "a", status: "completed")]),
-            initiallyExpanded: expanded
+            expanded: expanded
         ) {
             Text(String(repeating: "member content line\n", count: 20))
         }
