@@ -177,6 +177,11 @@ function handleLinkStateChange(link) {
       setStatus("Not paired", "bad");
       showPairAgainGate(link);
       break;
+    case "blocked":
+      clearEscalation();
+      setStatus("Blocked", "bad");
+      showOriginBlockedGate(link);
+      break;
     default: break;
   }
 }
@@ -217,6 +222,12 @@ function showPairAgainGate(link) {
   const name = server ? (server.name || server.lastOrigin) : "This Mac";
   showGate("Pair again", `${name} no longer recognizes this device. Copy a fresh pairing link from Alas → Settings → Remote and paste it here.`, false);
   $("gate-pair").classList.remove("hidden");
+}
+
+function showOriginBlockedGate(link) {
+  const server = hub.servers.find((s) => s.id === link.id);
+  const name = server ? (server.name || server.lastOrigin) : "This Mac";
+  showGate("Address not allowed", `${name} is online but doesn't allow this address. Add it to Allowed origins in that Mac's Remote settings, then try again.`, true);
 }
 
 function showPairGate() {
@@ -318,6 +329,10 @@ function switchServer(id) {
   applyHubFlag(anyServerHasHubEnabled());
   if (link.state === "online") return;   // setActive's own notify already ran onActiveOpen() for us
   if (link.state === "unauthorized") { showPairAgainGate(link); return; }
+  // links.connect() is a no-op while blocked (see hub-links.js's connect()
+  // guard) — falling through to the "Connecting…" gate below would show a
+  // spinner that never resolves.
+  if (link.state === "blocked") { showOriginBlockedGate(link); return; }
   clearEscalation();
   setStatus("Connecting…", "connecting");
   showConnectingGate();
@@ -1308,6 +1323,7 @@ function serverDotClass(link) {
     case "online": return link.counts.running > 0 ? "run" : "idle";
     case "connecting": return "connecting";
     case "unauthorized": return "warn";
+    case "blocked": return "warn";
     default: return "off";
   }
 }
@@ -1319,6 +1335,7 @@ function serverSubtitle(server, link) {
     case "online": return link.legacy ? `${where} · Older Alas` : where;
     case "connecting": return `${where} · Connecting…`;
     case "unauthorized": return "Pair again";
+    case "blocked": return "Address not allowed";
     case "offline": return `${where} · Offline`;
     default: return where;
   }

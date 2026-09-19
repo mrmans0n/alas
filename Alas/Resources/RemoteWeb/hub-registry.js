@@ -168,12 +168,17 @@ function save(storage, doc) {
 // Records a successful pairing. A server that already shares any of the
 // origins is re-paired in place (new token, merged origin list, new origins
 // first); otherwise a new entry is appended and becomes active when nothing
-// was.
+// was. Origin overlap only re-pairs an entry that has never confirmed its
+// identity via `hello` (serverId is null) — a DHCP-reused LAN address or a
+// shared custom origin must not let a pairing silently take over a Mac
+// that's already been identified. Once identity is known, applyHello's own
+// serverId-based merge is the authority: a fresh entry that turns out to
+// share a confirmed Mac's serverId gets reconciled there instead.
 function upsertPaired(doc, { origins, token, now }) {
   const normalized = uniqueOrigins(origins);
   const matchable = normalized.filter((o) => !isLoopbackOrigin(o));
   const existing = matchable.length
-    ? doc.servers.find((s) => s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))
+    ? doc.servers.find((s) => !s.serverId && s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))
     : undefined;
   if (existing) {
     existing.token = token;

@@ -1238,7 +1238,39 @@ struct RemoteWebAssetTests {
     @Test func pairingDedupIgnoresTheSharedLocalhostOrigin() throws {
         let js = try asset("hub-registry.js")
         #expect(js.contains("function isLoopbackOrigin(origin)"))
-        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(400) })
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(body.contains("const matchable = normalized.filter((o) => !isLoopbackOrigin(o));"))
+    }
+
+    // Regression (Codex review, PR #1337): a non-loopback origin can also be
+    // reused (a DHCP-reassigned LAN address, a shared custom hostname), so
+    // origin overlap must stop being trusted once an entry has confirmed its
+    // identity via hello. See test-hub-registry.js for the node-executed
+    // reconciliation coverage.
+    @Test func pairingDedupOnlyMatchesServersNotYetIdentifiedByHello() throws {
+        let js = try asset("hub-registry.js")
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains("doc.servers.find((s) => !s.serverId && s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))"))
+    }
+
+    // Regression (Codex review, PR #1337): probe() collapsed every non-2xx
+    // /health response — including a 403 origin rejection — into
+    // "unreachable," so a Mac that was online but rejecting this address
+    // looked identical to an offline one and retried forever instead of
+    // surfacing the allowlist remediation.
+    @Test func originRejectionDuringHealthProbeSurfacesAsBlockedNotOffline() throws {
+        let links = try asset("hub-links.js")
+        #expect(links.contains(#"state: "idle"|"connecting"|"online"|"offline"|"unauthorized"|"blocked""#))
+        #expect(links.contains("blocked: statuses.some((s) => s === 403),"))
+        let onAllFailed = try #require(links.range(of: "function onAllOriginsFailed(link, order, attempt) {").map { links[$0.lowerBound...].prefix(400) })
+        #expect(onAllFailed.contains(#"if (blocked) { setState(link, "blocked"); return; }"#))
+
+        let app = try asset("app.js")
+        #expect(app.contains("function showOriginBlockedGate(link) {"))
+        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(700) })
+        #expect(stateChange.contains(#"case "blocked":"#))
+        #expect(stateChange.contains("showOriginBlockedGate(link);"))
+        let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
+        #expect(switchServer.contains(#"if (link.state === "blocked") { showOriginBlockedGate(link); return; }"#))
     }
 }

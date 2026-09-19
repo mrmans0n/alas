@@ -189,6 +189,27 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(sockets.length, before + 2, "a successful open resets the backoff");
   }
 
+  // --- blocked (origin rejected) vs unauthorized vs offline ------------------
+  {
+    // Regression (Codex review, PR #1337): probe() used to collapse any
+    // non-2xx /health response — including a 403 origin rejection — into
+    // "unreachable", so a Mac that was actually online but rejecting this
+    // hub's address looked identical to one that was simply offline and got
+    // retried forever instead of surfacing the allowlist remediation.
+    const { clock, sockets, links } = harness({ fetchImpl: () => Promise.resolve({ ok: false, status: 403 }) });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    sockets[0].drop();
+    await settle();
+    assert.equal(links.get("b").state, "blocked", "socket refused and /health answers 403 → blocked, not offline");
+    assert.equal(clock.pending(), 0, "no reconnect timer while blocked");
+    links.connect("b");
+    assert.equal(sockets.length, 1, "connect() is a no-op while blocked");
+    links.retry("b");
+    assert.equal(sockets.length, 2, "retry() clears blocked and reconnects");
+  }
+
   // --- visibility ------------------------------------------------------------
   {
     const { clock, sockets, links } = harness();

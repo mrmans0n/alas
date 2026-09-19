@@ -101,6 +101,10 @@ struct RemoteServerPane: View {
                                     set: { value in
                                         state.config.remote.displayName = value
                                         state.saveConfig()
+                                        // Clients only learn the name from hello — push a fresh
+                                        // one so connected browsers don't show a stale name until
+                                        // their next reconnect.
+                                        state.remoteServer?.broadcastHello()
                                     }
                                 ),
                                 placeholder: state.remoteDisplayName

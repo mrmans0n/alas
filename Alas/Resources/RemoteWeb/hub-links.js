@@ -7,7 +7,7 @@
 // hooks: { onStateChange(link), onHello(link, hello), onLegacy(link), onMessage(link, msg),
 //          onCounts(link), onOriginChange(link, origin) }
 // link:  { id, origins, lastOrigin, token, role: "active"|"idle",
-//          state: "idle"|"connecting"|"online"|"offline"|"unauthorized",
+//          state: "idle"|"connecting"|"online"|"offline"|"unauthorized"|"blocked",
 //          counts: {attention, running}, legacy, socket }
 
 const HANDSHAKE_TIMEOUT_MS = 4000;
@@ -146,7 +146,7 @@ function createLinks(deps, hooks) {
   function connect(id) {
     const link = links.get(id);
     if (!link) return;
-    if (link.state === "connecting" || link.state === "online" || link.state === "unauthorized") return;
+    if (link.state === "connecting" || link.state === "online" || link.state === "unauthorized" || link.state === "blocked") return;
     if (!visible && link.role !== "active") return;
     clearTimers(link);
     closeSocket(link);
@@ -254,30 +254,39 @@ function createLinks(deps, hooks) {
   }
 
   // Every origin refused the handshake. A reachable /health means the Mac is
-  // up but rejected the token (revoked → "Pair again"); otherwise the Mac is
-  // simply unreachable and we keep retrying.
+  // up but rejected the token (revoked → "Pair again"); a 403 means the Mac
+  // is up but its origin policy rejects this address ("Blocked" → tell the
+  // user where to fix it, not to re-pair); otherwise the Mac is simply
+  // unreachable and we keep retrying.
   function onAllOriginsFailed(link, order, attempt) {
-    probeAny(order).then((reachable) => {
+    probeAny(order).then(({ reachable, blocked }) => {
       if (attempt !== link.attempt) return;
       if (reachable) { setState(link, "unauthorized"); return; }
+      if (blocked) { setState(link, "blocked"); return; }
       setState(link, "offline");
       scheduleReconnect(link);
     });
   }
 
   function probeAny(origins) {
-    return Promise.all(origins.map(probe)).then((results) => results.some(Boolean));
+    return Promise.all(origins.map(probe)).then((statuses) => ({
+      reachable: statuses.some((s) => s != null && s >= 200 && s < 300),
+      blocked: statuses.some((s) => s === 403),
+    }));
   }
 
+  // Resolves the /health response's status code, or null on timeout/network
+  // failure — distinct from a 403, which means the Mac answered but this
+  // origin isn't on its allowlist.
   function probe(origin) {
     return new Promise((resolve) => {
       let done = false;
-      const timer = deps.setTimeout(() => { if (!done) { done = true; resolve(false); } }, PROBE_TIMEOUT_MS);
+      const timer = deps.setTimeout(() => { if (!done) { done = true; resolve(null); } }, PROBE_TIMEOUT_MS);
       Promise.resolve()
         .then(() => deps.fetch(origin + "/health", { method: "GET" }))
         .then(
-          (res) => { if (!done) { done = true; deps.clearTimeout(timer); resolve(!!(res && res.ok)); } },
-          () => { if (!done) { done = true; deps.clearTimeout(timer); resolve(false); } }
+          (res) => { if (!done) { done = true; deps.clearTimeout(timer); resolve(res ? res.status : null); } },
+          () => { if (!done) { done = true; deps.clearTimeout(timer); resolve(null); } }
         );
     });
   }
