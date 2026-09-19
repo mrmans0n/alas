@@ -10,6 +10,11 @@ filter lives in the `on:` block of `.github/workflows/build.yml` and
 source, script, and manifest paths still trigger a run. No branch protection
 requires these checks, so a skipped workflow leaves the pull request mergeable.
 
+That contract test is Ruby rather than Python because it only needs to parse
+`build.yml` and assert against it, and Ruby's standard library ships a YAML
+parser; Python has none built in and this repo doesn't otherwise depend on
+PyYAML, so Ruby avoids adding a dependency for a single test file.
+
 CI builds the test target once, then asks Xcode to enumerate the compiled tests
 with `test-without-building -enumerate-tests -test-enumeration-style flat
 -test-enumeration-format json`. No Swift source is parsed. The inventory and
