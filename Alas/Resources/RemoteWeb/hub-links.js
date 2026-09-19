@@ -328,9 +328,15 @@ function createLinks(deps, hooks) {
     return err;
   }
 
-  function withTimeout(promise, ms) {
+  // `onTimeout`, if given, runs exactly when the timer wins the race —
+  // independent of whether `promise` itself ever settles. Used by `pair`
+  // to abort the underlying fetch in real browsers; the retry-chain
+  // advancement below stays driven by this same timer either way, so a
+  // test's fetch mock need not honor AbortSignal for the timeout path to
+  // behave deterministically.
+  function withTimeout(promise, ms, onTimeout) {
     return new Promise((resolve, reject) => {
-      const timer = deps.setTimeout(() => reject(new Error("timeout")), ms);
+      const timer = deps.setTimeout(() => { if (onTimeout) onTimeout(); reject(new Error("timeout")); }, ms);
       Promise.resolve(promise).then(
         (value) => { deps.clearTimeout(timer); resolve(value); },
         (err) => { deps.clearTimeout(timer); reject(err); }
@@ -342,11 +348,19 @@ function createLinks(deps, hooks) {
   // or 403 (origin not allowed) stops immediately; network failures move
   // on to the next origin. The request stays a CORS "simple request" (no
   // explicit Content-Type) so no preflight is needed on the hot path.
+  //
+  // Each attempt gets its own AbortController so a request abandoned to
+  // the timeout is actually cancelled in-flight — otherwise a merely-slow
+  // (not actually down) origin can still process and consume the
+  // single-use code after the client has already moved on to the next
+  // origin, which then gets a legitimate-looking but misleading 401.
   function pair(origins, code, deviceName) {
     const tryAt = (index) => {
       if (index >= origins.length) return Promise.reject(pairError("net"));
       const origin = origins[index];
-      return withTimeout(deps.fetch(origin + "/pair", { method: "POST", body: JSON.stringify({ code, deviceName }) }), PAIR_TIMEOUT_MS)
+      const controller = new AbortController();
+      const request = deps.fetch(origin + "/pair", { method: "POST", body: JSON.stringify({ code, deviceName }), signal: controller.signal });
+      return withTimeout(request, PAIR_TIMEOUT_MS, () => controller.abort())
         .then(
           (res) => {
             if (res.status === 401) throw pairError("expired");

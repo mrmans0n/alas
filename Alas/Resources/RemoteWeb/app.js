@@ -151,6 +151,14 @@ function connectedLabel() {
   return hubUIEnabled && server ? (server.name || server.lastOrigin) : "Connected";
 }
 
+// Aggregate, not per-active-server: once ANY paired Mac has ever reported
+// hubEnabled, the hub UI stays available no matter which server is
+// currently active — switching to view a Mac whose own toggle is off must
+// never strand the user without a way back to the server list.
+function anyServerHasHubEnabled() {
+  return hub.servers.some((s) => s.hubEnabled === true);
+}
+
 function handleLinkStateChange(link) {
   refreshHubViews();
   if (link.role !== "active") return;
@@ -226,10 +234,8 @@ function handleLinkHello(link, hello) {
     if (hub.activeId === result.server.id) switchServer(result.server.id);
     return;
   }
-  if (link.role === "active") {
-    applyHubFlag(result.server.hubEnabled === true);
-    if (link.state === "online") setStatus(connectedLabel(), "ok");
-  }
+  applyHubFlag(anyServerHasHubEnabled());
+  if (link.role === "active" && link.state === "online") setStatus(connectedLabel(), "ok");
   refreshHubViews();
 }
 
@@ -302,7 +308,7 @@ function switchServer(id) {
   everConnected = false;
   $("gate-pair").classList.add("hidden");
   const link = links.setActive(id);
-  applyHubFlag(target.hubEnabled === true);
+  applyHubFlag(anyServerHasHubEnabled());
   if (link.state === "online") return;   // setActive's own notify already ran onActiveOpen() for us
   if (link.state === "unauthorized") { showPairAgainGate(link); return; }
   clearEscalation();
@@ -1397,7 +1403,7 @@ function forgetServer(id) {
   const online = links.all().filter((l) => l.state === "online").map((l) => l.id);
   const next = RemoteHubRegistry.fallbackActiveId(hub, online);
   if (next) { switchServer(next); return; }
-  applyHubFlag(false);
+  applyHubFlag(anyServerHasHubEnabled());
   showPairGate();
 }
 

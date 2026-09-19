@@ -36,12 +36,18 @@ function hasExplicitPort(text) {
 function normalizeOrigin(input) {
   const text = String(input || "").trim();
   if (!text) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : "http://" + text;
+  const hadScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
+  const withScheme = hadScheme ? text : "http://" + text;
   let url;
   try { url = new URL(withScheme); } catch (_) { return null; }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (!url.hostname || url.username || url.password) return null;
-  if (!url.port && url.protocol === "http:" && !hasExplicitPort(withScheme)) url.port = DEFAULT_PORT;
+  // Only a bare, schemeless input (the manual "Add server" entry UX) gets
+  // Alas's own default port assumed. A caller-supplied complete http(s) URL
+  // (e.g. a browser's own location.origin during legacy-token migration, or
+  // a reverse-proxied address on port 80) is left exactly as given — its
+  // absence of a port is a deliberate fact, not something to default.
+  if (!hadScheme && !url.port && url.protocol === "http:" && !hasExplicitPort(withScheme)) url.port = DEFAULT_PORT;
   return url.origin;
 }
 

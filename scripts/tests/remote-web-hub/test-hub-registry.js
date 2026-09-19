@@ -26,6 +26,7 @@ assert.equal(registry.normalizeOrigin("ftp://x:1"), null);
 assert.equal(registry.normalizeOrigin("http://user:pw@host:1"), null);
 assert.equal(registry.normalizeOrigin(""), null);
 assert.equal(registry.normalizeOrigin("not a url at all"), null);
+assert.equal(registry.normalizeOrigin("http://alas.lan"), "http://alas.lan", "an explicit scheme with no port is left alone, not defaulted (e.g. a reverse proxy on port 80)");
 
 // --- parsePairingLink --------------------------------------------------------
 
