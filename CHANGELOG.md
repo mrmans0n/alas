@@ -6,9 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.6] - 2026-09-19
+
+### ✨ Features
+
+- Redesign the agent launcher as a keyboard-driven switcher with persistent search (#1321).
+- Redesign the mobile PWA and improve the run report output viewer (#1328, #1329).
+
+### 🚀 Performance
+
+- Improve editor undo performance (#1325).
+
 ### 🐛 Fixes
 
-- Show a loading state in the agent launcher while opening a discovered agent session instead of freezing without feedback.
+- Hide the project Spaces submenu when no spaces exist and stop sidebar commit counts from flickering (#1319, #1323).
+- Show a loading state while opening discovered agent sessions and preserve unmatched launcher searches (#1324, #1327).
+- Keep the worktree branch-name field responsive while typing (#1326).
+
+### 🏗️ Internal
+
+- Expose repository skills to Claude Code and update the Ubuntu CI dependency (#1313, #1322).
 
 ## [0.18.5] - 2026-09-18
 
