@@ -10,9 +10,22 @@ import SwiftUI
 /// row's token changes) but resets once the row is unmounted off-band.
 struct ACPToolCallGroupRow<Content: View>: View {
     let summary: ACPToolCallGroupSummary
+    let onToggle: (Bool) -> Void
     @ViewBuilder let content: () -> Content
-    @State private var expanded = false
+    @State private var expanded: Bool
     @Environment(\.theme) private var theme
+
+    init(
+        summary: ACPToolCallGroupSummary,
+        initiallyExpanded: Bool = false,
+        onToggle: @escaping (Bool) -> Void = { _ in },
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.summary = summary
+        self.onToggle = onToggle
+        self.content = content
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -21,7 +34,10 @@ struct ACPToolCallGroupRow<Content: View>: View {
                 .frame(width: 1.5)
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 10) {
-                Button { expanded.toggle() } label: {
+                Button {
+                    expanded.toggle()
+                    onToggle(expanded)
+                } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "wrench.and.screwdriver")
                             .font(.system(size: 10))

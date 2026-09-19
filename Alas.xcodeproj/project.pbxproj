@@ -1877,6 +1877,7 @@
 		FB8B530E472D1C22B78F12EE /* ACPDelegatedSessionsPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53F2697D068C074A82959C9F /* ACPDelegatedSessionsPolicy.swift */; };
 		FB9BAF6C82A1750E41594DB7 /* SelfUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CF2E2BF116094A9FEE3F8D /* SelfUpdater.swift */; };
 		FBAB18AAEFB289EF765564C5 /* RightPaneSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */; };
+		FBB6CB050566D78617BFE5FB /* ACPToolCallGroupRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BB85FBA80F935B794FBCD0E /* ACPToolCallGroupRowTests.swift */; };
 		FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */; };
 		FBFAB8DAB738CC7A21076D22 /* GGCommitMenuModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7C5CADC042EF509370EB87 /* GGCommitMenuModel.swift */; };
 		FC7824BA0FCB09A23321634D /* WorkspaceEditJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F646D9B04452A668B487DAB /* WorkspaceEditJournal.swift */; };
@@ -2246,6 +2247,7 @@
 		2B932ED9D5A485AE1545223C /* ACPPermissionFSTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionFSTests.swift; sourceTree = "<group>"; };
 		2B9CB2A64E9E16A2DE3A6272 /* DiffContextExpansionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffContextExpansionTests.swift; sourceTree = "<group>"; };
 		2B9E3F080F847EF069137844 /* ShortcutBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutBinding.swift; sourceTree = "<group>"; };
+		2BB85FBA80F935B794FBCD0E /* ACPToolCallGroupRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPToolCallGroupRowTests.swift; sourceTree = "<group>"; };
 		2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailabilityTests.swift; sourceTree = "<group>"; };
 		2BFD4C762D8323B78934ECE7 /* BranchPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BranchPicker.swift; sourceTree = "<group>"; };
 		2C0350206BA233AD3B54B3C7 /* session-update-compaction-update.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-compaction-update.json"; sourceTree = "<group>"; };
@@ -5149,6 +5151,7 @@
 				B3E9B2665E18F4C4BF3FB683 /* ACPThumbnailImageCacheTests.swift */,
 				869F008CBAF90B11A48EFD46 /* ACPToolCallCardTests.swift */,
 				01FFD43363429EF853D66F67 /* ACPToolCallGroupingTests.swift */,
+				2BB85FBA80F935B794FBCD0E /* ACPToolCallGroupRowTests.swift */,
 				B77D7A400059AFD189D1CA5A /* ACPToolCallPresentationTests.swift */,
 				729B5F3498FF7388142DB9DD /* ACPTranscriptLogicalScrollModelTests.swift */,
 				BB2445F05867BE94E6EC1EA5 /* ACPTranscriptQueuePolicyTests.swift */,
@@ -8336,6 +8339,7 @@
 				28710B18EF9FAE100B99E0A7 /* ACPThumbnailImageCacheTests.swift in Sources */,
 				D063240A6A5B8C4766B36F7B /* ACPToolCallCardTests.swift in Sources */,
 				E1E4C11CC5BFF761DF397507 /* ACPToolCallContentTests.swift in Sources */,
+				FBB6CB050566D78617BFE5FB /* ACPToolCallGroupRowTests.swift in Sources */,
 				8A7825E8DAAF18F1A9E08F3A /* ACPToolCallGroupingTests.swift in Sources */,
 				1C2C949642E10060172AB1BA /* ACPToolCallPresentationTests.swift in Sources */,
 				F3249EE6574B3C7FC9FED0B1 /* ACPTranscriptChangeLogTests.swift in Sources */,

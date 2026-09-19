@@ -116,6 +116,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// its message index is O(window) work in exactly the state where
         /// scrolling must stay smooth.
         private let visibleRowsCache = ACPVisibleRowsCache()
+        /// Persists tool-call bundle expand state by member id across a
+        /// group's row id changing (see `ACPToolCallGroupExpansionSeeds`).
+        /// Lives for the Coordinator's lifetime, i.e. as long as this chat
+        /// tab's transcript stays mounted.
+        private let toolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -281,7 +286,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 availableTrailingGutterWidth: Self.availableTrailingGutterWidth(
                     contentViewWidth: contentWidth,
                     contentMaxWidth: host.contentMaxWidth
-                )
+                ),
+                expansionSeeds: toolCallGroupExpansionSeeds
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -431,7 +437,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         static func rowSpecs(
             host: ACPTranscriptScroller,
             availableRowContentWidth: CGFloat? = nil,
-            availableTrailingGutterWidth: CGFloat? = nil
+            availableTrailingGutterWidth: CGFloat? = nil,
+            expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -485,7 +492,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     specs.append(Self.toolCallGroupSpec(
                         host: host, group: group,
                         availableRowContentWidth: availableRowContentWidth,
-                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                        availableTrailingGutterWidth: availableTrailingGutterWidth,
+                        expansionSeeds: expansionSeeds
                     ))
                     lastIndex = group.members[group.members.count - 1].index
                 }
@@ -564,7 +572,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
             availableRowContentWidth: CGFloat,
-            availableTrailingGutterWidth: CGFloat
+            availableTrailingGutterWidth: CGFloat,
+            expansionSeeds: ACPToolCallGroupExpansionSeeds
         ) -> ACPTranscriptRowSpec {
             let transcript = host.transcript
             let members: [ToolCallGroupMember] = group.members.compactMap { row in
@@ -583,12 +592,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     availableTrailingGutterWidth: availableTrailingGutterWidth
                 )
             }
+            let memberStableIds = members.map { $0.row.stableId }
+            let initiallyExpanded = expansionSeeds.isExpanded(members: memberStableIds)
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys), host: host),
                 build: {
                     wrapRow(host: host) {
-                        ACPToolCallGroupRow(summary: summary) {
+                        ACPToolCallGroupRow(
+                            summary: summary,
+                            initiallyExpanded: initiallyExpanded,
+                            onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
+                        ) {
                             ForEach(members) { member in
                                 Self.messageRow(
                                     host: host,
@@ -1280,9 +1295,33 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let host,
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
                   let row = tiling.row(withId: id) else { return nil }
-            guard let localIndex = currentRowLookup(host: host).transcriptIndex(for: id),
-                  let globalIndex = host.transcript.globalIndex(forLocalIndex: localIndex) else { return nil }
-            return CGFloat(globalIndex) + min(1, max(0, (y - row.minY) / max(1, row.height)))
+            let lookup = currentRowLookup(host: host)
+            guard let localSpan = lookup.localIndexSpan(forRowId: id),
+                  let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            else { return nil }
+            // A folded tool-call group's row displays `localSpan.count`
+            // messages in the height of one row; scale the within-row
+            // fraction across that many global-index units instead of
+            // always advancing by one, or dragging through most of an
+            // expanded bundle would barely move the minimap and then jump
+            // by (count - 1) at the next row. `globalLast` falls back to
+            // `globalFirst` (a span of 1) rather than propagating nil, since
+            // a missing upper bound (e.g. trimmed history) shouldn't make
+            // the whole position lookup fail for an otherwise-resolvable row.
+            let globalLast = host.transcript.globalIndex(forLocalIndex: localSpan.upperBound) ?? globalFirst
+            return Self.globalMessagePosition(
+                rowFraction: (y - row.minY) / max(1, row.height),
+                globalIndexSpan: globalFirst...max(globalFirst, globalLast)
+            )
+        }
+
+        /// Pure scaling math behind `globalMessagePosition(at:)`, split out
+        /// for direct unit testing: a row-relative fraction (0 at its top, 1
+        /// at its bottom) mapped onto the global-index span the row
+        /// represents on screen.
+        static func globalMessagePosition(rowFraction: CGFloat, globalIndexSpan: ClosedRange<Int>) -> CGFloat {
+            let span = CGFloat(globalIndexSpan.upperBound - globalIndexSpan.lowerBound + 1)
+            return CGFloat(globalIndexSpan.lowerBound) + min(1, max(0, rowFraction)) * span
         }
 
         private func pauseTailFollow() {

@@ -123,3 +123,37 @@ struct ACPToolCallGroupSummary: Equatable {
         "Hide \(count) \(count == 1 ? "tool" : "tools")"
     }
 }
+
+/// Persists which tool-call bundles are expanded, keyed by member stable ids
+/// rather than by a bundle's own row id.
+///
+/// A group's row id is derived from its first member (see
+/// `ACPTranscriptToolCallGroup.id`), which stays fixed while a run grows at
+/// its tail (the common case: watching a live turn run through more tools)
+/// but changes when history backfill reveals an earlier, adjacent finished
+/// call that becomes the new first member. A changed row id makes the
+/// reconciler treat the bundle as a brand-new row, discarding its
+/// `@State`-held expanded flag.
+///
+/// Seeding a freshly (re)mounted row's initial state from this store —
+/// keyed by the same message stable ids the scroll anchor already uses —
+/// keeps the bundle open across that regroup. Keying by member id rather
+/// than by a fixed placeholder row id also means two unrelated bundles that
+/// happen to land in the same structural position after a logical-scrollbar
+/// jump never inherit each other's expanded state: they share no member ids.
+@MainActor
+final class ACPToolCallGroupExpansionSeeds {
+    private var expandedMemberIds: Set<String> = []
+
+    func isExpanded(members: [String]) -> Bool {
+        members.contains { expandedMemberIds.contains($0) }
+    }
+
+    func setExpanded(_ expanded: Bool, members: [String]) {
+        if expanded {
+            expandedMemberIds.formUnion(members)
+        } else {
+            expandedMemberIds.subtract(members)
+        }
+    }
+}

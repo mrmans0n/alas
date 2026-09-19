@@ -203,4 +203,105 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
         #expect(lookup.rowId(forStableId: "u") == "u")
         #expect(lookup.rowId(forStableId: "missing") == nil)
     }
+
+    @Test("a group's local index span covers its first through last member")
+    func groupLocalIndexSpan() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.localIndexSpan(forRowId: "tcg-tc-a") == 1...3)
+    }
+
+    @Test("a plain row's local index span is just its own index")
+    func plainRowLocalIndexSpan() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.localIndexSpan(forRowId: "u") == 0...0)
+        #expect(lookup.localIndexSpan(forRowId: "tc-c") == 4...4)
+    }
+
+    @Test("an unknown row id has no span")
+    func unknownRowIdHasNoSpan() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.localIndexSpan(forRowId: "missing") == nil)
+    }
+}
+
+@MainActor
+@Suite("ACP minimap fraction across a group's span")
+struct ACPMinimapGroupSpanTests {
+    @Test("a single-message row (span of one) advances by exactly one unit")
+    func singleMessageSpanAdvancesByOne() {
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 0, globalIndexSpan: 5...5
+        ) == 5)
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 0.5, globalIndexSpan: 5...5
+        ) == 5.5)
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 1, globalIndexSpan: 5...5
+        ) == 6)
+    }
+
+    @Test("a grouped row (span of several) advances proportionally across its full span")
+    func groupedRowSpanAdvancesAcrossFullSpan() {
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 0, globalIndexSpan: 10...19
+        ) == 10)
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 0.5, globalIndexSpan: 10...19
+        ) == 15)
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 1, globalIndexSpan: 10...19
+        ) == 20)
+    }
+
+    @Test("the row fraction is clamped to 0...1")
+    func rowFractionIsClamped() {
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: -0.2, globalIndexSpan: 10...19
+        ) == 10)
+        #expect(ACPTranscriptScroller.Coordinator.globalMessagePosition(
+            rowFraction: 1.4, globalIndexSpan: 10...19
+        ) == 20)
+    }
+}
+
+@MainActor
+@Suite("ACP tool-call group expansion seeds")
+struct ACPToolCallGroupExpansionSeedsTests {
+    @Test("a group is not expanded until one of its members is recorded")
+    func notExpandedInitially() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        #expect(!seeds.isExpanded(members: ["tc-a", "tc-b"]))
+    }
+
+    @Test("recording expansion for any current member marks the group expanded")
+    func recordingAnyMemberMarksExpanded() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        #expect(seeds.isExpanded(members: ["tc-a", "tc-b"]))
+    }
+
+    @Test("a regrouped bundle sharing at least one prior member is still reported expanded")
+    func regroupedBundleStaysExpanded() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        // Backfill revealed an older adjacent call ("tc-z"), which becomes
+        // the new first member and would change the group's row id — the
+        // seed should still recognize this as the same logical bundle.
+        #expect(seeds.isExpanded(members: ["tc-z", "tc-a", "tc-b"]))
+    }
+
+    @Test("an unrelated bundle sharing no members is not expanded")
+    func unrelatedBundleIsNotExpanded() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        #expect(!seeds.isExpanded(members: ["tc-x", "tc-y"]))
+    }
+
+    @Test("collapsing removes every current member from the seed set")
+    func collapsingRemovesMembers() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        seeds.setExpanded(false, members: ["tc-a", "tc-b"])
+        #expect(!seeds.isExpanded(members: ["tc-a", "tc-b"]))
+    }
 }

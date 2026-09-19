@@ -42,10 +42,12 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
 struct ACPTranscriptVisibleRowLookup {
     private let indexById: [String: Int]
     private let rowIdByStableId: [String: String]
+    private let spanById: [String: ClosedRange<Int>]
 
     init(rows: [ACPTranscriptRenderRow]) {
         var indexById: [String: Int] = [:]
         var rowIdByStableId: [String: String] = [:]
+        var spanById: [String: ClosedRange<Int>] = [:]
         indexById.reserveCapacity(rows.count)
         rowIdByStableId.reserveCapacity(rows.count)
         for row in rows {
@@ -53,8 +55,10 @@ struct ACPTranscriptVisibleRowLookup {
             case .message(let visible):
                 indexById[visible.stableId] = visible.index
                 rowIdByStableId[visible.stableId] = visible.stableId
+                spanById[visible.stableId] = visible.index...visible.index
             case .toolCallGroup(let group):
                 indexById[group.id] = group.members[0].index
+                spanById[group.id] = group.members[0].index...group.members[group.members.count - 1].index
                 for member in group.members {
                     indexById[member.stableId] = member.index
                     rowIdByStableId[member.stableId] = group.id
@@ -63,6 +67,7 @@ struct ACPTranscriptVisibleRowLookup {
         }
         self.indexById = indexById
         self.rowIdByStableId = rowIdByStableId
+        self.spanById = spanById
     }
 
     func transcriptIndex(for id: String?) -> Int? {
@@ -75,5 +80,15 @@ struct ACPTranscriptVisibleRowLookup {
     /// the message is outside the render window.
     func rowId(forStableId stableId: String) -> String? {
         rowIdByStableId[stableId]
+    }
+
+    /// The transcript-index range `rowId` represents on screen: a single
+    /// index for a plain message row, the full `[first, last]` member range
+    /// for a bundled tool-call group. Lets a fractional position within the
+    /// row's physical height (minimap drag, logical scrollbar) scale across
+    /// however many messages the row actually stands for, instead of always
+    /// treating one row as exactly one message.
+    func localIndexSpan(forRowId rowId: String) -> ClosedRange<Int>? {
+        spanById[rowId]
     }
 }
