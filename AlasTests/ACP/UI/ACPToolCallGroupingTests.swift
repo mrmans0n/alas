@@ -170,6 +170,7 @@ struct ACPToolCallGroupSummaryTests {
     }
 }
 
+@MainActor
 @Suite("ACP visible row lookup with groups")
 struct ACPTranscriptVisibleRowLookupGroupTests {
     private let rows: [ACPTranscriptRenderRow] = [
@@ -193,6 +194,31 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
         #expect(lookup.transcriptIndex(for: "tc-b") == 3)
         #expect(lookup.transcriptIndex(for: "tc-c") == 4)
         #expect(lookup.transcriptIndex(for: "missing") == nil)
+    }
+
+    @Test("a stale plain member id that has since been bundled resolves to its group")
+    func staleResolutionForBundledPlainId() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tc-b", lookup: lookup) == "tcg-tc-a")
+    }
+
+    @Test("a stale group id whose first member changed resolves via its old first member")
+    func staleResolutionForRenamedGroupId() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tcg-tc-a", lookup: lookup) == "tcg-tc-a")
+    }
+
+    @Test("a stale plain id that is still a plain row resolves to itself")
+    func staleResolutionForUnchangedPlainId() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tc-c", lookup: lookup) == "tc-c")
+    }
+
+    @Test("an unresolvable stale id returns nil")
+    func staleResolutionForUnknownId() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("missing", lookup: lookup) == nil)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tcg-missing", lookup: lookup) == nil)
     }
 
     @Test("row id for a bundled member is the group id; plain rows map to themselves")

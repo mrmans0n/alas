@@ -141,10 +141,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 tiling: tiling, pool: pool, scroller: scroller
             )
             reconciler.resolveStaleRowId = { [weak self] staleId in
-                guard let self, let host = self.host,
-                      let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId)
-                else { return nil }
-                return self.currentRowLookup(host: host).rowId(forStableId: staleStableId)
+                guard let self, let host = self.host else { return nil }
+                return Self.resolveStaleRowId(staleId, lookup: self.currentRowLookup(host: host))
             }
             self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
@@ -1354,6 +1352,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 rowFraction: (y - row.minY) / max(1, row.height),
                 globalIndexSpan: globalFirst...max(globalFirst, globalLast)
             )
+        }
+
+        /// Resolves a scroll anchor's row id that no longer exists in the
+        /// current geometry to whatever row currently displays the same
+        /// message — the seam `ACPTranscriptScrollerReconciler.resolveStaleRowId`
+        /// consults. `staleId` may be either a plain message's own stable
+        /// id (if it has since been folded into a group) or a tool-call
+        /// group id whose first member changed (see
+        /// `ACPTranscriptToolCallGroup.id`) — tried in that order, since
+        /// only a message stable id is a valid key into `lookup`'s member
+        /// map, while a group id must first be decoded back to one.
+        static func resolveStaleRowId(_ staleId: String, lookup: ACPTranscriptVisibleRowLookup) -> String? {
+            if let resolved = lookup.rowId(forStableId: staleId) {
+                return resolved
+            }
+            guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId) else {
+                return nil
+            }
+            return lookup.rowId(forStableId: staleStableId)
         }
 
         /// Pure scaling math behind `globalMessagePosition(at:)`, split out
