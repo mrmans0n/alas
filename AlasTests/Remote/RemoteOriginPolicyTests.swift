@@ -65,6 +65,20 @@ struct RemoteOriginPolicyTests {
         #expect(withDefaultPort.allows(originHeader: "https://example.com"), "the browser's own Origin header omits the default port")
     }
 
+    // Regression: pasting a public hub URL straight from a
+    // browser's address bar commonly includes a trailing slash
+    // (https://hub.example.com/), which used to be silently rejected as a
+    // non-bare-origin path, leaving the entry displayed and persisted but
+    // never actually matching any real request.
+    @Test func parseAcceptsABareTrailingSlashButNotADeeperPath() {
+        #expect(RemoteOriginPolicy.parse("https://hub.example.com/")?.normalized == "https://hub.example.com")
+
+        let withTrailingSlash = RemoteOriginPolicy(hostPolicy: .loopback, allowedOrigins: ["https://hub.example.com/"])
+        #expect(withTrailingSlash.allows(originHeader: "https://hub.example.com"))
+
+        #expect(RemoteOriginPolicy.parse("https://hub.example.com/path") == nil, "a deeper path is still rejected")
+    }
+
     @Test func privateHostClassifierCoversLoopbackLinkLocalAndPrivateRanges() {
         for host in ["localhost", "127.0.0.1", "127.5.5.5", "::1", "10.1.1.1", "192.168.0.1", "172.31.0.1",
                      "100.64.0.1", "100.127.255.255", "169.254.9.9", "fe80::1", "fd7a:115c:a1e0::1", "fc00::1"] {

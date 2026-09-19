@@ -43,12 +43,15 @@ struct RemoteOriginPolicy: Equatable, Sendable {
     }
 
     /// Accepts only a bare origin: http(s) scheme, host, optional port, and
-    /// nothing else (no path, query, fragment, or credentials).
+    /// nothing else (no path beyond a bare trailing slash, no query,
+    /// fragment, or credentials). A trailing "/" is accepted as equivalent
+    /// to no path at all — a common shape when pasting a URL straight from
+    /// a browser's address bar — while any deeper path is still rejected.
     static func parse(_ raw: String) -> ParsedOrigin? {
         guard let components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let rawHost = components.host, !rawHost.isEmpty,
-              components.path.isEmpty, components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/", components.query == nil, components.fragment == nil,
               components.user == nil, components.password == nil else { return nil }
         let host = RemoteNetwork.normalizedHost(rawHost)
         guard !host.isEmpty else { return nil }

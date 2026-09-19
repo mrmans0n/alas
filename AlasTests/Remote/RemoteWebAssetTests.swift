@@ -1392,6 +1392,22 @@ struct RemoteWebAssetTests {
         let js = try asset("hub-links.js")
         let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
         #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
-        #expect(pair.contains(".catch(() => tryAt(index + 1, bestError));"))
+        #expect(pair.contains("return Promise.resolve(res.json()).then("))
+    }
+
+    // Regression: falling through to tryAt(index + 1) from
+    // the tokenless-body branch used to still sit inside a .then().catch()
+    // on the outer chain, so once every remaining origin also failed, that
+    // eventual rejection bubbled back up and got retried a second time —
+    // doubling (or, with more tokenless responders, multiplying) requests
+    // against origins that were never going to succeed. Using the two-
+    // argument then(onFulfilled, onRejected) form instead means the
+    // rejection handler only ever catches res.json() itself failing to
+    // parse, never a later tryAt() call's own rejection.
+    @Test func pairDoesNotDoubleRetryRemainingOriginsAfterATokenlessResponse() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
+        #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
+        #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }
 }

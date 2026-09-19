@@ -517,6 +517,32 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.deepEqual(result, { origin: "http://10.0.0.1:8765", token: "fresh" }, "a tokenless 2xx body must not be accepted as success");
   }
   {
+    // Regression: falling through to tryAt(index + 1) from
+    // inside the tokenless-body .then() used to still be wrapped by a
+    // .catch() on the outer chain, so once every *remaining* origin also
+    // failed, that eventual rejection bubbled back up and was retried a
+    // second time — doubling (or, with more tokenless responders,
+    // exponentially multiplying) the requests against origins that were
+    // never going to succeed.
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        if (url.startsWith("http://localhost")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        return Promise.reject(new Error("net"));
+      },
+    });
+    await assert.rejects(
+      links.pair(["http://localhost:8765", "http://10.0.0.1:8765", "http://10.0.0.2:8765"], "CODE", "phone"),
+      (err) => err.reason === "net"
+    );
+    assert.deepEqual(
+      calls,
+      ["http://localhost:8765/pair", "http://10.0.0.1:8765/pair", "http://10.0.0.2:8765/pair"],
+      "each remaining origin must be tried exactly once, not retried after the tokenless response"
+    );
+  }
+  {
     const { clock, links } = harness({ fetchImpl: () => new Promise(() => {}) });
     const pending = links.pair(["http://10.0.0.1:8765"], "CODE", "phone");
     pending.catch(() => {}); // observed immediately so the rejection below is never "unhandled" during the awaited tick

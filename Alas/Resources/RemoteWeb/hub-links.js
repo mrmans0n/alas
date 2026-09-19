@@ -462,13 +462,18 @@ function createLinks(deps, hooks) {
             // reverse proxy's own error page) may not even be JSON, or may
             // be JSON without a usable token — either must fall through to
             // the next origin rather than aborting the whole attempt or
-            // creating a registry entry with a garbage token.
-            return Promise.resolve(res.json())
-              .then((body) => {
+            // creating a registry entry with a garbage token. The rejection
+            // handler here must only catch res.json() itself failing to
+            // parse — using .then().catch() instead would also catch the
+            // *next* tryAt() call's own eventual rejection and retry the
+            // same remaining origins a second time.
+            return Promise.resolve(res.json()).then(
+              (body) => {
                 if (!body || typeof body.token !== "string" || !body.token) return tryAt(index + 1, bestError);
                 return { origin, token: body.token };
-              })
-              .catch(() => tryAt(index + 1, bestError));
+              },
+              () => tryAt(index + 1, bestError)
+            );
           },
           () => tryAt(index + 1, bestError)
         );
