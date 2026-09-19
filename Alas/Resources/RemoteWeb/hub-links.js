@@ -274,7 +274,19 @@ function createLinks(deps, hooks) {
   }
 
   function probeAny(origins) {
-    return Promise.all(origins.map(probe)).then((statuses) => ({
+    // Every server advertises "localhost" alongside its real addresses, but
+    // that origin only actually reaches the paired Mac when the browser
+    // happens to run on that same machine — otherwise it silently answers
+    // for whatever Alas instance is local to THIS device. Probing it for a
+    // genuinely remote link could report a healthy, unrelated Mac and
+    // misclassify an offline remote Mac as "unauthorized" (which stops
+    // reconnecting for good) instead of "offline" (which keeps retrying).
+    // Prefer real addresses; only fall back to loopback when it's all a
+    // link has, since then it's the only signal available.
+    const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;
+    const candidates = origins.filter((o) => !isLoopback(o));
+    const toProbe = candidates.length ? candidates : origins;
+    return Promise.all(toProbe.map(probe)).then((statuses) => ({
       reachable: statuses.some((s) => s != null && s >= 200 && s < 300),
       blocked: statuses.some((s) => s === 403),
     }));

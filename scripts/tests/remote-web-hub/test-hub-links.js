@@ -210,6 +210,35 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(sockets.length, 2, "retry() clears blocked and reconnects");
   }
 
+  // --- health probe ignores a coincidental local Alas instance ---------------
+  {
+    // Regression (Codex review, PR #1337): every server advertises
+    // "localhost" alongside its real addresses, so probing it for
+    // revocation detection could actually reach a *different*, unrelated
+    // Alas instance running on the browser's own machine — falsely
+    // reporting a genuinely offline remote Mac as "unauthorized" (which
+    // permanently stops reconnecting) instead of "offline" (which retries).
+    const serverC = { id: "c", origins: ["http://localhost:8765", "http://10.0.0.9:8765"], lastOrigin: "http://10.0.0.9:8765", token: "tok-c" };
+    const probed = [];
+    const { clock, sockets, links } = harness({
+      fetchImpl: (url) => {
+        probed.push(url);
+        if (url.startsWith("http://localhost")) return Promise.resolve({ ok: true, status: 200 });
+        return Promise.reject(new Error("unreachable"));
+      },
+    });
+    links.add(serverC);
+    links.setActive("c");
+    links.connect("c");
+    sockets[0].drop();   // the real address (tried first, as lastOrigin) refuses
+    await settle();
+    sockets[1].drop();   // the fallback loopback address also refuses the handshake
+    await settle();
+    assert.ok(!probed.some((u) => u.startsWith("http://localhost")), "the loopback origin is not probed when a real address exists");
+    assert.equal(links.get("c").state, "offline", "the real origin's own failure decides the outcome, not an unrelated local instance");
+    assert.equal(clock.pending(), 1, "an offline link keeps its reconnect timer");
+  }
+
   // --- visibility ------------------------------------------------------------
   {
     const { clock, sockets, links } = harness();

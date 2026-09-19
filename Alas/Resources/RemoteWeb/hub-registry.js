@@ -271,6 +271,7 @@ globalThis.RemoteHubRegistry = {
   HUB_STORAGE_KEY,
   LEGACY_TOKEN_KEY,
   normalizeOrigin,
+  isLoopbackOrigin,
   parsePairingLink,
   parseManualPairing,
   load,

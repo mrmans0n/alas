@@ -1286,4 +1286,23 @@ struct RemoteWebAssetTests {
         #expect(update.contains(#"if (link.role === "active" || idleAllowed) connect(link.id);"#))
         #expect(!update.contains("    connect(link.id);\n    return link;"), "update() must not reconnect unconditionally")
     }
+
+    // Regression (Codex review, PR #1337): every server advertises
+    // "localhost" alongside its real addresses, so the revocation-detection
+    // health probe could reach a coincidental, unrelated Alas instance on
+    // the browser's own machine instead of the actual paired Mac — falsely
+    // reporting a genuinely offline remote Mac as "unauthorized" (which
+    // permanently stops reconnecting). See the node-executed "health probe
+    // ignores a coincidental local Alas instance" coverage in
+    // test-hub-links.js.
+    @Test func healthProbePrefersRealAddressesOverTheSharedLocalhostOrigin() throws {
+        let registry = try asset("hub-registry.js")
+        #expect(registry.contains("isLoopbackOrigin,"), "isLoopbackOrigin must be exported for hub-links.js to use")
+
+        let links = try asset("hub-links.js")
+        let probeAny = try #require(links.range(of: "function probeAny(origins) {").map { links[$0.lowerBound...].prefix(900) })
+        #expect(probeAny.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
+        #expect(probeAny.contains("const candidates = origins.filter((o) => !isLoopback(o));"))
+        #expect(probeAny.contains("const toProbe = candidates.length ? candidates : origins;"))
+    }
 }
