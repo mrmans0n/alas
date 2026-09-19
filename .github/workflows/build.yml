@@ -55,8 +55,8 @@ jobs:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
-    # Build once, publish products, then run ordinary tests on this same runner.
-    timeout-minutes: 165
+    # Build once; test runners queue only after products and the plan are published.
+    timeout-minutes: 110
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -125,6 +125,31 @@ jobs:
 
       - name: Test build-alas-cli.sh harness
         run: bash scripts/tests/build-alas-cli/run.sh
+
+      # These runners exercise Apple-target selection, lipo/install-name
+      # behavior, resource signing, and Xcode DerivedData metadata.
+      - name: Test build-zmx harness
+        run: bash scripts/tests/build-zmx/run.sh
+
+      - name: Test build-fff harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/build-fff/run.sh
+
+      - name: Test build-treesitter-pack harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/build-treesitter-pack/run.sh
+
+      - name: Test embed-ghostty-resources harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/embed-ghostty-resources/run.sh
+
+      - name: Test Xcode state harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/xcode-state/run.sh
+
+      - name: Test Alas build harness
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/alas-build/run.sh
 
       - name: Compute Ghostty cache key inputs
         # Use the script's authoritative fingerprint so the Actions key tracks
@@ -440,62 +465,15 @@ jobs:
           path: .build/xcode/CompilationCache.noindex
           key: ${{ steps.compilation-cache.outputs.cache-primary-key }}
 
-      - name: Test — ordinary Swift batch 1/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 0 --lane ordinary
-
-      - name: Test — ordinary Swift batch 2/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 1 --lane ordinary
-
-      - name: Test — ordinary Swift batch 3/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 2 --lane ordinary
-
-      - name: Test — ordinary Swift batch 4/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 3 --lane ordinary
-
-      - name: Test — ordinary Swift batch 5/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 4 --lane ordinary
-
-      - name: Test — ordinary Swift batch 6/6
-        if: ${{ !cancelled() && steps.swift-inventory.outcome == 'success' }}
-        timeout-minutes: 8
-        run: python3 scripts/ci_swift_tests.py run --batch 5 --lane ordinary
-
-      - name: Upload Swift coverage reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: swift-test-reports-${{ github.run_attempt }}-0
-          path: .build/xcode/results/*.report.json
-          if-no-files-found: warn
-
-      - name: Upload Swift test result bundles
-        if: always()
-        timeout-minutes: 10
-        uses: actions/upload-artifact@v7
-        with:
-          name: swift-test-results-${{ github.run_attempt }}-0
-          path: .build/xcode/results
-          include-hidden-files: true
-          if-no-files-found: warn
-
   swift-tests:
     name: Swift tests (shard ${{ matrix.shard }})
-    # Start alongside the builder to avoid a second macOS queue after compilation.
+    # Reserve macOS runners only when compiled products are ready.
+    needs: build-test
     permissions:
       contents: read
       actions: read
     runs-on: macos-26
-    # Includes a bounded 60-minute artifact wait and isolated invocation deadlines.
+    # Cover cumulative invocation deadlines, result extraction, and diagnostics.
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -527,18 +505,10 @@ jobs:
         # runtime skip, which the coverage audit correctly rejects.
         run: brew install ripgrep
 
-      - name: Wait for compiled Swift test products
-        id: products
-        timeout-minutes: 62
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci_swift_tests.py wait-products
-
       - name: Download compiled Swift test products
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ steps.products.outputs.artifact_id }}
-          merge-multiple: true
+          name: swift-test-products-${{ github.run_attempt }}
           path: .build/xcode/artifact
 
       - name: Download Swift test plan
@@ -736,37 +706,3 @@ jobs:
       - name: Test remote web worktree creation
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-worktree-creation/run.sh
-
-  shell-harness-tests:
-    name: macOS shell harness tests
-    runs-on: macos-26
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          submodules: recursive
-
-      # These runners exercise Apple-target selection, lipo/install-name
-      # behavior, resource signing, and Xcode DerivedData metadata.
-      - name: Test build-zmx harness
-        run: bash scripts/tests/build-zmx/run.sh
-
-      - name: Test build-fff harness
-        if: ${{ !cancelled() }}
-        run: bash scripts/tests/build-fff/run.sh
-
-      - name: Test build-treesitter-pack harness
-        if: ${{ !cancelled() }}
-        run: bash scripts/tests/build-treesitter-pack/run.sh
-
-      - name: Test embed-ghostty-resources harness
-        if: ${{ !cancelled() }}
-        run: bash scripts/tests/embed-ghostty-resources/run.sh
-
-      - name: Test Xcode state harness
-        if: ${{ !cancelled() }}
-        run: bash scripts/tests/xcode-state/run.sh
-
-      - name: Test Alas build harness
-        if: ${{ !cancelled() }}
-        run: bash scripts/tests/alas-build/run.sh
