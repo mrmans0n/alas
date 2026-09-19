@@ -62,14 +62,23 @@ The user-visible hub UI ships behind an experiment toggle, following the
   web client pair with several Macs and switch between them."
 - The Mac reports the value in `hello` as `hubEnabled`.
 
-Client behaviour keyed on the **active server's** hello:
+Client behaviour is keyed on whether **any known paired server**'s cached
+`hubEnabled` is `true` — not just the currently active one:
 
-- `hubEnabled` absent or `false`: the status chip, disabled Settings tab, and
-  gates behave exactly as today. The registry migration still runs and the
-  link manager still owns the single active link, so there is one code path,
-  but no idle links are created and no hub UI is rendered.
-- `hubEnabled: true`: the server chip, Servers section, add sheet, idle links,
-  and badges are enabled.
+- No paired server has ever reported `hubEnabled: true`: the status chip,
+  disabled Settings tab, and gates behave exactly as today. The registry
+  migration still runs and the link manager still owns the single active
+  link, so there is one code path, but no idle links are created and no hub
+  UI is rendered.
+- At least one paired server has reported `hubEnabled: true` (whether or not
+  it is the one currently active): the server chip, Servers section, add
+  sheet, idle links, and badges are enabled.
+
+This is an aggregate over the whole registry, not a per-server flag re-read on
+every switch, so that once a user has opted into the hub on their hub Mac,
+switching to view a different, non-hub-toggled Mac never hides the hub UI or
+strands them without a way back to it — a per-active-server check would do
+exactly that, since the newly active Mac's own hello would report `false`.
 
 Only the Mac used as the hub needs the toggle on. Macs being *added* need only
 the ungated server groundwork below (identity, hello, Origin policy, CORS,
@@ -207,6 +216,7 @@ One `localStorage` document, key `alas.remote.hub`, replaces the token key:
       "lastOrigin": "http://100.64.1.5:8765",
       "token": "…",
       "protocolVersion": 1 | null,
+      "hubEnabled": false, // from hello; the aggregate flag check above ORs this over every entry
       "addedAt": 1758300000000
     }
   ]
