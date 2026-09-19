@@ -44,6 +44,18 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Remote hub",
+                        desc: "Lets the remote web client pair with several Macs and switch between them."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.remote.hubEnabled },
+                            set: { enabled in
+                                state.config.remote.hubEnabled = enabled
+                                state.saveConfig()
+                            }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
