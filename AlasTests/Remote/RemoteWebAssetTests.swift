@@ -1376,11 +1376,29 @@ struct RemoteWebAssetTests {
     // address was even tried.
     @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
         #expect(pair.contains("const tryAt = (index, bestError) => {"))
-        #expect(pair.contains(#"if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));"#))
-        #expect(pair.contains(#"if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));"#))
+        #expect(pair.contains("return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);"))
         #expect(pair.contains("return tryAt(0, null);"))
+    }
+
+    // Regression: a normal pairing link advertises the
+    // same Mac's LAN, tailnet, and .local addresses alongside localhost —
+    // the non-loopback ones all come from that one Mac's own
+    // advertisedAddresses(), so continuing to post the same expired or
+    // mistyped code to every one of them on a 401/403 recursively charges
+    // RemotePairingService's 5-failures-per-60s redemption budget once per
+    // advertised address, and can exhaust it in a single submission. Only
+    // a loopback origin (genuinely ambiguous identity) still gets the
+    // benefit of the doubt; the first non-loopback 401/403 is now
+    // terminal. See the node-executed coverage in test-hub-links.js for
+    // the call-count verification.
+    @Test func pairingDoesNotChargeTheSameTargetsRateLimitOncePerAddress() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
+        #expect(pair.contains("const err = bestError || pairError(\"expired\");"))
+        #expect(pair.contains("const err = bestError || pairError(\"origin\");"))
     }
 
     // Regression: a 2xx from an unrelated responder (a
@@ -1390,7 +1408,7 @@ struct RemoteWebAssetTests {
     // or accept a garbage, tokenless registry entry as success.
     @Test func pairFallsThroughAfterAnInvalidOrTokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
         #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }
@@ -1406,7 +1424,7 @@ struct RemoteWebAssetTests {
     // parse, never a later tryAt() call's own rejection.
     @Test func pairDoesNotDoubleRetryRemainingOriginsAfterATokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
         #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }

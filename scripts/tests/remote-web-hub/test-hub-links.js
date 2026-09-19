@@ -485,6 +485,49 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     );
   }
   {
+    // Regression: a normal pairing link advertises the
+    // same Mac's LAN, tailnet, and .local addresses alongside localhost —
+    // all non-loopback, so they're presumed to be the same real target.
+    // Continuing to post the same expired/mistyped code to every one of
+    // them burns through RemotePairingService's 5-failures-per-60s budget
+    // in a single submission. A 401/403 from a non-loopback origin must
+    // stop immediately rather than trying the next advertised address.
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        return Promise.resolve({ ok: false, status: 401 });
+      },
+    });
+    await assert.rejects(
+      links.pair(["http://10.0.0.1:8765", "http://10.0.0.2:8765", "http://10.0.0.3:8765"], "CODE", "phone"),
+      (err) => err.reason === "expired"
+    );
+    assert.deepEqual(calls, ["http://10.0.0.1:8765/pair"], "must not charge the same target's rate limit once per advertised address");
+  }
+  {
+    // The loopback origin still gets the benefit of the doubt (it may be a
+    // completely unrelated Mac), but once past it, the same rule applies:
+    // stop at the first non-loopback response instead of trying every
+    // remaining address of what's presumed to be the same real target.
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        return Promise.resolve({ ok: false, status: 401 });
+      },
+    });
+    await assert.rejects(
+      links.pair(["http://localhost:8765", "http://10.0.0.1:8765", "http://10.0.0.2:8765"], "CODE", "phone"),
+      (err) => err.reason === "expired"
+    );
+    assert.deepEqual(
+      calls,
+      ["http://localhost:8765/pair", "http://10.0.0.1:8765/pair"],
+      "the loopback origin is tried, but the first non-loopback response is still terminal"
+    );
+  }
+  {
     const { links } = harness();
     await assert.rejects(links.pair(["http://10.0.0.1:8765", "http://10.0.0.2:8765"], "CODE", "phone"), (err) => err.reason === "net");
   }

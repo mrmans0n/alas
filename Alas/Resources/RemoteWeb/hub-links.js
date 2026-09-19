@@ -445,8 +445,15 @@ function createLinks(deps, hooks) {
     // real addresses, so it can answer from a completely unrelated local
     // Alas instance that has never heard of this code — a 401 from there
     // isn't proof the code is expired, it's a false read from the wrong
-    // server. Keep trying every origin and only report the first genuine
-    // (non-network) error if none of them actually pairs.
+    // server. Only a loopback origin gets that benefit of the doubt: the
+    // non-loopback addresses in one pairing link all come from the same
+    // Mac's own advertisedAddresses(), so a 401/403 from any of them is
+    // authoritative for the real target and must stop immediately —
+    // otherwise a single expired/mistyped code recursively posts to every
+    // advertised address and can burn through the whole 5-per-60s
+    // redemption-failure budget (RemotePairingService.redeem) in one
+    // submission, locking out even a freshly generated valid code.
+    const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;
     const tryAt = (index, bestError) => {
       if (index >= origins.length) return Promise.reject(bestError || pairError("net"));
       const origin = origins[index];
@@ -455,8 +462,14 @@ function createLinks(deps, hooks) {
       return withTimeout(request, PAIR_TIMEOUT_MS, () => controller.abort())
         .then(
           (res) => {
-            if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));
-            if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));
+            if (res.status === 401) {
+              const err = bestError || pairError("expired");
+              return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);
+            }
+            if (res.status === 403) {
+              const err = bestError || pairError("origin");
+              return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);
+            }
             if (!res.ok) return tryAt(index + 1, bestError);
             // A 2xx from an unrelated responder (a captive portal, a
             // reverse proxy's own error page) may not even be JSON, or may
