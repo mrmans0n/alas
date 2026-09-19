@@ -473,8 +473,8 @@ jobs:
       contents: read
       actions: read
     runs-on: macos-26
-    # Ordinary and isolated invocations retain their individual deadlines.
-    timeout-minutes: 90
+    # Cover cumulative invocation deadlines, result extraction, and diagnostics.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
