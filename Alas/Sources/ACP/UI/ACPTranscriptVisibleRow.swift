@@ -69,12 +69,13 @@ struct ACPTranscriptVisibleRowLookup {
                     rowIdByStableId[member.stableId] = group.id
                 }
             case .toolCallGroupHeader(let group):
-                // The header stands for no message of its own; anchoring it
-                // at its first member's index keeps minimap and compaction
-                // math continuous across it. Members are NOT registered
-                // here — each one registers itself as its own row above.
+                // The header stands for no message of ITS OWN: the first
+                // member follows as its own row and owns that index. So it
+                // gets an anchor index (anchors and remaps still resolve
+                // it) but deliberately NO span — see `localIndexSpan`.
+                // Members are not registered here; each registers itself as
+                // its own row above.
                 indexById[group.id] = group.members[0].index
-                spanById[group.id] = group.members[0].index...group.members[0].index
             }
         }
         self.indexById = indexById
@@ -95,11 +96,18 @@ struct ACPTranscriptVisibleRowLookup {
     }
 
     /// The transcript-index range `rowId` represents on screen: a single
-    /// index for a plain message row, the full `[first, last]` member range
-    /// for a bundled tool-call group. Lets a fractional position within the
-    /// row's physical height (minimap drag, logical scrollbar) scale across
-    /// however many messages the row actually stands for, instead of always
-    /// treating one row as exactly one message.
+    /// index for a plain message row (or one expanded bundle member), the
+    /// full `[first, last]` member range for a COLLAPSED tool-call group.
+    /// Lets a fractional position within the row's physical height (minimap
+    /// drag, logical scrollbar) scale across however many messages the row
+    /// actually stands for, instead of always treating one row as exactly
+    /// one message.
+    ///
+    /// Nil means either an unknown row id or — for an expanded bundle's
+    /// header — a row that represents no message at all and must therefore
+    /// not advance the logical position as it scrolls past. The two are
+    /// told apart by `transcriptIndex(for:)`, which still answers for the
+    /// header; see `globalMessagePosition(at:)`.
     func localIndexSpan(forRowId rowId: String) -> ClosedRange<Int>? {
         spanById[rowId]
     }

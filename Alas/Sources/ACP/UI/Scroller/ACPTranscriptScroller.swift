@@ -485,7 +485,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let rows = renderRows ?? Self.renderRows(host: host)
+            // The fallback must fold with the SAME expansion state the
+            // header specs below read, or a caller that passes only
+            // `expansionSeeds` gets headers rendering "Hide N tools" with
+            // no member rows behind them.
+            let rows = renderRows ?? Self.renderRows(host: host, expansionSeeds: expansionSeeds)
             let fork = Self.readyFork(host: host)
             let forkBoundaryIndex = fork.map { $0.inheritedMessageCount - 1 }
             var forkDividerEmitted = false
@@ -1443,8 +1447,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
                   let row = tiling.row(withId: id) else { return nil }
             let lookup = currentRowLookup(host: host)
-            guard let localSpan = lookup.localIndexSpan(forRowId: id),
-                  let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            guard let localSpan = lookup.localIndexSpan(forRowId: id) else {
+                // A row with an anchor index but no span of its own: an
+                // expanded bundle's header, which stands for no message.
+                // It holds the position of the member that follows rather
+                // than advancing across its own height — otherwise the
+                // logical position would walk forward by one while
+                // scrolling the header and then jump BACK on entering the
+                // first member row, which owns that same index.
+                guard let anchorIndex = lookup.transcriptIndex(for: id),
+                      let globalAnchor = host.transcript.globalIndex(forLocalIndex: anchorIndex)
+                else { return nil }
+                return CGFloat(globalAnchor)
+            }
+            guard let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
             else { return nil }
             // A folded tool-call group's row displays `localSpan.count`
             // messages in the height of one row; scale the within-row
@@ -1727,6 +1743,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// guessing from assumed row sizes.
         func rowFrameForTesting(id: String) -> (minY: CGFloat, height: CGFloat)? {
             tiling.row(withId: id).map { ($0.minY, $0.height) }
+        }
+
+        /// The logical (fractional global message) position the minimap and
+        /// logical scrollbar would report for a scroll offset, so a test can
+        /// sweep a range of offsets and assert the mapping stays monotonic.
+        func globalMessagePositionForTesting(at y: CGFloat) -> CGFloat? {
+            globalMessagePosition(at: y)
         }
         #endif
     }

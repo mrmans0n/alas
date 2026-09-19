@@ -308,6 +308,22 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(ids == ["tcg-tc-a", "tc-a", "tc-b", "tc-c", "__composer_spacer__"])
     }
 
+    @Test("the expansion store alone drives member specs, with no precomputed rows")
+    func expansionSeedsAloneDriveMemberSpecs() {
+        // The fallback fold inside rowSpecs must use the same store the
+        // header spec reads, or the header renders "Hide N tools" with no
+        // member rows behind it.
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b", "tc-c"])
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, expansionSeeds: seeds).map(\.id)
+        #expect(ids == ["tcg-tc-a", "tc-a", "tc-b", "tc-c", "__composer_spacer__"])
+    }
+
     @Test("a member's spec id is identical to the one it gets with collapsing off")
     func memberSpecIdMatchesUngroupedSpecId() {
         let messages = [tool("a"), tool("b"), tool("c")]
@@ -1162,6 +1178,51 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         #expect(session.transcript.visibleTailBound > targetIndex)
         #expect(session.transcript.visibleHead > ACPTranscript.tailWindow)
         #expect(coordinator.topVisibleMessageIdForTesting == target.stableId)
+    }
+
+    @Test("logical position never moves backward when scrolling across an expanded bundle's header")
+    func logicalPositionIsMonotonicAcrossExpandedHeader() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let leading = messages(3)
+        let toolCalls: [ACPMessage] = (0..<6).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)",
+                title: "Read file \(index)",
+                kind: "read",
+                status: "completed",
+                content: String(repeating: "output line \(index)\n", count: 12)
+            ))
+        }
+        session.replaceTranscriptMessages(leading + toolCalls)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        session.followsTranscriptTail = false
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.setToolCallGroupExpandedForTesting(true, memberStableIds: toolCalls.map(\.stableId))
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        // Sweep from just above the header down through the first member.
+        let headerFrame = try #require(coordinator.rowFrameForTesting(id: "tcg-" + toolCalls[0].stableId))
+        let firstMemberFrame = try #require(coordinator.rowFrameForTesting(id: toolCalls[0].stableId))
+        #expect(firstMemberFrame.minY > headerFrame.minY)
+
+        var positions: [CGFloat] = []
+        var y = max(0, headerFrame.minY - 10)
+        let end = firstMemberFrame.minY + firstMemberFrame.height
+        while y <= end {
+            positions.append(try #require(coordinator.globalMessagePositionForTesting(at: y)))
+            y += 4
+        }
+
+        // The header stands for no message, so the position may hold
+        // steady across it, but it must never run ahead and then come back.
+        for (previous, next) in zip(positions, positions.dropFirst()) {
+            #expect(next >= previous - 0.0001, "logical position went backward: \(previous) -> \(next)")
+        }
     }
 
     @Test("toggling a mounted bundle mounts its member rows without a model update")

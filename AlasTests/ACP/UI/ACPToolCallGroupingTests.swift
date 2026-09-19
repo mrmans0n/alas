@@ -410,11 +410,17 @@ struct ACPTranscriptVisibleRowLookupExpandedGroupTests {
         #expect(lookup.transcriptIndex(for: "tc-b") == 2)
     }
 
-    @Test("the header stands at its first member's index and spans no further")
-    func headerSpansOnlyItsAnchorIndex() {
+    @Test("the header has an anchor index but no logical span of its own")
+    func headerHasAnchorIndexButNoSpan() {
+        // The header represents no message: its first member follows as its
+        // own row and owns that index. If the header also claimed the span,
+        // the logical position would advance by one while scrolling the
+        // header and then jump backward on entering that member row.
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
         #expect(lookup.transcriptIndex(for: group.id) == 1)
-        #expect(lookup.localIndexSpan(forRowId: group.id) == 1...1)
+        #expect(lookup.localIndexSpan(forRowId: group.id) == nil)
+        // The first member still owns it.
+        #expect(lookup.localIndexSpan(forRowId: "tc-a") == 1...1)
     }
 
     @Test("a middle member absorbed into a merged expanded group needs no stale remap")
