@@ -298,7 +298,7 @@ final class ACPTranscriptScrollerReconciler {
             pendingAnchorRestore = nil
             return
         }
-        if case .row(let id, let offsetWithinRow) = before, tiling.row(withId: id) == nil {
+        if case .row(let id, let offsetWithinRow, _) = before, tiling.row(withId: id) == nil {
             pendingAnchorRestore = PendingAnchorRestore(
                 id: id, offsetWithinRow: offsetWithinRow,
                 applyBudget: Self.pendingAnchorApplyBudget
@@ -470,8 +470,14 @@ final class ACPTranscriptScrollerReconciler {
     /// The scroll offset expressed relative to a row (so it survives a
     /// wholesale geometry replacement), or — for the synthetic tail region,
     /// where no such row exists — relative to the document's bottom edge.
+    ///
+    /// `rowHeight` is the anchor row's height AT CAPTURE TIME, kept so
+    /// `restoreScrollAnchor` can reconstruct the anchor from the row's
+    /// BOTTOM edge instead of its top when the row was only found via
+    /// `resolveStaleRowId` — see that function's doc comment for why that
+    /// path specifically implies content grew at the row's head.
     private enum ScrollAnchor {
-        case row(id: String, offsetWithinRow: CGFloat)
+        case row(id: String, offsetWithinRow: CGFloat, rowHeight: CGFloat)
         case bottomRelative(distance: CGFloat)
     }
 
@@ -526,22 +532,34 @@ final class ACPTranscriptScrollerReconciler {
             return .bottomRelative(distance: scroller.distanceFromBottom)
         }
         let row = tiling.rowLayout(at: index)
-        return .row(id: row.id, offsetWithinRow: viewportMinY - row.minY)
+        return .row(id: row.id, offsetWithinRow: viewportMinY - row.minY, rowHeight: row.height)
     }
 
     /// Puts the anchored position back where it was on screen. A nil
     /// anchor leaves the offset alone — there is nothing better to aim at,
-    /// and `setScrollY`'s clamp still keeps it inside the new document. A
-    /// `.row` anchor whose row no longer exists in the new geometry first
-    /// tries `resolveStaleRowId` (see its doc comment); only if that also
-    /// comes up empty does it fall back to leaving the offset alone.
+    /// and `setScrollY`'s clamp still keeps it inside the new document.
     ///
-    /// For `.row`, the offset is capped at the anchor row's NEW height: a
-    /// row that shrank across the reset (a tall tool-output row collapsing,
-    /// say) would otherwise place the viewport top past its own end by
-    /// `oldHeight - newHeight`. The viewport top can be at most the anchor
-    /// row's bottom edge. No lower cap — see `captureScrollAnchor` on why
-    /// negative offsets are legitimate.
+    /// A `.row` anchor whose row id still exists restores TOP-relative:
+    /// offset is capped at the anchor row's NEW height, since a row that
+    /// shrank across the reset (a tall tool-output row collapsing, say)
+    /// would otherwise place the viewport top past its own end by
+    /// `oldHeight - newHeight` — the viewport top can be at most the
+    /// anchor row's bottom edge. No lower cap — see `captureScrollAnchor`
+    /// on why negative offsets are legitimate.
+    ///
+    /// A `.row` anchor whose id no longer exists tries `resolveStaleRowId`
+    /// (see its doc comment) and, if that succeeds, restores BOTTOM-
+    /// relative instead: this path is reached only for a folded tool-call
+    /// group whose id changed, which happens only when its FIRST member
+    /// changed — i.e. content was prepended at the row's HEAD. (Plain tail
+    /// growth, a new LAST member appended, never changes the group's id,
+    /// so it never reaches this path.) Reusing the top-relative offset
+    /// unchanged would land inside that newly prepended content instead of
+    /// the content the reader was viewing; anchoring from the row's bottom
+    /// edge is exact here because everything below the reader's original
+    /// position is guaranteed not to have moved. Still capped, symmetrically,
+    /// at the row's new height. If `resolveStaleRowId` also comes up empty,
+    /// falls back to leaving the offset alone.
     ///
     /// For `.bottomRelative`, `setScrollY` re-derives the offset from the
     /// NEW `documentHeight` (already installed by the caller before this
@@ -550,9 +568,13 @@ final class ACPTranscriptScrollerReconciler {
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
         guard let anchor else { return }
         switch anchor {
-        case .row(let id, let offsetWithinRow):
-            guard let row = tiling.row(withId: id) ?? resolveStaleRowId(id).flatMap(tiling.row(withId:)) else { return }
-            scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
+        case .row(let id, let offsetWithinRow, let oldRowHeight):
+            if let row = tiling.row(withId: id) {
+                scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
+            } else if let resolvedId = resolveStaleRowId(id), let row = tiling.row(withId: resolvedId) {
+                let distanceFromOldBottom = oldRowHeight - offsetWithinRow
+                scroller.setScrollY(row.maxY - min(distanceFromOldBottom, row.height))
+            }
         case .bottomRelative(let distance):
             scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)
         }

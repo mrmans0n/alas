@@ -884,6 +884,42 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
     }
 
+    /// Regression test for the Codex follow-up finding: `resolveStaleRowId`
+    /// only ever fires when the anchor row's id changed, which — for a
+    /// folded tool-call group — happens only when its FIRST member changed,
+    /// i.e. content was prepended at the row's HEAD (plain tail growth,
+    /// appending a new last member, never changes the group's id, so it
+    /// never reaches this resolver at all). Reusing the captured
+    /// TOP-relative `offsetWithinRow` unchanged against a row that grew at
+    /// its head lands inside the newly prepended content instead of
+    /// preserving what the reader was viewing. Anchoring from the row's
+    /// BOTTOM edge instead is exact here, precisely because that growth
+    /// direction is guaranteed whenever this resolver path is taken.
+    @Test("a stale group anchor whose row grew at its head restores from the bottom edge, not the top")
+    func resetRemapsStaleGroupAnchorAccountingForHeadGrowth() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 600)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 400pt into a 600pt row: 200pt from its bottom edge.
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? "tcg-tc-3" : nil }
+
+        // The replacement row is 400pt taller — four more member cards
+        // revealed above the previously-visible content.
+        let new = [spec("mA"), spec("tcg-tc-3", token: 1, height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-3")!
+        // Correct: 200pt from the NEW row's bottom edge (row.minY + 800).
+        // The bug would instead reuse the raw 400pt-from-top offset
+        // unchanged (row.minY + 400), landing inside the newly prepended
+        // content rather than the content the reader was already viewing.
+        #expect(abs(scroller.scrollY - (row.minY + 800)) < 1)
+    }
+
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")
     func resetAnchorSkipsSyntheticRows() {
         // The head pagination spinner occupies row 0 (minY 24, maxY 38), so
