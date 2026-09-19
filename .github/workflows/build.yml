@@ -737,6 +737,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-worktree-creation/run.sh
 
+      - name: Test remote web hub
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-hub/run.sh
+
   shell-harness-tests:
     name: macOS shell harness tests
     runs-on: macos-26
