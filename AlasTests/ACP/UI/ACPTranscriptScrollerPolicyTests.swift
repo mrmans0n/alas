@@ -12,7 +12,8 @@ private func makeHost(
     contentMaxWidth: CGFloat = 800,
     typography: ACPChatTypography = .default,
     onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in },
-    onQueueRemove: @escaping (UUID) -> Void = { _ in }
+    onQueueRemove: @escaping (UUID) -> Void = { _ in },
+    collapsesFinishedToolCalls: Bool = false
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
@@ -41,7 +42,8 @@ private func makeHost(
         onQueueClearAll: {},
         onRetryContextRecovery: {},
         onOpenForkSource: { _ in },
-        agentDisplayName: { $0 }
+        agentDisplayName: { $0 },
+        collapsesFinishedToolCalls: collapsesFinishedToolCalls
     )
 }
 
@@ -223,6 +225,67 @@ struct ACPTranscriptScrollerRowSpecsTests {
         for id in specs.map(\.id) where id != pendingInputId {
             #expect(byId[id]?.keepsMountedOffscreen == false, "\(id) unexpectedly opted into keepsMountedOffscreen")
         }
+    }
+
+    private func tool(_ id: String, status: String = "completed") -> ACPMessage {
+        .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status))
+    }
+
+    @Test("finished tool calls stay individual rows when collapsing is off")
+    func toolCallsStayIndividualWhenCollapsingOff() {
+        let host = makeHost(collapsesFinishedToolCalls: false)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tc-a", "tc-b", "tc-c", "__composer_spacer__"])
+    }
+
+    @Test("finished tool calls fold into a group row ahead of the active tool when collapsing is on")
+    func toolCallsFoldWhenCollapsingOn() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        #expect(specs.map(\.id) == ["tcg-tc-a", "tc-c", "__composer_spacer__"])
+        let group = try #require(specs.first { $0.id == "tcg-tc-a" })
+        #expect(group.keepsMountedOffscreen == false)
+    }
+
+    @Test("group row token changes when a member's status changes")
+    func groupTokenChangesOnMemberStatus() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        host.transcript.messages = [tool("a"), tool("b", status: "failed")]
+        let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        #expect(!before.isEqual(to: after))
+    }
+
+    @Test("the fork divider follows the group that ends at the fork boundary")
+    func forkDividerFollowsGroupAtBoundary() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 2, inheritedMessageCount: 2,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c"), tool("d")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
     }
 
     @Test("active connection recovery is rendered at the transcript tail")

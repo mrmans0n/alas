@@ -40,6 +40,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
+    /// Settings → Chat → "Collapse finished tool calls". See
+    /// `ACPToolCallGrouping`.
+    var collapsesFinishedToolCalls: Bool = false
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -450,54 +453,166 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let rows = ACPTranscriptVisibleRow.rows(
-                messages: transcript.messages,
-                visibleHead: transcript.visibleHead,
-                visibleTail: transcript.visibleTailBound,
-                stableId: { transcript.stableId(for: $0) }
-            )
-            for row in rows where transcript.messages.indices.contains(row.index) {
-                let message = transcript.messages[row.index]
-                let messageCreatedAt = transcript.createdAt(forStableId: row.stableId)
-                let messagePhase = ACPTranscriptRowContent.presentationPhase(of: message)
-                let rowToken = token(ACPTranscriptRowContent.equalityKey(
-                    stableId: row.stableId, message: message,
-                    messageCreatedAt: messageCreatedAt,
-                    messagePhase: messagePhase,
-                    contentMaxWidth: host.contentMaxWidth,
-                    availableRowContentWidth: availableRowContentWidth,
-                    availableTrailingGutterWidth: availableTrailingGutterWidth,
-                    typography: host.typography,
-                    trustedImageRoot: host.trustedImageRoot,
-                    isForkEligible: host.session.canForkMessage(at: row.index),
-                    forkTargets: host.forkTargets
-                ), host: host)
-                specs.append(ACPTranscriptRowSpec(
-                    id: row.stableId,
-                    equalityToken: rowToken,
-                    build: {
-                        wrapRow(host: host) {
-                            Self.messageRow(
-                                host: host,
-                                row: row,
-                                message: message,
-                                availableRowContentWidth: availableRowContentWidth,
-                                availableTrailingGutterWidth: availableTrailingGutterWidth
-                            )
+            let rows = Self.renderRows(host: host)
+            for renderRow in rows {
+                let lastIndex: Int
+                switch renderRow {
+                case .message(let row):
+                    guard transcript.messages.indices.contains(row.index) else { continue }
+                    let message = transcript.messages[row.index]
+                    let rowToken = token(Self.messageRowKey(
+                        host: host, row: row, message: message,
+                        availableRowContentWidth: availableRowContentWidth,
+                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                    ), host: host)
+                    specs.append(ACPTranscriptRowSpec(
+                        id: row.stableId,
+                        equalityToken: rowToken,
+                        build: {
+                            wrapRow(host: host) {
+                                Self.messageRow(
+                                    host: host,
+                                    row: row,
+                                    message: message,
+                                    availableRowContentWidth: availableRowContentWidth,
+                                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                                )
+                            }
                         }
-                    }
-                ))
+                    ))
+                    lastIndex = row.index
+                case .toolCallGroup(let group):
+                    specs.append(Self.toolCallGroupSpec(
+                        host: host, group: group,
+                        availableRowContentWidth: availableRowContentWidth,
+                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                    ))
+                    lastIndex = group.members[group.members.count - 1].index
+                }
                 // Fork divider follows its boundary row, as in the legacy list.
-                if let fork = host.session.forkRecord,
-                   fork.phase == .ready,
-                   row.index == fork.inheritedMessageCount - 1,
-                   fork.mechanism != nil {
+                // Grouping breaks a run at that boundary (`groupingOptions`), so
+                // a bundle can end exactly there but never straddle it.
+                if let fork = Self.readyFork(host: host), lastIndex == fork.inheritedMessageCount - 1 {
                     specs.append(Self.forkDividerSpec(host: host, fork: fork))
                 }
             }
 
             specs.append(contentsOf: Self.syntheticTailSpecs(host: host))
             return specs
+        }
+
+        private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
+            guard let fork = host.session.forkRecord, fork.phase == .ready, fork.mechanism != nil else {
+                return nil
+            }
+            return fork
+        }
+
+        /// Tool-call bundling inputs for this host. The fork boundary is a
+        /// forced run break so the divider spec can follow its boundary row.
+        static func groupingOptions(host: ACPTranscriptScroller) -> ACPToolCallGrouping.Options {
+            ACPToolCallGrouping.Options(
+                enabled: host.collapsesFinishedToolCalls,
+                breakAfterIndex: readyFork(host: host).map { $0.inheritedMessageCount - 1 }
+            )
+        }
+
+        /// Window-sliced, plan-filtered, deduped rows with finished tool-call
+        /// runs folded per `groupingOptions`. Same builder the coordinator's
+        /// memoized lookup uses, so row ids agree between the spec list and
+        /// the scroll-anchor / minimap mapping.
+        static func renderRows(host: ACPTranscriptScroller) -> [ACPTranscriptRenderRow] {
+            let transcript = host.transcript
+            let rows = ACPTranscriptVisibleRow.rows(
+                messages: transcript.messages,
+                visibleHead: transcript.visibleHead,
+                visibleTail: transcript.visibleTailBound,
+                stableId: { transcript.stableId(for: $0) }
+            )
+            return ACPToolCallGrouping.fold(
+                rows: rows, messages: transcript.messages,
+                options: groupingOptions(host: host)
+            )
+        }
+
+        private static func messageRowKey(
+            host: ACPTranscriptScroller,
+            row: ACPTranscriptVisibleRow,
+            message: ACPMessage,
+            availableRowContentWidth: CGFloat,
+            availableTrailingGutterWidth: CGFloat
+        ) -> ACPTranscriptRowContent.EqualityKey {
+            ACPTranscriptRowContent.equalityKey(
+                stableId: row.stableId, message: message,
+                messageCreatedAt: host.transcript.createdAt(forStableId: row.stableId),
+                messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
+                contentMaxWidth: host.contentMaxWidth,
+                availableRowContentWidth: availableRowContentWidth,
+                availableTrailingGutterWidth: availableTrailingGutterWidth,
+                typography: host.typography,
+                trustedImageRoot: host.trustedImageRoot,
+                isForkEligible: host.session.canForkMessage(at: row.index),
+                forkTargets: host.forkTargets
+            )
+        }
+
+        /// One collapsed row for a run of finished tool calls. The token folds
+        /// every member's message-row key so a late status/duration/content
+        /// update on any bundled call still re-renders the row (and, when
+        /// expanded, the card inside it).
+        private static func toolCallGroupSpec(
+            host: ACPTranscriptScroller,
+            group: ACPTranscriptToolCallGroup,
+            availableRowContentWidth: CGFloat,
+            availableTrailingGutterWidth: CGFloat
+        ) -> ACPTranscriptRowSpec {
+            let transcript = host.transcript
+            let members: [ToolCallGroupMember] = group.members.compactMap { row in
+                guard transcript.messages.indices.contains(row.index) else { return nil }
+                return ToolCallGroupMember(row: row, message: transcript.messages[row.index])
+            }
+            let toolCalls: [ACPMessage.ToolCall] = members.compactMap { member in
+                if case .toolCall(let toolCall) = member.message { return toolCall }
+                return nil
+            }
+            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls)
+            let memberKeys = members.map { member in
+                messageRowKey(
+                    host: host, row: member.row, message: member.message,
+                    availableRowContentWidth: availableRowContentWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                )
+            }
+            return ACPTranscriptRowSpec(
+                id: group.id,
+                equalityToken: token(ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys), host: host),
+                build: {
+                    wrapRow(host: host) {
+                        ACPToolCallGroupRow(summary: summary) {
+                            ForEach(members) { member in
+                                Self.messageRow(
+                                    host: host,
+                                    row: member.row,
+                                    message: member.message,
+                                    availableRowContentWidth: availableRowContentWidth,
+                                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                                )
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        private struct ToolCallGroupTokenInputs: Equatable {
+            let summary: ACPToolCallGroupSummary
+            let memberKeys: [ACPTranscriptRowContent.EqualityKey]
+        }
+
+        private struct ToolCallGroupMember: Identifiable {
+            let row: ACPTranscriptVisibleRow
+            let message: ACPMessage
+            var id: String { row.stableId }
         }
 
         static func messageRow(
@@ -1090,8 +1205,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         }
 
         private func alignPendingLogicalTargetIfPossible() {
+            // The target is a message stable id; when that message is folded
+            // into a tool-call bundle the tiled row is the bundle's.
             guard let id = pendingLogicalTargetId,
-                  let row = tiling.row(withId: id),
+                  let row = tiling.row(withId: currentRowLookup()?.rowId(forStableId: id) ?? id),
                   let scroller
             else { return }
             let fraction = pendingMinimapRowFraction
@@ -1138,39 +1255,32 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                       syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
                   )
             else { return nil }
-            let lookup = visibleRowsCache.lookup(
+            guard let localIndex = currentRowLookup(host: host).transcriptIndex(for: anchorId) else { return nil }
+            return host.transcript.globalIndex(forLocalIndex: localIndex)
+        }
+
+        /// Memoized id → transcript-index mapping for the rows currently
+        /// tiled — the same `renderRows` the spec list is built from, so
+        /// group ids resolve exactly as `rowSpecs` emitted them.
+        private func currentRowLookup(host: ACPTranscriptScroller) -> ACPTranscriptVisibleRowLookup {
+            visibleRowsCache.lookup(
                 generation: host.transcript.messagesGeneration,
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(
-                        messages: host.transcript.messages,
-                        visibleHead: host.transcript.visibleHead,
-                        visibleTail: host.transcript.visibleTailBound,
-                        stableId: { host.transcript.stableId(for: $0) }
-                    )
-                }
+                grouping: Self.groupingOptions(host: host),
+                build: { Self.renderRows(host: host) }
             )
-            guard let localIndex = lookup.transcriptIndex(for: anchorId) else { return nil }
-            return host.transcript.globalIndex(forLocalIndex: localIndex)
+        }
+
+        private func currentRowLookup() -> ACPTranscriptVisibleRowLookup? {
+            host.map(currentRowLookup(host:))
         }
 
         private func globalMessagePosition(at y: CGFloat) -> CGFloat? {
             guard let host,
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
                   let row = tiling.row(withId: id) else { return nil }
-            let lookup = visibleRowsCache.lookup(
-                generation: host.transcript.messagesGeneration,
-                head: host.transcript.visibleHead,
-                tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(messages: host.transcript.messages,
-                                                 visibleHead: host.transcript.visibleHead,
-                                                 visibleTail: host.transcript.visibleTailBound,
-                                                 stableId: { host.transcript.stableId(for: $0) })
-                }
-            )
-            guard let localIndex = lookup.transcriptIndex(for: id),
+            guard let localIndex = currentRowLookup(host: host).transcriptIndex(for: id),
                   let globalIndex = host.transcript.globalIndex(forLocalIndex: localIndex) else { return nil }
             return CGFloat(globalIndex) + min(1, max(0, (y - row.minY) / max(1, row.height)))
         }
@@ -1244,22 +1354,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // itself changes, and the id → index map is derived once per
             // rebuild. Same rows, same builder, same lookup the legacy list
             // uses.
-            let lookup = visibleRowsCache.lookup(
-                generation: host.transcript.messagesGeneration,
-                head: host.transcript.visibleHead,
-                tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(
-                        messages: host.transcript.messages,
-                        visibleHead: host.transcript.visibleHead,
-                        visibleTail: host.transcript.visibleTailBound,
-                        stableId: { host.transcript.stableId(for: $0) }
-                    )
-                }
-            )
-            let globalIndex = lookup.transcriptIndex(for: anchorId)
+            let globalIndex = currentRowLookup(host: host).transcriptIndex(for: anchorId)
                 .flatMap { host.transcript.globalIndex(forLocalIndex: $0) }
-            host.onRememberScrollAnchor(anchorId, globalIndex, false)
+            // Remember a bundle by its first tool call's stable id, not the
+            // bundle row id: `restoreInitialPositionIfNeeded` re-resolves
+            // whichever row shows that message, bundled or not.
+            let rememberedId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: anchorId) ?? anchorId
+            host.onRememberScrollAnchor(rememberedId, globalIndex, false)
         }
 
         /// Runs once per Coordinator lifetime, but only actually latches
@@ -1304,7 +1405,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 scroller.scrollToBottom()
                 return
             }
-            guard let row = tiling.row(withId: anchor) else {
+            // An anchor remembered as a tool call's own id may now be tiled
+            // inside a bundle; align on the bundle row in that case.
+            let anchorStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: anchor) ?? anchor
+            let anchorRowId = currentRowLookup(host: host).rowId(forStableId: anchorStableId) ?? anchor
+            guard let row = tiling.row(withId: anchorRowId) else {
                 // Anchor exists but isn't resolvable yet; retry later
                 // instead of latching onto a wrong fallback.
                 return

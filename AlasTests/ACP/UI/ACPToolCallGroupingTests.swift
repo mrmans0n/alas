@@ -1,0 +1,201 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("ACP tool-call grouping")
+struct ACPToolCallGroupingTests {
+    private func tool(_ id: String, status: String = "completed") -> ACPMessage {
+        .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status))
+    }
+
+    private func compaction(_ id: String) -> ACPMessage {
+        .toolCall(.init(
+            toolCallId: id, title: "Compacting context", kind: "context_compaction",
+            status: "completed",
+            metadata: AnyCodable(["contextCompaction": ["version": 1]])
+        ))
+    }
+
+    private func fold(
+        _ messages: [ACPMessage],
+        enabled: Bool = true,
+        breakAfterIndex: Int? = nil
+    ) -> [ACPTranscriptRenderRow] {
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages, visibleHead: 0, visibleTail: messages.count,
+            stableId: { $0.stableId }
+        )
+        return ACPToolCallGrouping.fold(
+            rows: rows, messages: messages,
+            options: .init(enabled: enabled, breakAfterIndex: breakAfterIndex)
+        )
+    }
+
+    private func ids(_ rows: [ACPTranscriptRenderRow]) -> [String] { rows.map(\.id) }
+
+    @Test("disabled grouping keeps every row as a plain message row")
+    func disabledKeepsMessageRows() {
+        let messages = [tool("a"), tool("b"), tool("c")]
+        let folded = fold(messages, enabled: false)
+        #expect(ids(folded) == ["tc-a", "tc-b", "tc-c"])
+        #expect(folded.allSatisfy { if case .message = $0 { true } else { false } })
+    }
+
+    @Test("two or more consecutive finished tool calls fold into one group")
+    func consecutiveFinishedToolsFold() throws {
+        let folded = fold([tool("a"), tool("b"), tool("c", status: "failed")])
+        #expect(ids(folded) == ["tcg-tc-a"])
+        guard case .toolCallGroup(let group) = try #require(folded.first) else {
+            Issue.record("expected a tool-call group")
+            return
+        }
+        #expect(group.members.map(\.stableId) == ["tc-a", "tc-b", "tc-c"])
+        #expect(group.members.map(\.index) == [0, 1, 2])
+    }
+
+    @Test("a single finished tool call stays a plain card")
+    func singleFinishedToolStaysMessage() {
+        let before = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
+        let after = ACPMessage.user(id: UUID(), messageId: "u2", text: "thanks", attachments: [])
+        let folded = fold([before, tool("a"), after])
+        #expect(ids(folded) == ["acp-user:u1", "tc-a", "acp-user:u2"])
+    }
+
+    @Test("an active tool call ends the run and stays visible after the group")
+    func activeToolEndsRun() {
+        let folded = fold([tool("a"), tool("b"), tool("c", status: "in_progress")])
+        #expect(ids(folded) == ["tcg-tc-a", "tc-c"])
+    }
+
+    @Test("a pending tool call is treated as active")
+    func pendingToolIsActive() {
+        let folded = fold([tool("a"), tool("b"), tool("c", status: "pending"), tool("d")])
+        #expect(ids(folded) == ["tcg-tc-a", "tc-c", "tc-d"])
+    }
+
+    @Test("agent text between tool calls splits the run")
+    @MainActor
+    func agentTextSplitsRun() {
+        let agent = ACPMessage.agent(id: UUID(), messageId: "m1", StreamingText("text"))
+        let folded = fold([tool("a"), tool("b"), agent, tool("c"), tool("d")])
+        #expect(ids(folded) == ["tcg-tc-a", "acp-agent:m1", "tcg-tc-c"])
+    }
+
+    @Test("a thinking row between tool calls splits the run")
+    @MainActor
+    func thoughtSplitsRun() {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
+        let folded = fold([tool("a"), tool("b"), thought, tool("c"), tool("d")])
+        #expect(ids(folded) == ["tcg-tc-a", "acp-thought:t1", "tcg-tc-c"])
+    }
+
+    @Test("a file edit card stays outside the bundle and splits the run")
+    func fileEditSplitsRun() {
+        let editId = UUID()
+        let edit = ACPMessage.fileEdit(id: editId, .init(path: "a.swift", added: 1, removed: 0))
+        let folded = fold([tool("a"), tool("b"), edit, tool("c"), tool("d")])
+        #expect(ids(folded) == ["tcg-tc-a", editId.uuidString, "tcg-tc-c"])
+    }
+
+    @Test("a context compaction card is never bundled")
+    func compactionIsNeverBundled() {
+        let folded = fold([tool("a"), tool("b"), compaction("cc"), tool("c"), tool("d")])
+        #expect(ids(folded) == ["tcg-tc-a", "tc-cc", "tcg-tc-c"])
+    }
+
+    @Test("hidden plan messages do not split a run")
+    func hiddenPlanDoesNotSplitRun() {
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        let folded = fold([tool("a"), plan, tool("b")])
+        #expect(ids(folded) == ["tcg-tc-a"])
+    }
+
+    @Test("the run breaks after the fork boundary index")
+    func breakAfterIndexSplitsRun() {
+        let folded = fold([tool("a"), tool("b"), tool("c"), tool("d")], breakAfterIndex: 1)
+        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-c"])
+    }
+
+    @Test("the group id stays stable while the run grows at the tail")
+    func groupIdStableAsRunGrows() {
+        let before = fold([tool("a"), tool("b")])
+        let after = fold([tool("a"), tool("b"), tool("c")])
+        #expect(ids(before) == ids(after))
+    }
+
+    @Test("finished status excludes in-progress, running, and pending")
+    func finishedStatus() {
+        #expect(ACPToolCallGrouping.isFinished(status: "completed"))
+        #expect(ACPToolCallGrouping.isFinished(status: "failed"))
+        #expect(ACPToolCallGrouping.isFinished(status: "cancelled"))
+        #expect(!ACPToolCallGrouping.isFinished(status: "in_progress"))
+        #expect(!ACPToolCallGrouping.isFinished(status: "running"))
+        #expect(!ACPToolCallGrouping.isFinished(status: "pending"))
+    }
+}
+
+@Suite("ACP tool-call group summary")
+struct ACPToolCallGroupSummaryTests {
+    private func tool(_ id: String, status: String = "completed") -> ACPMessage.ToolCall {
+        .init(toolCallId: id, title: id, kind: "read", status: status)
+    }
+
+    @Test("counts members and failures")
+    func countsMembersAndFailures() {
+        let summary = ACPToolCallGroupSummary(toolCalls: [
+            tool("a"), tool("b", status: "failed"), tool("c", status: "error"),
+        ])
+        #expect(summary.count == 3)
+        #expect(summary.failedCount == 2)
+    }
+
+    @Test("collapsed label pluralizes and appends the failure count")
+    func collapsedLabel() {
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "Ran 2 tools")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "Ran 1 tool")
+        #expect(ACPToolCallGroupSummary(toolCalls: [
+            tool("a"), tool("b", status: "failed"), tool("c"),
+        ]).collapsedLabel == "Ran 3 tools · 1 failed")
+    }
+
+    @Test("expanded label offers to hide the bundle")
+    func expandedLabel() {
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide 3 tools")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide 1 tool")
+    }
+}
+
+@Suite("ACP visible row lookup with groups")
+struct ACPTranscriptVisibleRowLookupGroupTests {
+    private let rows: [ACPTranscriptRenderRow] = [
+        .message(ACPTranscriptVisibleRow(index: 0, stableId: "u")),
+        .toolCallGroup(ACPTranscriptToolCallGroup(members: [
+            ACPTranscriptVisibleRow(index: 1, stableId: "tc-a"),
+            ACPTranscriptVisibleRow(index: 3, stableId: "tc-b"),
+        ])),
+        .message(ACPTranscriptVisibleRow(index: 4, stableId: "tc-c")),
+    ]
+
+    @Test("a group id resolves to its first member's transcript index")
+    func groupIdResolvesToFirstMember() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.transcriptIndex(for: "tcg-tc-a") == 1)
+    }
+
+    @Test("member stable ids still resolve to their own transcript index")
+    func memberIdsResolve() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.transcriptIndex(for: "tc-b") == 3)
+        #expect(lookup.transcriptIndex(for: "tc-c") == 4)
+        #expect(lookup.transcriptIndex(for: "missing") == nil)
+    }
+
+    @Test("row id for a bundled member is the group id; plain rows map to themselves")
+    func rowIdForStableId() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.rowId(forStableId: "tc-b") == "tcg-tc-a")
+        #expect(lookup.rowId(forStableId: "tc-c") == "tc-c")
+        #expect(lookup.rowId(forStableId: "u") == "u")
+        #expect(lookup.rowId(forStableId: "missing") == nil)
+    }
+}
