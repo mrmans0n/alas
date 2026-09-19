@@ -82,7 +82,7 @@ struct DiffReviewRail: View {
                 expandedBody
             }
         }
-        .frame(width: collapsed ? 44 : 260)
+        .frame(width: collapsed ? DiffReviewRailMetrics.collapsedWidth : DiffReviewRailMetrics.expandedWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(width: 0.5), alignment: .trailing)

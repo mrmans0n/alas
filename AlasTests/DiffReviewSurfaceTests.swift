@@ -3497,6 +3497,162 @@ struct DiffReviewSurfaceTests {
         #expect(selectedDraftID == "draft-summary")
     }
 
+    @Test func narrowSurfaceMovesDraftSummaryAfterTheDiffStack() async throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let comment = draftComment(id: "draft-inline", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var selectedDraftID: String?
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            draftCommentsByFileID: [file.id: [comment]],
+            onSelectDraftComment: { selectedDraftID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        // Two 260pt rails would leave a 180pt diff, well under the minimum.
+        let controller = host(view, width: 700, height: 700)
+        let window = attachWindow(controller, width: 700, height: 700)
+        defer { _ = window }
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-inline", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-collapse-toggle", in: controller.view) == nil)
+
+        let pressed = pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-comment-draft-inline",
+            in: controller.view
+        )
+
+        #expect(pressed)
+        #expect(selectedDraftID == "draft-inline")
+    }
+
+    @Test func wideSurfaceKeepsDraftSummaryInTheRail() async throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let comment = draftComment(id: "draft-rail", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            draftCommentsByFileID: [file.id: [comment]]
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+        let window = attachWindow(controller, width: 1200, height: 700)
+        defer { _ = window }
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-inline", in: controller.view) == nil)
+    }
+
+    @Test func inlineSummaryActionsStayFreshAfterActionsChangeWithoutChangingTheToken() async throws {
+        // Regression: the inline summary row's equality token only tracks
+        // derived values (comments, availability, agent targets, ...), not
+        // the actions closures themselves. If a controller swap replaces
+        // draftCommentActions while every tracked value stays equal, the
+        // AppKit hosting pool skips rebuilding the mounted row, so the
+        // built view must keep forwarding to the latest closures rather
+        // than the ones captured at its last rebuild.
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let comment = draftComment(id: "draft-relay", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let availability: (ReviewDraftComment) -> ReviewDraftCommentActionAvailability = { _ in
+            ReviewDraftCommentActionAvailability(
+                canEdit: false,
+                canDelete: false,
+                canResolve: true,
+                canDismiss: false,
+                canCopyPrompt: false,
+                canShowSendToAgent: false,
+                canSendToAgent: false
+            )
+        }
+
+        func makeView(resolve: @escaping (ReviewDraftComment) -> Void) -> some View {
+            DiffReviewSurface(
+                session: session,
+                selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+                railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+                reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+                layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+                wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+                showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+                codeFontFamily: "",
+                codeFontSize: 13,
+                draftCommentsByFileID: [file.id: [comment]],
+                draftCommentActions: ReviewDraftCommentActions(availability: availability, resolve: resolve)
+            )
+            .environment(\.theme, theme())
+        }
+
+        var resolvedByFirstActions: [String] = []
+        var resolvedBySecondActions: [String] = []
+
+        // Two 260pt rails would leave a 180pt diff at 700pt, well under the
+        // minimum, so the summary renders inline.
+        let controller = host(
+            makeView(resolve: { resolvedByFirstActions.append($0.id) }),
+            width: 700,
+            height: 700
+        )
+        let window = attachWindow(controller, width: 700, height: 700)
+        defer { _ = window }
+        await drainSwiftUI(controller.view)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-inline", in: controller.view) != nil)
+
+        controller.rootView = makeView(resolve: { resolvedBySecondActions.append($0.id) })
+        await drainSwiftUI(controller.view)
+
+        let pressed = pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-resolve-draft-relay",
+            in: controller.view
+        )
+
+        #expect(pressed)
+        #expect(resolvedBySecondActions == ["draft-relay"])
+        #expect(resolvedByFirstActions.isEmpty)
+    }
+
     @Test func surfaceCanShowDraftSummaryRailBeforeCommentsExist() throws {
         let file = summary(path: "Sources/App.swift")
         let session = loadedSession(summaries: [file])
@@ -3724,6 +3880,150 @@ struct DiffReviewSurfaceTests {
             in: controller.view
         ))
         #expect(dismissedID == "draft-dismiss-summary")
+    }
+
+    @Test func inlineRowTokenChangesWithEditingState() throws {
+        // Regression: AppKitDiffScrollerReconciler.apply short-circuits when
+        // a spec's equality token is unchanged, leaving its stored `build`
+        // closure stale. If the token didn't vary with the in-progress
+        // edit, a row evicted (scrolled out of the mount band) and later
+        // remounted mid-edit would rebuild from a closure that captured an
+        // earlier keystroke, reverting the user's unsaved text.
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-token", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        let baseTheme = theme()
+
+        func token(editingBody: String) -> ReviewDraftSummaryInlineRowToken {
+            ReviewDraftSummaryInlineRowToken(
+                comments: [comment],
+                bundle: bundle,
+                availability: [ReviewDraftCommentActionAvailability.none],
+                canPublishReview: false,
+                agentTargets: [],
+                focusedDraftCommentID: nil,
+                inlineFeedbackByFileID: [:],
+                focusedFeedbackID: nil,
+                status: ReviewDraftSummaryRailStatus(),
+                theme: baseTheme,
+                editingCommentID: comment.id,
+                editingBody: editingBody
+            )
+        }
+
+        #expect(token(editingBody: "first draft") != token(editingBody: "first draft, revised"))
+        #expect(token(editingBody: "same") == token(editingBody: "same"))
+    }
+
+    @Test func summaryRailSeedsEditorFromInitialEditingState() throws {
+        // Regression: when the surface swaps between the rail and inline
+        // presentations mid-edit, the new instance must resume editing with
+        // the unsaved text rather than starting fresh from the persisted
+        // comment body.
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-seeded-edit", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var savedBody: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            edit: { _, body in savedBody = body }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: .constant(false),
+            draftCommentActions: actions,
+            initialEditingCommentID: comment.id,
+            initialEditingBody: "unsaved edit in progress"
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        // Already editing on first render, without pressing "Edit".
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-save-\(comment.id)", in: controller.view) != nil)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-save-\(comment.id)",
+            in: controller.view
+        ))
+
+        #expect(savedBody == "unsaved edit in progress")
+    }
+
+    @Test func summaryRailReportsEditingStateChangesAsTheyHappen() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-reported-edit", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+        var reportedStates: [(id: String?, body: String)] = []
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: .constant(false),
+            draftCommentActions: actions,
+            onEditingStateChange: { id, body in reportedStates.append((id, body)) }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-edit-\(comment.id)",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let lastReported = try #require(reportedStates.last)
+        #expect(lastReported.id == comment.id)
+        #expect(lastReported.body == comment.bodyMarkdown)
     }
 
     @Test func summaryRailEditorDoesNotKeepCardSelectionPressActive() throws {
