@@ -20,6 +20,30 @@ private final class MinimapWheelScrollView: MinimapScrollView {
     override func scrollWheel(with event: NSEvent) { wheelEvent = event }
 }
 
+/// Stands in for AppKit filling layout holes: measuring a glyph position
+/// resizes the document view, which posts the frame change that drives the
+/// editor minimap viewport update.
+@MainActor
+private final class MinimapResizingLayoutManager: NSLayoutManager {
+    weak var resizedView: NSView?
+    var remainingResizes = 40
+    private var depth = 0
+    private(set) var maximumDepth = 0
+    private(set) var measurements = 0
+
+    override func glyphIndex(for point: NSPoint, in container: NSTextContainer) -> Int {
+        depth += 1
+        measurements += 1
+        maximumDepth = max(maximumDepth, depth)
+        defer { depth -= 1 }
+        if remainingResizes > 0, let resizedView {
+            remainingResizes -= 1
+            resizedView.setFrameSize(NSSize(width: resizedView.frame.width, height: resizedView.frame.height + 1))
+        }
+        return super.glyphIndex(for: point, in: container)
+    }
+}
+
 @MainActor
 private final class MinimapColorReferenceView: NSView {
     override var isFlipped: Bool { true }
@@ -61,6 +85,41 @@ struct MinimapTests {
         #expect(!material.isHidden)
         #expect(material.frame == scroll.minimap.frame)
         #expect(container.subviews.last === scroll.minimap)
+    }
+
+    @Test("A document resize during a viewport measurement does not recurse")
+    @MainActor func viewportReentrancy() async throws {
+        let layout = MinimapResizingLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        layout.addTextContainer(container)
+        let storage = NSTextStorage(string: String(repeating: "let value = 42\n", count: 200))
+        storage.addLayoutManager(layout)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 2000), textContainer: container)
+        layout.resizedView = textView
+        let scroll = CodeEditorScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        scroll.documentView = textView
+        let host = MinimapContainerView(scrollView: scroll)
+        host.layoutSubtreeIfNeeded()
+
+        scroll.configureMinimap(shown: true, theme: try ThemeStore().current)
+
+        // The nested notifications are absorbed instead of recursing, and the
+        // synchronous work stays bounded rather than draining every resize.
+        #expect(layout.maximumDepth > 0, "The viewport update never measured a glyph position")
+        #expect(layout.maximumDepth <= 2, "Viewport updates re-entered \(layout.maximumDepth) levels deep")
+        let synchronousMeasurements = layout.measurements
+        #expect(layout.remainingResizes > 0, "The document view kept resizing without settling")
+
+        // An update still outstanding at the pass limit is rescheduled, not
+        // dropped, and the chain settles once layout stops resizing.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(layout.measurements > synchronousMeasurements, "The pending viewport update was discarded")
+        #expect(layout.maximumDepth <= 2, "Rescheduled updates re-entered \(layout.maximumDepth) levels deep")
+        let settled = layout.measurements
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(layout.measurements == settled, "Viewport updates kept rescheduling after layout settled")
+
+        scroll.configureMinimap(shown: false, theme: try ThemeStore().current)
     }
 
     @Test("Drag release does not navigate twice when the viewport changes")

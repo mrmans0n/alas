@@ -7,6 +7,9 @@ final class CodeEditorScrollView: MinimapScrollView {
     private var observers: [AnyCancellable] = []
     private var pendingDrawing: DispatchWorkItem?
     private var minimapTheme: Theme?
+    private var isUpdatingViewport = false
+    private var needsViewportUpdate = false
+    private var pendingViewportUpdate: DispatchWorkItem?
 
     override var minimapBackgroundMaterial: NSVisualEffectView.Material? { .contentBackground }
 
@@ -77,8 +80,43 @@ final class CodeEditorScrollView: MinimapScrollView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
+    /// Measuring the viewport forces text layout, and filling layout holes
+    /// resizes the document view — which re-posts the very frame and bounds
+    /// notifications that drive this method. Re-entering from there recurses
+    /// until the stack overflows, so a nested request is coalesced into a
+    /// bounded number of follow-up passes once the outer one unwinds.
     private func updateMinimapViewport() {
-        guard showsMinimap, let view = documentView as? CodeTextView else { return }
+        guard showsMinimap, documentView is CodeTextView else { return }
+        guard !isUpdatingViewport else {
+            needsViewportUpdate = true
+            return
+        }
+        pendingViewportUpdate?.cancel()
+        pendingViewportUpdate = nil
+        isUpdatingViewport = true
+        defer { isUpdatingViewport = false }
+        var passes = 0
+        repeat {
+            needsViewportUpdate = false
+            applyMinimapViewport()
+            passes += 1
+        } while needsViewportUpdate && passes < 3
+        // Layout that has not settled by the pass limit still owes the minimap
+        // an update. Hand it to the next runloop turn rather than dropping it,
+        // which keeps the viewport current without growing the stack.
+        guard needsViewportUpdate else { return }
+        needsViewportUpdate = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingViewportUpdate = nil
+            self.updateMinimapViewport()
+        }
+        pendingViewportUpdate = work
+        DispatchQueue.main.async(execute: work)
+    }
+
+    private func applyMinimapViewport() {
+        guard let view = documentView as? CodeTextView else { return }
         let first = view.sourceLinePosition(atViewY: contentView.bounds.minY)
         let last = view.sourceLinePosition(atViewY: contentView.bounds.maxY)
         let maximum = view.sourceLinePosition(atViewY: max(0, view.frame.height - contentView.bounds.height))
@@ -89,6 +127,9 @@ final class CodeEditorScrollView: MinimapScrollView {
     private func stopObserving() {
         pendingDrawing?.cancel()
         pendingDrawing = nil
+        pendingViewportUpdate?.cancel()
+        pendingViewportUpdate = nil
+        needsViewportUpdate = false
         observers.removeAll()
         observedStorage = nil
     }
