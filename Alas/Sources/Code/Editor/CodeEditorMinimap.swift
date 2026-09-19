@@ -9,6 +9,7 @@ final class CodeEditorScrollView: MinimapScrollView {
     private var minimapTheme: Theme?
     private var isUpdatingViewport = false
     private var needsViewportUpdate = false
+    private var pendingViewportUpdate: DispatchWorkItem?
 
     override var minimapBackgroundMaterial: NSVisualEffectView.Material? { .contentBackground }
 
@@ -90,17 +91,28 @@ final class CodeEditorScrollView: MinimapScrollView {
             needsViewportUpdate = true
             return
         }
+        pendingViewportUpdate?.cancel()
+        pendingViewportUpdate = nil
         isUpdatingViewport = true
-        defer {
-            isUpdatingViewport = false
-            needsViewportUpdate = false
-        }
+        defer { isUpdatingViewport = false }
         var passes = 0
         repeat {
             needsViewportUpdate = false
             applyMinimapViewport()
             passes += 1
         } while needsViewportUpdate && passes < 3
+        // Layout that has not settled by the pass limit still owes the minimap
+        // an update. Hand it to the next runloop turn rather than dropping it,
+        // which keeps the viewport current without growing the stack.
+        guard needsViewportUpdate else { return }
+        needsViewportUpdate = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingViewportUpdate = nil
+            self.updateMinimapViewport()
+        }
+        pendingViewportUpdate = work
+        DispatchQueue.main.async(execute: work)
     }
 
     private func applyMinimapViewport() {
@@ -115,6 +127,9 @@ final class CodeEditorScrollView: MinimapScrollView {
     private func stopObserving() {
         pendingDrawing?.cancel()
         pendingDrawing = nil
+        pendingViewportUpdate?.cancel()
+        pendingViewportUpdate = nil
+        needsViewportUpdate = false
         observers.removeAll()
         observedStorage = nil
     }

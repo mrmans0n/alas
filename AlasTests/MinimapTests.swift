@@ -29,9 +29,11 @@ private final class MinimapResizingLayoutManager: NSLayoutManager {
     var remainingResizes = 40
     private var depth = 0
     private(set) var maximumDepth = 0
+    private(set) var measurements = 0
 
     override func glyphIndex(for point: NSPoint, in container: NSTextContainer) -> Int {
         depth += 1
+        measurements += 1
         maximumDepth = max(maximumDepth, depth)
         defer { depth -= 1 }
         if remainingResizes > 0, let resizedView {
@@ -86,7 +88,7 @@ struct MinimapTests {
     }
 
     @Test("A document resize during a viewport measurement does not recurse")
-    @MainActor func viewportReentrancy() throws {
+    @MainActor func viewportReentrancy() async throws {
         let layout = MinimapResizingLayoutManager()
         let container = NSTextContainer(size: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
         layout.addTextContainer(container)
@@ -101,9 +103,22 @@ struct MinimapTests {
 
         scroll.configureMinimap(shown: true, theme: try ThemeStore().current)
 
+        // The nested notifications are absorbed instead of recursing, and the
+        // synchronous work stays bounded rather than draining every resize.
         #expect(layout.maximumDepth > 0, "The viewport update never measured a glyph position")
         #expect(layout.maximumDepth <= 2, "Viewport updates re-entered \(layout.maximumDepth) levels deep")
+        let synchronousMeasurements = layout.measurements
         #expect(layout.remainingResizes > 0, "The document view kept resizing without settling")
+
+        // An update still outstanding at the pass limit is rescheduled, not
+        // dropped, and the chain settles once layout stops resizing.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(layout.measurements > synchronousMeasurements, "The pending viewport update was discarded")
+        #expect(layout.maximumDepth <= 2, "Rescheduled updates re-entered \(layout.maximumDepth) levels deep")
+        let settled = layout.measurements
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(layout.measurements == settled, "Viewport updates kept rescheduling after layout settled")
+
         scroll.configureMinimap(shown: false, theme: try ThemeStore().current)
     }
 
