@@ -1298,15 +1298,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, topFraction / max(0.000_001, 1 - proportion)))
         }
 
+        /// A whole-number global index representing whichever message
+        /// currently sits at the viewport's top edge. Delegates to the
+        /// span-aware `globalMessagePosition(at:)` and floors it, so
+        /// scrolling deep into an expanded tool-call group (whose row
+        /// stands for many messages) resolves to the member actually under
+        /// the viewport instead of always the group's first member —
+        /// `settleUserScroll`'s window recenter would otherwise trim away
+        /// the later members currently on screen and jump the reader back
+        /// to the group's start.
         private func currentTopGlobalMessageIndex() -> Int? {
-            guard let host, let scroller,
-                  let anchorId = tiling.nearestNonSyntheticRowId(
-                      to: scroller.scrollY,
-                      syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
-                  )
-            else { return nil }
-            guard let localIndex = currentRowLookup(host: host).transcriptIndex(for: anchorId) else { return nil }
-            return host.transcript.globalIndex(forLocalIndex: localIndex)
+            guard let scroller else { return nil }
+            return globalMessagePosition(at: scroller.scrollY).map { Int($0) }
         }
 
         /// Memoized id → transcript-index mapping for the rows currently
@@ -1527,6 +1530,29 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 to: scroller.scrollY,
                 syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
             )
+        }
+
+        /// Seeds tool-call bundle expand state before the first `attach`/
+        /// `update`, so a test can exercise an expanded (and therefore
+        /// tall) group without simulating a real click on its disclosure
+        /// button.
+        func setToolCallGroupExpandedForTesting(_ expanded: Bool, memberStableIds: [String]) {
+            toolCallGroupExpansionSeeds.setExpanded(expanded, members: memberStableIds)
+        }
+
+        /// Invokes the debounce-timer-driven window-compaction path
+        /// synchronously, so a test doesn't have to wait out a real
+        /// `scrollSettleTimer` interval.
+        func settleUserScrollForTesting() {
+            settleUserScroll()
+        }
+
+        /// A mounted row's exact on-screen frame, so a test can compute a
+        /// precise scroll target inside it (e.g. a fraction through a
+        /// folded tool-call group's real measured height) instead of
+        /// guessing from assumed row sizes.
+        func rowFrameForTesting(id: String) -> (minY: CGFloat, height: CGFloat)? {
+            tiling.row(withId: id).map { ($0.minY, $0.height) }
         }
         #endif
     }

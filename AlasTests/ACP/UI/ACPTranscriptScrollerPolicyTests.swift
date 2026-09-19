@@ -936,6 +936,70 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         }
     }
 
+    /// Regression test for the Codex finding: `settleUserScroll`'s window
+    /// compaction used to resolve the viewport's top row via the group's
+    /// first member only, so stopping deep inside a tall expanded bundle
+    /// recentered the render window around a much earlier index — trimming
+    /// away the later members currently on screen and jumping the reader
+    /// back to the bundle's start.
+    @Test("settling deep inside an expanded tool-call group keeps the visible member in the window")
+    func settlingInsideExpandedGroupKeepsVisibleMemberInWindow() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let leading = messages(10)
+        let toolCalls: [ACPMessage] = (0..<150).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)", title: "Read file \(index)", kind: "read", status: "completed"
+            ))
+        }
+        let trailing = messages(40)
+        session.replaceTranscriptMessages(leading + toolCalls + trailing)
+        // A window spanning the whole transcript unconditionally satisfies
+        // `settleUserScroll`'s "window has grown past maxVisibleRows" gate,
+        // regardless of how a real fling would have grown it. The total
+        // message count must comfortably exceed `maxVisibleRows` by more
+        // than `tailWindow`, or `setVisibleWindow(around:)`'s own
+        // `latestHead` cap (`messages.count - maxVisibleRows`) clamps
+        // `visibleHead` near 0 regardless of the target index, making the
+        // old bug and the fix indistinguishable.
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = leading.count + toolCalls.count + trailing.count
+        session.followsTranscriptTail = false
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.setToolCallGroupExpandedForTesting(true, memberStableIds: toolCalls.map(\.stableId))
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        // Expanded, the 150-member bundle spans many viewports. Scroll to
+        // 70% through the GROUP ROW'S OWN measured height specifically
+        // (not 70% of the whole document, which could land in the small
+        // leading/trailing messages instead) — comfortably past
+        // `ACPTranscript.tailWindow` members into the group — before
+        // settling.
+        let groupId = "tcg-" + toolCalls[0].stableId
+        let groupFrame = try #require(coordinator.rowFrameForTesting(id: groupId))
+        #expect(groupFrame.height > scroller.viewportHeight * 3)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: groupFrame.minY + groupFrame.height * 0.7))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(coordinator.topVisibleMessageIdForTesting == groupId)
+
+        coordinator.settleUserScrollForTesting()
+
+        // The group's first member sits at local index 10 (after the 10
+        // leading messages), which is inside `ACPTranscript.tailWindow`
+        // (30) of 0 either way — the old bug (always reporting the group's
+        // first member) and the fix would both clamp `visibleHead` to 0 for
+        // a shallow scroll. Scrolling deep enough that the actually-visible
+        // member's index comfortably exceeds `tailWindow` makes the two
+        // behaviors diverge: the old bug still recenters near the group's
+        // start (clamping to 0), the fix recenters near the member under
+        // the viewport.
+        #expect(session.transcript.visibleHead > ACPTranscript.tailWindow)
+        #expect(session.transcript.visibleHead < leading.count + toolCalls.count)
+    }
+
     private func attach(
         session: ACPSession,
         size: NSSize = NSSize(width: 600, height: 400)
