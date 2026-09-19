@@ -52,6 +52,35 @@ precache list, and `?v=` bumps; server behaviour is covered by the suites in
   origins; only a Mac running this change can be added to a hub, because
   adding one requires the CORS and Origin handling below.
 
+## Feature Flag
+
+The user-visible hub UI ships behind an experiment toggle, following the
+`workspacesEnabled` and `needsAttentionEnabled` precedent:
+
+- `AppConfig.Remote.hubEnabled: Bool`, default `false`.
+- A **Remote hub** row in Settings, Advanced, Experimental: "Lets the remote
+  web client pair with several Macs and switch between them."
+- The Mac reports the value in `hello` as `hubEnabled`.
+
+Client behaviour keyed on the **active server's** hello:
+
+- `hubEnabled` absent or `false`: the status chip, disabled Settings tab, and
+  gates behave exactly as today. The registry migration still runs and the
+  link manager still owns the single active link, so there is one code path,
+  but no idle links are created and no hub UI is rendered.
+- `hubEnabled: true`: the server chip, Servers section, add sheet, idle links,
+  and badges are enabled.
+
+Only the Mac used as the hub needs the toggle on. Macs being *added* need only
+the ungated server groundwork below (identity, hello, Origin policy, CORS,
+pairing link). The **Copy pairing link** button in the Remote pane is shown
+regardless, since it is harmless and useful for a hub on another Mac.
+
+Everything server-side in this document ships ungated because it is additive,
+and the Origin policy accepts allowlisted hosts so existing reverse-proxy
+setups keep working. Once the hub has been exercised across the author's
+Macs, the flag is removed and the behaviour becomes the default.
+
 ## Server Identity and Protocol Version
 
 `AppConfig.Remote` gains two fields:
@@ -65,7 +94,7 @@ precache list, and `?v=` bumps; server behaviour is covered by the suites in
 server-to-client message:
 
 ```json
-{ "type": "hello", "protocolVersion": 1, "serverId": "…", "name": "…" }
+{ "type": "hello", "protocolVersion": 1, "serverId": "…", "name": "…", "hubEnabled": true }
 ```
 
 `RemoteConnection` sends `hello` as the first frame after a successful upgrade,
@@ -126,7 +155,11 @@ When a request carries `Origin`, it is allowed only if the scheme is `http` or
 - the CGNAT range Tailscale uses (`100.64/10`) or the tailnet IPv6 prefix;
 - IPv6 unique-local (`fc00::/7`) or link-local (`fe80::/10`, `169.254/16`);
 - a name ending in `.local`;
-- an entry in the new `AppConfig.Remote.allowedOrigins: [String]` list.
+- a host already accepted by the `RemoteAccessPolicy` Host allowlist, which
+  includes `AppConfig.Remote.allowedHosts`, so an existing reverse-proxy
+  hostname keeps working without new configuration;
+- an entry in the new `AppConfig.Remote.allowedOrigins: [String]` list, for
+  origins that are not also valid Host values (phase 2's hosted hub).
 
 The classifier reuses `RemoteNetwork`'s address classification. Requests with
 no `Origin` (non-browser clients, same-origin navigations) pass as today. The
@@ -321,8 +354,8 @@ two new scripts. The manifest is unchanged.
 **Swift (`AlasTests/Remote`):**
 
 - `RemoteOriginPolicyTests`: each allowed class, public IP and public DNS
-  rejected, `allowedOrigins` honoured, absent Origin allowed, malformed
-  Origin rejected.
+  rejected, Host-allowlisted names accepted, `allowedOrigins` honoured, absent
+  Origin allowed, malformed Origin rejected.
 - `RemoteHTTPResponderTests` (new): CORS headers on `/pair` and `/health`
   for an allowed origin, absent for a disallowed one, `OPTIONS /pair`
   returns 204 with the method and header allowances, `403` on rejected
@@ -333,7 +366,10 @@ two new scripts. The manifest is unchanged.
 - `RemotePairingLinkTests`: link built from ordered addresses, encoding, the
   base origin always present.
 - `RemoteConfigTests` (extend): `serverId` generated once and stable across
-  reloads; `displayName` default and override.
+  reloads; `displayName` default and override; `hubEnabled` defaults to
+  `false` and round-trips.
+- `RemoteServerIntegrationTests` (extend): `hello` carries `hubEnabled`
+  matching the config.
 - `RemoteWebAssetTests` (extend): new scripts in tag order and precache list.
 
 **Node (`scripts/tests/remote-web-hub/`):**
@@ -341,6 +377,9 @@ two new scripts. The manifest is unchanged.
 - Registry: legacy token migration, link parsing for all three input shapes,
   add and merge by `serverId` and by origin overlap, forget with active
   fallback, launch selection, attention and running aggregation.
+- Flag: with `hubEnabled` false in the active hello, no idle links are
+  created and the hub UI hooks are not invoked; flipping to true on a later
+  hello enables them.
 - Links: with an injected socket factory, origin fallback order and timeout,
   `lastOrigin` promotion, hello handling and legacy detection, idle polling
   gated on visibility, unauthorized versus offline via the injected fetch,
