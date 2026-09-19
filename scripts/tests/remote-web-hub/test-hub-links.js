@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 require("../../../Alas/Resources/RemoteWeb/hub-registry.js");
 require("../../../Alas/Resources/RemoteWeb/hub-links.js");
 
-const { createLinks, HANDSHAKE_TIMEOUT_MS, IDLE_POLL_MS, INITIAL_RECONNECT_MS, MAX_RECONNECT_MS } = globalThis.RemoteHubLinks;
+const { createLinks, HANDSHAKE_TIMEOUT_MS, PROBE_TIMEOUT_MS, IDLE_POLL_MS, INITIAL_RECONNECT_MS, MAX_RECONNECT_MS } = globalThis.RemoteHubLinks;
 
 function makeClock() {
   let now = 0;
@@ -191,7 +191,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 
   // --- blocked (origin rejected) vs unauthorized vs offline ------------------
   {
-    // Regression (Codex review, PR #1337): probe() used to collapse any
+    // Regression: probe() used to collapse any
     // non-2xx /health response — including a 403 origin rejection — into
     // "unreachable", so a Mac that was actually online but rejecting this
     // hub's address looked identical to one that was simply offline and got
@@ -212,7 +212,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 
   // --- health probe ignores a coincidental local Alas instance ---------------
   {
-    // Regression (Codex review, PR #1337): every server advertises
+    // Regression: every server advertises
     // "localhost" alongside its real addresses, so probing it for
     // revocation detection could actually reach a *different*, unrelated
     // Alas instance running on the browser's own machine — falsely
@@ -241,7 +241,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 
   // --- health probe verifies identity once it's known ------------------------
   {
-    // Regression (Codex review, PR #1337): even a non-loopback origin can be
+    // Regression: even a non-loopback origin can be
     // reused (DHCP, a reassigned reverse proxy) and answer for a completely
     // different Mac. Once a link knows its serverId, a 2xx /health response
     // must match it before establishing revocation.
@@ -271,8 +271,12 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(links.get("b").state, "unauthorized", "a healthy response from the same server still establishes revocation");
   }
   {
-    // A legacy response with no serverId at all still falls back to
-    // trusting the bare 2xx — there's no better signal for an older Mac.
+    // Regression: an identity-free 2xx (no serverId in
+    // the response body — an older Alas version, or an unrelated Mac that
+    // happens to sit at a reused address) must not establish revocation
+    // once this link already knows which server it expects. It falls back
+    // to "offline" (keeps retrying) rather than "unauthorized" (permanently
+    // stops), since identity could not actually be confirmed.
     const { sockets, links } = harness({ fetchImpl: () => Promise.resolve({ ok: true, status: 200 }) });
     links.add(serverB);
     links.setActive("b");
@@ -280,7 +284,42 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     links.get("b").serverId = "srv-B";
     sockets[0].drop();
     await settle();
-    assert.equal(links.get("b").state, "unauthorized", "an identity-free 2xx still falls back to the old trust-any-2xx behavior");
+    assert.equal(links.get("b").state, "offline", "an identity-free 2xx cannot confirm the expected server once its identity is known");
+  }
+  {
+    // Without a known serverId yet (this link has never received a hello),
+    // a bare 2xx is still the only signal available and is trusted, exactly
+    // as before this link ever learned an identity to check against.
+    const { sockets, links } = harness({ fetchImpl: () => Promise.resolve({ ok: true, status: 200 }) });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    sockets[0].drop();
+    await settle();
+    assert.equal(links.get("b").state, "unauthorized", "a bare 2xx is still trusted before any identity is known");
+  }
+
+  // --- probe aborts its fetch on timeout --------------------------------------
+  {
+    // Regression: a probe whose fetch never resolves used
+    // to leave the underlying request running forever once the timeout
+    // gave up on it — every retry cycle against a blackholed address added
+    // one more outstanding request.
+    let capturedSignal = null;
+    const { clock, sockets, links } = harness({
+      fetchImpl: (url, init) => {
+        capturedSignal = init.signal;
+        return new Promise(() => {});
+      },
+    });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    sockets[0].drop();
+    await settle();
+    assert.equal(capturedSignal.aborted, false, "not aborted before the probe timeout fires");
+    await clock.tick(PROBE_TIMEOUT_MS);
+    assert.equal(capturedSignal.aborted, true, "the probe timeout aborts the underlying fetch");
   }
 
   // --- visibility ------------------------------------------------------------
@@ -304,7 +343,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 
   // --- visibility while the hub is disabled -----------------------------
   {
-    // Regression (Codex review, PR #1337): setVisible(true) used to
+    // Regression: setVisible(true) used to
     // reconnect every idle link unconditionally, so a visibility cycle
     // resurrected idle sockets that disableIdle() had just suspended.
     const { sockets, links } = harness();
@@ -330,7 +369,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 
   // --- update() respects idleAllowed for non-active links --------------------
   {
-    // Regression (Codex review, PR #1337): app.js's handleLinkHello calls
+    // Regression: app.js's handleLinkHello calls
     // disableIdle() and then, in its duplicate-merge branch, links.update()
     // on the surviving idle link — which used to reconnect unconditionally,
     // resurrecting the socket disableIdle() had just suspended.
@@ -414,6 +453,36 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
   {
     const { links } = harness({ fetchImpl: () => Promise.resolve({ ok: false, status: 403 }) });
     await assert.rejects(links.pair(["http://10.0.0.1:8765"], "CODE", "phone"), (err) => err.reason === "origin");
+  }
+  {
+    // Regression: every pairing link includes "localhost"
+    // alongside the target Mac's real addresses. If it happens to answer
+    // from a completely unrelated local Alas instance that has never heard
+    // of this code, that instance's 401 must not abandon the whole attempt
+    // before the real target's own address is even tried.
+    const { links } = harness({
+      fetchImpl: (url) => {
+        if (url.startsWith("http://localhost")) return Promise.resolve({ ok: false, status: 401 });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "fresh" }) });
+      },
+    });
+    const result = await links.pair(["http://localhost:8765", "http://10.0.0.1:8765"], "CODE", "phone");
+    assert.deepEqual(result, { origin: "http://10.0.0.1:8765", token: "fresh" }, "an unrelated origin's 401 must not stop the real target from being tried");
+  }
+  {
+    // If every origin genuinely rejects the code, the first specific error
+    // (not a generic network failure) is still what gets reported.
+    const { links } = harness({
+      fetchImpl: (url) => {
+        if (url.startsWith("http://localhost")) return Promise.resolve({ ok: false, status: 401 });
+        return Promise.resolve({ ok: false, status: 403 });
+      },
+    });
+    await assert.rejects(
+      links.pair(["http://localhost:8765", "http://10.0.0.1:8765"], "CODE", "phone"),
+      (err) => err.reason === "expired",
+      "the first genuine error encountered wins when every origin fails"
+    );
   }
   {
     const { links } = harness();

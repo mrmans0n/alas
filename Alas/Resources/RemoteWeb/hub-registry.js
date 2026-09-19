@@ -165,7 +165,12 @@ function save(storage, doc) {
   storage.setItem(HUB_STORAGE_KEY, JSON.stringify(doc));
 }
 
-// Records a successful pairing. A server that already shares any of the
+// Records a successful pairing. `targetId`, when given, names an existing
+// entry the caller explicitly chose to re-pair (the "Re-pair" flow for an
+// unauthorized/blocked server) — it's always updated in place, since the
+// fresh origins may no longer overlap the stale ones at all (the address
+// changed) and there may be no serverId yet for applyHello to reconcile
+// with later. Without a target, a server that already shares any of the
 // origins is re-paired in place (new token, merged origin list, new origins
 // first); otherwise a new entry is appended and becomes active when nothing
 // was. Origin overlap only re-pairs an entry that has never confirmed its
@@ -174,12 +179,13 @@ function save(storage, doc) {
 // that's already been identified. Once identity is known, applyHello's own
 // serverId-based merge is the authority: a fresh entry that turns out to
 // share a confirmed Mac's serverId gets reconciled there instead.
-function upsertPaired(doc, { origins, token, now }) {
+function upsertPaired(doc, { origins, token, now, targetId }) {
   const normalized = uniqueOrigins(origins);
+  const target = targetId ? doc.servers.find((s) => s.id === targetId) : null;
   const matchable = normalized.filter((o) => !isLoopbackOrigin(o));
-  const existing = matchable.length
+  const existing = target || (matchable.length
     ? doc.servers.find((s) => !s.serverId && s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))
-    : undefined;
+    : undefined);
   if (existing) {
     existing.token = token;
     existing.origins = uniqueOrigins([...normalized, ...existing.origins]);

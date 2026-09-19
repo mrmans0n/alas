@@ -296,21 +296,22 @@ function createLinks(deps, hooks) {
     const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;
     const candidates = origins.filter((o) => !isLoopback(o));
     const toProbe = candidates.length ? candidates : origins;
-    return Promise.all(toProbe.map(probe)).then((results) => ({
+    return Promise.all(toProbe.map(probe)).then((results) => {
       // A non-loopback address can *also* be reused (DHCP, a reassigned
-      // reverse proxy) and answer for a completely different Mac. When we
-      // already know this link's serverId and the response carries one too,
-      // trust a 2xx only if they match; an identity-free response (a
-      // legacy Mac's /health, or a link whose serverId isn't known yet)
-      // falls back to trusting the bare status, since it's the only signal
-      // available in that case.
-      reachable: results.some((r) => {
-        if (!r || r.status < 200 || r.status >= 300) return false;
-        if (expectedServerId && r.serverId) return r.serverId === expectedServerId;
-        return true;
-      }),
-      blocked: results.some((r) => r && r.status === 403),
-    }));
+      // reverse proxy) and answer for a completely different — possibly
+      // older, pre-identity — Alas instance. Once this link has a known
+      // serverId, only an explicit match may establish revocation; an
+      // identity-free 2xx is no longer proof, since we can no longer tell
+      // "a legacy version of the actual paired Mac" apart from "a different
+      // Mac that happens to sit at a reused address." Without a known
+      // serverId yet (this link has never received its first hello), a bare
+      // 2xx is the only signal available, so it's still trusted.
+      const confirmsIdentity = (r) => !expectedServerId || r.serverId === expectedServerId;
+      return {
+        reachable: results.some((r) => r && r.status >= 200 && r.status < 300 && confirmsIdentity(r)),
+        blocked: results.some((r) => r && r.status === 403),
+      };
+    });
   }
 
   // Resolves { status, serverId } from the /health response, or null on
@@ -319,10 +320,14 @@ function createLinks(deps, hooks) {
   function probe(origin) {
     return new Promise((resolve) => {
       let done = false;
+      const controller = new AbortController();
+      // Every retry cycle probes anew; without aborting the underlying
+      // fetch, a blackholed address would leave one more outstanding HTTP
+      // request pending forever per cycle.
       const finish = (value) => { if (!done) { done = true; deps.clearTimeout(timer); resolve(value); } };
-      const timer = deps.setTimeout(() => finish(null), PROBE_TIMEOUT_MS);
+      const timer = deps.setTimeout(() => { controller.abort(); finish(null); }, PROBE_TIMEOUT_MS);
       Promise.resolve()
-        .then(() => deps.fetch(origin + "/health", { method: "GET" }))
+        .then(() => deps.fetch(origin + "/health", { method: "GET", signal: controller.signal }))
         .then(
           (res) => {
             if (!res) { finish(null); return; }
@@ -436,23 +441,29 @@ function createLinks(deps, hooks) {
   // single-use code after the client has already moved on to the next
   // origin, which then gets a legitimate-looking but misleading 401.
   function pair(origins, code, deviceName) {
-    const tryAt = (index) => {
-      if (index >= origins.length) return Promise.reject(pairError("net"));
+    // Every pairing link includes "localhost" alongside the target Mac's
+    // real addresses, so it can answer from a completely unrelated local
+    // Alas instance that has never heard of this code — a 401 from there
+    // isn't proof the code is expired, it's a false read from the wrong
+    // server. Keep trying every origin and only report the first genuine
+    // (non-network) error if none of them actually pairs.
+    const tryAt = (index, bestError) => {
+      if (index >= origins.length) return Promise.reject(bestError || pairError("net"));
       const origin = origins[index];
       const controller = new AbortController();
       const request = deps.fetch(origin + "/pair", { method: "POST", body: JSON.stringify({ code, deviceName }), signal: controller.signal });
       return withTimeout(request, PAIR_TIMEOUT_MS, () => controller.abort())
         .then(
           (res) => {
-            if (res.status === 401) throw pairError("expired");
-            if (res.status === 403) throw pairError("origin");
-            if (!res.ok) return tryAt(index + 1);
+            if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));
+            if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));
+            if (!res.ok) return tryAt(index + 1, bestError);
             return Promise.resolve(res.json()).then((body) => ({ origin, token: body.token }));
           },
-          () => tryAt(index + 1)
+          () => tryAt(index + 1, bestError)
         );
     };
-    return tryAt(0);
+    return tryAt(0, null);
   }
 
   return { add, remove, update, get, all, activeLink, setActive, sendActive, connect, connectAll, suspendIdle, disableIdle, setVisible, retry, pair };
@@ -463,6 +474,7 @@ globalThis.RemoteHubLinks = {
   wsUrl,
   HANDSHAKE_TIMEOUT_MS,
   PAIR_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
   IDLE_POLL_MS,
   INITIAL_RECONNECT_MS,
   MAX_RECONNECT_MS,

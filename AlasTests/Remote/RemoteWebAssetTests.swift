@@ -1162,7 +1162,7 @@ struct RemoteWebAssetTests {
         #expect(body.contains("if (enabled) links.connectAll(); else links.disableIdle();"))
     }
 
-    // Regression (Codex review, PR #1337): forgetServer's non-active branch
+    // Regression: forgetServer's non-active branch
     // used to only re-render, never recomputing the aggregate hub flag — so
     // forgetting the one server that had ever reported hubEnabled, while it
     // was inactive, left the hub UI stuck on with no server authorizing it.
@@ -1174,7 +1174,7 @@ struct RemoteWebAssetTests {
         #expect(!body.contains("if (!wasActive) { refreshHubViews(); return; }"))
     }
 
-    // Regression (Codex review, PR #1337): a disallowed cross-origin /pair
+    // Regression: a disallowed cross-origin /pair
     // request answered with a bare 403 — no Access-Control-Allow-Origin —
     // so the browser surfaced an opaque CORS network error instead of a
     // readable 403, and hub-links.js's pair() could never distinguish
@@ -1188,7 +1188,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"res.status === 403"#))
     }
 
-    // Regression (Codex review, PR #1337): setVisible() used to reconnect
+    // Regression: setVisible() used to reconnect
     // every idle link on a visibility change regardless of whether the hub
     // was actually enabled, so backgrounding and foregrounding the page
     // while the flag was off resurrected the idle sockets disableIdle()
@@ -1201,7 +1201,7 @@ struct RemoteWebAssetTests {
         #expect(setVisible.contains(#"if (link.role !== "active" && !idleAllowed) continue;"#))
     }
 
-    // Regression (Codex review, PR #1337): adopt() promoted a fallback
+    // Regression: adopt() promoted a fallback
     // origin only in memory — the registry's own lastOrigin was never
     // updated, so a page reload retried the dead remembered origin first
     // again and paid its full handshake timeout before falling through.
@@ -1215,7 +1215,7 @@ struct RemoteWebAssetTests {
         #expect(appJS.contains("RemoteHubRegistry.setLastOrigin(hub, link.id, origin);"))
     }
 
-    // Regression (Codex review, PR #1337): when a hello reveals that a link
+    // Regression: when a hello reveals that a link
     // duplicates an already-paired server, handleLinkHello merged the two
     // registry entries and returned before recomputing the aggregate hub
     // flag — so a surviving entry whose fresh hello reported hubEnabled:
@@ -1229,7 +1229,7 @@ struct RemoteWebAssetTests {
         #expect(flagIndex.lowerBound < mergeIndex.lowerBound, "the aggregate flag must be recomputed before the merge branch's early return")
     }
 
-    // Regression (Codex review, PR #1337): every pairing link advertises
+    // Regression: every pairing link advertises
     // "localhost" alongside a server's real addresses, so two different Macs
     // used to collide on that shared origin and pairing the second silently
     // overwrote the first's registry entry. See hub-registry.js's
@@ -1238,22 +1238,22 @@ struct RemoteWebAssetTests {
     @Test func pairingDedupIgnoresTheSharedLocalhostOrigin() throws {
         let js = try asset("hub-registry.js")
         #expect(js.contains("function isLoopbackOrigin(origin)"))
-        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(500) })
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(body.contains("const matchable = normalized.filter((o) => !isLoopbackOrigin(o));"))
     }
 
-    // Regression (Codex review, PR #1337): a non-loopback origin can also be
+    // Regression: a non-loopback origin can also be
     // reused (a DHCP-reassigned LAN address, a shared custom hostname), so
     // origin overlap must stop being trusted once an entry has confirmed its
     // identity via hello. See test-hub-registry.js for the node-executed
     // reconciliation coverage.
     @Test func pairingDedupOnlyMatchesServersNotYetIdentifiedByHello() throws {
         let js = try asset("hub-registry.js")
-        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(500) })
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(body.contains("doc.servers.find((s) => !s.serverId && s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))"))
     }
 
-    // Regression (Codex review, PR #1337): probe() collapsed every non-2xx
+    // Regression: probe() collapsed every non-2xx
     // /health response — including a 403 origin rejection — into
     // "unreachable," so a Mac that was online but rejecting this address
     // looked identical to an offline one and retried forever instead of
@@ -1274,7 +1274,7 @@ struct RemoteWebAssetTests {
         #expect(switchServer.contains(#"if (link.state === "blocked") { showOriginBlockedGate(link); return; }"#))
     }
 
-    // Regression (Codex review, PR #1337): handleLinkHello's duplicate-merge
+    // Regression: handleLinkHello's duplicate-merge
     // branch calls links.update() on the surviving idle link right after
     // disableIdle() may have just suspended it — update() used to reconnect
     // unconditionally, resurrecting that socket. See the node-executed
@@ -1287,7 +1287,7 @@ struct RemoteWebAssetTests {
         #expect(!update.contains("    connect(link.id);\n    return link;"), "update() must not reconnect unconditionally")
     }
 
-    // Regression (Codex review, PR #1337): every server advertises
+    // Regression: every server advertises
     // "localhost" alongside its real addresses, so the revocation-detection
     // health probe could reach a coincidental, unrelated Alas instance on
     // the browser's own machine instead of the actual paired Mac — falsely
@@ -1306,7 +1306,7 @@ struct RemoteWebAssetTests {
         #expect(probeAny.contains("const toProbe = candidates.length ? candidates : origins;"))
     }
 
-    // Regression (Codex review, PR #1337): even a non-loopback origin can be
+    // Regression: even a non-loopback origin can be
     // reused (DHCP, a reassigned reverse proxy) and answer for a completely
     // different Mac, so a bare 2xx isn't proof of talking to the paired
     // server. /health now includes the server's own serverId (see
@@ -1318,10 +1318,68 @@ struct RemoteWebAssetTests {
         let links = try asset("hub-links.js")
         #expect(links.contains("serverId: server.serverId || null,"), "links must track the server's identity once known")
         #expect(links.contains("function rememberServerId(link, msg) {"))
-        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(1800) })
-        #expect(probeAny.contains("if (expectedServerId && r.serverId) return r.serverId === expectedServerId;"))
-        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(900) })
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(2100) })
+        #expect(probeAny.contains("const confirmsIdentity = (r) => !expectedServerId || r.serverId === expectedServerId;"))
+        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(1300) })
         #expect(probe.contains("res.json().then("))
         #expect(probe.contains(#"typeof res.json !== "function""#))
+    }
+
+    // Regression: an identity-free 2xx (no serverId at all in
+    // the response body) used to still count as proof once a link already
+    // knew its expected identity, even though that response could be from a
+    // different — possibly older — Alas instance sitting at a reused
+    // address. Only an explicit serverId match may now make a probe result
+    // terminal once identity is known. See test-hub-links.js's "health
+    // probe verifies identity once it's known" coverage for the runtime
+    // behavior.
+    @Test func identityFreeResponsesCannotConfirmAKnownExpectedServer() throws {
+        let links = try asset("hub-links.js")
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(2100) })
+        #expect(!probeAny.contains("return true;"), "reachable must not have an unconditional identity-free fallback")
+    }
+
+    // Regression: a probe whose fetch never resolved left the
+    // underlying request running after the timeout gave up on it —
+    // outstanding requests against a blackholed address accumulated every
+    // retry cycle. probe() now aborts it, the same way pair() already does.
+    @Test func probeAbortsItsFetchOnTimeout() throws {
+        let links = try asset("hub-links.js")
+        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(1300) })
+        #expect(probe.contains("const controller = new AbortController();"))
+        #expect(probe.contains("controller.abort(); finish(null);"))
+        #expect(probe.contains("signal: controller.signal"))
+    }
+
+    // Regression: opening the "Re-pair" sheet for a specific
+    // unauthorized/blocked server whose address had changed entirely used
+    // to create a second registry row instead of updating the one the user
+    // selected, since the fresh origins no longer overlapped the stale
+    // ones. addServerTarget is now threaded through to upsertPaired so an
+    // explicit re-pair always updates that exact entry.
+    @Test func rePairingASelectedServerAlwaysUpdatesThatExactEntry() throws {
+        let registry = try asset("hub-registry.js")
+        #expect(registry.contains("function upsertPaired(doc, { origins, token, now, targetId }) {"))
+        let upsertPaired = try #require(registry.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { registry[$0.lowerBound...].prefix(700) })
+        #expect(upsertPaired.contains("const target = targetId ? doc.servers.find((s) => s.id === targetId) : null;"))
+        #expect(upsertPaired.contains("const existing = target ||"))
+
+        let app = try asset("app.js")
+        #expect(app.contains("targetId: options && options.targetId"))
+        #expect(app.contains("targetId: addServerTarget"))
+    }
+
+    // Regression: every pairing link includes "localhost"
+    // alongside the target Mac's real addresses. A 401 from a completely
+    // unrelated local Alas instance that has never heard of this pairing
+    // code used to abandon the whole attempt before the real target's own
+    // address was even tried.
+    @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(1600) })
+        #expect(pair.contains("const tryAt = (index, bestError) => {"))
+        #expect(pair.contains(#"if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));"#))
+        #expect(pair.contains(#"if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));"#))
+        #expect(pair.contains("return tryAt(0, null);"))
     }
 }

@@ -295,7 +295,7 @@ function send(obj) { links.sendActive(obj); }
 // manager's { reason } errors.
 async function pairAndAdd(input, options) {
   const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40));
-  const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now() });
+  const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
   RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
   RemoteHubRegistry.save(localStorage, hub);
   if (rePaired && links.get(server.id)) links.update(server); else links.add(server);
@@ -1431,7 +1431,7 @@ async function submitAddServer() {
   $("add-server-error").classList.add("hidden");
   const wasEmpty = !hub.activeId;
   try {
-    const server = await pairAndAdd(input, { activate: wasEmpty || addServerTarget === hub.activeId });
+    const server = await pairAndAdd(input, { activate: wasEmpty || addServerTarget === hub.activeId, targetId: addServerTarget });
     addServerBusy = false;
     hideAddServerSheet();
     if (wasEmpty) hideGate();

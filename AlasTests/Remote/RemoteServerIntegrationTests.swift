@@ -187,7 +187,7 @@ struct RemoteServerIntegrationTests {
         task.cancel(with: .goingAway, reason: nil)
     }
 
-    // Regression (Codex review, PR #1337): hubEnabled is only carried in the
+    // Regression: hubEnabled is only carried in the
     // hello sent at handshake, so toggling "Remote hub" used to leave every
     // already-connected browser stuck on the value it saw at connect time —
     // broadcastHello() must push a fresh hello without dropping the socket.
@@ -250,7 +250,7 @@ struct RemoteServerIntegrationTests {
         try await waitForConnectionClose(from: conn, on: queue)
     }
 
-    // Regression (Codex review, PR #1337): the origin-rejected 403 for
+    // Regression: the origin-rejected 403 for
     // `POST /pair` carried no CORS header, so a browser surfaced an opaque
     // CORS network error instead of a readable 403 — hub-links.js's pair()
     // could never see `res.status === 403` and tell "not allowed" apart

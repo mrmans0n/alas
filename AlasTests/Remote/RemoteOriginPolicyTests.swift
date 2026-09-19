@@ -52,7 +52,7 @@ struct RemoteOriginPolicyTests {
         #expect(RemoteOriginPolicy.parse("https://app.alas.build")?.port == nil)
     }
 
-    // Regression (Codex review, PR #1337): a browser's Origin header never
+    // Regression: a browser's Origin header never
     // carries a scheme-default port, so a configured allowlist entry typed
     // or pasted with one (a common copy-paste from an address bar) must
     // canonicalize the same way or it can never match a real request.

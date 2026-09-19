@@ -32,7 +32,7 @@ struct RemoteHTTPResponderTests {
         #expect(out.contains("Vary: Origin\r\n"))
     }
 
-    // Regression (Codex review, PR #1337): the health probe used to treat
+    // Regression: the health probe used to treat
     // any 2xx as proof of talking to the paired Mac, so a DHCP-reused
     // address or a coincidental unrelated Alas instance could falsely mark
     // a genuinely offline paired Mac as revoked. /health now includes the

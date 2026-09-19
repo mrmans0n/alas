@@ -123,7 +123,7 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
 }
 
 {
-  // Regression (Codex review, PR #1337): every pairing link includes
+  // Regression: every pairing link includes
   // "localhost" alongside the server's real addresses, so two different
   // Macs on the same default port used to collide on that shared origin —
   // pairing the second Mac silently overwrote the first's registry entry
@@ -143,7 +143,7 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
 }
 
 {
-  // Regression (Codex review, PR #1337): a non-loopback origin can also be
+  // Regression: a non-loopback origin can also be
   // reused — a DHCP-reassigned LAN address, or two Macs behind the same
   // custom hostname — so origin overlap must stop being trusted once an
   // entry has confirmed its identity via hello. Before that point (no
@@ -167,6 +167,23 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
   assert.equal(result.mergedFromId, second.server.id);
   assert.equal(result.server.id, first.server.id, "the older, already-identified entry survives the merge");
   assert.equal(doc.servers.length, 1);
+}
+
+{
+  // Regression: re-pairing a specific unauthorized/blocked
+  // entry (the "Re-pair" flow) whose address changed entirely no longer
+  // overlaps that entry's stored origins, so origin-based matching alone
+  // could never find it again — it would silently create a second row
+  // instead of updating the one the user picked. Passing targetId forces
+  // the explicitly selected entry to be updated regardless of overlap.
+  const doc = { version: 1, activeId: null, servers: [] };
+  const original = registry.upsertPaired(doc, { origins: ["http://10.0.0.1:8765"], token: "old", now: 1 }).server;
+  const result = registry.upsertPaired(doc, { origins: ["http://10.0.0.99:8765"], token: "new", now: 2, targetId: original.id });
+  assert.equal(result.rePaired, true, "an explicit target is always treated as a re-pair");
+  assert.equal(result.server.id, original.id);
+  assert.equal(result.server.token, "new");
+  assert.ok(result.server.origins.includes("http://10.0.0.99:8765"));
+  assert.equal(doc.servers.length, 1, "no duplicate row is created");
 }
 
 // --- applyHello --------------------------------------------------------------
