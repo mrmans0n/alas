@@ -179,10 +179,21 @@ final class RemoteConnection: @unchecked Sendable {
         // browser Origin; reject disallowed ones before any handler runs.
         if Self.isOriginGated(path: req.path, isUpgrade: isUpgrade),
            !originPolicy.allows(originHeader: req.headers["origin"]) {
+            // Echo the origin back on this rejection specifically — it grants
+            // no access (the request is still refused, nothing is served),
+            // it only lets the calling JS read the 403 instead of seeing an
+            // opaque CORS network error, which is what lets a hub's
+            // `POST /pair` distinguish "this origin isn't allowed" from
+            // "unreachable" and show the actionable allowlist message.
+            var extraHeaders: [(String, String)] = []
+            if let origin = req.headers["origin"], !origin.isEmpty {
+                extraHeaders = [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
+            }
             sendAndClose(RemoteHTTPResponder.http(
                 status: "403 Forbidden",
                 contentType: "text/plain",
-                body: Data("forbidden origin".utf8)
+                body: Data("forbidden origin".utf8),
+                extraHeaders: extraHeaders
             ))
             return
         }

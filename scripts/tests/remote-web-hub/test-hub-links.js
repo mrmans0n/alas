@@ -57,6 +57,7 @@ function harness({ fetchImpl } = {}) {
       onLegacy: (l) => events.push([l.id, "legacy"]),
       onMessage: (l, m) => events.push([l.id, "msg", m.type]),
       onCounts: (l) => events.push([l.id, "counts", l.counts.attention, l.counts.running]),
+      onOriginChange: (l, origin) => events.push([l.id, "originChange", origin]),
     }
   );
   return { clock, sockets, events, links };
@@ -68,7 +69,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
 (async () => {
   // --- origin order and fallback --------------------------------------------
   {
-    const { clock, sockets, links } = harness();
+    const { clock, sockets, events, links } = harness();
     links.add(serverA);
     links.setActive("a");
     links.connect("a");
@@ -85,6 +86,10 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     sockets[1].open();
     assert.equal(links.get("a").state, "online");
     assert.equal(links.get("a").lastOrigin, "http://10.0.0.1:8765", "the origin that answered is promoted");
+    assert.ok(
+      events.some((e) => e[0] === "a" && e[1] === "originChange" && e[2] === "http://10.0.0.1:8765"),
+      "promoting a fallback origin over the remembered one is reported for persistence"
+    );
   }
 
   // --- hello / legacy / active message routing ------------------------------
@@ -94,6 +99,10 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     links.setActive("a");
     links.connect("a");
     sockets[0].open();
+    assert.ok(
+      !events.some((e) => e[1] === "originChange"),
+      "connecting on the already-remembered lastOrigin is not reported as a change"
+    );
     sockets[0].message({ type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio" });
     assert.ok(events.some((e) => e[0] === "a" && e[1] === "hello" && e[2] === "srv-A"));
     assert.equal(links.get("a").legacy, false);
@@ -197,6 +206,32 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(sockets.length, 2, "no reconnects while hidden");
     links.setVisible(true);
     assert.equal(sockets.length, 3, "idle links reconnect when visible again");
+  }
+
+  // --- visibility while the hub is disabled -----------------------------
+  {
+    // Regression (Codex review, PR #1337): setVisible(true) used to
+    // reconnect every idle link unconditionally, so a visibility cycle
+    // resurrected idle sockets that disableIdle() had just suspended.
+    const { sockets, links } = harness();
+    links.add(serverA);
+    links.add(serverB);
+    links.setActive("a");
+    links.connectAll();
+    sockets[0].open();
+    sockets[1].open();
+    links.disableIdle();
+    assert.equal(links.get("a").state, "online", "the active link is unaffected by disableIdle()");
+    assert.equal(sockets[1].closed, true, "the idle link is torn down");
+    links.setVisible(false);
+    links.setVisible(true);
+    assert.equal(sockets.length, 2, "the idle link stays suspended across a visibility cycle while the hub is off");
+    assert.equal(links.get("b").state, "idle");
+    assert.equal(links.get("a").state, "online", "the active link keeps working the whole time");
+
+    // Re-enabling the hub resumes idle links immediately.
+    links.connectAll();
+    assert.equal(sockets.length, 3, "connectAll() reconnects the idle link once the hub is back on");
   }
 
   // --- role switching --------------------------------------------------------

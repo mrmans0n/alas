@@ -2,7 +2,7 @@
 // paired Mac) are DOM-free modules; app.js owns the UI and drives the ACTIVE
 // link through send()/handle() exactly as the single-server client did.
 const hub = RemoteHubRegistry.load(localStorage, location.origin, location.hostname, Date.now());
-let hubUIEnabled = false;   // mirrors the active server's `hello.hubEnabled`; gates every hub-only surface
+let hubUIEnabled = false;   // aggregate: true once ANY paired server has ever reported hello.hubEnabled
 const links = RemoteHubLinks.createLinks({
   createSocket: (url, protocols) => new WebSocket(url, protocols),
   fetch: (url, init) => fetch(url, init),
@@ -14,6 +14,10 @@ const links = RemoteHubLinks.createLinks({
   onLegacy: () => refreshHubViews(),
   onMessage: (link, msg) => handle(msg),
   onCounts: () => refreshHubViews(),
+  onOriginChange: (link, origin) => {
+    RemoteHubRegistry.setLastOrigin(hub, link.id, origin);
+    RemoteHubRegistry.save(localStorage, hub);
+  },
 });
 const $ = (id) => document.getElementById(id);
 function listen(id, event, handler) {
@@ -248,7 +252,7 @@ function applyHubFlag(enabled) {
   $("settings-placeholder").classList.toggle("hidden", enabled);
   $("status").classList.toggle("is-server", enabled);
   if (!enabled && topLevelTab === "settings") showRepos();
-  if (enabled) links.connectAll(); else links.suspendIdle();
+  if (enabled) links.connectAll(); else links.disableIdle();
   refreshHubViews();
 }
 
@@ -1423,7 +1427,14 @@ function forgetServer(id) {
   RemoteHubRegistry.forgetServer(hub, id);
   RemoteHubRegistry.save(localStorage, hub);
   links.remove(id);
-  if (!wasActive) { refreshHubViews(); return; }
+  if (!wasActive) {
+    // The forgotten server may have been the only one that had ever
+    // reported hubEnabled — recompute the aggregate, not just re-render,
+    // so the hub UI doesn't stay stuck on with no server actually
+    // authorizing it.
+    applyHubFlag(anyServerHasHubEnabled());
+    return;
+  }
   const online = links.all().filter((l) => l.state === "online").map((l) => l.id);
   const next = RemoteHubRegistry.fallbackActiveId(hub, online);
   if (next) { switchServer(next); return; }

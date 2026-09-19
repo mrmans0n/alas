@@ -1159,6 +1159,59 @@ struct RemoteWebAssetTests {
         let body = try #require(js.range(of: "function applyHubFlag(enabled) {").map { js[$0.lowerBound...].prefix(600) })
         #expect(body.contains(#"$("hub-section").classList.toggle("hidden", !enabled);"#))
         #expect(body.contains(#"$("settings-placeholder").classList.toggle("hidden", enabled);"#))
-        #expect(body.contains("if (enabled) links.connectAll(); else links.suspendIdle();"))
+        #expect(body.contains("if (enabled) links.connectAll(); else links.disableIdle();"))
+    }
+
+    // Regression (Codex review, PR #1337): forgetServer's non-active branch
+    // used to only re-render, never recomputing the aggregate hub flag — so
+    // forgetting the one server that had ever reported hubEnabled, while it
+    // was inactive, left the hub UI stuck on with no server authorizing it.
+    @Test func forgettingAnInactiveServerRecomputesTheAggregateHubFlag() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function forgetServer(id) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("if (!wasActive) {"))
+        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
+        #expect(!body.contains("if (!wasActive) { refreshHubViews(); return; }"))
+    }
+
+    // Regression (Codex review, PR #1337): a disallowed cross-origin /pair
+    // request answered with a bare 403 — no Access-Control-Allow-Origin —
+    // so the browser surfaced an opaque CORS network error instead of a
+    // readable 403, and hub-links.js's pair() could never distinguish
+    // "this origin isn't allowed" from "unreachable."
+    @Test func originRejectionIsCORSReadableSoPairCanDistinguishItFromUnreachable() throws {
+        // The server-side fix lives in RemoteConnection.swift, outside this
+        // web-asset bundle; RemoteConnectionOriginRejectionTests covers it
+        // directly. This test only pins the client-side contract the fix
+        // exists to satisfy: `pair()` must branch on `res.status === 403`.
+        let js = try asset("hub-links.js")
+        #expect(js.contains(#"res.status === 403"#))
+    }
+
+    // Regression (Codex review, PR #1337): setVisible() used to reconnect
+    // every idle link on a visibility change regardless of whether the hub
+    // was actually enabled, so backgrounding and foregrounding the page
+    // while the flag was off resurrected the idle sockets disableIdle()
+    // had just suspended.
+    @Test func idleLinksStaySuspendedAcrossAVisibilityCycleWhileTheHubIsOff() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("let idleAllowed = false;"))
+        #expect(js.contains("function disableIdle() {"))
+        let setVisible = try #require(js.range(of: "function setVisible(next) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(setVisible.contains(#"if (link.role !== "active" && !idleAllowed) continue;"#))
+    }
+
+    // Regression (Codex review, PR #1337): adopt() promoted a fallback
+    // origin only in memory — the registry's own lastOrigin was never
+    // updated, so a page reload retried the dead remembered origin first
+    // again and paid its full handshake timeout before falling through.
+    @Test func adoptingAFallbackOriginPersistsItToTheRegistry() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("onOriginChange(link, origin)"))
+        let adopt = try #require(js.range(of: "function adopt(link, socket, origin) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(adopt.contains("if (link.lastOrigin !== origin && h.onOriginChange) h.onOriginChange(link, origin);"))
+        let appJS = try asset("app.js")
+        #expect(appJS.contains("onOriginChange: (link, origin) => {"))
+        #expect(appJS.contains("RemoteHubRegistry.setLastOrigin(hub, link.id, origin);"))
     }
 }

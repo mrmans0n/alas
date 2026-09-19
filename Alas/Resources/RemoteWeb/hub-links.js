@@ -4,7 +4,8 @@
 // node tests can drive every transition deterministically.
 //
 // deps:  { createSocket(url, protocols), fetch(url, init), setTimeout(fn, ms), clearTimeout(id) }
-// hooks: { onStateChange(link), onHello(link, hello), onLegacy(link), onMessage(link, msg), onCounts(link) }
+// hooks: { onStateChange(link), onHello(link, hello), onLegacy(link), onMessage(link, msg),
+//          onCounts(link), onOriginChange(link, origin) }
 // link:  { id, origins, lastOrigin, token, role: "active"|"idle",
 //          state: "idle"|"connecting"|"online"|"offline"|"unauthorized",
 //          counts: {attention, running}, legacy, socket }
@@ -25,6 +26,7 @@ function createLinks(deps, hooks) {
   const links = new Map();
   let activeId = null;
   let visible = true;
+  let idleAllowed = false;   // true once connectAll() has run; see disableIdle()
 
   function notify(link) { if (h.onStateChange) h.onStateChange(link); }
   function setState(link, state) {
@@ -189,6 +191,11 @@ function createLinks(deps, hooks) {
 
   function adopt(link, socket, origin) {
     if (link.pendingSocket === socket) link.pendingSocket = null;
+    // A successful connect on an origin other than the remembered one is
+    // worth persisting — otherwise every future reload retries the dead
+    // origin first and pays its full handshake timeout again before
+    // falling through to the one that actually works.
+    if (link.lastOrigin !== origin && h.onOriginChange) h.onOriginChange(link, origin);
     link.socket = socket;
     link.lastOrigin = origin;
     link.reconnectDelay = INITIAL_RECONNECT_MS;
@@ -290,10 +297,14 @@ function createLinks(deps, hooks) {
   }
 
   function connectAll() {
+    idleAllowed = true;
     for (const link of links.values()) connect(link.id);
   }
 
-  // Closes every non-active socket (page hidden, or hub flag off).
+  // Closes every non-active socket (page hidden, or hub flag off). Does not
+  // itself change `idleAllowed` — it's also called on a mere visibility
+  // change (setVisible(false)), which must not "turn off" idle links for
+  // good the way disableIdle() below does.
   function suspendIdle() {
     for (const link of links.values()) {
       if (link.role === "active") continue;
@@ -302,10 +313,25 @@ function createLinks(deps, hooks) {
     }
   }
 
+  // Called specifically when the hub feature itself turns off, as opposed to
+  // the page merely going to the background. Idle links must stay suspended
+  // across a later visibility change until the hub is re-enabled — a plain
+  // suspendIdle() (backgrounding) leaves them eligible to resume.
+  function disableIdle() {
+    idleAllowed = false;
+    suspendIdle();
+  }
+
   function setVisible(next) {
     visible = !!next;
     if (!visible) { suspendIdle(); return; }
     for (const link of links.values()) {
+      // The active link always resumes on visible-again regardless of the
+      // hub flag — that's ordinary single-server behavior. An idle link
+      // only resumes if the hub is actually enabled; otherwise a mere
+      // visibility cycle would resurrect the idle sockets disableIdle()
+      // just suspended.
+      if (link.role !== "active" && !idleAllowed) continue;
       if (link.state === "online" && link.role === "idle") startPolling(link);
       else connect(link.id);
     }
@@ -374,7 +400,7 @@ function createLinks(deps, hooks) {
     return tryAt(0);
   }
 
-  return { add, remove, update, get, all, activeLink, setActive, sendActive, connect, connectAll, suspendIdle, setVisible, retry, pair };
+  return { add, remove, update, get, all, activeLink, setActive, sendActive, connect, connectAll, suspendIdle, disableIdle, setVisible, retry, pair };
 }
 
 globalThis.RemoteHubLinks = {

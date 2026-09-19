@@ -216,6 +216,44 @@ struct RemoteServerIntegrationTests {
         try await waitForConnectionClose(from: conn, on: queue)
     }
 
+    // Regression (Codex review, PR #1337): the origin-rejected 403 for
+    // `POST /pair` carried no CORS header, so a browser surfaced an opaque
+    // CORS network error instead of a readable 403 — hub-links.js's pair()
+    // could never see `res.status === 403` and tell "not allowed" apart
+    // from "unreachable." Echoing the origin back on the rejection grants
+    // no access (the request is still refused); it only makes the refusal
+    // legible to the calling JS.
+    @Test func pairWithRejectedOriginReturns403WithCORSHeaderAndDoesNotRedeemCode() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.pair-rejected-origin")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let body = #"{"code":"\#(code)","deviceName":"phone"}"#
+        let request = [
+            "POST /pair HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Origin: https://evil.example",
+            "Content-Length: \(body.utf8.count)",
+            "",
+            body
+        ].joined(separator: "\r\n")
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(text.contains("Access-Control-Allow-Origin: https://evil.example\r\n"))
+        #expect(text.contains("Vary: Origin\r\n"))
+
+        let token = try pairing.redeem(code: code, deviceName: "after-rejected-origin")
+        #expect(pairing.validate(token: token) != nil, "the rejected attempt must not have consumed the single-use code")
+    }
+
     @Test func webSocketWithPrivateOriginUpgrades() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
