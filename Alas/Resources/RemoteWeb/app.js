@@ -551,7 +551,8 @@ function renderWorktreeGroup(section, worktree) {
   const totalSessions = worktree.activeSessions.length + worktree.closedSessions.length;
   const singleSession = totalSessions === 1 ? (worktree.activeSessions[0] || worktree.closedSessions[0]) : null;
   const expansionKey = `${section.id}\u0000${worktree.id}`;
-  const expanded = !singleSession && expandedWorktrees.has(expansionKey);
+  const searchExpanded = !singleSession && RemoteRepoFilter.worktreeSessionTitleMatchesQuery(worktree, repoSearchQuery);
+  const expanded = !singleSession && (searchExpanded || expandedWorktrees.has(expansionKey));
 
   const card = el("div", "wt");
   if (singleSession) {
@@ -569,18 +570,22 @@ function renderWorktreeGroup(section, worktree) {
     return card;
   }
 
-  const summaryButton = document.createElement("button");
-  summaryButton.type = "button";
-  summaryButton.className = "wt-summary";
-  summaryButton.setAttribute("aria-expanded", String(expanded));
-  summaryButton.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${totalSessions} sessions for ${worktree.title}`);
-  summaryButton.onclick = () => {
-    if (expanded) expandedWorktrees.delete(expansionKey);
-    else expandedWorktrees.add(expansionKey);
-    renderSessions([...listedSessions.values()]);
-  };
-  summaryButton.append(worktreeRow1(section, worktree, null, expanded), worktreeRow2(worktree));
-  card.append(summaryButton);
+  const summary = document.createElement(searchExpanded ? "div" : "button");
+  summary.className = "wt-summary";
+  if (searchExpanded) {
+    summary.classList.add("wt-summary-static");
+  } else {
+    summary.type = "button";
+    summary.setAttribute("aria-expanded", String(expanded));
+    summary.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${totalSessions} sessions for ${worktree.title}`);
+    summary.onclick = () => {
+      if (expanded) expandedWorktrees.delete(expansionKey);
+      else expandedWorktrees.add(expansionKey);
+      renderSessions([...listedSessions.values()]);
+    };
+  }
+  summary.append(worktreeRow1(section, worktree, null, expanded), worktreeRow2(worktree));
+  card.append(summary);
 
   if (expanded) {
     card.append(sessionCardList([...worktree.activeSessions, ...worktree.closedSessions]));

@@ -112,6 +112,12 @@ function sessionTitlesOf(worktree) {
   return [...worktree.activeSessions, ...worktree.closedSessions].map((s) => s.title || "");
 }
 
+function worktreeSessionTitleMatchesQuery(worktree, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return false;
+  return sessionTitlesOf(worktree).some((title) => title.toLowerCase().includes(needle));
+}
+
 function sectionMatchesQuery(section, query) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
@@ -120,7 +126,7 @@ function sectionMatchesQuery(section, query) {
     if (String(worktree.title || "").toLowerCase().includes(needle)) return true;
     const branch = worktree.summary && worktree.summary.branch;
     if (branch && String(branch).toLowerCase().includes(needle)) return true;
-    return sessionTitlesOf(worktree).some((title) => title.toLowerCase().includes(needle));
+    return worktreeSessionTitleMatchesQuery(worktree, needle);
   });
 }
 
@@ -147,6 +153,7 @@ globalThis.RemoteRepoFilter = {
   relativeTimeShort,
   diffBarSegments,
   sectionMatchesFilter,
+  worktreeSessionTitleMatchesQuery,
   sectionMatchesQuery,
   sectionCounts,
 };
