@@ -67,15 +67,22 @@ raise "build-test timeout must cover its sequential steps plus 30 minutes of pre
   swift_job.fetch("timeout-minutes") >= bounded_step_minutes + 30
 
 workers = jobs.fetch("swift-tests")
-raise "workers must queue alongside the builder" if workers.key?("needs")
+raise "workers must queue only after the builder finishes" unless workers["needs"] == "build-test"
 raise "shard failures must not cancel sibling diagnostics" unless workers.dig("strategy", "fail-fast") == false
-raise "two subprocess workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2]
-raise "artifact wait requires read-only Actions access" unless workers.dig("permissions", "actions") == "read"
+raise "two balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2]
 builder_steps = swift_job.fetch("steps")
 publish = builder_steps.index { |step| step["name"] == "Upload compiled Swift test products" }
-ordinary = builder_steps.index { |step| step.fetch("run", "").include?("--lane ordinary") }
-raise "publish products before running ordinary tests" unless publish && ordinary && publish < ordinary
-raise "builder must not execute subprocess work" if builder_steps.any? { |step| step.fetch("run", "").include?("--lane subprocess") }
+raise "builder must publish compiled products" unless publish
+raise "builder must not execute test batches" if builder_steps.any? { |step| step.fetch("run", "").match?(/--lane|run-shard/) }
+worker_steps = workers.fetch("steps")
+raise "workers must not reserve runners waiting for products" if worker_steps.any? { |step| step.fetch("run", "").include?("wait-products") }
+raise "workers must download this attempt's products" unless worker_steps.any? do |step|
+  step.fetch("uses", "").start_with?("actions/download-artifact@") &&
+    step.dig("with", "name") == "swift-test-products-${{ github.run_attempt }}"
+end
+raise "workers must execute both lanes assigned to their shard" unless worker_steps.any? do |step|
+  step["run"] == "python3 scripts/ci_swift_tests.py run-shard --shard ${{ matrix.shard }}"
+end
 build_commands = jobs.values.flat_map { |job| job.fetch("steps", []) }.count do |step|
   step.fetch("run", "").lines.any? { |line| line.strip == "build-for-testing" }
 end
@@ -108,7 +115,7 @@ audit = jobs.fetch("swift-coverage")
 audit_download = audit.fetch("steps").find { |step| step.dig("with", "pattern") }
 raise "coverage audit must download compact reports, not diagnostic bundles" unless
   audit_download&.dig("with", "pattern") == "swift-test-reports-${{ github.run_attempt }}-*"
-[swift_job, workers].each do |job|
+[workers].each do |job|
   reports = job.fetch("steps").find { |step| step.dig("with", "name")&.start_with?("swift-test-reports-") }
   raise "each lane must publish reports even after failure" unless
     reports && reports["if"] == "always()" && reports.dig("with", "path") == ".build/xcode/results/*.report.json"
@@ -125,8 +132,7 @@ end
 expected_runners = {
   "ci-workflow-contract" => "ubuntu-26.04",
   "rust-tests" => "ubuntu-26.04",
-  "remote-web-tests" => "ubuntu-26.04",
-  "shell-harness-tests" => "macos-26"
+  "remote-web-tests" => "ubuntu-26.04"
 }
 
 expected_runners.each do |name, runner|
@@ -156,7 +162,8 @@ remote_steps = jobs.fetch("remote-web-tests").fetch("steps").map { |step| step["
   raise "remote-web-tests must run #{command}" unless remote_steps.include?(command)
 end
 
-shell_steps = jobs.fetch("shell-harness-tests").fetch("steps").map { |step| step["run"] }
+raise "shell harnesses must share the build runner" if jobs.key?("shell-harness-tests")
+shell_steps = builder_steps.map { |step| step["run"] }
 [
   "bash scripts/tests/build-zmx/run.sh",
   "bash scripts/tests/build-fff/run.sh",
@@ -165,7 +172,7 @@ shell_steps = jobs.fetch("shell-harness-tests").fetch("steps").map { |step| step
   "bash scripts/tests/xcode-state/run.sh",
   "bash scripts/tests/alas-build/run.sh"
 ].each do |command|
-  raise "shell-harness-tests must run #{command}" unless shell_steps.include?(command)
+  raise "builder must run #{command}" unless shell_steps.include?(command)
 end
 
 puts "ci workflow contract: ok"

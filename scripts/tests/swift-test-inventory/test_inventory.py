@@ -52,7 +52,7 @@ class InventoryTests(unittest.TestCase):
             with self.subTest(document=document), self.assertRaises(ValueError):
                 self.module.make_plan(document, [], 2)
 
-    def test_shards_balance_invocations_and_keep_ordinary_on_lane_zero(self):
+    def test_shards_balance_ordinary_and_isolated_invocations_together(self):
         ids = [f"AlasTests/S{i}/test()" for i in range(12)]
         policy = [(f"AlasTests/S{i}", "subprocess", "isolation", "#23") for i in range(12)]
         plan = self.module.make_plan(enumeration("AlasTests/Ordinary/test()", *ids), policy, 2)
@@ -60,12 +60,11 @@ class InventoryTests(unittest.TestCase):
                   for chunk in batch["invocations"]]
         timings = [{"selectors": chunk, "seconds": seconds}
                    for chunk, seconds in zip(chunks, [90, 60, 40, 10])]
+        timings.append({"selectors": ["AlasTests/Ordinary"], "seconds": 80})
         self.module.assign_shards(plan, timings)
-        self.assertEqual(plan["shard_seconds"], [100, 100])
-        self.assertTrue(all(shard == 0 for batch in plan["batches"] if batch["lane"] == "ordinary"
-                            for shard in batch["shards"]))
-        self.assertCountEqual([shard for batch in plan["batches"] if batch["lane"] == "subprocess"
-                               for shard in batch["shards"]], [1, 1, 2, 2])
+        self.assertEqual(plan["shard_seconds"], [140, 140])
+        self.assertTrue(all(shard in (1, 2) for batch in plan["batches"] for shard in batch["shards"]))
+        self.assertEqual(plan["timing_sources"]["exact"], 5)
 
     def test_unknown_invocations_are_assigned_and_bad_timings_rejected(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [
@@ -139,13 +138,28 @@ class InventoryTests(unittest.TestCase):
             directory = Path(directory)
             with patch.object(self.module, "bounded", side_effect=execute), patch.object(
                     self.module.subprocess, "run", side_effect=extract):
-                statuses = [self.module.run_shard(plan, directory, shard) for shard in range(3)]
-            self.assertEqual(statuses, [True, False, True])
+                statuses = [self.module.run_shard(plan, directory, shard) for shard in (1, 2)]
+            self.assertEqual(statuses, [False, True])
             self.assertCountEqual(selected, ["AlasTests/Ordinary"] + [f"AlasTests/S{i}" for i in range(7)])
             self.assertEqual(len(selected), len(set(selected)))
             self.assertEqual(len(list(directory.glob("*.report.json"))), 4)
             with self.assertRaises(ValueError):
                 self.module.run_shard(plan, directory, 3)
+            with self.assertRaises(ValueError):
+                self.module.run_shard(plan, directory, 0)
+
+    def test_audit_exports_ordinary_timings_for_balancing_future_runs(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
+        self.module.assign_shards(plan, [])
+        report = self.module.account(["AlasTests/A/a()"], results(("A/a()", "Passed")))
+        report.update(plan_id=plan["id"], selectors=["AlasTests/A"], duration_seconds=80)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            self.module.write_json(directory / "ordinary-1-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+            timings = json.loads((directory / "timings.json").read_text())
+            self.assertEqual(timings["invocations"], [{"selectors": ["AlasTests/A"], "seconds": 80}])
 
     def test_portable_xctestrun_does_not_resolve_or_build_project(self):
         with patch.dict("os.environ", {"SWIFT_TEST_XCTESTRUN": "/tmp/products/Alas.xctestrun"}):
