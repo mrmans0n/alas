@@ -1,11 +1,13 @@
 import Foundation
 
-/// A run of two or more consecutive, already-finished tool-call rows that the
-/// transcript renders as one collapsed "Ran N tools" row instead of N cards.
+/// A run of one or more consecutive, already-finished tool-call rows that the
+/// transcript renders as one collapsed "Ran N tools" row instead of N cards —
+/// including a lone finished call, so every tool call is one click away
+/// instead of always taking up a full card.
 struct ACPTranscriptToolCallGroup: Equatable {
     static let idPrefix = "tcg-"
 
-    /// In transcript order; always at least `ACPToolCallGrouping.minimumRunLength`.
+    /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
 
     /// Derived from the first member so the id stays stable while the run
@@ -47,9 +49,6 @@ enum ACPToolCallGrouping {
         var breakAfterIndex: Int? = nil
     }
 
-    /// Runs shorter than this stay as plain cards.
-    static let minimumRunLength = 2
-
     static func isFinished(status: String) -> Bool {
         switch status {
         case "in_progress", "running", "pending": false
@@ -79,10 +78,8 @@ enum ACPToolCallGrouping {
         var run: [ACPTranscriptVisibleRow] = []
 
         func flushRun() {
-            if run.count >= minimumRunLength {
+            if !run.isEmpty {
                 result.append(.toolCallGroup(ACPTranscriptToolCallGroup(members: run)))
-            } else {
-                result.append(contentsOf: run.map(ACPTranscriptRenderRow.message))
             }
             run.removeAll(keepingCapacity: true)
         }

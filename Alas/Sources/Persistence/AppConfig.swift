@@ -255,9 +255,9 @@ struct AppConfig: Codable, Equatable {
         /// only; the composer bolt still wins afterward. Default: false.
         var acpAutoRunByDefault: Bool
         var acpShowMinimap: Bool
-        /// When true, the chat transcript folds runs of consecutive finished
-        /// tool calls into one expandable "Ran N tools" row. The active tool
-        /// call always stays visible. Default: false.
+        /// When true, the chat transcript folds finished tool calls (bundling
+        /// consecutive ones together) into an expandable "Ran N tools" row.
+        /// The active tool call always stays visible. Default: false.
         var acpCollapseFinishedToolCalls: Bool
         /// When true (default), every local ACP session gets the built-in
         /// "alas" MCP server exposing CLI actions (open, worktrees, review).

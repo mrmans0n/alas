@@ -41,7 +41,7 @@ struct ACPToolCallGroupingTests {
         #expect(folded.allSatisfy { if case .message = $0 { true } else { false } })
     }
 
-    @Test("two or more consecutive finished tool calls fold into one group")
+    @Test("consecutive finished tool calls fold into one group")
     func consecutiveFinishedToolsFold() throws {
         let folded = fold([tool("a"), tool("b"), tool("c", status: "failed")])
         #expect(ids(folded) == ["tcg-tc-a"])
@@ -53,12 +53,17 @@ struct ACPToolCallGroupingTests {
         #expect(group.members.map(\.index) == [0, 1, 2])
     }
 
-    @Test("a single finished tool call stays a plain card")
-    func singleFinishedToolStaysMessage() {
+    @Test("a single finished tool call still folds into a one-member group")
+    func singleFinishedToolFolds() throws {
         let before = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
         let after = ACPMessage.user(id: UUID(), messageId: "u2", text: "thanks", attachments: [])
         let folded = fold([before, tool("a"), after])
-        #expect(ids(folded) == ["acp-user:u1", "tc-a", "acp-user:u2"])
+        #expect(ids(folded) == ["acp-user:u1", "tcg-tc-a", "acp-user:u2"])
+        guard case .toolCallGroup(let group) = try #require(folded.dropFirst().first) else {
+            Issue.record("expected a tool-call group")
+            return
+        }
+        #expect(group.members.map(\.stableId) == ["tc-a"])
     }
 
     @Test("an active tool call ends the run and stays visible after the group")
@@ -70,7 +75,7 @@ struct ACPToolCallGroupingTests {
     @Test("a pending tool call is treated as active")
     func pendingToolIsActive() {
         let folded = fold([tool("a"), tool("b"), tool("c", status: "pending"), tool("d")])
-        #expect(ids(folded) == ["tcg-tc-a", "tc-c", "tc-d"])
+        #expect(ids(folded) == ["tcg-tc-a", "tc-c", "tcg-tc-d"])
     }
 
     @Test("agent text between tool calls splits the run")

@@ -81,7 +81,7 @@ struct ChatPane: View {
                         ), monospaced: true).frame(width: 80)
                     }
                     SettingsRow(name: RowLabels.collapseFinishedToolCalls,
-                                desc: "Fold consecutive finished tool calls into one expandable “Ran N tools” row. The tool that is currently running always stays visible.") {
+                                desc: "Fold finished tool calls into an expandable “Ran N tools” row, bundling consecutive ones together. The tool that is currently running always stays visible.") {
                         AlasToggle(on: state.bind(\.harness.acpCollapseFinishedToolCalls))
                     }
                 }
