@@ -162,6 +162,10 @@ final class RightPaneState: GGSplitCommitServicing {
     /// In-flight refreshes capture this before doing async work and must not
     /// publish if it changed underneath them.
     private var snapshotInvalidationGeneration: Int = 0
+    /// Ensures only the newest checkpoint catalog load can publish. Checkpoint
+    /// captures do not invalidate the broader worktree snapshot, so they need
+    /// their own ordering boundary.
+    private var checkpointLoadGeneration: UInt = 0
     /// Fingerprint of the staged index contents (concatenated blob SHAs of
     /// staged files). Changes whenever any staged file's contents change,
     /// even when add/del totals are identical. Used by views that need to
@@ -736,9 +740,12 @@ final class RightPaneState: GGSplitCommitServicing {
 
     private func publishCheckpointSnapshot(
         _ result: Result<(CheckpointCatalogSnapshot, [CheckpointRestoreJournal]), CheckpointSnapshotLoadError>?,
-        snapshotGeneration: Int
+        snapshotGeneration: Int,
+        checkpointGeneration: UInt
     ) {
-        guard snapshotGeneration == snapshotInvalidationGeneration else { return }
+        guard snapshotGeneration == snapshotInvalidationGeneration,
+              checkpointGeneration == checkpointLoadGeneration
+        else { return }
         guard let result else {
             checkpointSummaries = []
             checkpointStorageUsage = 0
@@ -766,9 +773,15 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func refreshCheckpoints() async {
-        let generation = snapshotInvalidationGeneration
+        checkpointLoadGeneration &+= 1
+        let checkpointGeneration = checkpointLoadGeneration
+        let snapshotGeneration = snapshotInvalidationGeneration
         let result = await loadCheckpointSnapshot(target: checkpointTarget)
-        publishCheckpointSnapshot(result, snapshotGeneration: generation)
+        publishCheckpointSnapshot(
+            result,
+            snapshotGeneration: snapshotGeneration,
+            checkpointGeneration: checkpointGeneration
+        )
     }
 
     func checkpointMutationsDisabledAfterJournalRevalidation() async -> Bool {
@@ -896,7 +909,10 @@ final class RightPaneState: GGSplitCommitServicing {
             lastCheckpointError = CheckpointRestoreBlocker.interruptedRestore.description
             return
         }
-        guard checkpointOperationInFlight == nil else { return }
+        guard checkpointOperationInFlight == nil else {
+            lastCheckpointError = "Another checkpoint operation is in progress."
+            return
+        }
         checkpointOperationInFlight = .preview
         lastCheckpointError = nil
         lastCheckpointStatus = nil
@@ -1306,6 +1322,8 @@ final class RightPaneState: GGSplitCommitServicing {
         let snapshotGeneration = snapshotInvalidationGeneration
         let checkpointTarget = checkpointTarget
         checkpointJournalDiscoverySucceeded = checkpointTarget?.path.isRemoteAlasPath == true
+        checkpointLoadGeneration &+= 1
+        let checkpointGeneration = checkpointLoadGeneration
         async let checkpointLoad = loadCheckpointSnapshot(target: checkpointTarget)
         loading = true
         defer { loading = false }
@@ -1401,7 +1419,11 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             self.reconcileStashCaches(with: stashes)
             if self.stashes != stashes { self.stashes = stashes }
-            publishCheckpointSnapshot(checkpointResult, snapshotGeneration: snapshotGeneration)
+            publishCheckpointSnapshot(
+                checkpointResult,
+                snapshotGeneration: snapshotGeneration,
+                checkpointGeneration: checkpointGeneration
+            )
             if self.lastChangesFingerprint != newChangesFingerprint {
                 self.lastChangesFingerprint = newChangesFingerprint
                 self.changesGeneration += 1
@@ -1519,7 +1541,11 @@ final class RightPaneState: GGSplitCommitServicing {
                 return false
             }
             let checkpointResult = await checkpointLoad
-            publishCheckpointSnapshot(checkpointResult, snapshotGeneration: snapshotGeneration)
+            publishCheckpointSnapshot(
+                checkpointResult,
+                snapshotGeneration: snapshotGeneration,
+                checkpointGeneration: checkpointGeneration
+            )
             sidebarError = error.localizedDescription
             hasLoadedSnapshot = true
             latestSnapshotRefreshSucceeded = false
