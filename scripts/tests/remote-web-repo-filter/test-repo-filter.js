@@ -77,6 +77,15 @@ assert.equal(filter.sectionMatchesFilter(dirty, "dirty"), true);
 assert.equal(filter.sectionMatchesFilter(quiet, "all"), true);
 assert.deepEqual(filter.sectionCounts([running, dirty, quiet]), { all: 3, running: 1, dirty: 1 });
 
+const sessionSearch = worktree(
+  [{ title: "Fix PWA", status: "idle" }],
+  [{ title: "Archived checkpoint", status: "idle" }]
+);
+assert.equal(filter.worktreeSessionTitleMatchesQuery(sessionSearch, "fix pwa"), true);
+assert.equal(filter.worktreeSessionTitleMatchesQuery(sessionSearch, "ARCHIVED"), true);
+assert.equal(filter.worktreeSessionTitleMatchesQuery(sessionSearch, "main"), false);
+assert.equal(filter.worktreeSessionTitleMatchesQuery(sessionSearch, "   "), false);
+
 // --- existing helpers keep their contracts -----------------------------------
 
 assert.equal(filter.repoInitials(".dotfiles"), "DO");
