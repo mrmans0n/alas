@@ -34,9 +34,10 @@ suites retain #23 as their follow-up. The subprocess list preserves the conserva
 isolation baseline gathered during #1277; it does not assert every listed suite
 individually reproduced a hang. Shrink it using measured runs, not source heuristics.
 
-Six ordinary batches run sequentially on the build runner after it publishes the
-compiled products. Two additional runners split the subprocess invocations by
-measured duration, preserving invocations of at most three suites. Each invocation
+The build runner publishes compiled products and the test plan, then finishes.
+Two dependent test runners balance all six ordinary batches and the subprocess
+invocations by measured duration. Subprocess invocations still contain at most
+three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
@@ -122,7 +123,7 @@ new baseline: 48m30s of macOS runner time, or 50m39s including initial queue tim
 Preparation and discovery took 2m15s, compilation 18m34s, ordinary tests 8m47s,
 subprocess tests 17m47s, and diagnostics/cleanup about one minute.
 
-The next experiment prioritizes elapsed time with three execution lanes. The
+The previous experiment prioritized elapsed time with three execution lanes. The
 builder publishes a tar archive of compiled products and runs ordinary tests
 itself. Two workers queue at workflow start and wait up to 60 minutes for that
 attempt's artifact. They stop early if the builder completes without publishing.
@@ -134,15 +135,20 @@ the old prototype's runner-minute adoption criterion does not fit this deliberat
 tradeoff. Record actual queue, wait, setup, transfer, test, and upload durations
 before declaring the experiment successful.
 
+The current layout uses one build job followed by two balanced test jobs.
+Workers depend on `build-test`, so no macOS slot is reserved while waiting for
+compilation. This trades a second queue wait for lower runner occupancy across
+concurrent PRs. Both ordinary and subprocess work run on those two workers.
+
 `scripts/ci-swift-test-timings.json` records invocation selectors and elapsed
 seconds from a passing run, linked in its `source` field. Planning assigns the
-longest estimated subprocess invocations to the least-loaded worker. Estimates
+longest estimated invocations from both lanes to the least-loaded worker. Estimates
 first use exact selector matches, then the same suite group regardless of which
 individual tests are quarantined. Regrouped suites use an equal share of their
 previous invocation time; unknown suites use the median of those per-suite
 estimates, or ten seconds when no history exists. These approximations affect
 assignment only. Invocation deadlines and test selection remain independent.
-Ordinary work stays on lane zero.
+Successful coverage audits export timings for both lanes for the next refresh.
 No global Swift Testing parallelism is enabled. Each worker executes sequentially,
 so host preferences, environment, pasteboard, and process state are not shared
 between simultaneously executing invocations on the same host.
@@ -224,9 +230,9 @@ snapshot collected before it finishes. Jobs and steps overlap, so do not sum
 them to infer workflow latency.
 
 Use these reports to compare macOS queue delays and worker artifact waits before
-changing runner count or provisioning. The existing three-lane layout queues
-workers alongside the builder to avoid a second queue after compilation, but
-occupies workers while they wait. Queue measurements alone do not establish
+changing runner count or provisioning. The former three-lane layout queued
+workers alongside the builder and occupied workers while they waited. The current
+layout releases the builder before either test runner queues. Queue measurements alone do not establish
 whether repository demand, account limits, or hosted-runner supply caused a delay.
 Likewise, compare compiler hit/miss counters on source-changing commits rather
 than extrapolating from unchanged-revision cache replay.

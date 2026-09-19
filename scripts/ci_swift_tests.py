@@ -159,7 +159,7 @@ def suite_key(selectors):
 
 
 def assign_shards(plan, timings):
-    """Keep ordinary work on shard zero; balance isolated invocations on 1 and 2."""
+    """Balance ordinary and isolated invocations across two test runners."""
     weights = {}
     groups, suites = {}, {}
     for entry in timings:
@@ -181,19 +181,18 @@ def assign_shards(plan, timings):
     for batch in plan["batches"]:
         batch["shards"] = [0] * len(batch["invocations"])
         batch["estimated_seconds"] = [None] * len(batch["invocations"])
-        if batch["lane"] == "subprocess":
-            for index, selectors in enumerate(batch["invocations"]):
-                group = suite_key(selectors)
-                if tuple(selectors) in weights:
-                    seconds, source = weights[tuple(selectors)], "exact"
-                elif group in groups:
-                    seconds, source = statistics.median(groups[group]), "suite-group"
-                else:
-                    seconds = sum(suite_weights.get(suite, unknown) for suite in group)
-                    source = "estimated"
-                sources[source] += 1
-                batch["estimated_seconds"][index] = seconds
-                pending.append((seconds, batch["id"], index, batch))
+        for index, selectors in enumerate(batch["invocations"]):
+            group = suite_key(selectors)
+            if tuple(selectors) in weights:
+                seconds, source = weights[tuple(selectors)], "exact"
+            elif group in groups:
+                seconds, source = statistics.median(groups[group]), "suite-group"
+            else:
+                seconds = sum(suite_weights.get(suite, unknown) for suite in group)
+                source = "estimated"
+            sources[source] += 1
+            batch["estimated_seconds"][index] = seconds
+            pending.append((seconds, batch["id"], index, batch))
     totals = [0.0, 0.0]
     for seconds, _, index, batch in sorted(pending, key=lambda row: (-row[0], row[1], row[2])):
         shard = min(range(2), key=lambda candidate: (totals[candidate], candidate))
@@ -307,8 +306,8 @@ def run_batch(plan, directory, lane, index, shard=None):
 
 
 def run_shard(plan, directory, shard):
-    if shard not in (0, 1, 2):
-        raise ValueError("Swift shard must be 0, 1, or 2")
+    if shard not in (1, 2):
+        raise ValueError("Swift shard must be 1 or 2")
     success = True
     for batch in plan["batches"]:
         # Do not short-circuit: failed invocations must not suppress later work.
@@ -351,8 +350,7 @@ def summarize(plan, directory):
             if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0:
                 shard = batch.get("shards", [0] * len(batch["invocations"]))[number - 1]
                 shard_seconds[shard] += duration
-                if batch["lane"] == "subprocess":
-                    timings.append({"selectors": batch["invocations"][number - 1], "seconds": duration})
+                timings.append({"selectors": batch["invocations"][number - 1], "seconds": duration})
             rows.append(f"| {name} | {report.get('executed', 0)} | {report.get('skipped', 0)} | "
                         f"{report.get('duration_seconds', 'incomplete')} | {report['ok']} |")
     scheduled = set(plan["tests"]) - set(plan["excluded"])
@@ -365,12 +363,13 @@ def summarize(plan, directory):
                + f"\n\nMissing invocation reports: {', '.join(missing) or 'none'}.\n")
     if "shard_seconds" in plan:
         summary += "\n| Lane | Estimated seconds | Actual invocation seconds |\n|---|---:|---:|\n"
-        for shard, seconds in enumerate(shard_seconds):
-            estimate = "n/a" if shard == 0 else f"{plan['shard_seconds'][shard - 1]:.2f}"
+        for shard in (1, 2):
+            seconds = shard_seconds[shard]
+            estimate = f"{plan['shard_seconds'][shard - 1]:.2f}"
             summary += f"| {shard} | {estimate} | {seconds:.2f} |\n"
         summary += f"\nTiming sources: {json.dumps(plan.get('timing_sources', {}), sort_keys=True)}.\n"
         summary += "Actual totals include only reports with durations; check coverage above for incomplete lanes.\n"
-    invocation_count = sum(len(batch["invocations"]) for batch in plan["batches"] if batch["lane"] == "subprocess")
+    invocation_count = sum(len(batch["invocations"]) for batch in plan["batches"])
     if success and timings and len(timings) == invocation_count:
         source = (f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
                   f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
@@ -393,7 +392,7 @@ def main():
     parser.add_argument("--policy", type=Path, default=ROOT / "scripts/ci-swift-test-policy.tsv")
     parser.add_argument("--batch-count", type=int, default=6)
     parser.add_argument("--batch", type=int, default=0)
-    parser.add_argument("--shard", type=int, choices=[0, 1, 2], default=0)
+    parser.add_argument("--shard", type=int, choices=[1, 2], default=1)
     parser.add_argument("--timings", type=Path, default=ROOT / "scripts/ci-swift-test-timings.json")
     parser.add_argument("--lane", choices=["ordinary", "subprocess"], default="ordinary")
     args = parser.parse_args()
