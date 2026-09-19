@@ -114,7 +114,7 @@ struct ACPMessageGutter<Content: View>: View {
 
     private var actionButtons: some View {
         HStack(spacing: 4) {
-            if let checkpointID {
+            if showsInlineTimestamp, messageCreatedAt != nil, let checkpointID {
                 Button {
                     onRestoreCheckpoint(checkpointID)
                 } label: {
