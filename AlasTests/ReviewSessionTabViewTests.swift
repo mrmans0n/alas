@@ -143,7 +143,7 @@ struct ReviewSessionTabViewTests {
         let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
 
-        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 700))
         host.layoutSubtreeIfNeeded()
 
         #expect(recursiveDescription(host).contains("Review all changes"))
@@ -189,7 +189,7 @@ struct ReviewSessionTabViewTests {
         let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
 
-        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 700))
         host.layoutSubtreeIfNeeded()
 
         #expect(recursiveDescription(host).contains("Sent to agent"))
@@ -248,7 +248,7 @@ struct ReviewSessionTabViewTests {
         let view = ReviewSessionTabView.preview(record: try #require(updated), loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
 
-        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 700))
         host.layoutSubtreeIfNeeded()
 
         #expect(recursiveDescription(host).contains("Sent to agent, but failed to save handoff record: save failed"))
