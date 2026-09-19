@@ -1,13 +1,812 @@
 {
-  "source": "https://github.com/mrmans0n/alas/actions/runs/35339077070/attempts/1",
+  "source": "https://github.com/mrmans0n/alas/actions/runs/35458736464/attempts/1",
   "invocations": [
     {
       "selectors": [
-        "AlasTests/ACPProcessLivenessTests",
-        "AlasTests/ACPRemoteFileServerTests",
-        "AlasTests/ACPSessionTerminalRoutingTests"
+        "AlasTests/ACPAdapterInstallCoordinatorTests",
+        "AlasTests/ACPAttachmentMimeTypeTests",
+        "AlasTests/ACPChangeNotifierTests",
+        "AlasTests/ACPComposerActionButtonMetricsTests",
+        "AlasTests/ACPComposerFocusPolicyTests",
+        "AlasTests/ACPContentBlockImageTests",
+        "AlasTests/ACPDictationRegionTests",
+        "AlasTests/ACPFirstRunConnectingPolicyTests",
+        "AlasTests/ACPInitializeTests",
+        "AlasTests/ACPMCPServerTests",
+        "AlasTests/ACPMarkdownInlineTextViewHeightTests",
+        "AlasTests/ACPMessageTests",
+        "AlasTests/ACPPermissionDecisionLogTests",
+        "AlasTests/ACPReconnectPolicyTests",
+        "AlasTests/ACPScrollDirectionClassifierTests",
+        "AlasTests/ACPSessionEnqueueWhileRecoveringTests",
+        "AlasTests/ACPSessionForkRunnerTests",
+        "AlasTests/ACPSessionManagerAttachRestoreTests",
+        "AlasTests/ACPSessionManagerReattachTests",
+        "AlasTests/ACPSessionOrchestrationPolicyTests",
+        "AlasTests/ACPSessionRunnerTests",
+        "AlasTests/ACPSessionTests",
+        "AlasTests/ACPSetupNudgeBannerModeTests",
+        "AlasTests/ACPSubmitRouteTests",
+        "AlasTests/ACPTranscriptCurrentPlanTests",
+        "AlasTests/ACPTranscriptRowContentTests",
+        "AlasTests/ACPTranscriptScrollerLiveScrollTests",
+        "AlasTests/ACPTranscriptScrollerReconcilerWindowLayoutTests",
+        "AlasTests/ACPTranscriptScrollerViewTests",
+        "AlasTests/ACPTranscriptTilingViewportTests",
+        "AlasTests/ACPWorktreeSessionBootstrapperTests",
+        "AlasTests/AgentBuiltinsTests",
+        "AlasTests/AgentLifecycleEventMapperTests",
+        "AlasTests/AgentsPaneTests",
+        "AlasTests/AppConfigCodeInstallTests",
+        "AlasTests/AppConfigMarkdownTests",
+        "AlasTests/AppKitDiffReviewFlingPerfTests",
+        "AlasTests/AppKitDiffScrollerReconcilerTests",
+        "AlasTests/AppStateCreateWorktreeCompletionTests",
+        "AlasTests/AppStateRepoIconTests",
+        "AlasTests/AttentionNavigationTests",
+        "AlasTests/BinaryFileTypeTests",
+        "AlasTests/CenterSelectionStateResolverTests",
+        "AlasTests/ChatFontCatalogTests",
+        "AlasTests/CheckpointRestorePresentationTests",
+        "AlasTests/ClosedTabHistoryTests",
+        "AlasTests/CodeTextViewCompletionTests",
+        "AlasTests/CommitHeaderViewTests",
+        "AlasTests/CommitReviewLoaderTests",
+        "AlasTests/CompletionEngineTests",
+        "AlasTests/CopilotInstallerTests",
+        "AlasTests/DefinitionSnippetCacheTests",
+        "AlasTests/DiffDisplaySignatureTests",
+        "AlasTests/DiffPaneDocumentCacheTests",
+        "AlasTests/DiffReviewInlineFeedbackMarkdownTests",
+        "AlasTests/DiffReviewRenderableContentEqualityTests",
+        "AlasTests/DraftCommitTabStateTests",
+        "AlasTests/EditorBufferLanguageOverrideTests",
+        "AlasTests/EditorDisplayIntegrationTests/accessibilityHintActionsNavigateAndRejectStaleOwners()",
+        "AlasTests/EditorDisplayIntegrationTests/accessibilityUsesSourceValueAndSelection()",
+        "AlasTests/EditorDisplayIntegrationTests/diagnosticBatchRepaintsWithoutRebuildingProjectionAndPreservesSourceState()",
+        "AlasTests/EditorDisplayIntegrationTests/findBackgroundExcludesHintAndSurvivesRefresh()",
+        "AlasTests/EditorDisplayIntegrationTests/findSearchesSourceAcrossHintsAndReplacementUndoesOnce()",
+        "AlasTests/EditorDisplayIntegrationTests/hoverHitRejectsHintButPreservesSourceObjectReplacementCharacter()",
+        "AlasTests/EditorDisplayIntegrationTests/minimapNavigationAndViewportFollowWrappedSourceLines()",
+        "AlasTests/EditorDisplayIntegrationTests/minimapUsesSourceRunsAndSourceLineNavigation()",
+        "AlasTests/EditorDisplayIntegrationTests/parameterizedAccessibilityReturnsSourceRangesAndText()",
+        "AlasTests/EditorDisplayIntegrationTests/projectionRefreshKeepsTheLeadingFragmentScrollAnchor()",
+        "AlasTests/EditorDisplayIntegrationTests/rulerNumbersFirstFragmentsAndEOFFromSourceLines()",
+        "AlasTests/EditorDisplayIntegrationTests/sourceAttributesAndSemanticColorsExcludeHintsAfterRebuild()",
+        "AlasTests/EditorDisplayIntegrationTests/tabSwitchRestoresSourceSelectionAndScrollWithoutOldHints()",
+        "AlasTests/EditorDisplayIntegrationTests/twoSecondServerDelayDoesNotBlockNativeTypingOrMenu()",
+        "AlasTests/EditorDisplayIntegrationTests/undoRetainsHintsOutsideTheRevertedLine()",
+        "AlasTests/EditorDisplayIntegrationTests/unicodeGeometryAndAccessibilityKeepSourceBoundaries(_:)",
+        "AlasTests/EditorDisplayIntegrationTests/unicodeRectsOccupyTheMappedGlyphs(_:_:)",
+        "AlasTests/EditorDisplayIntegrationTests/zeroWidthEOFWarningKeepsItsMarkerTooltipWithHints()",
+        "AlasTests/EditorLSPStatusResolverTests",
+        "AlasTests/EmptyTabViewTests",
+        "AlasTests/FileSystemOpenTests",
+        "AlasTests/FilesTabFilterTests",
+        "AlasTests/GGActionEventsTests",
+        "AlasTests/GGInboxHelpersTests",
+        "AlasTests/GGLandEventTests",
+        "AlasTests/GGMutationModelsTests",
+        "AlasTests/GGSplitTabsManagerTests",
+        "AlasTests/GGStackModelsTests",
+        "AlasTests/GatekeeperRemediatorTests",
+        "AlasTests/HarnessDetectorTests",
+        "AlasTests/HoverWindowControllerTests",
+        "AlasTests/ImageDiffPairResolverTests",
+        "AlasTests/IndentationHelperTests",
+        "AlasTests/InstallerHostTests",
+        "AlasTests/IssueSuggestionLoaderTests",
+        "AlasTests/LSPServerRequestsTests",
+        "AlasTests/MCPHelloEventTests",
+        "AlasTests/MarkdownFenceEditingTests",
+        "AlasTests/MarkdownViewModeTests",
+        "AlasTests/MergeRegionVisualLayoutTests",
+        "AlasTests/MermaidAttachmentCoordinatorTests",
+        "AlasTests/MermaidViewerStateTests",
+        "AlasTests/NotificationServiceTests",
+        "AlasTests/PairedAuthoredContentSurfaceTests",
+        "AlasTests/PairedPrimaryComposerSurfaceTests",
+        "AlasTests/PaneLeafEncodeTests",
+        "AlasTests/PersistenceStoreTests",
+        "AlasTests/ProjectConfigAgentOverrideTests",
+        "AlasTests/ProjectMCPConfigImporterTests",
+        "AlasTests/ProjectsManagerProjectOrderingTests",
+        "AlasTests/ReleaseCheckerTests",
+        "AlasTests/RemoteExecTests",
+        "AlasTests/RemoteHostRegistryTests",
+        "AlasTests/RemotePairingServiceTests",
+        "AlasTests/RemoteServerIntegrationTests",
+        "AlasTests/RemoteWorktreeSummaryBuilderTests",
+        "AlasTests/RepoIconResolverTests",
+        "AlasTests/RepoSelectorRecentsTests",
+        "AlasTests/ReviewChangesTabViewTests",
+        "AlasTests/ReviewHandoffProgressTests",
+        "AlasTests/ReviewRequestContextBuilderTests",
+        "AlasTests/ReviewSessionStoreTests",
+        "AlasTests/ReviewThreadWriteTests",
+        "AlasTests/RightPaneRailReducerTests",
+        "AlasTests/RightPaneStateReviewLoopPushTests",
+        "AlasTests/RightRailSizingTests",
+        "AlasTests/SQLiteDatabaseTests",
+        "AlasTests/SemanticTokensSchedulingTests",
+        "AlasTests/ShortcutBindingTests",
+        "AlasTests/SidebarVisibilityTests",
+        "AlasTests/StagedDiffSelectionBridgingTests",
+        "AlasTests/SurfaceViewShortcutTests",
+        "AlasTests/TabMergeConflictCodingTests",
+        "AlasTests/TabsManagerTests",
+        "AlasTests/ThreePaneSizingTests",
+        "AlasTests/TrackedRevisionTargetTests",
+        "AlasTests/WebPreviewAutomationBrowserTests",
+        "AlasTests/WorkingTreeChangeGroupTests",
+        "AlasTests/WorkspaceCheckoutBoundaryTests",
+        "AlasTests/WorkspaceConfigurationResolverTests",
+        "AlasTests/WorkspaceLSPManagerStatusTests",
+        "AlasTests/WorkspaceSidebarLayoutTests",
+        "AlasTests/WorktreeCleanupConfigTests",
+        "AlasTests/WorktreeRowStatusTests",
+        "AlasTests/WorktreeWatcherFilterTests"
       ],
-      "seconds": 31.48
+      "seconds": 112.56
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPAdapterTargetTests",
+        "AlasTests/ACPAuthFailureTests",
+        "AlasTests/ACPChatLayoutTests",
+        "AlasTests/ACPComposerCodeBlockStylingTests",
+        "AlasTests/ACPComposerImageExtractTests",
+        "AlasTests/ACPContextCompactionPresentationTests",
+        "AlasTests/ACPDictationServiceTests",
+        "AlasTests/ACPGoalPillTests",
+        "AlasTests/ACPLaunchCatalogTests",
+        "AlasTests/ACPMCPStatusPolicyTests",
+        "AlasTests/ACPMarkdownInlineTextViewMeasurementCacheTests",
+        "AlasTests/ACPMessageTimestampFormatterTests",
+        "AlasTests/ACPPermissionFSTests",
+        "AlasTests/ACPRemoteAdapterInstallerTests",
+        "AlasTests/ACPSelectChipMetricsTests",
+        "AlasTests/ACPSessionForkAttachTests",
+        "AlasTests/ACPSessionHydrationStateTests",
+        "AlasTests/ACPSessionManagerAttachStateTests",
+        "AlasTests/ACPSessionManagerRemoteRestoreTests",
+        "AlasTests/ACPSessionPersistenceTests",
+        "AlasTests/ACPSessionStoreActivityTests",
+        "AlasTests/ACPSessionToolCallTruncationTests",
+        "AlasTests/ACPSlashPickerTests",
+        "AlasTests/ACPThumbnailImageCacheTests",
+        "AlasTests/ACPTranscriptLogicalScrollModelTests",
+        "AlasTests/ACPTranscriptRowHostingPoolTests",
+        "AlasTests/ACPTranscriptScrollerLogicalNavigationTests",
+        "AlasTests/ACPTranscriptScrollerRestoreLatchTests",
+        "AlasTests/ACPTranscriptScrollerViewportHeightReconciliationTests",
+        "AlasTests/ACPTranscriptWindowTests",
+        "AlasTests/ANSIStreamTests",
+        "AlasTests/AgentConfiguredCatalogTests",
+        "AlasTests/AgentPathResolveTests",
+        "AlasTests/AlasFieldTests",
+        "AlasTests/AppConfigCodeTextRenderingTests",
+        "AlasTests/AppConfigShortcutsCodingTests",
+        "AlasTests/AppKitDiffReviewPresentationStateTests",
+        "AlasTests/AppKitDiffScrollerStressTests",
+        "AlasTests/AppStateFocusMainWorktreeTests",
+        "AlasTests/AppStateRightPaneRailAcceptanceTests",
+        "AlasTests/AttentionProducerTests",
+        "AlasTests/BlockedLanguageServerNudgeResolverTests",
+        "AlasTests/CenterTabCompositionTests",
+        "AlasTests/ChatPaneTests",
+        "AlasTests/CheckpointWriterLeaseStoreTests",
+        "AlasTests/CodeActionsFeatureTests",
+        "AlasTests/CodeTextViewIndentationTests",
+        "AlasTests/CommitInfoTests",
+        "AlasTests/CommitRowTests",
+        "AlasTests/CompletionFeatureTests",
+        "AlasTests/CopyFeedbackStateTests",
+        "AlasTests/DiagnosticDetailsTests",
+        "AlasTests/DiffFeedbackLaneTests",
+        "AlasTests/DiffPaneLSPLineMapTests",
+        "AlasTests/DiffReviewModelsTests",
+        "AlasTests/DiffReviewScrollSpyTests",
+        "AlasTests/DraftCommitTabsManagerTests",
+        "AlasTests/EditorBufferStoreTests",
+        "AlasTests/EditorDisplayMapTests",
+        "AlasTests/EditorNavigationHistoryTests",
+        "AlasTests/EnvBuilderTests",
+        "AlasTests/FileTreeBuilderTests",
+        "AlasTests/FilesTabLoadingIndicatorTests",
+        "AlasTests/GGAvailabilityTests",
+        "AlasTests/GGInboxHostTests",
+        "AlasTests/GGLandingPresentationTests",
+        "AlasTests/GGServiceActionsTests",
+        "AlasTests/GGStackActionStateTests",
+        "AlasTests/GGStackReadinessModelTests",
+        "AlasTests/GeminiInstallerTests",
+        "AlasTests/HarnessServiceTests",
+        "AlasTests/HunkPatchBuilderTests",
+        "AlasTests/ImageDiffSideBySideViewTests",
+        "AlasTests/InlayHintsFeatureTests",
+        "AlasTests/IssueAttachmentTests",
+        "AlasTests/JSONRPCFramerTests",
+        "AlasTests/LanguageRegistryTests",
+        "AlasTests/MCPRegistrationDecisionTests",
+        "AlasTests/MarkdownFenceResolveTests",
+        "AlasTests/MasonSnapshotTests",
+        "AlasTests/MergeResultPaneRenderPlanTests",
+        "AlasTests/MermaidDiagramLayoutTests",
+        "AlasTests/MinimapTests",
+        "AlasTests/NumstatParserTests",
+        "AlasTests/PairedComposerTextControlsTests",
+        "AlasTests/PairedReviewComposerSurfaceTests",
+        "AlasTests/PaneTreeTests",
+        "AlasTests/PiACPInstallerTests",
+        "AlasTests/ProjectConfigHostTests",
+        "AlasTests/ProjectMCPServerEditorPolicyTests",
+        "AlasTests/ProviderReviewActionsTests",
+        "AlasTests/ReleaseInfoTests",
+        "AlasTests/RemoteFileOpsTests",
+        "AlasTests/RemoteHostStatusStoreTests",
+        "AlasTests/RemotePollCadenceTests",
+        "AlasTests/RemoteSessionGatewayTests",
+        "AlasTests/RenameFeatureTests/defaultFalseAndMalformedRangeReject()",
+        "AlasTests/RenameFeatureTests/explicitFormattingChangesBufferWithoutSavingAndArmsSharedUndo()",
+        "AlasTests/RenameFeatureTests/indentationMatchesEditor()",
+        "AlasTests/RenameFeatureTests/nullPreparationRejectsRename()",
+        "AlasTests/RenameFeatureTests/prepareCapabilityAndRangeFormatting()",
+        "AlasTests/RenameFeatureTests/prepareVariants(_:)",
+        "AlasTests/RenameFeatureTests/renameNullMeansNoEdits()",
+        "AlasTests/RenameFeatureTests/serverRejectionKeepsItsMessage()",
+        "AlasTests/RenameFeatureTests/unopenedPreviewTargetsHaveNormalUndoInInitiatingEditor(resourceOnly:)",
+        "AlasTests/RepoMCPExternalSyncTests",
+        "AlasTests/RepositoryAgentMenuPolicyTests",
+        "AlasTests/ReviewDraftCommentAgentModelTests",
+        "AlasTests/ReviewLoopDrawerTests",
+        "AlasTests/ReviewRequestDiffLoaderTests",
+        "AlasTests/ReviewSessionTabViewTests",
+        "AlasTests/RevisionFollowCapabilityTests",
+        "AlasTests/RightPaneSelectionStateResolverTests",
+        "AlasTests/RightPaneStateUnstagePathsTests",
+        "AlasTests/RunEndpointTests",
+        "AlasTests/SearchModelTests",
+        "AlasTests/SemanticVersionTests",
+        "AlasTests/ShortcutRecorderValidationTests",
+        "AlasTests/SignatureHelpFeatureTests",
+        "AlasTests/StartupRecoveryTests",
+        "AlasTests/SymbolsFeatureTests",
+        "AlasTests/TabsManagerBufferTests",
+        "AlasTests/TestWindowCleanupTests",
+        "AlasTests/TitlelessWindowTests",
+        "AlasTests/TreeSitterHighlighterTests",
+        "AlasTests/WebPreviewAutomationRoutingTests",
+        "AlasTests/WorkingTreeFlatRowTests",
+        "AlasTests/WorkspaceCheckoutCoordinatorCreationTests",
+        "AlasTests/WorkspaceDefinitionDialogModelTests",
+        "AlasTests/WorkspaceLifecycleConfirmationTests",
+        "AlasTests/WorkspaceSpaceMigrationTests",
+        "AlasTests/WorktreeCleanupModelTests",
+        "AlasTests/WorktreeServiceCreatedAtTests",
+        "AlasTests/WorktreeWatcherTests"
+      ],
+      "seconds": 133.34
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPAdapterUpdateBannerDeciderTests",
+        "AlasTests/ACPAuthNudgeBannerTests",
+        "AlasTests/ACPChatTypographyTests",
+        "AlasTests/ACPComposerCodeFenceKeyTests",
+        "AlasTests/ACPComposerPairedDelimiterTests",
+        "AlasTests/ACPContextRingTests",
+        "AlasTests/ACPDiffGeneratorTests",
+        "AlasTests/ACPHarnessBridgeTests",
+        "AlasTests/ACPLaunchPathResolverTests",
+        "AlasTests/ACPManagedAdapterDescriptorTests",
+        "AlasTests/ACPMarkdownLiveStylerImageChipTests",
+        "AlasTests/ACPMessageWireTests",
+        "AlasTests/ACPPermissionPolicyTests",
+        "AlasTests/ACPRemoteAdapterManagementTests",
+        "AlasTests/ACPSelectChipTests",
+        "AlasTests/ACPSessionForkManagerTests",
+        "AlasTests/ACPSessionHydratorTests",
+        "AlasTests/ACPSessionManagerDisposalTests",
+        "AlasTests/ACPSessionManagerRetentionTests",
+        "AlasTests/ACPSessionQueueAPITests",
+        "AlasTests/ACPSessionStoreCRUDTests",
+        "AlasTests/ACPSessionUpdateTests",
+        "AlasTests/ACPSpeechDictationEngineFormatTests",
+        "AlasTests/ACPToolCallCardTests",
+        "AlasTests/ACPTranscriptMarkdownCacheEvictionTests",
+        "AlasTests/ACPTranscriptRowHostingViewTests",
+        "AlasTests/ACPTranscriptScrollerPolicyTests",
+        "AlasTests/ACPTranscriptScrollerRowSpecsTests",
+        "AlasTests/ACPTranscriptTests",
+        "AlasTests/ACPUsageUpdateDecodeTests",
+        "AlasTests/AdapterUpdateStateCodableTests",
+        "AlasTests/AgentDefinitionTests",
+        "AlasTests/AgentPathTests",
+        "AlasTests/AlasGhosttyRuntimeCallbackTests",
+        "AlasTests/AppConfigFilesTests",
+        "AlasTests/AppConfigSidebarChromeOverridesTests",
+        "AlasTests/AppKitDiffReviewRowPlanTests",
+        "AlasTests/AppKitDiffScrollerTests",
+        "AlasTests/AppStateFollowStackEntryTests",
+        "AlasTests/AppStateRunRecordTests",
+        "AlasTests/AttentionSignalAggregatorTests",
+        "AlasTests/BuildIdentityTests",
+        "AlasTests/ChangeSummaryVisibilityTests",
+        "AlasTests/CheckpointDiffTabTests",
+        "AlasTests/ChevronStabilityTests",
+        "AlasTests/CodeHostModelsTests",
+        "AlasTests/CodeTextViewMultiCursorTests",
+        "AlasTests/CommitMessageEditorViewTests",
+        "AlasTests/CommitTabStateTests",
+        "AlasTests/CompletionWindowControllerTests",
+        "AlasTests/CursorInstallerTests",
+        "AlasTests/DiagnosticsRangeTests",
+        "AlasTests/DiffInlineCommentModelTests",
+        "AlasTests/DiffPaneRowPlanTests",
+        "AlasTests/DiffReviewRailThreadCountsTests",
+        "AlasTests/DiffReviewStagedMutationActionsTests",
+        "AlasTests/DragOutActivationTests",
+        "AlasTests/EditorBufferTests",
+        "AlasTests/EditorFindControllerTests",
+        "AlasTests/EditorOverlayPanelTests",
+        "AlasTests/EventHolderTests",
+        "AlasTests/FileTreeRowIndentationTests",
+        "AlasTests/FocusDirectionTests",
+        "AlasTests/GGCommitMenuModelTests",
+        "AlasTests/GGInboxModelsTests",
+        "AlasTests/GGLandingStoreTests",
+        "AlasTests/GGServiceInboxTests",
+        "AlasTests/GGStackCacheTests",
+        "AlasTests/GGStackSummaryStoreTests",
+        "AlasTests/GhosttyConfigBuilderTests",
+        "AlasTests/HeadReaderTests",
+        "AlasTests/IconSymbolTests",
+        "AlasTests/ImageDiffSwipeViewTests",
+        "AlasTests/InlineErrorStripTests",
+        "AlasTests/IssueAutocompleteModelTests",
+        "AlasTests/LSPCapabilitiesTests",
+        "AlasTests/LanguageServerAvailabilityTests",
+        "AlasTests/MCPRegistrationRegistryTests",
+        "AlasTests/MarkdownFileTypeTests",
+        "AlasTests/MemoryDiagnosticsTests",
+        "AlasTests/MergeScrollCoordinatorTests",
+        "AlasTests/MermaidDiagramThemeTests",
+        "AlasTests/NativeContextMenuTests",
+        "AlasTests/OKLCHTests",
+        "AlasTests/PairedDelimiterDeadKeyTests",
+        "AlasTests/PairedTextEditorMarkdownStylingTests",
+        "AlasTests/PathsTests",
+        "AlasTests/PiInstallerTests",
+        "AlasTests/ProjectConfigTests",
+        "AlasTests/ProjectMCPServerTests",
+        "AlasTests/ProviderReviewOriginalPathResolverTests",
+        "AlasTests/RemoteAccessPolicyTests",
+        "AlasTests/RemoteFileSearchGateTests",
+        "AlasTests/RemoteImageCacheTests",
+        "AlasTests/RemoteProjectCollisionTests",
+        "AlasTests/RemoteStatusFingerprintTests",
+        "AlasTests/RepoConfigStoreTests",
+        "AlasTests/RepoMCPResolverTests",
+        "AlasTests/RepositoryAgentSelectionPolicyTests",
+        "AlasTests/ReviewDraftCommentStoreTests",
+        "AlasTests/ReviewLoopHandoffBuilderTests",
+        "AlasTests/ReviewRequestDraftTests",
+        "AlasTests/ReviewSessionTargetTests",
+        "AlasTests/RevisionFollowPresentationTests",
+        "AlasTests/RightPaneStateContentFingerprintTests",
+        "AlasTests/RightPaneTabShortcutTests",
+        "AlasTests/RunHistoryStoreTests",
+        "AlasTests/SectionHeaderTests",
+        "AlasTests/SessionOwnerIDTests",
+        "AlasTests/ShortcutReservationsTests",
+        "AlasTests/SnippetSessionTests",
+        "AlasTests/StartupScriptInstallerTests",
+        "AlasTests/TabActivityIconTintTests",
+        "AlasTests/TabsManagerPaneTests",
+        "AlasTests/TextEditCoordinatesTests",
+        "AlasTests/TouchTargetSmokeTests",
+        "AlasTests/UnionCanvasGeometryTests",
+        "AlasTests/WebPreviewBrowserTests",
+        "AlasTests/WorkingTreeStageAllActionTests",
+        "AlasTests/WorkspaceCheckoutCreationModelTests",
+        "AlasTests/WorkspaceEditPlannerTests",
+        "AlasTests/WorkspaceMemberReviewRollupTests",
+        "AlasTests/WorkspaceStoreTests",
+        "AlasTests/WorktreeCleanupScannerTests",
+        "AlasTests/WorktreeSortMenuTests"
+      ],
+      "seconds": 79.23
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPAdapterUpdateStoreTests",
+        "AlasTests/ACPBareURLLinkifierTests",
+        "AlasTests/ACPChipStateTests",
+        "AlasTests/ACPComposerControlPresentationDictationTests",
+        "AlasTests/ACPComposerPlaceholderTests",
+        "AlasTests/ACPDelayedHoverVisibilityTests",
+        "AlasTests/ACPElicitationCoordinatorTests",
+        "AlasTests/ACPImageBlocksTests",
+        "AlasTests/ACPLaunchSpecNpmPackageTests",
+        "AlasTests/ACPManagerAccessorsTests",
+        "AlasTests/ACPMarkdownTextBareURLTests",
+        "AlasTests/ACPMockClientTests",
+        "AlasTests/ACPPlanPillStateTests",
+        "AlasTests/ACPRemoteLaunchTests",
+        "AlasTests/ACPSessionAgentStateTests",
+        "AlasTests/ACPSessionForkPersistenceTests",
+        "AlasTests/ACPSessionInfoUpdateDecodeTests",
+        "AlasTests/ACPSessionManagerHydrationTests",
+        "AlasTests/ACPSessionManagerSubmitTests",
+        "AlasTests/ACPSessionRecoveryIntegrationTests",
+        "AlasTests/ACPSessionStoreDedupTests",
+        "AlasTests/ACPSessionUsageTests",
+        "AlasTests/ACPSpeechDictationEngineLocaleTests",
+        "AlasTests/ACPToolCallContentTests",
+        "AlasTests/ACPTranscriptMarkdownTests",
+        "AlasTests/ACPTranscriptRowWindowTests",
+        "AlasTests/ACPTranscriptScrollerQueueBubbleTokenTests",
+        "AlasTests/ACPTranscriptScrollerScrollBackTests",
+        "AlasTests/ACPTranscriptTilingControllerTests",
+        "AlasTests/ACPUserInputFormStateTests",
+        "AlasTests/AdvancedSettingsVisibilityTests",
+        "AlasTests/AgentDetectorTests",
+        "AlasTests/AgentRegistryTests",
+        "AlasTests/AlasMCPHTTPSupervisorTests",
+        "AlasTests/AppConfigHarnessMCPTests",
+        "AlasTests/AppConfigTests",
+        "AlasTests/AppKitDiffReviewScrollerTests",
+        "AlasTests/AppKitDiffTilingControllerTests",
+        "AlasTests/AppStateOverlayFocusTests",
+        "AlasTests/AttachIssueDialogModelTests",
+        "AlasTests/AttentionStoreTests",
+        "AlasTests/BuiltInAlasMCPTests",
+        "AlasTests/ChangesPreparationModelTests",
+        "AlasTests/CheckpointFileSystemTests",
+        "AlasTests/ClaudeCodeACPInstallerTests",
+        "AlasTests/CodeHostRemoteDetectorTests",
+        "AlasTests/CodexACPInstallerTests",
+        "AlasTests/CommitPromptStatusTests",
+        "AlasTests/CommitTabViewTests",
+        "AlasTests/ComposerActionTests",
+        "AlasTests/CursorModelVariantsDeriveTests",
+        "AlasTests/DialogChromeLayoutTests",
+        "AlasTests/DiffInlineHighlighterTests",
+        "AlasTests/DiffPaneTextDocumentBuilderTests",
+        "AlasTests/DiffReviewRenderBudgetTests",
+        "AlasTests/DiffReviewSurfaceTests",
+        "AlasTests/DragOutPayloadTests",
+        "AlasTests/EditorCommandRouterTests",
+        "AlasTests/EditorFindRequestTests",
+        "AlasTests/EditorSemanticLayerTests",
+        "AlasTests/FileBookmarksTests",
+        "AlasTests/FileTypeIconTests",
+        "AlasTests/FollowRevisionPrefillTests",
+        "AlasTests/GGConfigCodableTests",
+        "AlasTests/GGInboxStoreTests",
+        "AlasTests/GGLandingTabsTests",
+        "AlasTests/GGSidebarRefreshControllerTests",
+        "AlasTests/GGStackChipModelTests",
+        "AlasTests/GGUndoMarkerStoreTests",
+        "AlasTests/HTTPRequestParserTests",
+        "AlasTests/HoverFeatureBehaviorTests",
+        "AlasTests/ImageDiffDecodedCacheTests",
+        "AlasTests/ImageDiffViewTests",
+        "AlasTests/InstallNudgeResolverTests",
+        "AlasTests/IssueCompletionGeometryTests",
+        "AlasTests/LSPClientLifecycleTests",
+        "AlasTests/LanguageServerRegistryTests",
+        "AlasTests/MarkdownCodeBlockStylerTests",
+        "AlasTests/MarkdownImageLoaderTests",
+        "AlasTests/MemorySnapshotTests",
+        "AlasTests/MergeView3WayLayoutTests",
+        "AlasTests/MermaidModelsTests",
+        "AlasTests/NavigationFeatureTests",
+        "AlasTests/OpenCodeInstallerTests",
+        "AlasTests/PairedDelimiterEditingTests",
+        "AlasTests/PaneBandLayoutTests",
+        "AlasTests/PendingDiscardTests",
+        "AlasTests/PiMCPAdapterInspectorTests",
+        "AlasTests/ProjectIconImageStagingTests",
+        "AlasTests/ProjectPickerTests",
+        "AlasTests/QueuedPromptTests",
+        "AlasTests/RemoteAgentProbeTests",
+        "AlasTests/RemoteHelperClientTests",
+        "AlasTests/RemoteLSPLauncherTests",
+        "AlasTests/RemoteProtocolTests",
+        "AlasTests/RemoteWebAssetTests",
+        "AlasTests/RepoConfigTests",
+        "AlasTests/RepoMCPTrustBannerPolicyTests",
+        "AlasTests/ReviewChangesLoaderTests",
+        "AlasTests/ReviewDraftModelsTests",
+        "AlasTests/ReviewLoopHandoffRoutingTests",
+        "AlasTests/ReviewScopeSelectionTests",
+        "AlasTests/ReviewTabViewTests",
+        "AlasTests/RightPaneGGLandTests",
+        "AlasTests/RightPaneStateDiscardPathsTests",
+        "AlasTests/RightPaneTabTests",
+        "AlasTests/RunRecordStoreTests",
+        "AlasTests/SemanticTokensClientTests",
+        "AlasTests/SettingsSaveNormalizationTests",
+        "AlasTests/ShortcutResolverTests",
+        "AlasTests/SpacePagerIndicatorTests",
+        "AlasTests/StartupScriptResolverTests",
+        "AlasTests/TabActivityPulseTests",
+        "AlasTests/TabsManagerReviewRequestDraftTests",
+        "AlasTests/ThemeSidebarContrastTests",
+        "AlasTests/TrackedRevisionCodingTests",
+        "AlasTests/UpdateThrottleTests",
+        "AlasTests/WebPreviewCommandTests",
+        "AlasTests/WorkspaceACPSessionTests",
+        "AlasTests/WorkspaceCheckoutDetailModelTests",
+        "AlasTests/WorkspaceEditPreviewTests",
+        "AlasTests/WorkspaceModelsTests",
+        "AlasTests/WorkspaceWorkItemTests",
+        "AlasTests/WorktreeCodableTests",
+        "AlasTests/WorktreeStatusParserTests"
+      ],
+      "seconds": 70.72
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPAdapterVersionCheckerTests",
+        "AlasTests/ACPBrokerClientTests",
+        "AlasTests/ACPCodeBlockHighlighterTests",
+        "AlasTests/ACPComposerDraftBridgeTests",
+        "AlasTests/ACPConfigOptionTests",
+        "AlasTests/ACPDelegatedSessionsPolicyTests",
+        "AlasTests/ACPElicitationTests",
+        "AlasTests/ACPImageEncodingTests",
+        "AlasTests/ACPLaunchSpecTests",
+        "AlasTests/ACPMarkdownBlockCacheTests",
+        "AlasTests/ACPMentionPickerTests",
+        "AlasTests/ACPNewChatEmptyStateTests",
+        "AlasTests/ACPPromptCapabilitiesTests",
+        "AlasTests/ACPRemoteMCPFilterTests",
+        "AlasTests/ACPSessionByteAccountingTests",
+        "AlasTests/ACPSessionForkPolicyTests",
+        "AlasTests/ACPSessionLeaseTests",
+        "AlasTests/ACPSessionManagerLeaseTests",
+        "AlasTests/ACPSessionManagerTests",
+        "AlasTests/ACPSessionRunnerAgentStateTests",
+        "AlasTests/ACPSessionStoreQueueTests",
+        "AlasTests/ACPSessionVisibleQueueTests",
+        "AlasTests/ACPStdioQuestionDispatchTests",
+        "AlasTests/ACPToolCallPresentationTests",
+        "AlasTests/ACPTranscriptMessageIndexTests",
+        "AlasTests/ACPTranscriptScrollerConvergenceTests",
+        "AlasTests/ACPTranscriptScrollerReconcilerApplyTests",
+        "AlasTests/ACPTranscriptScrollerScrollbarTrackClickTests",
+        "AlasTests/ACPTranscriptTilingHeightTests",
+        "AlasTests/ACPUserScrollEventTests",
+        "AlasTests/AgentAutoLaunchTests",
+        "AlasTests/AgentExecutionTargetTests",
+        "AlasTests/AgentSidebarFormattingTests",
+        "AlasTests/AppConfigAgentsCodingTests",
+        "AlasTests/AppConfigHarnessTests",
+        "AlasTests/AppConfigWorktreeOrderingDecodeTests",
+        "AlasTests/AppKitDiffRowHostingPoolTests",
+        "AlasTests/AppQuitActionTests",
+        "AlasTests/AppStateOverlayTests",
+        "AlasTests/AttentionInboxViewTests",
+        "AlasTests/BaseBranchSelectorTests",
+        "AlasTests/CapabilityPresetsTests",
+        "AlasTests/ChangesTabViewTests",
+        "AlasTests/CheckpointModelTests",
+        "AlasTests/ClaudeInstallerTests",
+        "AlasTests/CodeLanguageDetailViewTests",
+        "AlasTests/CodexInstallerTests",
+        "AlasTests/CommitPublishModelsTests",
+        "AlasTests/CommitsSectionTitleTests",
+        "AlasTests/ConflictMarkerParserTests",
+        "AlasTests/CursorModelVariantsTests",
+        "AlasTests/DiffContextExpansionTests",
+        "AlasTests/DiffOpenFileAvailabilityTests",
+        "AlasTests/DiffParserTests",
+        "AlasTests/DiffReviewRenderContextCacheTests",
+        "AlasTests/DiffSelectableTextTests",
+        "AlasTests/DragOutSessionTests",
+        "AlasTests/EditorDisplayDocumentTests",
+        "AlasTests/EditorInlayLayoutTests",
+        "AlasTests/EditorTabStateMarkdownCodableTests",
+        "AlasTests/FileContextMenuActionsTests",
+        "AlasTests/FilesBookmarksPaneMetricsTests",
+        "AlasTests/FormatOnSaveTests",
+        "AlasTests/GGConfigReaderTests",
+        "AlasTests/GGInboxTabsTests",
+        "AlasTests/GGMCPInjectionTests",
+        "AlasTests/GGSplitCommitModelTests",
+        "AlasTests/GGStackCreateModeTests",
+        "AlasTests/GGWorktreeMenuModelTests",
+        "AlasTests/HarnessBadgeSurfaceTests",
+        "AlasTests/HoverFeatureRenderingTests",
+        "AlasTests/ImageDiffDifferenceComputerTests",
+        "AlasTests/ImageFileTypeTests",
+        "AlasTests/InstallRecipeTests",
+        "AlasTests/IssuePromptBuilderTests",
+        "AlasTests/LSPMessagesTests",
+        "AlasTests/LineEndingTests",
+        "AlasTests/MarkdownCodeBoxSurfaceOptInTests",
+        "AlasTests/MarkdownParserTests",
+        "AlasTests/MergeAgentTests",
+        "AlasTests/MergeWordDiffTests",
+        "AlasTests/MermaidRenderCacheTests",
+        "AlasTests/NewWorktreeDialogTests",
+        "AlasTests/OpenSessionsTests",
+        "AlasTests/PairedDelimiterFenceBoxTests",
+        "AlasTests/PaneCollapseMotionTests",
+        "AlasTests/PendingReviewTests",
+        "AlasTests/PiMCPConfigWriterTests",
+        "AlasTests/ProjectIconSizeTests",
+        "AlasTests/ProjectsManagerFileBookmarksTests",
+        "AlasTests/RangeReviewLoaderTests",
+        "AlasTests/RemoteConfigTests",
+        "AlasTests/RemoteHelperInstallerTests",
+        "AlasTests/RemoteLastActivityTests",
+        "AlasTests/RemoteQueueProjectionTests",
+        "AlasTests/RemoteWorktreeFileAccessTests",
+        "AlasTests/RepoGroupViewLayoutTests",
+        "AlasTests/RepoMCPTrustTests",
+        "AlasTests/ReviewChangesModelsTests",
+        "AlasTests/ReviewEvidenceTests",
+        "AlasTests/ReviewReadinessModelTests",
+        "AlasTests/ReviewSessionModelsTests",
+        "AlasTests/ReviewTargetPaletteModelTests",
+        "AlasTests/RightPaneLoadingSkeletonLayoutTests",
+        "AlasTests/RightPaneStateFileTreeTests",
+        "AlasTests/RightPaneToolbarModelTests",
+        "AlasTests/RunReportTabTests",
+        "AlasTests/SemanticTokensCoalescingTests",
+        "AlasTests/SettingsSectionTests",
+        "AlasTests/SidebarHeaderViewTests",
+        "AlasTests/SpacesManagerTests",
+        "AlasTests/StatusParserTests",
+        "AlasTests/TabActivityPulseTransitionTests",
+        "AlasTests/TabsManagerReviewSessionTests",
+        "AlasTests/ThemeStoreTests",
+        "AlasTests/TrackedRevisionResolverTests",
+        "AlasTests/WarningCharacterTests",
+        "AlasTests/WebPreviewFeedbackTests",
+        "AlasTests/WorkspaceAcceptanceTests",
+        "AlasTests/WorkspaceCheckoutPreflightTests",
+        "AlasTests/WorkspaceEditUndoTests",
+        "AlasTests/WorkspaceNavigationStateTests",
+        "AlasTests/WorktreeCheckpointStoreTests",
+        "AlasTests/WorktreePathTemplateRendererTests",
+        "AlasTests/WorktreeStatusStoreTests"
+      ],
+      "seconds": 56.09
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPAgentProfilesTests",
+        "AlasTests/ACPBrokerProtocolTests",
+        "AlasTests/ACPComposerActionButtonChevronTests",
+        "AlasTests/ACPComposerDraftTests",
+        "AlasTests/ACPConnectionTests",
+        "AlasTests/ACPDictationLocaleFormatterTests",
+        "AlasTests/ACPFileWriterTests",
+        "AlasTests/ACPImageStagingTests",
+        "AlasTests/ACPMCPPromptPreambleTests",
+        "AlasTests/ACPMarkdownInlineRendererTests",
+        "AlasTests/ACPMessageStableIdTests",
+        "AlasTests/ACPOrchestrationStoreTests",
+        "AlasTests/ACPQuestionPromptTests",
+        "AlasTests/ACPRemoteNodeEnvironmentTests",
+        "AlasTests/ACPSessionDiscoveryTests",
+        "AlasTests/ACPSessionForkPresentationTests",
+        "AlasTests/ACPSessionLifecycleTests",
+        "AlasTests/ACPSessionManagerQueueRestoreTests",
+        "AlasTests/ACPSessionOrchestrationCoordinatorTests",
+        "AlasTests/ACPSessionRunnerQueueTests",
+        "AlasTests/ACPSessionStoreSchemaTests",
+        "AlasTests/ACPSetupCheckerTests",
+        "AlasTests/ACPStreamingTextTests",
+        "AlasTests/ACPTranscriptChangeLogTests",
+        "AlasTests/ACPTranscriptQueuePolicyTests",
+        "AlasTests/ACPTranscriptScrollerForkDividerTokenTests",
+        "AlasTests/ACPTranscriptScrollerReconcilerDiffTests",
+        "AlasTests/ACPTranscriptScrollerSyntheticTokenTests",
+        "AlasTests/ACPTranscriptTilingInsertRemoveTests",
+        "AlasTests/ACPVisibleRowsCacheTests",
+        "AlasTests/AgentAvailabilityStoreTests",
+        "AlasTests/AgentLauncherModelTests",
+        "AlasTests/AgentSidebarRollupTests",
+        "AlasTests/AppConfigChangesTests",
+        "AlasTests/AppConfigInlayHintsTests",
+        "AlasTests/AppIconTests",
+        "AlasTests/AppKitDiffRowHostingViewTests",
+        "AlasTests/AppStateAttentionTests",
+        "AlasTests/AppStateRemoteWorktreePathTests",
+        "AlasTests/AttentionIntegrationTests",
+        "AlasTests/BaseResolutionMappingTests",
+        "AlasTests/CenterPaneRightRailRevealTests",
+        "AlasTests/ChangesTreeBuilderTests",
+        "AlasTests/CheckpointPresentationTests",
+        "AlasTests/CloseTabConfirmationPolicyTests",
+        "AlasTests/CodeTextViewAutoPairTests",
+        "AlasTests/CommitContextBuilderTests",
+        "AlasTests/CommitPublishWorkflowTests",
+        "AlasTests/CompletionDocumentationRendererTests",
+        "AlasTests/ContentResultGroupViewTests",
+        "AlasTests/DebounceTimerTests",
+        "AlasTests/DiffDisplayModelBuilderTests",
+        "AlasTests/DiffPaneAppKitScrollerTests",
+        "AlasTests/DiffReviewImageStateTests",
+        "AlasTests/DiffReviewRenderEligibilityTests",
+        "AlasTests/DraftAmendPrefillTests",
+        "AlasTests/EditorBufferExternalEditableTests",
+        "AlasTests/EditorDisplayInputTests",
+        "AlasTests/EditorLSPBindingTests",
+        "AlasTests/EmojiPickerSelectionTests",
+        "AlasTests/FileSearchRankerTests",
+        "AlasTests/FilesTabCompactChainTests",
+        "AlasTests/FuzzyMatchTests",
+        "AlasTests/GGFollowEntryModelTests",
+        "AlasTests/GGInstallControllerTests",
+        "AlasTests/GGMutationCoordinatorTests",
+        "AlasTests/GGSplitPreviewRowPlanTests",
+        "AlasTests/GGStackGateTests",
+        "AlasTests/GatekeeperAssessorTests",
+        "AlasTests/HarnessConfigAutoRunTests",
+        "AlasTests/HoverHighlightFeatureTests",
+        "AlasTests/ImageDiffModeApplicabilityTests",
+        "AlasTests/InAppNotificationTests",
+        "AlasTests/InstallSourceTests",
+        "AlasTests/IssueResolverTests",
+        "AlasTests/LSPPositionCodecTests",
+        "AlasTests/MCPAttachmentPlannerTests",
+        "AlasTests/MarkdownFenceContainmentTests",
+        "AlasTests/MarkdownRendererTests",
+        "AlasTests/MergeConflictBinaryDetectionTests",
+        "AlasTests/MergedReviewRequestTests",
+        "AlasTests/MermaidRenderServiceTests",
+        "AlasTests/NewWorktreeIssueStateTests",
+        "AlasTests/OwnerTabsManagerTests",
+        "AlasTests/PairedDelimiterFenceTests",
+        "AlasTests/PaneDragMathTests",
+        "AlasTests/PendingStashDropTests",
+        "AlasTests/ProjectAvatarPresetProviderTests",
+        "AlasTests/ProjectIconTests",
+        "AlasTests/ProjectsManagerHeadUpdatesTests",
+        "AlasTests/RecommendedLanguageCatalogTests",
+        "AlasTests/RemoteContentSearchTests",
+        "AlasTests/RemoteHostCapabilitiesTests",
+        "AlasTests/RemoteNetworkTests",
+        "AlasTests/RemoteRepoValidatorTests",
+        "AlasTests/RemoteWorktreePollTests",
+        "AlasTests/RepoIconDisplayCacheTests",
+        "AlasTests/RepoSelectorModelTests",
+        "AlasTests/ReviewChangesScrollSpyTests",
+        "AlasTests/ReviewFeedbackBundleTests",
+        "AlasTests/ReviewRequestChipModelTests",
+        "AlasTests/ReviewSessionSelectionPersisterTests",
+        "AlasTests/ReviewThreadModelTests",
+        "AlasTests/RightPaneRailModelTests",
+        "AlasTests/RightPaneStateRevealTests",
+        "AlasTests/RightPaneVisibilityTests",
+        "AlasTests/RunTabPresentationTests",
+        "AlasTests/SemanticTokensFeatureTests",
+        "AlasTests/ShortcutActionTests",
+        "AlasTests/SidebarMaterialChoiceTests",
+        "AlasTests/StagedDiffLoaderTests",
+        "AlasTests/SurfaceViewKeyboardTests",
+        "AlasTests/TabBarToolbarPresentationTests",
+        "AlasTests/TabsManagerRuntimeTitleTests",
+        "AlasTests/ThemeTests",
+        "AlasTests/TrackedRevisionStallTests",
+        "AlasTests/WebPageMetadataFetcherTests",
+        "AlasTests/WebSocketFrameTests",
+        "AlasTests/WorkspaceAutomationServiceTests",
+        "AlasTests/WorkspaceCheckoutWorktreeResolverTests",
+        "AlasTests/WorkspaceFeatureFlagTests",
+        "AlasTests/WorkspacePresentationTests",
+        "AlasTests/WorktreeCleanupClassifierTests",
+        "AlasTests/WorktreeRowHeightTests",
+        "AlasTests/WorktreeUpstreamStatusTests"
+      ],
+      "seconds": 61.36
     },
     {
       "selectors": [
@@ -15,15 +814,14 @@
         "AlasTests/AppConfigTerminalTests",
         "AlasTests/AppStateCLIRoutingTests"
       ],
-      "seconds": 30.52
+      "seconds": 39.88
     },
     {
       "selectors": [
-        "AlasTests/CheckpointRestoreInterruptionTests",
         "AlasTests/CheckpointRestorePreparationTests",
         "AlasTests/CheckpointRestorePreviewTests"
       ],
-      "seconds": 298.29
+      "seconds": 37.16
     },
     {
       "selectors": [
@@ -31,7 +829,7 @@
         "AlasTests/GitIgnoreServiceTests",
         "AlasTests/GitInvocationTests"
       ],
-      "seconds": 11.62
+      "seconds": 8.26
     },
     {
       "selectors": [
@@ -39,7 +837,7 @@
         "AlasTests/GitServiceStashTests",
         "AlasTests/GitServiceUpstreamTests"
       ],
-      "seconds": 28.62
+      "seconds": 21.41
     },
     {
       "selectors": [
@@ -47,7 +845,7 @@
         "AlasTests/ProcessGitDataTests",
         "AlasTests/ProcessGitTests"
       ],
-      "seconds": 13.66
+      "seconds": 9.53
     },
     {
       "selectors": [
@@ -55,15 +853,7 @@
         "AlasTests/RightPaneGGRefreshSchedulingTests",
         "AlasTests/RightPaneGGStackErrorPresentationTests"
       ],
-      "seconds": 22.65
-    },
-    {
-      "selectors": [
-        "AlasTests/RunScriptStackDetectorTests",
-        "AlasTests/RunScriptStoreTests",
-        "AlasTests/RunScriptTemplateTests"
-      ],
-      "seconds": 21.73
+      "seconds": 12.39
     },
     {
       "selectors": [
@@ -89,39 +879,7 @@
         "AlasTests/WorkspaceTerminalSessionTests/remoteCheckoutCwdContainmentRejectsSymlinkEscapes()",
         "AlasTests/WorkspaceTerminalSessionTests/worktreeIdentityKeepsItsExistingZmxName()"
       ],
-      "seconds": 18.36
-    },
-    {
-      "selectors": [
-        "AlasTests/ACPStdioClientTests",
-        "AlasTests/ACPStdioTerminalDispatchTests",
-        "AlasTests/ACPTerminalCRLFTests"
-      ],
-      "seconds": 14.39
-    },
-    {
-      "selectors": [
-        "AlasTests/AppStateCreateWorktreeLaunchSurfaceTests",
-        "AlasTests/AppStateCreateWorktreeSymlinkTests",
-        "AlasTests/AppStateGGACPWorktreeContextTests"
-      ],
-      "seconds": 12.67
-    },
-    {
-      "selectors": [
-        "AlasTests/ClosedTabAppStateTests",
-        "AlasTests/CodeHostProviderTests",
-        "AlasTests/CommitDetailsTests"
-      ],
-      "seconds": 20.29
-    },
-    {
-      "selectors": [
-        "AlasTests/GitLabCLIProviderTests",
-        "AlasTests/GitLabCLIProviderVerdictTests",
-        "AlasTests/GitNameValidatorTests"
-      ],
-      "seconds": 7.65
+      "seconds": 13.41
     },
     {
       "selectors": [
@@ -130,15 +888,7 @@
         "AlasTests/HookCommandShellTests/claudeBusyCommand_sendsValidEvent()",
         "AlasTests/HookCommandShellTests/commandWithoutEnvVars_exitsSilently()"
       ],
-      "seconds": 11.72
-    },
-    {
-      "selectors": [
-        "AlasTests/ProcessMemoryProbeTests",
-        "AlasTests/ProcessTransportTerminationTests",
-        "AlasTests/ProjectGitWatcherTests"
-      ],
-      "seconds": 10.29
+      "seconds": 9.53
     },
     {
       "selectors": [
@@ -146,7 +896,7 @@
         "AlasTests/RightPaneStateBaseBranchTests",
         "AlasTests/RightPaneStateDiscardTests"
       ],
-      "seconds": 21.91
+      "seconds": 21.42
     },
     {
       "selectors": [
@@ -154,7 +904,210 @@
         "AlasTests/SSHCommandTests",
         "AlasTests/SSHConfigParserTests"
       ],
-      "seconds": 10.25
+      "seconds": 7.59
+    },
+    {
+      "selectors": [
+        "AlasTests/CheckpointRestoreInterruptionTests/recoveryRefusesSessionsDirtyBuffersAndReplacedLockInode()",
+        "AlasTests/CheckpointRestoreInterruptionTests/relaunchRecoversUnlessOwnedLockChanged(tamper:point:)",
+        "AlasTests/CheckpointRestoreInterruptionTests/rollbackPreservesConcurrentSelectedEditAndBackups()",
+        "AlasTests/CheckpointRestoreInterruptionTests/rollbackRemovesRestoreCreatedDirectoryBeforeRestoringOriginalFile()"
+      ],
+      "seconds": 51.91
+    },
+    {
+      "selectors": [
+        "AlasTests/AppStateKeepSessionsAliveTests",
+        "AlasTests/AppStatePersistenceTests",
+        "AlasTests/AppStateRunScriptCreationTests"
+      ],
+      "seconds": 9.12
+    },
+    {
+      "selectors": [
+        "AlasTests/CommitPublishLiveOperationsTests",
+        "AlasTests/CommitsAheadTests",
+        "AlasTests/CommitsOlderTests"
+      ],
+      "seconds": 15.95
+    },
+    {
+      "selectors": [
+        "AlasTests/HookInstallNudgeResolverTests",
+        "AlasTests/ImageDiffEndToEndTests",
+        "AlasTests/ImageDiffPairLoaderTests"
+      ],
+      "seconds": 10.89
+    },
+    {
+      "selectors": [
+        "AlasTests/RightPaneStateLoadOlderTests",
+        "AlasTests/RightPaneStatePullTests",
+        "AlasTests/RightPaneStateSyncStatusTests"
+      ],
+      "seconds": 33.19
+    },
+    {
+      "selectors": [
+        "AlasTests/WorktreeStateSnapshotterTests",
+        "AlasTests/WorktreeTrashTests",
+        "AlasTests/ZmxClientTests"
+      ],
+      "seconds": 20.35
+    },
+    {
+      "selectors": [
+        "AlasTests/RemoteFileAccessTests",
+        "AlasTests/RemoteFileStatsTests",
+        "AlasTests/RemoteTerminalLaunchTests"
+      ],
+      "seconds": 7.87
+    },
+    {
+      "selectors": [
+        "AlasTests/RightPaneStoreBaseBranchTests",
+        "AlasTests/RunScriptCompletionMonitorTests",
+        "AlasTests/RunScriptCreationTests"
+      ],
+      "seconds": 10.78
+    },
+    {
+      "selectors": [
+        "AlasTests/ZmxEnvTests",
+        "AlasTests/ZmxSessionNameTests",
+        "AlasTests/ZmxSunPathBudgetTests"
+      ],
+      "seconds": 7.18
+    },
+    {
+      "selectors": [
+        "AlasTests/ACPTerminalHostTests",
+        "AlasTests/ACPTerminalTests",
+        "AlasTests/AgentHookSocketServerCLITests"
+      ],
+      "seconds": 21.66
+    },
+    {
+      "selectors": [
+        "AlasTests/AgentTerminalLaunchTests",
+        "AlasTests/AlasCLICommandRouterTests",
+        "AlasTests/AlasCLIEnvInjectionTests"
+      ],
+      "seconds": 6.88
+    },
+    {
+      "selectors": [
+        "AlasTests/GGCommandRunningStreamingTests",
+        "AlasTests/GGReorderModelTests",
+        "AlasTests/GGServiceTests"
+      ],
+      "seconds": 21.38
+    },
+    {
+      "selectors": [
+        "AlasTests/AlasCLIRequestTests",
+        "AlasTests/AlasCLIReviewTargetResolverTests",
+        "AlasTests/AlasCLIWorktreeResolverTests"
+      ],
+      "seconds": 7.75
+    },
+    {
+      "selectors": [
+        "AlasTests/CheckpointCoordinationTests",
+        "AlasTests/CheckpointDiffLoaderTests",
+        "AlasTests/CheckpointRestoreIntegrationTests"
+      ],
+      "seconds": 46.22
+    },
+    {
+      "selectors": [
+        "AlasTests/GGWorktreeContextTests",
+        "AlasTests/GitEventFilterTests",
+        "AlasTests/GitHubCLIProviderTests"
+      ],
+      "seconds": 6.66
+    },
+    {
+      "selectors": [
+        "AlasTests/GitServiceReviewRequestDraftTests",
+        "AlasTests/GitServiceStackCommitTests",
+        "AlasTests/GitServiceStagedTests"
+      ],
+      "seconds": 9.53
+    },
+    {
+      "selectors": [
+        "AlasTests/ReviewLoopStateTests",
+        "AlasTests/ReviewSessionLoaderTests",
+        "AlasTests/RevisionSnapshotCacheTests"
+      ],
+      "seconds": 25.26
+    },
+    {
+      "selectors": [
+        "AlasTests/RunScriptMetadataTests",
+        "AlasTests/RunScriptPaletteModelTests",
+        "AlasTests/RunScriptStackCatalogTests"
+      ],
+      "seconds": 9.16
+    },
+    {
+      "selectors": [
+        "AlasTests/CheckpointRestoreInterruptionTests/checkpointRefreshLeavesUnownedUUIDShapedRestoreDirectoryAlone()",
+        "AlasTests/CheckpointRestoreInterruptionTests/competingEmptyIndexLockIsNotRemoved()",
+        "AlasTests/CheckpointRestoreInterruptionTests/failureAfterIndexLockIntentDoesNotLeaveALock()",
+        "AlasTests/CheckpointRestoreInterruptionTests/failuresRollBackBothLayers(point:)"
+      ],
+      "seconds": 72.2
+    },
+    {
+      "selectors": [
+        "AlasTests/RunScriptStackDetectorTests",
+        "AlasTests/RunScriptStoreTests",
+        "AlasTests/RunScriptTemplateTests"
+      ],
+      "seconds": 11.59
+    },
+    {
+      "selectors": [
+        "AlasTests/CheckpointRestoreInterruptionTests/indexInstallationInterruptionCanRecoverWithoutTrustingForeignLockBytes(point:tamper:)",
+        "AlasTests/CheckpointRestoreInterruptionTests/lockedRevalidationRejectsChangesAfterPreparation()",
+        "AlasTests/CheckpointRestoreInterruptionTests/recoveryAcceptsPendingEmptyIndexLockCandidateName()",
+        "AlasTests/CheckpointRestoreInterruptionTests/recoveryCleansIncompletePreparedStagingJournal()"
+      ],
+      "seconds": 80.75
+    },
+    {
+      "selectors": [
+        "AlasTests/AppStateCreateWorktreeLaunchSurfaceTests",
+        "AlasTests/AppStateCreateWorktreeSymlinkTests",
+        "AlasTests/AppStateGGACPWorktreeContextTests"
+      ],
+      "seconds": 10.51
+    },
+    {
+      "selectors": [
+        "AlasTests/ClosedTabAppStateTests",
+        "AlasTests/CodeHostProviderTests",
+        "AlasTests/CommitDetailsTests"
+      ],
+      "seconds": 16.4
+    },
+    {
+      "selectors": [
+        "AlasTests/GitLabCLIProviderTests",
+        "AlasTests/GitLabCLIProviderVerdictTests",
+        "AlasTests/GitNameValidatorTests"
+      ],
+      "seconds": 8.3
+    },
+    {
+      "selectors": [
+        "AlasTests/ProcessMemoryProbeTests",
+        "AlasTests/ProcessTransportTerminationTests",
+        "AlasTests/ProjectGitWatcherTests"
+      ],
+      "seconds": 9.88
     },
     {
       "selectors": [
@@ -166,43 +1119,11 @@
     },
     {
       "selectors": [
-        "AlasTests/ACPTerminalHostTests",
-        "AlasTests/ACPTerminalTests",
-        "AlasTests/AgentHookSocketServerCLITests"
-      ],
-      "seconds": 27.69
-    },
-    {
-      "selectors": [
-        "AlasTests/AppStateKeepSessionsAliveTests",
-        "AlasTests/AppStatePersistenceTests",
-        "AlasTests/AppStateRunScriptCreationTests"
-      ],
-      "seconds": 15.91
-    },
-    {
-      "selectors": [
-        "AlasTests/CommitPublishLiveOperationsTests",
-        "AlasTests/CommitsAheadTests",
-        "AlasTests/CommitsOlderTests"
-      ],
-      "seconds": 16.63
-    },
-    {
-      "selectors": [
         "AlasTests/GitRefNameInputFilterTests",
         "AlasTests/GitServiceBehindStatusTests",
         "AlasTests/GitServiceCommitEditingTests"
       ],
-      "seconds": 29.28
-    },
-    {
-      "selectors": [
-        "AlasTests/HookInstallNudgeResolverTests",
-        "AlasTests/ImageDiffEndToEndTests",
-        "AlasTests/ImageDiffPairLoaderTests"
-      ],
-      "seconds": 11.06
+      "seconds": 22.63
     },
     {
       "selectors": [
@@ -210,15 +1131,7 @@
         "AlasTests/ProjectsManagerWorktreeOrderingTests",
         "AlasTests/RemoteAppStateAccessTests"
       ],
-      "seconds": 61.67
-    },
-    {
-      "selectors": [
-        "AlasTests/RightPaneStateLoadOlderTests",
-        "AlasTests/RightPaneStatePullTests",
-        "AlasTests/RightPaneStateSyncStatusTests"
-      ],
-      "seconds": 33.36
+      "seconds": 55.8
     },
     {
       "selectors": [
@@ -226,30 +1139,14 @@
         "AlasTests/SelfUpdaterTests",
         "AlasTests/ShellEnvResolverTests"
       ],
-      "seconds": 12.92
+      "seconds": 11.9
     },
     {
       "selectors": [
-        "AlasTests/WorktreeStateSnapshotterTests",
-        "AlasTests/WorktreeTrashTests",
-        "AlasTests/ZmxClientTests"
+        "AlasTests/CheckpointRestoreInterruptionTests/selectiveRecoveryPreservesUnrelatedEditsMadeAfterInterruption(replacedByDirectory:)",
+        "AlasTests/CheckpointRestoreInterruptionTests/staleStateNeverWritesSelectedFiles(change:)"
       ],
-      "seconds": 21.68
-    },
-    {
-      "selectors": [
-        "AlasTests/AgentHookSocketServerTests/backgroundActivityEnvelopeDecodesActivityIdentifier()",
-        "AlasTests/AgentHookSocketServerTests/configureClientSocket_enablesNoSigPipe()",
-        "AlasTests/AgentHookSocketServerTests/oversizedPid_decodesAsNil()",
-        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_acceptsFreshDirectory()",
-        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_rejectsInsecurePerms()",
-        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_rejectsWrongOwner()",
-        "AlasTests/AgentHookSocketServerTests/shutdown_unlinksSocketFile()",
-        "AlasTests/AgentHookSocketServerTests/staleSocketSweep_removesDeadPidFiles()",
-        "AlasTests/AgentRunnerInvocationTests",
-        "AlasTests/AgentRunnerParseTests"
-      ],
-      "seconds": 11.47
+      "seconds": 47.48
     },
     {
       "selectors": [
@@ -257,7 +1154,7 @@
         "AlasTests/AppStateTabAvailabilityTests",
         "AlasTests/AppStateWorktreeArchiveBatchTests"
       ],
-      "seconds": 11.07
+      "seconds": 17.29
     },
     {
       "selectors": [
@@ -265,7 +1162,7 @@
         "AlasTests/DiffPaneViewTests",
         "AlasTests/FileIndexTests"
       ],
-      "seconds": 34.63
+      "seconds": 33.96
     },
     {
       "selectors": [
@@ -273,7 +1170,7 @@
         "AlasTests/GitServiceHeadMessageTests",
         "AlasTests/GitServiceMergeTests"
       ],
-      "seconds": 27.46
+      "seconds": 29.36
     },
     {
       "selectors": [
@@ -281,23 +1178,7 @@
         "AlasTests/JSONRPCFramerBoundsTests",
         "AlasTests/JSONRPCStdioFramingFailureTests"
       ],
-      "seconds": 8.94
-    },
-    {
-      "selectors": [
-        "AlasTests/RemoteFileAccessTests",
-        "AlasTests/RemoteFileStatsTests",
-        "AlasTests/RemoteTerminalLaunchTests"
-      ],
-      "seconds": 7.18
-    },
-    {
-      "selectors": [
-        "AlasTests/RightPaneStoreBaseBranchTests",
-        "AlasTests/RunScriptCompletionMonitorTests",
-        "AlasTests/RunScriptCreationTests"
-      ],
-      "seconds": 11.33
+      "seconds": 13.83
     },
     {
       "selectors": [
@@ -305,23 +1186,23 @@
         "AlasTests/TerminalIntegrationActionsTests",
         "AlasTests/TerminalServiceZmxTests"
       ],
-      "seconds": 22.46
+      "seconds": 25.53
     },
     {
       "selectors": [
-        "AlasTests/ZmxEnvTests",
-        "AlasTests/ZmxSessionNameTests",
-        "AlasTests/ZmxSunPathBudgetTests"
+        "AlasTests/ACPProcessLivenessTests",
+        "AlasTests/ACPRemoteFileServerTests",
+        "AlasTests/ACPSessionTerminalRoutingTests"
       ],
-      "seconds": 10.01
+      "seconds": 12.16
     },
     {
       "selectors": [
-        "AlasTests/AgentTerminalLaunchTests",
-        "AlasTests/AlasCLICommandRouterTests",
-        "AlasTests/AlasCLIEnvInjectionTests"
+        "AlasTests/TerminalSplitDragStateTests",
+        "AlasTests/TerminalTabStateCodableTests",
+        "AlasTests/WorkspaceCheckoutLifecycleTests"
       ],
-      "seconds": 8.08
+      "seconds": 13.73
     },
     {
       "selectors": [
@@ -329,15 +1210,7 @@
         "AlasTests/BeautifulMermaidBackendTests",
         "AlasTests/BeautifulMermaidSmokeTests"
       ],
-      "seconds": 10.79
-    },
-    {
-      "selectors": [
-        "AlasTests/GGCommandRunningStreamingTests",
-        "AlasTests/GGReorderModelTests",
-        "AlasTests/GGServiceTests"
-      ],
-      "seconds": 26.52
+      "seconds": 19.83
     },
     {
       "selectors": [
@@ -402,7 +1275,7 @@
         "AlasTests/GitServiceRemoteChangesTests/untrackedLineCountStreamsLargeFiles()",
         "AlasTests/GitServiceRemoteForFetchTests"
       ],
-      "seconds": 25.33
+      "seconds": 28.68
     },
     {
       "selectors": [
@@ -410,7 +1283,7 @@
         "AlasTests/LSPTransportFramingTests",
         "AlasTests/LegacyHookSweepTests"
       ],
-      "seconds": 7.83
+      "seconds": 10.67
     },
     {
       "selectors": [
@@ -418,7 +1291,7 @@
         "AlasTests/RemoteZmxInstallerTests",
         "AlasTests/RepositoryImportServiceTests"
       ],
-      "seconds": 10.14
+      "seconds": 10.53
     },
     {
       "selectors": [
@@ -426,71 +1299,15 @@
         "AlasTests/RunScriptFailureTests",
         "AlasTests/RunScriptLaunchTests"
       ],
-      "seconds": 28.57
+      "seconds": 28.65
     },
     {
       "selectors": [
-        "AlasTests/TerminalSplitDragStateTests",
-        "AlasTests/TerminalTabStateCodableTests",
-        "AlasTests/WorkspaceCheckoutLifecycleTests"
+        "AlasTests/ACPStdioClientTests",
+        "AlasTests/ACPStdioTerminalDispatchTests",
+        "AlasTests/ACPTerminalCRLFTests"
       ],
-      "seconds": 14.85
-    },
-    {
-      "selectors": [
-        "AlasTests/AlasCLIRequestTests",
-        "AlasTests/AlasCLIReviewTargetResolverTests",
-        "AlasTests/AlasCLIWorktreeResolverTests"
-      ],
-      "seconds": 7.79
-    },
-    {
-      "selectors": [
-        "AlasTests/CheckpointCoordinationTests",
-        "AlasTests/CheckpointDiffLoaderTests",
-        "AlasTests/CheckpointRestoreIntegrationTests"
-      ],
-      "seconds": 66.58
-    },
-    {
-      "selectors": [
-        "AlasTests/GGWorktreeContextTests",
-        "AlasTests/GitEventFilterTests",
-        "AlasTests/GitHubCLIProviderTests"
-      ],
-      "seconds": 6.97
-    },
-    {
-      "selectors": [
-        "AlasTests/GitServiceReviewRequestDraftTests",
-        "AlasTests/GitServiceStackCommitTests",
-        "AlasTests/GitServiceStagedTests"
-      ],
-      "seconds": 9.59
-    },
-    {
-      "selectors": [
-        "AlasTests/MergeConflictTabModelTests",
-        "AlasTests/MergeOperationStateTests",
-        "AlasTests/NewRunScriptDialogTests"
-      ],
-      "seconds": 19.23
-    },
-    {
-      "selectors": [
-        "AlasTests/ReviewLoopStateTests",
-        "AlasTests/ReviewSessionLoaderTests",
-        "AlasTests/RevisionSnapshotCacheTests"
-      ],
-      "seconds": 24.67
-    },
-    {
-      "selectors": [
-        "AlasTests/RunScriptMetadataTests",
-        "AlasTests/RunScriptPaletteModelTests",
-        "AlasTests/RunScriptStackCatalogTests"
-      ],
-      "seconds": 13.51
+      "seconds": 9.65
     },
     {
       "selectors": [
@@ -498,7 +1315,30 @@
         "AlasTests/WorkspaceCheckoutRemoteInvocationTests",
         "AlasTests/WorkspaceCheckoutRepairTests"
       ],
-      "seconds": 8.2
+      "seconds": 10.65
+    },
+    {
+      "selectors": [
+        "AlasTests/AgentHookSocketServerTests/backgroundActivityEnvelopeDecodesActivityIdentifier()",
+        "AlasTests/AgentHookSocketServerTests/configureClientSocket_enablesNoSigPipe()",
+        "AlasTests/AgentHookSocketServerTests/oversizedPid_decodesAsNil()",
+        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_acceptsFreshDirectory()",
+        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_rejectsInsecurePerms()",
+        "AlasTests/AgentHookSocketServerTests/prepareSocketDirectory_rejectsWrongOwner()",
+        "AlasTests/AgentHookSocketServerTests/shutdown_unlinksSocketFile()",
+        "AlasTests/AgentHookSocketServerTests/staleSocketSweep_removesDeadPidFiles()",
+        "AlasTests/AgentRunnerInvocationTests",
+        "AlasTests/AgentRunnerParseTests"
+      ],
+      "seconds": 10.29
+    },
+    {
+      "selectors": [
+        "AlasTests/MergeConflictTabModelTests",
+        "AlasTests/MergeOperationStateTests",
+        "AlasTests/NewRunScriptDialogTests"
+      ],
+      "seconds": 25.32
     }
   ]
 }

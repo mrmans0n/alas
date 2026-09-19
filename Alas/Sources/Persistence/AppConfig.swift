@@ -286,6 +286,10 @@ struct AppConfig: Codable, Equatable {
         /// only; the composer bolt still wins afterward. Default: false.
         var acpAutoRunByDefault: Bool
         var acpShowMinimap: Bool
+        /// When true, the chat transcript folds finished tool calls (bundling
+        /// consecutive ones together) into an expandable "Ran N tools" row.
+        /// The active tool call always stays visible. Default: false.
+        var acpCollapseFinishedToolCalls: Bool
         /// When true (default), every local ACP session gets the built-in
         /// "alas" MCP server exposing CLI actions (open, worktrees, review).
         var exposeAlasMCP: Bool
@@ -300,6 +304,7 @@ struct AppConfig: Codable, Equatable {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpShowMinimap,
+                 acpCollapseFinishedToolCalls,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
 
@@ -310,6 +315,7 @@ struct AppConfig: Codable, Equatable {
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
              acpShowMinimap: Bool = false,
+             acpCollapseFinishedToolCalls: Bool = false,
              exposeAlasMCP: Bool = true,
              alasMCPTransport: AlasMCPTransport = .stdio,
              acpDictationLocale: String = "")
@@ -322,6 +328,7 @@ struct AppConfig: Codable, Equatable {
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
             self.acpShowMinimap = acpShowMinimap
+            self.acpCollapseFinishedToolCalls = acpCollapseFinishedToolCalls
             self.exposeAlasMCP = exposeAlasMCP
             self.alasMCPTransport = alasMCPTransport
             self.acpDictationLocale = acpDictationLocale
@@ -337,6 +344,7 @@ struct AppConfig: Codable, Equatable {
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
+            acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
             alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
             acpDictationLocale = (try? c.decode(String.self, forKey: .acpDictationLocale)) ?? ""

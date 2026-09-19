@@ -12,10 +12,15 @@ enum ACPTranscriptLogicalScrollModel {
         let logicalViewportMessages: CGFloat
     }
 
+    /// `topGlobalIndex` is fractional so a viewport whose top sits part-way
+    /// through a folded tool-call group's on-screen height (which represents
+    /// several messages) advances the thumb smoothly across that height
+    /// instead of holding it fixed at the group's first member and then
+    /// jumping by the remaining member count at the next row.
     static func metrics(
         totalCount: Int,
         viewportHeight: CGFloat,
-        topGlobalIndex: Int,
+        topGlobalIndex: CGFloat,
         isAtTail: Bool
     ) -> Metrics {
         let count = max(0, totalCount)
@@ -28,7 +33,7 @@ enum ACPTranscriptLogicalScrollModel {
         } else if isAtTail {
             value = 1
         } else {
-            value = Double(min(max(CGFloat(topGlobalIndex), 0), maximumTopIndex) / maximumTopIndex)
+            value = Double(min(max(topGlobalIndex, 0), maximumTopIndex) / maximumTopIndex)
         }
         return Metrics(
             value: value,
