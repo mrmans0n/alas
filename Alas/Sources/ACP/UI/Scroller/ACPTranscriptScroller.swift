@@ -1222,27 +1222,62 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private func alignPendingLogicalTargetIfPossible() {
             // The target is a message stable id; when that message is folded
             // into a tool-call bundle the tiled row is the bundle's.
-            guard let id = pendingLogicalTargetId,
-                  let row = tiling.row(withId: currentRowLookup()?.rowId(forStableId: id) ?? id),
+            guard let host,
+                  let id = pendingLogicalTargetId,
                   let scroller
             else { return }
-            let fraction = pendingMinimapRowFraction
+            let lookup = currentRowLookup(host: host)
+            let rowId = lookup.rowId(forStableId: id) ?? id
+            guard let row = tiling.row(withId: rowId) else { return }
+            let fraction = Self.groupAwareRowFraction(
+                targetStableId: id, rowId: rowId, fallbackFraction: pendingMinimapRowFraction,
+                lookup: lookup, transcript: host.transcript
+            )
             pendingMinimapRowFraction = 0
             scroller.setScrollY(row.minY + row.height * fraction)
             pendingLogicalTargetId = nil
             rememberCurrentAnchor()
         }
 
+        /// `pendingMinimapRowFraction` is the fractional remainder of the
+        /// original drag target's GLOBAL position (e.g. 0.3 of the way
+        /// through message 15's own one-unit slot). When that message is a
+        /// plain row, that remainder already IS the row fraction. When it's
+        /// bundled into a group, the row's physical height represents every
+        /// member, so the same 0.3 has to be re-expressed relative to the
+        /// group's full span — reconstructing the original global position
+        /// (15.3) and re-deriving the fraction across `[first, last]` rather
+        /// than always landing at the group's top.
+        private static func groupAwareRowFraction(
+            targetStableId: String,
+            rowId: String,
+            fallbackFraction: CGFloat,
+            lookup: ACPTranscriptVisibleRowLookup,
+            transcript: ACPTranscript
+        ) -> CGFloat {
+            guard let targetLocalIndex = lookup.transcriptIndex(for: targetStableId),
+                  let targetGlobalIndex = transcript.globalIndex(forLocalIndex: targetLocalIndex),
+                  let localSpan = lookup.localIndexSpan(forRowId: rowId),
+                  let globalFirst = transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            else { return fallbackFraction }
+            let globalLast = transcript.globalIndex(forLocalIndex: localSpan.upperBound) ?? globalFirst
+            let targetGlobalPosition = CGFloat(targetGlobalIndex) + fallbackFraction
+            return rowFraction(
+                forGlobalMessagePosition: targetGlobalPosition,
+                globalIndexSpan: globalFirst...max(globalFirst, globalLast)
+            )
+        }
+
         private func syncLogicalScrollerMetrics() {
             guard let host, let scroller else { return }
-            let topGlobalIndex = pendingLogicalTargetGlobalIndex
-                ?? currentTopGlobalMessageIndex()
-                ?? host.transcript.globalIndex(forLocalIndex: host.transcript.visibleHead)
+            let topGlobalPosition = pendingLogicalTargetGlobalIndex.map(CGFloat.init)
+                ?? globalMessagePosition(at: scroller.scrollY)
+                ?? host.transcript.globalIndex(forLocalIndex: host.transcript.visibleHead).map(CGFloat.init)
                 ?? 0
             scroller.setLogicalScrollerMetrics(ACPTranscriptLogicalScrollModel.metrics(
                 totalCount: host.transcript.logicalMessageCount,
                 viewportHeight: scroller.viewportHeight,
-                topGlobalIndex: topGlobalIndex,
+                topGlobalIndex: topGlobalPosition,
                 isAtTail: host.session.followsTranscriptTail
             ))
             syncMinimapViewport()
@@ -1287,10 +1322,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        private func currentRowLookup() -> ACPTranscriptVisibleRowLookup? {
-            host.map(currentRowLookup(host:))
-        }
-
         private func globalMessagePosition(at y: CGFloat) -> CGFloat? {
             guard let host,
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
@@ -1322,6 +1353,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         static func globalMessagePosition(rowFraction: CGFloat, globalIndexSpan: ClosedRange<Int>) -> CGFloat {
             let span = CGFloat(globalIndexSpan.upperBound - globalIndexSpan.lowerBound + 1)
             return CGFloat(globalIndexSpan.lowerBound) + min(1, max(0, rowFraction)) * span
+        }
+
+        /// Inverse of `globalMessagePosition(rowFraction:globalIndexSpan:)`:
+        /// given a target global message position and the on-screen row's
+        /// global-index span, the fraction (0...1) into that row's physical
+        /// height where the target sits. Used to scroll a minimap-drag
+        /// target to the right place within a folded tool-call group instead
+        /// of always the group's top, regardless of which member was
+        /// targeted.
+        static func rowFraction(forGlobalMessagePosition position: CGFloat, globalIndexSpan: ClosedRange<Int>) -> CGFloat {
+            let span = CGFloat(globalIndexSpan.upperBound - globalIndexSpan.lowerBound + 1)
+            guard span > 0 else { return 0 }
+            return min(1, max(0, (position - CGFloat(globalIndexSpan.lowerBound)) / span))
         }
 
         private func pauseTailFollow() {

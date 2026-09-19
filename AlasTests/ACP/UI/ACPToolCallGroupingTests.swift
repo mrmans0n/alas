@@ -262,6 +262,59 @@ struct ACPMinimapGroupSpanTests {
             rowFraction: 1.4, globalIndexSpan: 10...19
         ) == 20)
     }
+
+    @Test("a target at the group's first member lands at the row's top")
+    func targetAtFirstMemberLandsAtTop() {
+        #expect(ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 10, globalIndexSpan: 10...19
+        ) == 0)
+    }
+
+    @Test("a target mid-way through the group lands mid-way down the row")
+    func targetMidGroupLandsMidRow() {
+        #expect(ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 15, globalIndexSpan: 10...19
+        ) == 0.5)
+    }
+
+    @Test("a target at the group's last member lands near the row's bottom")
+    func targetAtLastMemberLandsNearBottom() {
+        #expect(ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 19, globalIndexSpan: 10...19
+        ) == 0.9)
+    }
+
+    @Test("the row fraction for a single-message row (span of one) is unaffected")
+    func singleMessageRowFractionUnaffected() {
+        let fraction = ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 5.3, globalIndexSpan: 5...5
+        )
+        #expect(abs(fraction - 0.3) < 0.0001)
+    }
+
+    @Test("an out-of-range target clamps to the row's bounds")
+    func outOfRangeTargetClamps() {
+        #expect(ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 5, globalIndexSpan: 10...19
+        ) == 0)
+        #expect(ACPTranscriptScroller.Coordinator.rowFraction(
+            forGlobalMessagePosition: 25, globalIndexSpan: 10...19
+        ) == 1)
+    }
+
+    @Test("rowFraction is the inverse of globalMessagePosition")
+    func rowFractionIsInverseOfGlobalMessagePosition() {
+        let span = 10...19
+        for rawFraction in stride(from: CGFloat(0), through: CGFloat(1), by: CGFloat(0.1)) {
+            let position = ACPTranscriptScroller.Coordinator.globalMessagePosition(
+                rowFraction: rawFraction, globalIndexSpan: span
+            )
+            let roundTripped = ACPTranscriptScroller.Coordinator.rowFraction(
+                forGlobalMessagePosition: position, globalIndexSpan: span
+            )
+            #expect(abs(roundTripped - rawFraction) < 0.0001)
+        }
+    }
 }
 
 @MainActor
