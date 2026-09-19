@@ -3337,6 +3337,17 @@ Append:
 #add-server-manual summary { cursor: pointer; list-style: none; }
 #add-server-manual summary::-webkit-details-marker { display: none; }
 #add-server-manual[open] summary { margin-bottom: 8px; }
+/* #gate is an opaque z-index:20 overlay and .sheet is z-index:10, so without
+   this the add-server sheet opens invisibly (and unclickable) behind either
+   pairing gate — the only path to add the first server or recover from a
+   revoked token. */
+#add-server-sheet { z-index: 30; }
+/* #gate-pair has no other styling source (unlike #gate-retry below), so give
+   it the same secondary-button treatment .sheet-close already uses elsewhere
+   in this file — #gate-retry keeps the accent/primary look since it's the
+   default action on the other gates. */
+#gate-pair { margin-top: 10px; padding: 11px 20px; border: none; border-radius: 12px; background: var(--fill-strong); color: var(--fg-muted); font-size: 15px; font-weight: 600; cursor: pointer; }
+#gate-pair:active { transform: scale(0.97); }
 ```
 
 - [ ] **Step 6: Run the asset tests and the node suite**
