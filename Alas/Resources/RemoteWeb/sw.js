@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v66";
+const CACHE_NAME = "alas-remote-shell-v67";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -8,7 +8,9 @@ const SHELL_ASSETS = [
   "/worktree-creation.js?v=1",
   "/changes-view.js?v=8",
   "/file-browser.js?v=3",
-  "/app.js?v=84",
+  "/hub-registry.js?v=1",
+  "/hub-links.js?v=1",
+  "/app.js?v=85",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",
@@ -37,6 +39,10 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
+
+  // Cross-origin requests (pairing, health probes, sockets to OTHER Macs
+  // from a hub served by this one) are never intercepted or cached.
+  if (url.origin !== self.location.origin) return;
 
   if (request.method !== "GET") return;
   if (

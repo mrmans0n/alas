@@ -1134,4 +1134,67 @@ struct RemoteWebAssetTests {
             js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1200) })
         #expect(badgeBody.contains("changesState.loaded && changesState.metricsAvailable && !changesState.failed"))
     }
+
+    @Test func remoteWebLoadsAndPrecachesTheHubModules() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        let registry = try asset("hub-registry.js")
+        let links = try asset("hub-links.js")
+
+        try expectLoadsBeforeApp("/hub-registry.js", in: html)
+        try expectLoadsBeforeApp("/hub-links.js", in: html)
+        try expectReferencedAndPrecached("/hub-registry.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/hub-links.js", html: html, sw: sw)
+        // hub-links derives counts through the registry, so it must load second.
+        let registryAt = try referencePosition(of: "/hub-registry.js", in: html)
+        let linksAt = try referencePosition(of: "/hub-links.js", in: html)
+        #expect(registryAt < linksAt)
+        #expect(registry.contains("globalThis.RemoteHubRegistry ="))
+        #expect(links.contains("globalThis.RemoteHubLinks ="))
+        // Pure modules: no DOM access.
+        #expect(!registry.contains("document."))
+        #expect(!links.contains("document."))
+    }
+
+    @Test func serviceWorkerIgnoresCrossOriginRequests() throws {
+        let sw = try asset("sw.js")
+        let fetchHandler = try #require(sw.range(of: #"self.addEventListener("fetch""#).map { sw[$0.lowerBound...].prefix(600) })
+        #expect(fetchHandler.contains("if (url.origin !== self.location.origin) return;"))
+    }
+
+    @Test func appDrivesTheActiveLinkThroughTheHubModules() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("const hub = RemoteHubRegistry.load(localStorage, location.origin, location.hostname, Date.now());"))
+        #expect(js.contains("const links = RemoteHubLinks.createLinks({"))
+        #expect(js.contains("function send(obj) { links.sendActive(obj); }"))
+        #expect(js.contains("function handleLinkStateChange(link)"))
+        #expect(js.contains("function handleLinkHello(link, hello)"))
+        #expect(js.contains("function onActiveOpen()"))
+        #expect(js.contains("function onActiveClose()"))
+        #expect(js.contains("function pairAndAdd(input, options)"))
+        #expect(js.contains("function resetServerScopedState()"))
+        #expect(js.contains("function switchServer(id)"))
+        #expect(js.contains("function applyHubFlag(enabled)"))
+        #expect(js.contains(#"document.addEventListener("visibilitychange""#))
+        // The single-socket client is gone: the only WebSocket construction
+        // is the factory handed to the link manager; no token key, no
+        // page-level reconnect timer.
+        #expect(js.components(separatedBy: "new WebSocket(").count == 2)
+        #expect(js.contains("createSocket: (url, protocols) => new WebSocket(url, protocols),"))
+        #expect(!js.contains(#"const tokenKey = "alas.remote.token";"#))
+        #expect(!js.contains("function scheduleReconnect()"))
+        #expect(!js.contains("async function ensureToken()"))
+        #expect(!js.contains(#"fetch("/pair""#))
+    }
+
+    // The old ?code= flow must survive: a scanned QR (re)pairs and strips the
+    // code from the URL before anything else happens.
+    @Test func bootStillHonoursAPairingCodeInTheURL() throws {
+        let js = try asset("app.js")
+        let boot = try #require(js.range(of: "function boot() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(boot.contains("RemoteHubRegistry.parsePairingLink(location.href)"))
+        #expect(boot.contains(#"history.replaceState({}, "", "/");"#))
+        #expect(boot.contains("pairAndAdd(fromLink, { activate: true })"))
+    }
 }
