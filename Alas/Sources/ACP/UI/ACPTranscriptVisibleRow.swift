@@ -52,7 +52,12 @@ struct ACPTranscriptVisibleRowLookup {
         rowIdByStableId.reserveCapacity(rows.count)
         for row in rows {
             switch row {
-            case .message(let visible):
+            case .message(let visible), .toolCallGroupMember(let visible, _):
+                // An expanded bundle's member is indexed exactly like a
+                // plain message row: its own id, its own single-message
+                // span. That is what makes the scroller's geometry exact
+                // for it, and what makes its row id survive expanding,
+                // collapsing or disabling the setting.
                 indexById[visible.stableId] = visible.index
                 rowIdByStableId[visible.stableId] = visible.stableId
                 spanById[visible.stableId] = visible.index...visible.index
@@ -63,6 +68,13 @@ struct ACPTranscriptVisibleRowLookup {
                     indexById[member.stableId] = member.index
                     rowIdByStableId[member.stableId] = group.id
                 }
+            case .toolCallGroupHeader(let group):
+                // The header stands for no message of its own; anchoring it
+                // at its first member's index keeps minimap and compaction
+                // math continuous across it. Members are NOT registered
+                // here — each one registers itself as its own row above.
+                indexById[group.id] = group.members[0].index
+                spanById[group.id] = group.members[0].index...group.members[0].index
             }
         }
         self.indexById = indexById

@@ -19,7 +19,8 @@ struct ACPToolCallGroupingTests {
     private func fold(
         _ messages: [ACPMessage],
         enabled: Bool = true,
-        breakAfterIndex: Int? = nil
+        breakAfterIndex: Int? = nil,
+        expandAll: Bool = false
     ) -> [ACPTranscriptRenderRow] {
         let rows = ACPTranscriptVisibleRow.rows(
             messages: messages, visibleHead: 0, visibleTail: messages.count,
@@ -27,7 +28,8 @@ struct ACPToolCallGroupingTests {
         )
         return ACPToolCallGrouping.fold(
             rows: rows, messages: messages,
-            options: .init(enabled: enabled, breakAfterIndex: breakAfterIndex)
+            options: .init(enabled: enabled, breakAfterIndex: breakAfterIndex),
+            isExpanded: { _ in expandAll }
         )
     }
 
@@ -136,6 +138,41 @@ struct ACPToolCallGroupingTests {
         let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
         let folded = fold([user, tool("b"), tool("c"), tool("d")], breakAfterIndex: 0)
         #expect(ids(folded) == ["acp-user:u1", "tcg-tc-b"])
+    }
+
+    @Test("an expanded run folds into a header row plus one row per member")
+    func expandedRunEmitsHeaderAndMemberRows() {
+        let folded = fold([tool("a"), tool("b"), tool("c")], expandAll: true)
+        #expect(ids(folded) == ["tcg-tc-a", "tc-a", "tc-b", "tc-c"])
+        guard case .toolCallGroupHeader = folded[0] else {
+            Issue.record("expected a header row first")
+            return
+        }
+        for row in folded.dropFirst() {
+            guard case .toolCallGroupMember(_, let groupId) = row else {
+                Issue.record("expected a member row, got \(row)")
+                return
+            }
+            #expect(groupId == "tcg-tc-a")
+        }
+    }
+
+    @Test("an expanded member's row id is the same one it has when collapsing is off entirely")
+    func expandedMemberRowIdMatchesUngroupedRowId() {
+        // This is the property the scroller relies on: expanding, collapsing
+        // or switching the setting off never changes a member's row id, so a
+        // scroll anchor on that card can never go stale.
+        let messages = [tool("a"), tool("b"), tool("c")]
+        let ungrouped = ids(fold(messages, enabled: false))
+        let expandedMembers = ids(fold(messages, expandAll: true)).filter { $0 != "tcg-tc-a" }
+        #expect(expandedMembers == ungrouped)
+    }
+
+    @Test("the header row keeps the collapsed bundle's id, so toggling updates it in place")
+    func headerKeepsCollapsedRowId() {
+        let messages = [tool("a"), tool("b")]
+        #expect(ids(fold(messages)).first == "tcg-tc-a")
+        #expect(ids(fold(messages, expandAll: true)).first == "tcg-tc-a")
     }
 
     @Test("the group id stays stable while the run grows at the tail")
@@ -332,6 +369,64 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
     func unknownRowIdHasNoSpan() {
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
         #expect(lookup.localIndexSpan(forRowId: "missing") == nil)
+    }
+}
+
+/// The expanded bundle is where the collapsed design used to have to guess.
+/// These cover the properties that replace the guessing: each member is its
+/// own row, with its own single-message span and its own stable row id.
+@MainActor
+@Suite("ACP visible row lookup with an expanded group")
+struct ACPTranscriptVisibleRowLookupExpandedGroupTests {
+    private let group = ACPTranscriptToolCallGroup(members: [
+        ACPTranscriptVisibleRow(index: 1, stableId: "tc-a"),
+        ACPTranscriptVisibleRow(index: 2, stableId: "tc-b"),
+        ACPTranscriptVisibleRow(index: 3, stableId: "tc-c"),
+    ])
+
+    private var rows: [ACPTranscriptRenderRow] {
+        [.message(ACPTranscriptVisibleRow(index: 0, stableId: "u"))]
+            + [.toolCallGroupHeader(group)]
+            + group.members.map { .toolCallGroupMember($0, groupId: group.id) }
+    }
+
+    @Test("each expanded member spans exactly its own message")
+    func memberSpansOneMessage() {
+        // This is what makes window compaction exact: the row under the
+        // viewport names one message, instead of a fraction across the
+        // whole bundle's member count.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.localIndexSpan(forRowId: "tc-a") == 1...1)
+        #expect(lookup.localIndexSpan(forRowId: "tc-b") == 2...2)
+        #expect(lookup.localIndexSpan(forRowId: "tc-c") == 3...3)
+    }
+
+    @Test("an expanded member's row is itself, not the bundle")
+    func memberResolvesToItsOwnRow() {
+        // With the member tiled as its own row, an anchor on it stays valid
+        // through expand/collapse/disable — there is no stale id to remap.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.rowId(forStableId: "tc-b") == "tc-b")
+        #expect(lookup.transcriptIndex(for: "tc-b") == 2)
+    }
+
+    @Test("the header stands at its first member's index and spans no further")
+    func headerSpansOnlyItsAnchorIndex() {
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.transcriptIndex(for: group.id) == 1)
+        #expect(lookup.localIndexSpan(forRowId: group.id) == 1...1)
+    }
+
+    @Test("a middle member absorbed into a merged expanded group needs no stale remap")
+    func middleMemberNeedsNoStaleRemap() {
+        // The "preserve middle-member anchors during group merges" case:
+        // the bridging call keeps its own row id on both sides of the
+        // merge, so resolveStaleRowId is never consulted for it.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        #expect(lookup.rowId(forStableId: "tc-b") == "tc-b")
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tc-b", lookup: lookup, groupingEnabled: true
+        )?.rowId == "tc-b")
     }
 }
 
