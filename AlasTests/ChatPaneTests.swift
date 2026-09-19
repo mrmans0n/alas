@@ -27,6 +27,7 @@ struct ChatPaneTests {
         #expect(ChatPane.rowLabels == [
             "Font family",
             "Font size",
+            "Collapse finished tool calls",
             "Default launch surface",
             "While busy, ⏎ queues; ⌥⏎ steers",
             "Confirm before closing chat tabs",

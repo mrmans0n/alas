@@ -40,6 +40,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
+    /// Settings → Chat → "Collapse finished tool calls". See
+    /// `ACPToolCallGrouping`.
+    var collapsesFinishedToolCalls: Bool = false
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -113,6 +116,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// its message index is O(window) work in exactly the state where
         /// scrolling must stay smooth.
         private let visibleRowsCache = ACPVisibleRowsCache()
+        /// Persists tool-call bundle expand state by member id across a
+        /// group's row id changing (see `ACPToolCallGroupExpansionSeeds`).
+        /// Lives for the Coordinator's lifetime, i.e. as long as this chat
+        /// tab's transcript stays mounted.
+        private let toolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -129,9 +137,24 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         func attach(scroller: ACPTranscriptScrollerView, host: ACPTranscriptScroller) {
             self.scroller = scroller
-            self.reconciler = ACPTranscriptScrollerReconciler(
+            let reconciler = ACPTranscriptScrollerReconciler(
                 tiling: tiling, pool: pool, scroller: scroller
             )
+            reconciler.resolveStaleRowId = { [weak self] staleId in
+                guard let self, let host = self.host else { return nil }
+                guard let resolution = Self.resolveStaleRowId(
+                    staleId, lookup: self.currentRowLookup(host: host),
+                    groupingEnabled: host.collapsesFinishedToolCalls
+                ) else { return nil }
+                return (resolution.rowId, resolution.assumeHeadGrowth)
+            }
+            // A bundle's expanded flag lives in its row token, so a toggle
+            // must produce a fresh spec list to take effect on screen.
+            toolCallGroupExpansionSeeds.onChange = { [weak self] in
+                guard let self, let host = self.host else { return }
+                self.update(host: host)
+            }
+            self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
                 self?.handleScroll(
                     previousY: previousY, newY: newY,
@@ -278,7 +301,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 availableTrailingGutterWidth: Self.availableTrailingGutterWidth(
                     contentViewWidth: contentWidth,
                     contentMaxWidth: host.contentMaxWidth
-                )
+                ),
+                expansionSeeds: toolCallGroupExpansionSeeds,
+                // Same memoized fold the scroll-anchor and minimap lookups
+                // read, so a width-only or expand-toggle update doesn't
+                // re-slice and re-fold the whole window.
+                renderRows: currentRenderRows(host: host)
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -425,10 +453,17 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         /// Message rows from the render window + synthetic tail rows, in the
         /// same order the legacy VStack rendered them.
+        ///
+        /// `renderRows` lets the coordinator hand in its memoized fold (see
+        /// `currentRenderRows`); when nil, the rows are computed fresh — the
+        /// same result either way, so callers without a cache (tests, the
+        /// static helpers) can omit it.
         static func rowSpecs(
             host: ACPTranscriptScroller,
             availableRowContentWidth: CGFloat? = nil,
-            availableTrailingGutterWidth: CGFloat? = nil
+            availableTrailingGutterWidth: CGFloat? = nil,
+            expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
+            renderRows: [ACPTranscriptRenderRow]? = nil
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -450,54 +485,209 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
+            let rows = renderRows ?? Self.renderRows(host: host)
+            let fork = Self.readyFork(host: host)
+            let forkBoundaryIndex = fork.map { $0.inheritedMessageCount - 1 }
+            var forkDividerEmitted = false
+            for renderRow in rows {
+                // The divider normally follows its boundary row (below). But
+                // when the boundary message never becomes a row — a `.plan`,
+                // or a replayed duplicate deduped away — no row's last index
+                // equals the boundary, so the after-row emission never
+                // fires. Emit it here instead, ahead of the first row that
+                // starts past the boundary, so the divider still separates
+                // inherited from post-fork content.
+                if let fork, let boundary = forkBoundaryIndex, !forkDividerEmitted,
+                   Self.firstIndex(of: renderRow) > boundary {
+                    specs.append(Self.forkDividerSpec(host: host, fork: fork))
+                    forkDividerEmitted = true
+                }
+                let lastIndex: Int
+                switch renderRow {
+                case .message(let row):
+                    guard transcript.messages.indices.contains(row.index) else { continue }
+                    let message = transcript.messages[row.index]
+                    let rowToken = token(Self.messageRowKey(
+                        host: host, row: row, message: message,
+                        availableRowContentWidth: availableRowContentWidth,
+                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                    ), host: host)
+                    specs.append(ACPTranscriptRowSpec(
+                        id: row.stableId,
+                        equalityToken: rowToken,
+                        build: {
+                            wrapRow(host: host) {
+                                Self.messageRow(
+                                    host: host,
+                                    row: row,
+                                    message: message,
+                                    availableRowContentWidth: availableRowContentWidth,
+                                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                                )
+                            }
+                        }
+                    ))
+                    lastIndex = row.index
+                case .toolCallGroup(let group):
+                    specs.append(Self.toolCallGroupSpec(
+                        host: host, group: group,
+                        availableRowContentWidth: availableRowContentWidth,
+                        availableTrailingGutterWidth: availableTrailingGutterWidth,
+                        expansionSeeds: expansionSeeds
+                    ))
+                    lastIndex = group.members[group.members.count - 1].index
+                }
+                // Fork divider follows its boundary row, as in the legacy list.
+                // Grouping breaks a run at that boundary (`groupingOptions`), so
+                // a bundle can end exactly there but never straddle it.
+                if let fork, !forkDividerEmitted, lastIndex == forkBoundaryIndex {
+                    specs.append(Self.forkDividerSpec(host: host, fork: fork))
+                    forkDividerEmitted = true
+                }
+            }
+
+            specs.append(contentsOf: Self.syntheticTailSpecs(host: host))
+            return specs
+        }
+
+        private static func firstIndex(of renderRow: ACPTranscriptRenderRow) -> Int {
+            switch renderRow {
+            case .message(let row): row.index
+            case .toolCallGroup(let group): group.members[0].index
+            }
+        }
+
+        private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
+            guard let fork = host.session.forkRecord, fork.phase == .ready, fork.mechanism != nil else {
+                return nil
+            }
+            return fork
+        }
+
+        /// Tool-call bundling inputs for this host. The fork boundary is a
+        /// forced run break so the divider spec can follow its boundary row.
+        static func groupingOptions(host: ACPTranscriptScroller) -> ACPToolCallGrouping.Options {
+            ACPToolCallGrouping.Options(
+                enabled: host.collapsesFinishedToolCalls,
+                breakAfterIndex: readyFork(host: host).map { $0.inheritedMessageCount - 1 }
+            )
+        }
+
+        /// Window-sliced, plan-filtered, deduped rows with finished tool-call
+        /// runs folded per `groupingOptions`. Same builder the coordinator's
+        /// memoized lookup uses, so row ids agree between the spec list and
+        /// the scroll-anchor / minimap mapping.
+        static func renderRows(host: ACPTranscriptScroller) -> [ACPTranscriptRenderRow] {
+            let transcript = host.transcript
             let rows = ACPTranscriptVisibleRow.rows(
                 messages: transcript.messages,
                 visibleHead: transcript.visibleHead,
                 visibleTail: transcript.visibleTailBound,
                 stableId: { transcript.stableId(for: $0) }
             )
-            for row in rows where transcript.messages.indices.contains(row.index) {
-                let message = transcript.messages[row.index]
-                let messageCreatedAt = transcript.createdAt(forStableId: row.stableId)
-                let messagePhase = ACPTranscriptRowContent.presentationPhase(of: message)
-                let rowToken = token(ACPTranscriptRowContent.equalityKey(
-                    stableId: row.stableId, message: message,
-                    messageCreatedAt: messageCreatedAt,
-                    messagePhase: messagePhase,
-                    contentMaxWidth: host.contentMaxWidth,
+            return ACPToolCallGrouping.fold(
+                rows: rows, messages: transcript.messages,
+                options: groupingOptions(host: host)
+            )
+        }
+
+        private static func messageRowKey(
+            host: ACPTranscriptScroller,
+            row: ACPTranscriptVisibleRow,
+            message: ACPMessage,
+            availableRowContentWidth: CGFloat,
+            availableTrailingGutterWidth: CGFloat
+        ) -> ACPTranscriptRowContent.EqualityKey {
+            ACPTranscriptRowContent.equalityKey(
+                stableId: row.stableId, message: message,
+                messageCreatedAt: host.transcript.createdAt(forStableId: row.stableId),
+                messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
+                contentMaxWidth: host.contentMaxWidth,
+                availableRowContentWidth: availableRowContentWidth,
+                availableTrailingGutterWidth: availableTrailingGutterWidth,
+                typography: host.typography,
+                trustedImageRoot: host.trustedImageRoot,
+                isForkEligible: host.session.canForkMessage(at: row.index),
+                forkTargets: host.forkTargets
+            )
+        }
+
+        /// One collapsed row for a run of finished tool calls. The token folds
+        /// every member's message-row key so a late status/duration/content
+        /// update on any bundled call still re-renders the row (and, when
+        /// expanded, the card inside it), plus the expanded flag itself: the
+        /// row renders whatever the store says, and a toggle reaches the
+        /// screen by producing a spec whose token differs.
+        private static func toolCallGroupSpec(
+            host: ACPTranscriptScroller,
+            group: ACPTranscriptToolCallGroup,
+            availableRowContentWidth: CGFloat,
+            availableTrailingGutterWidth: CGFloat,
+            expansionSeeds: ACPToolCallGroupExpansionSeeds
+        ) -> ACPTranscriptRowSpec {
+            let transcript = host.transcript
+            let members: [ToolCallGroupMember] = group.members.compactMap { row in
+                guard transcript.messages.indices.contains(row.index) else { return nil }
+                return ToolCallGroupMember(row: row, message: transcript.messages[row.index])
+            }
+            let toolCalls: [ACPMessage.ToolCall] = members.compactMap { member in
+                if case .toolCall(let toolCall) = member.message { return toolCall }
+                return nil
+            }
+            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls)
+            let memberKeys = members.map { member in
+                messageRowKey(
+                    host: host, row: member.row, message: member.message,
                     availableRowContentWidth: availableRowContentWidth,
-                    availableTrailingGutterWidth: availableTrailingGutterWidth,
-                    typography: host.typography,
-                    trustedImageRoot: host.trustedImageRoot,
-                    isForkEligible: host.session.canForkMessage(at: row.index),
-                    forkTargets: host.forkTargets
-                ), host: host)
-                specs.append(ACPTranscriptRowSpec(
-                    id: row.stableId,
-                    equalityToken: rowToken,
-                    build: {
-                        wrapRow(host: host) {
-                            Self.messageRow(
-                                host: host,
-                                row: row,
-                                message: message,
-                                availableRowContentWidth: availableRowContentWidth,
-                                availableTrailingGutterWidth: availableTrailingGutterWidth
-                            )
+                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                )
+            }
+            let memberStableIds = members.map { $0.row.stableId }
+            // Folds any member not yet tagged (e.g. newly revealed by
+            // backfill) into the run's existing lineage before reading it,
+            // so a later collapse from whichever subset happens to be
+            // visible still clears the whole run — see
+            // `ACPToolCallGroupExpansionSeeds.syncLineage`.
+            expansionSeeds.syncLineage(members: memberStableIds)
+            let expanded = expansionSeeds.isExpanded(members: memberStableIds)
+            return ACPTranscriptRowSpec(
+                id: group.id,
+                equalityToken: token(
+                    ToolCallGroupTokenInputs(summary: summary, memberKeys: memberKeys, expanded: expanded),
+                    host: host
+                ),
+                build: {
+                    wrapRow(host: host) {
+                        ACPToolCallGroupRow(
+                            summary: summary,
+                            expanded: expanded,
+                            onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
+                        ) {
+                            ForEach(members) { member in
+                                Self.messageRow(
+                                    host: host,
+                                    row: member.row,
+                                    message: member.message,
+                                    availableRowContentWidth: availableRowContentWidth,
+                                    availableTrailingGutterWidth: availableTrailingGutterWidth
+                                )
+                            }
                         }
                     }
-                ))
-                // Fork divider follows its boundary row, as in the legacy list.
-                if let fork = host.session.forkRecord,
-                   fork.phase == .ready,
-                   row.index == fork.inheritedMessageCount - 1,
-                   fork.mechanism != nil {
-                    specs.append(Self.forkDividerSpec(host: host, fork: fork))
                 }
-            }
+            )
+        }
 
-            specs.append(contentsOf: Self.syntheticTailSpecs(host: host))
-            return specs
+        private struct ToolCallGroupTokenInputs: Equatable {
+            let summary: ACPToolCallGroupSummary
+            let memberKeys: [ACPTranscriptRowContent.EqualityKey]
+            let expanded: Bool
+        }
+
+        private struct ToolCallGroupMember: Identifiable {
+            let row: ACPTranscriptVisibleRow
+            let message: ACPMessage
+            var id: String { row.stableId }
         }
 
         static func messageRow(
@@ -1090,27 +1280,64 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         }
 
         private func alignPendingLogicalTargetIfPossible() {
-            guard let id = pendingLogicalTargetId,
-                  let row = tiling.row(withId: id),
+            // The target is a message stable id; when that message is folded
+            // into a tool-call bundle the tiled row is the bundle's.
+            guard let host,
+                  let id = pendingLogicalTargetId,
                   let scroller
             else { return }
-            let fraction = pendingMinimapRowFraction
+            let lookup = currentRowLookup(host: host)
+            let rowId = lookup.rowId(forStableId: id) ?? id
+            guard let row = tiling.row(withId: rowId) else { return }
+            let fraction = Self.groupAwareRowFraction(
+                targetStableId: id, rowId: rowId, fallbackFraction: pendingMinimapRowFraction,
+                lookup: lookup, transcript: host.transcript
+            )
             pendingMinimapRowFraction = 0
             scroller.setScrollY(row.minY + row.height * fraction)
             pendingLogicalTargetId = nil
             rememberCurrentAnchor()
         }
 
+        /// `pendingMinimapRowFraction` is the fractional remainder of the
+        /// original drag target's GLOBAL position (e.g. 0.3 of the way
+        /// through message 15's own one-unit slot). When that message is a
+        /// plain row, that remainder already IS the row fraction. When it's
+        /// bundled into a group, the row's physical height represents every
+        /// member, so the same 0.3 has to be re-expressed relative to the
+        /// group's full span — reconstructing the original global position
+        /// (15.3) and re-deriving the fraction across `[first, last]` rather
+        /// than always landing at the group's top.
+        private static func groupAwareRowFraction(
+            targetStableId: String,
+            rowId: String,
+            fallbackFraction: CGFloat,
+            lookup: ACPTranscriptVisibleRowLookup,
+            transcript: ACPTranscript
+        ) -> CGFloat {
+            guard let targetLocalIndex = lookup.transcriptIndex(for: targetStableId),
+                  let targetGlobalIndex = transcript.globalIndex(forLocalIndex: targetLocalIndex),
+                  let localSpan = lookup.localIndexSpan(forRowId: rowId),
+                  let globalFirst = transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            else { return fallbackFraction }
+            let globalLast = transcript.globalIndex(forLocalIndex: localSpan.upperBound) ?? globalFirst
+            let targetGlobalPosition = CGFloat(targetGlobalIndex) + fallbackFraction
+            return rowFraction(
+                forGlobalMessagePosition: targetGlobalPosition,
+                globalIndexSpan: globalFirst...max(globalFirst, globalLast)
+            )
+        }
+
         private func syncLogicalScrollerMetrics() {
             guard let host, let scroller else { return }
-            let topGlobalIndex = pendingLogicalTargetGlobalIndex
-                ?? currentTopGlobalMessageIndex()
-                ?? host.transcript.globalIndex(forLocalIndex: host.transcript.visibleHead)
+            let topGlobalPosition = pendingLogicalTargetGlobalIndex.map(CGFloat.init)
+                ?? globalMessagePosition(at: scroller.scrollY)
+                ?? host.transcript.globalIndex(forLocalIndex: host.transcript.visibleHead).map(CGFloat.init)
                 ?? 0
             scroller.setLogicalScrollerMetrics(ACPTranscriptLogicalScrollModel.metrics(
                 totalCount: host.transcript.logicalMessageCount,
                 viewportHeight: scroller.viewportHeight,
-                topGlobalIndex: topGlobalIndex,
+                topGlobalIndex: topGlobalPosition,
                 isAtTail: host.session.followsTranscriptTail
             ))
             syncMinimapViewport()
@@ -1131,48 +1358,141 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, topFraction / max(0.000_001, 1 - proportion)))
         }
 
+        /// A whole-number global index representing whichever message
+        /// currently sits at the viewport's top edge. Delegates to the
+        /// span-aware `globalMessagePosition(at:)` and floors it, so
+        /// scrolling deep into an expanded tool-call group (whose row
+        /// stands for many messages) resolves to the member actually under
+        /// the viewport instead of always the group's first member —
+        /// `settleUserScroll`'s window recenter would otherwise trim away
+        /// the later members currently on screen and jump the reader back
+        /// to the group's start.
         private func currentTopGlobalMessageIndex() -> Int? {
-            guard let host, let scroller,
-                  let anchorId = tiling.nearestNonSyntheticRowId(
-                      to: scroller.scrollY,
-                      syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
-                  )
-            else { return nil }
-            let lookup = visibleRowsCache.lookup(
+            guard let scroller else { return nil }
+            return globalMessagePosition(at: scroller.scrollY).map { Int($0) }
+        }
+
+        /// Memoized id → transcript-index mapping for the rows currently
+        /// tiled — the same `renderRows` the spec list is built from, so
+        /// group ids resolve exactly as `rowSpecs` emitted them.
+        private func currentRowLookup(host: ACPTranscriptScroller) -> ACPTranscriptVisibleRowLookup {
+            visibleRowsCache.lookup(
                 generation: host.transcript.messagesGeneration,
                 head: host.transcript.visibleHead,
                 tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(
-                        messages: host.transcript.messages,
-                        visibleHead: host.transcript.visibleHead,
-                        visibleTail: host.transcript.visibleTailBound,
-                        stableId: { host.transcript.stableId(for: $0) }
-                    )
-                }
+                grouping: Self.groupingOptions(host: host),
+                build: { Self.renderRows(host: host) }
             )
-            guard let localIndex = lookup.transcriptIndex(for: anchorId) else { return nil }
-            return host.transcript.globalIndex(forLocalIndex: localIndex)
+        }
+
+        /// The memoized render rows themselves, for `rowSpecs` — same cache
+        /// entry `currentRowLookup` derives its mapping from.
+        private func currentRenderRows(host: ACPTranscriptScroller) -> [ACPTranscriptRenderRow] {
+            visibleRowsCache.rows(
+                generation: host.transcript.messagesGeneration,
+                head: host.transcript.visibleHead,
+                tail: host.transcript.visibleTailBound,
+                grouping: Self.groupingOptions(host: host),
+                build: { Self.renderRows(host: host) }
+            )
         }
 
         private func globalMessagePosition(at y: CGFloat) -> CGFloat? {
             guard let host,
                   let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
                   let row = tiling.row(withId: id) else { return nil }
-            let lookup = visibleRowsCache.lookup(
-                generation: host.transcript.messagesGeneration,
-                head: host.transcript.visibleHead,
-                tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(messages: host.transcript.messages,
-                                                 visibleHead: host.transcript.visibleHead,
-                                                 visibleTail: host.transcript.visibleTailBound,
-                                                 stableId: { host.transcript.stableId(for: $0) })
-                }
+            let lookup = currentRowLookup(host: host)
+            guard let localSpan = lookup.localIndexSpan(forRowId: id),
+                  let globalFirst = host.transcript.globalIndex(forLocalIndex: localSpan.lowerBound)
+            else { return nil }
+            // A folded tool-call group's row displays `localSpan.count`
+            // messages in the height of one row; scale the within-row
+            // fraction across that many global-index units instead of
+            // always advancing by one, or dragging through most of an
+            // expanded bundle would barely move the minimap and then jump
+            // by (count - 1) at the next row. `globalLast` falls back to
+            // `globalFirst` (a span of 1) rather than propagating nil, since
+            // a missing upper bound (e.g. trimmed history) shouldn't make
+            // the whole position lookup fail for an otherwise-resolvable row.
+            let globalLast = host.transcript.globalIndex(forLocalIndex: localSpan.upperBound) ?? globalFirst
+            return Self.globalMessagePosition(
+                rowFraction: (y - row.minY) / max(1, row.height),
+                globalIndexSpan: globalFirst...max(globalFirst, globalLast)
             )
-            guard let localIndex = lookup.transcriptIndex(for: id),
-                  let globalIndex = host.transcript.globalIndex(forLocalIndex: localIndex) else { return nil }
-            return CGFloat(globalIndex) + min(1, max(0, (y - row.minY) / max(1, row.height)))
+        }
+
+        struct StaleRowIdResolution: Equatable {
+            let rowId: String
+            let assumeHeadGrowth: Bool
+        }
+
+        /// Resolves a scroll anchor's row id that no longer exists in the
+        /// current geometry to whatever row currently displays the same
+        /// message — the seam `ACPTranscriptScrollerReconciler.resolveStaleRowId`
+        /// consults. `staleId` may be either a plain message's own stable
+        /// id (if it has since been folded into a group) or a tool-call
+        /// group id whose first member changed (see
+        /// `ACPTranscriptToolCallGroup.id`) — tried in that order, since
+        /// only a message stable id is a valid key into `lookup`'s member
+        /// map, while a group id must first be decoded back to one.
+        ///
+        /// `assumeHeadGrowth` tells the reconciler whether the replacement
+        /// row is taller because content was prepended at its head (true —
+        /// see `ACPTranscriptScrollerReconciler.restoreScrollAnchor`'s doc
+        /// comment) or not.
+        ///
+        /// A resolved GROUP id only implies head growth while collapsing
+        /// stays enabled: decoding one succeeds because its first member
+        /// changed WITHIN an ongoing group. If grouping was disabled
+        /// instead, the group id vanished because grouping stopped entirely
+        /// — a short collapsed bundle can become a much taller plain tool
+        /// card, the opposite of "grew a little at the head" — so
+        /// restoration must not assume bottom-relative there.
+        ///
+        /// A resolved PLAIN id (a card that has since been folded into a
+        /// bundle) implies head growth only when that card is now the
+        /// bundle's LAST member: everything else in the bundle sits above
+        /// it, so the old card's bottom edge is the bundle's bottom edge and
+        /// bottom-relative restoration is exact. If the card landed anywhere
+        /// else in the bundle — typically its FIRST member, as when the
+        /// setting is turned on with the reader parked on the first of a
+        /// run of finished calls — the bundle grew below it, and
+        /// bottom-relative restoration would drag the viewport down by the
+        /// height of every later member; top-relative is right there.
+        static func resolveStaleRowId(
+            _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
+        ) -> StaleRowIdResolution? {
+            if let resolved = lookup.rowId(forStableId: staleId) {
+                let isLastMember = lookup.transcriptIndex(for: staleId) != nil
+                    && lookup.transcriptIndex(for: staleId) == lookup.localIndexSpan(forRowId: resolved)?.upperBound
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: isLastMember)
+            }
+            guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
+                  let resolved = lookup.rowId(forStableId: staleStableId)
+            else { return nil }
+            return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: groupingEnabled)
+        }
+
+        /// Pure scaling math behind `globalMessagePosition(at:)`, split out
+        /// for direct unit testing: a row-relative fraction (0 at its top, 1
+        /// at its bottom) mapped onto the global-index span the row
+        /// represents on screen.
+        static func globalMessagePosition(rowFraction: CGFloat, globalIndexSpan: ClosedRange<Int>) -> CGFloat {
+            let span = CGFloat(globalIndexSpan.upperBound - globalIndexSpan.lowerBound + 1)
+            return CGFloat(globalIndexSpan.lowerBound) + min(1, max(0, rowFraction)) * span
+        }
+
+        /// Inverse of `globalMessagePosition(rowFraction:globalIndexSpan:)`:
+        /// given a target global message position and the on-screen row's
+        /// global-index span, the fraction (0...1) into that row's physical
+        /// height where the target sits. Used to scroll a minimap-drag
+        /// target to the right place within a folded tool-call group instead
+        /// of always the group's top, regardless of which member was
+        /// targeted.
+        static func rowFraction(forGlobalMessagePosition position: CGFloat, globalIndexSpan: ClosedRange<Int>) -> CGFloat {
+            let span = CGFloat(globalIndexSpan.upperBound - globalIndexSpan.lowerBound + 1)
+            guard span > 0 else { return 0 }
+            return min(1, max(0, (position - CGFloat(globalIndexSpan.lowerBound)) / span))
         }
 
         private func pauseTailFollow() {
@@ -1244,22 +1564,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // itself changes, and the id → index map is derived once per
             // rebuild. Same rows, same builder, same lookup the legacy list
             // uses.
-            let lookup = visibleRowsCache.lookup(
-                generation: host.transcript.messagesGeneration,
-                head: host.transcript.visibleHead,
-                tail: host.transcript.visibleTailBound,
-                build: {
-                    ACPTranscriptVisibleRow.rows(
-                        messages: host.transcript.messages,
-                        visibleHead: host.transcript.visibleHead,
-                        visibleTail: host.transcript.visibleTailBound,
-                        stableId: { host.transcript.stableId(for: $0) }
-                    )
-                }
-            )
-            let globalIndex = lookup.transcriptIndex(for: anchorId)
+            let globalIndex = currentRowLookup(host: host).transcriptIndex(for: anchorId)
                 .flatMap { host.transcript.globalIndex(forLocalIndex: $0) }
-            host.onRememberScrollAnchor(anchorId, globalIndex, false)
+            // Remember a bundle by its first tool call's stable id, not the
+            // bundle row id: `restoreInitialPositionIfNeeded` re-resolves
+            // whichever row shows that message, bundled or not.
+            let rememberedId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: anchorId) ?? anchorId
+            host.onRememberScrollAnchor(rememberedId, globalIndex, false)
         }
 
         /// Runs once per Coordinator lifetime, but only actually latches
@@ -1304,7 +1615,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 scroller.scrollToBottom()
                 return
             }
-            guard let row = tiling.row(withId: anchor) else {
+            // An anchor remembered as a tool call's own id may now be tiled
+            // inside a bundle; align on the bundle row in that case.
+            let anchorStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: anchor) ?? anchor
+            let anchorRowId = currentRowLookup(host: host).rowId(forStableId: anchorStableId) ?? anchor
+            guard let row = tiling.row(withId: anchorRowId) else {
                 // Anchor exists but isn't resolvable yet; retry later
                 // instead of latching onto a wrong fallback.
                 return
@@ -1339,6 +1654,30 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 to: scroller.scrollY,
                 syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
             )
+        }
+
+        /// Writes tool-call bundle expand state exactly as the row's own
+        /// disclosure button does, so a test can exercise an expanded (and
+        /// therefore tall) group without simulating a real click. Works
+        /// both before the first `attach` (seeding) and after (the store's
+        /// `onChange` re-tiles the mounted row).
+        func setToolCallGroupExpandedForTesting(_ expanded: Bool, memberStableIds: [String]) {
+            toolCallGroupExpansionSeeds.setExpanded(expanded, members: memberStableIds)
+        }
+
+        /// Invokes the debounce-timer-driven window-compaction path
+        /// synchronously, so a test doesn't have to wait out a real
+        /// `scrollSettleTimer` interval.
+        func settleUserScrollForTesting() {
+            settleUserScroll()
+        }
+
+        /// A mounted row's exact on-screen frame, so a test can compute a
+        /// precise scroll target inside it (e.g. a fraction through a
+        /// folded tool-call group's real measured height) instead of
+        /// guessing from assumed row sizes.
+        func rowFrameForTesting(id: String) -> (minY: CGFloat, height: CGFloat)? {
+            tiling.row(withId: id).map { ($0.minY, $0.height) }
         }
         #endif
     }

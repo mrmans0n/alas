@@ -302,7 +302,7 @@ struct MinimapTests {
         )
         #expect(rows.map(\.index) == [1, 2])
         #expect(Set(rows.map(\.stableId)).count == rows.count)
-        let lookup = ACPTranscriptVisibleRowLookup(rows: rows.map { ($0.index, $0.stableId) })
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows.map(ACPTranscriptRenderRow.message))
         #expect(lookup.transcriptIndex(for: latest.stableId) == 2)
     }
 

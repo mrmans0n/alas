@@ -540,7 +540,8 @@ private struct ACPSessionView: View {
             agentDisplayName: { agentID in
                 state.agent(id: agentID)?.displayName ?? agentID
             },
-            showMinimap: showMinimap
+            showMinimap: showMinimap,
+            collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
         )
     }
 

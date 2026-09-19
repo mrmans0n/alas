@@ -12,7 +12,8 @@ private func makeHost(
     contentMaxWidth: CGFloat = 800,
     typography: ACPChatTypography = .default,
     onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in },
-    onQueueRemove: @escaping (UUID) -> Void = { _ in }
+    onQueueRemove: @escaping (UUID) -> Void = { _ in },
+    collapsesFinishedToolCalls: Bool = false
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
         session: session,
@@ -41,7 +42,8 @@ private func makeHost(
         onQueueClearAll: {},
         onRetryContextRecovery: {},
         onOpenForkSource: { _ in },
-        agentDisplayName: { $0 }
+        agentDisplayName: { $0 },
+        collapsesFinishedToolCalls: collapsesFinishedToolCalls
     )
 }
 
@@ -223,6 +225,144 @@ struct ACPTranscriptScrollerRowSpecsTests {
         for id in specs.map(\.id) where id != pendingInputId {
             #expect(byId[id]?.keepsMountedOffscreen == false, "\(id) unexpectedly opted into keepsMountedOffscreen")
         }
+    }
+
+    private func tool(_ id: String, status: String = "completed") -> ACPMessage {
+        .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status))
+    }
+
+    @Test("finished tool calls stay individual rows when collapsing is off")
+    func toolCallsStayIndividualWhenCollapsingOff() {
+        let host = makeHost(collapsesFinishedToolCalls: false)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tc-a", "tc-b", "tc-c", "__composer_spacer__"])
+    }
+
+    @Test("finished tool calls fold into a group row ahead of the active tool when collapsing is on")
+    func toolCallsFoldWhenCollapsingOn() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        #expect(specs.map(\.id) == ["tcg-tc-a", "tc-c", "__composer_spacer__"])
+        let group = try #require(specs.first { $0.id == "tcg-tc-a" })
+        #expect(group.keepsMountedOffscreen == false)
+    }
+
+    @Test("group row token changes when a member's status changes")
+    func groupTokenChangesOnMemberStatus() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        host.transcript.messages = [tool("a"), tool("b", status: "failed")]
+        let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        #expect(!before.isEqual(to: after))
+    }
+
+    @Test("group row token changes when the bundle's expanded state changes")
+    func groupTokenChangesOnExpansion() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        let collapsed = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, expansionSeeds: seeds)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        let expanded = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, expansionSeeds: seeds)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        // The expanded flag is store-owned and folded into the token: a
+        // toggle must yield a different token or the reconciler would keep
+        // the stale row content on screen.
+        #expect(!collapsed.isEqual(to: expanded))
+    }
+
+    @Test("caller-supplied render rows drive the spec list")
+    func suppliedRenderRowsDriveSpecs() {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        // Hand in a fold that deliberately differs from what `renderRows`
+        // would produce; the specs must follow the supplied rows, proving
+        // the memoized path is actually consumed rather than recomputed.
+        let supplied: [ACPTranscriptRenderRow] = [
+            .message(ACPTranscriptVisibleRow(index: 0, stableId: "tc-a")),
+            .toolCallGroup(ACPTranscriptToolCallGroup(members: [
+                ACPTranscriptVisibleRow(index: 1, stableId: "tc-b"),
+                ACPTranscriptVisibleRow(index: 2, stableId: "tc-c"),
+            ])),
+        ]
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, renderRows: supplied).map(\.id)
+        #expect(ids == ["tc-a", "tcg-tc-b", "__composer_spacer__"])
+    }
+
+    @Test("the fork divider is still emitted when the boundary message has no row")
+    func forkDividerEmittedAcrossRowlessBoundary() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 2, inheritedMessageCount: 2,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: true)
+        // The boundary (index 1) is a `.plan`, which never becomes a row.
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        host.transcript.messages = [tool("a"), plan, tool("c"), tool("d")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
+    }
+
+    @Test("the fork divider is emitted once when the boundary row is followed by a later row")
+    func forkDividerEmittedOnce() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 1, inheritedMessageCount: 1,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: false)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tc-a", "__fork_divider__", "tc-b", "tc-c", "__composer_spacer__"])
+    }
+
+    @Test("the fork divider follows the group that ends at the fork boundary")
+    func forkDividerFollowsGroupAtBoundary() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.forkRecord = ACPSessionForkRecord(
+            targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 2, inheritedMessageCount: 2,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let host = makeHost(session: session, collapsesFinishedToolCalls: true)
+        host.transcript.messages = [tool("a"), tool("b"), tool("c"), tool("d")]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
     }
 
     @Test("active connection recovery is rendered at the transcript tail")
@@ -871,6 +1011,102 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         (0..<count).map { index in
             .systemNotice(id: UUID(), text: "message \(index)")
         }
+    }
+
+    /// Regression test for the Codex finding: `settleUserScroll`'s window
+    /// compaction used to resolve the viewport's top row via the group's
+    /// first member only, so stopping deep inside a tall expanded bundle
+    /// recentered the render window around a much earlier index — trimming
+    /// away the later members currently on screen and jumping the reader
+    /// back to the bundle's start.
+    @Test("settling deep inside an expanded tool-call group keeps the visible member in the window")
+    func settlingInsideExpandedGroupKeepsVisibleMemberInWindow() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let leading = messages(10)
+        let toolCalls: [ACPMessage] = (0..<150).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)", title: "Read file \(index)", kind: "read", status: "completed"
+            ))
+        }
+        let trailing = messages(40)
+        session.replaceTranscriptMessages(leading + toolCalls + trailing)
+        // A window spanning the whole transcript unconditionally satisfies
+        // `settleUserScroll`'s "window has grown past maxVisibleRows" gate,
+        // regardless of how a real fling would have grown it. The total
+        // message count must comfortably exceed `maxVisibleRows` by more
+        // than `tailWindow`, or `setVisibleWindow(around:)`'s own
+        // `latestHead` cap (`messages.count - maxVisibleRows`) clamps
+        // `visibleHead` near 0 regardless of the target index, making the
+        // old bug and the fix indistinguishable.
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = leading.count + toolCalls.count + trailing.count
+        session.followsTranscriptTail = false
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.setToolCallGroupExpandedForTesting(true, memberStableIds: toolCalls.map(\.stableId))
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        // Expanded, the 150-member bundle spans many viewports. Scroll to
+        // 70% through the GROUP ROW'S OWN measured height specifically
+        // (not 70% of the whole document, which could land in the small
+        // leading/trailing messages instead) — comfortably past
+        // `ACPTranscript.tailWindow` members into the group — before
+        // settling.
+        let groupId = "tcg-" + toolCalls[0].stableId
+        let groupFrame = try #require(coordinator.rowFrameForTesting(id: groupId))
+        #expect(groupFrame.height > scroller.viewportHeight * 3)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: groupFrame.minY + groupFrame.height * 0.7))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(coordinator.topVisibleMessageIdForTesting == groupId)
+
+        coordinator.settleUserScrollForTesting()
+
+        // The group's first member sits at local index 10 (after the 10
+        // leading messages), which is inside `ACPTranscript.tailWindow`
+        // (30) of 0 either way — the old bug (always reporting the group's
+        // first member) and the fix would both clamp `visibleHead` to 0 for
+        // a shallow scroll. Scrolling deep enough that the actually-visible
+        // member's index comfortably exceeds `tailWindow` makes the two
+        // behaviors diverge: the old bug still recenters near the group's
+        // start (clamping to 0), the fix recenters near the member under
+        // the viewport.
+        #expect(session.transcript.visibleHead > ACPTranscript.tailWindow)
+        #expect(session.transcript.visibleHead < leading.count + toolCalls.count)
+    }
+
+    @Test("toggling a mounted bundle's expansion re-tiles the row without a model update")
+    func togglingExpansionRetilesMountedRow() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let toolCalls: [ACPMessage] = (0..<5).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)", title: "Read file \(index)", kind: "read", status: "completed"
+            ))
+        }
+        session.replaceTranscriptMessages(toolCalls)
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        let groupId = "tcg-" + toolCalls[0].stableId
+        let collapsedHeight = try #require(coordinator.rowFrameForTesting(id: groupId)).height
+
+        // Flip the store after mount, exactly as the row's own disclosure
+        // button does. The expanded flag lives in the row token, so the
+        // store must drive a fresh spec list on its own — nothing else
+        // (no message change, no width change) calls `update(host:)` here.
+        coordinator.setToolCallGroupExpandedForTesting(true, memberStableIds: toolCalls.map(\.stableId))
+        scroller.layoutSubtreeIfNeeded()
+
+        let expandedHeight = try #require(coordinator.rowFrameForTesting(id: groupId)).height
+        #expect(expandedHeight > collapsedHeight)
     }
 
     private func attach(
