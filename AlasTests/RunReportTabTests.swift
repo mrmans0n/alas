@@ -4,6 +4,24 @@ import Testing
 
 @MainActor
 struct RunReportTabTests {
+    @Test func outputPresentationKeepsAvailableLogTextAndTruncationState() {
+        let presentation = RunReportOutputPresentation.make(
+            for: .available(text: "Task :test\nBUILD SUCCESSFUL", truncated: true)
+        )
+
+        #expect(presentation == .document(text: "Task :test\nBUILD SUCCESSFUL", isTruncated: true))
+    }
+
+    @Test func outputPresentationUsesAnEmptyStateForNoCapturedText() {
+        let presentation = RunReportOutputPresentation.make(for: .available(text: "", truncated: false))
+
+        #expect(presentation == .document(text: "No output was produced.", isTruncated: false))
+    }
+
+    @Test func outputPresentationDistinguishesUnavailableOutput() {
+        #expect(RunReportOutputPresentation.make(for: .unavailable) == .unavailable)
+    }
+
     @Test func tabStateRoundTripsWithStableRunIdentity() throws {
         let state = RunReportTabState(worktreeId: "wt-1", runID: "run-1")
         let tab = Tab.runReport(state)
