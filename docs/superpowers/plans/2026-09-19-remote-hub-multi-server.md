@@ -2165,6 +2165,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
   {
     const { clock, links } = harness({ fetchImpl: () => new Promise(() => {}) });
     const pending = links.pair(["http://10.0.0.1:8765"], "CODE", "phone");
+    pending.catch(() => {}); // observed immediately so the rejection below is never "unhandled" during the awaited tick
     await clock.tick(globalThis.RemoteHubLinks.PAIR_TIMEOUT_MS);
     await assert.rejects(pending, (err) => err.reason === "net");
   }
@@ -2227,6 +2228,7 @@ function createLinks(deps, hooks) {
       role: "idle",
       state: "idle",
       socket: null,
+      pendingSocket: null,
       attempt: 0,
       reconnectDelay: INITIAL_RECONNECT_MS,
       reconnectTimer: null,
@@ -2248,12 +2250,24 @@ function createLinks(deps, hooks) {
     stopPolling(link);
   }
 
+  // Closes both the adopted socket (`link.socket`) and, if a connection
+  // attempt is still mid-handshake, the not-yet-adopted one
+  // (`link.pendingSocket`) — otherwise a teardown mid-attempt (e.g. `remove()`
+  // right after `update()` reconnects) orphans that socket: never closed,
+  // and (on a real WebSocket) a live connection leaked indefinitely.
   function closeSocket(link) {
     const socket = link.socket;
     link.socket = null;
-    if (!socket) return;
-    socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
-    try { socket.close(); } catch (_) {}
+    if (socket) {
+      socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+      try { socket.close(); } catch (_) {}
+    }
+    const pending = link.pendingSocket;
+    link.pendingSocket = null;
+    if (pending) {
+      pending.onopen = pending.onmessage = pending.onclose = pending.onerror = null;
+      try { pending.close(); } catch (_) {}
+    }
   }
 
   // Invalidates in-flight handshakes (their `attempt` no longer matches) and
@@ -2334,6 +2348,7 @@ function createLinks(deps, hooks) {
     let socket;
     try { socket = deps.createSocket(wsUrl(origin), [link.token]); }
     catch (_) { attemptOrigin(link, order, index + 1, attempt); return; }
+    link.pendingSocket = socket;
     let settled = false;
     const timer = deps.setTimeout(() => {
       if (settled) return;
@@ -2359,6 +2374,7 @@ function createLinks(deps, hooks) {
   }
 
   function adopt(link, socket, origin) {
+    if (link.pendingSocket === socket) link.pendingSocket = null;
     link.socket = socket;
     link.lastOrigin = origin;
     link.reconnectDelay = INITIAL_RECONNECT_MS;
