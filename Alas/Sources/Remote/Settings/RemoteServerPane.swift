@@ -106,6 +106,24 @@ struct RemoteServerPane: View {
                                 placeholder: state.remoteDisplayName
                             )
                         }
+                        SettingsRow(
+                            name: "Allowed origins",
+                            desc: "Comma-separated. Add an address here if a hub reports \"doesn't allow this address\" — e.g. a reverse-proxied hostname the automatic checks don't already trust."
+                        ) {
+                            AlasField(
+                                text: Binding(
+                                    get: { state.config.remote.allowedOrigins.joined(separator: ", ") },
+                                    set: { value in
+                                        state.config.remote.allowedOrigins = value.split(separator: ",")
+                                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                                            .filter { !$0.isEmpty }
+                                        state.saveConfig()
+                                        state.refreshRemoteAccessState()
+                                    }
+                                ),
+                                monospaced: true
+                            )
+                        }
                         SettingsRow(name: "Pair a device", desc: "Show a QR code to pair a new phone or tablet.") {
                             AlasButton(
                                 title: pairingCode == nil ? "Show pairing QR" : "New code",

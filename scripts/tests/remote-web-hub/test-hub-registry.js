@@ -122,6 +122,26 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
   assert.equal(doc.activeId, first.server.id, "active server is not changed by adding another");
 }
 
+{
+  // Regression (Codex review, PR #1337): every pairing link includes
+  // "localhost" alongside the server's real addresses, so two different
+  // Macs on the same default port used to collide on that shared origin —
+  // pairing the second Mac silently overwrote the first's registry entry
+  // instead of adding a new one.
+  const doc = { version: 1, activeId: null, servers: [] };
+  const first = registry.upsertPaired(doc, { origins: ["http://localhost:8765", "http://10.0.0.1:8765"], token: "t1", now: 1 });
+  const second = registry.upsertPaired(doc, { origins: ["http://localhost:8765", "http://10.0.0.2:8765"], token: "t2", now: 2 });
+  assert.equal(second.rePaired, false, "a shared localhost origin must not merge two different Macs");
+  assert.equal(doc.servers.length, 2);
+  assert.notEqual(second.server.id, first.server.id);
+
+  // Re-pairing the same Mac still matches on its real, non-loopback origin.
+  const rePair = registry.upsertPaired(doc, { origins: ["http://localhost:8765", "http://10.0.0.1:8765"], token: "t3", now: 3 });
+  assert.equal(rePair.rePaired, true, "a real shared origin still re-pairs in place");
+  assert.equal(rePair.server.id, first.server.id);
+  assert.equal(doc.servers.length, 2);
+}
+
 // --- applyHello --------------------------------------------------------------
 
 {

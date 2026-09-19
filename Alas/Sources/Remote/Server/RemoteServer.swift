@@ -142,6 +142,15 @@ final class RemoteServer {
         }
     }
 
+    /// Pushes a fresh `hello` to every authenticated connection — e.g. after
+    /// the "Remote hub" toggle changes, so already-connected browsers pick up
+    /// the new `hubEnabled` without waiting for a reconnect.
+    func broadcastHello() {
+        for (oid, conn) in connections where connectionDevice[oid] != nil {
+            conn.sendHello()
+        }
+    }
+
     func connectedDeviceCounts() -> [String: Int] {
         var counts: [String: Int] = [:]
         for deviceId in connectionDevice.values {

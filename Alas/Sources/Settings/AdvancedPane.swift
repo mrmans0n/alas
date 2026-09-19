@@ -53,6 +53,10 @@ struct AdvancedPane: View {
                             set: { enabled in
                                 state.config.remote.hubEnabled = enabled
                                 state.saveConfig()
+                                // Already-connected browsers only see hubEnabled in the
+                                // hello sent at handshake — push a fresh one so they
+                                // don't need a reload to notice the flag changed.
+                                state.remoteServer?.broadcastHello()
                             }
                         ))
                     }

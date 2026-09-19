@@ -60,6 +60,20 @@ function uniqueOrigins(origins) {
   return out;
 }
 
+// Every server advertises "localhost" alongside its real addresses so a
+// browser running on the same Mac can reach it — but that means every
+// server's pairing link shares this origin with every other server on the
+// same default port. It can never disambiguate which Mac a pairing belongs
+// to, so it must never be used to decide two pairings are the same server.
+function isLoopbackOrigin(origin) {
+  try {
+    const hostname = new URL(origin).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  } catch (_) {
+    return false;
+  }
+}
+
 // The string encoded in the QR / Copy button:
 //   http://<host>:<port>/?code=<CODE>&hosts=<origin>,<origin>,…
 // or a legacy link without `hosts`. Returns { origins, code } with the
@@ -157,7 +171,10 @@ function save(storage, doc) {
 // was.
 function upsertPaired(doc, { origins, token, now }) {
   const normalized = uniqueOrigins(origins);
-  const existing = doc.servers.find((s) => s.origins.some((o) => normalized.includes(o)));
+  const matchable = normalized.filter((o) => !isLoopbackOrigin(o));
+  const existing = matchable.length
+    ? doc.servers.find((s) => s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))
+    : undefined;
   if (existing) {
     existing.token = token;
     existing.origins = uniqueOrigins([...normalized, ...existing.origins]);

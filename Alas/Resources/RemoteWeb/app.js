@@ -229,6 +229,10 @@ function handleLinkHello(link, hello) {
   const result = RemoteHubRegistry.applyHello(hub, link.id, hello);
   if (!result) return;
   RemoteHubRegistry.save(localStorage, hub);
+  // Recompute the aggregate before the merge branch's early return too — the
+  // surviving entry's hubEnabled may have just changed and no other server
+  // is left to authorize the hub UI otherwise.
+  applyHubFlag(anyServerHasHubEnabled());
   if (result.mergedFromId) {
     // The Mac we just reached was already paired under another entry. Keep
     // the older entry (its id is what the UI references), give it the fresh
@@ -238,7 +242,6 @@ function handleLinkHello(link, hello) {
     if (hub.activeId === result.server.id) switchServer(result.server.id);
     return;
   }
-  applyHubFlag(anyServerHasHubEnabled());
   if (link.role === "active" && link.state === "online") setStatus(connectedLabel(), "ok");
   refreshHubViews();
 }

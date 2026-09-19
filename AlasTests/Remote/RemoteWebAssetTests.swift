@@ -1214,4 +1214,31 @@ struct RemoteWebAssetTests {
         #expect(appJS.contains("onOriginChange: (link, origin) => {"))
         #expect(appJS.contains("RemoteHubRegistry.setLastOrigin(hub, link.id, origin);"))
     }
+
+    // Regression (Codex review, PR #1337): when a hello reveals that a link
+    // duplicates an already-paired server, handleLinkHello merged the two
+    // registry entries and returned before recomputing the aggregate hub
+    // flag — so a surviving entry whose fresh hello reported hubEnabled:
+    // false could leave the hub UI stuck on with nothing left authorizing it.
+    @Test func mergingADuplicateLinkRecomputesTheAggregateHubFlag() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function handleLinkHello(link, hello) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
+        let flagIndex = try #require(body.range(of: "applyHubFlag(anyServerHasHubEnabled());"))
+        let mergeIndex = try #require(body.range(of: "if (result.mergedFromId) {"))
+        #expect(flagIndex.lowerBound < mergeIndex.lowerBound, "the aggregate flag must be recomputed before the merge branch's early return")
+    }
+
+    // Regression (Codex review, PR #1337): every pairing link advertises
+    // "localhost" alongside a server's real addresses, so two different Macs
+    // used to collide on that shared origin and pairing the second silently
+    // overwrote the first's registry entry. See hub-registry.js's
+    // upsertPaired / isLoopbackOrigin and the matching node-executed
+    // coverage in scripts/tests/remote-web-hub/test-hub-registry.js.
+    @Test func pairingDedupIgnoresTheSharedLocalhostOrigin() throws {
+        let js = try asset("hub-registry.js")
+        #expect(js.contains("function isLoopbackOrigin(origin)"))
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now }) {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(body.contains("const matchable = normalized.filter((o) => !isLoopbackOrigin(o));"))
+    }
 }

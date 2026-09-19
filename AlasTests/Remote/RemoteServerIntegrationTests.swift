@@ -187,6 +187,40 @@ struct RemoteServerIntegrationTests {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    // Regression (Codex review, PR #1337): hubEnabled is only carried in the
+    // hello sent at handshake, so toggling "Remote hub" used to leave every
+    // already-connected browser stuck on the value it saw at connect time —
+    // broadcastHello() must push a fresh hello without dropping the socket.
+    @Test func broadcastHelloPushesUpdatedIdentityToAConnectedSocket() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        var hubEnabled = false
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: hubEnabled) }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
+        task.resume()
+        let first = try await receiveServerMessage(task)
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: false))
+
+        hubEnabled = true
+        server.broadcastHello()
+        let second = try await receiveServerMessage(task)
+        #expect(second == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: true))
+
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
     @Test func webSocketWithPublicOriginIsRejectedBeforeTokenValidation() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")

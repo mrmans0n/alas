@@ -112,6 +112,22 @@ final class RemoteConnection: @unchecked Sendable {
         onQueue { [weak self] in self?.teardown() }
     }
 
+    /// Pushes a fresh `hello` outside the initial handshake — e.g. when the
+    /// server's advertised identity (like `hubEnabled`) changes while a
+    /// client is already connected. `framesEnabled` is confined to `queue`,
+    /// so it must be read there before hopping to MainActor to build the
+    /// hello; a socket that hasn't finished its own handshake yet is left
+    /// alone; its `completeUpgrade` hello already reflects current identity.
+    func sendHello() {
+        onQueue { [weak self] in
+            guard let self, self.framesEnabled else { return }
+            Task { @MainActor [weak self] in
+                guard let self, let hello = self.makeHello() else { return }
+                self.sendServerMessage(hello)
+            }
+        }
+    }
+
     /// Hops a block back onto the connection's serial queue so it can safely
     /// touch the queue-confined state after a `@MainActor` round-trip.
     private func onQueue(_ work: @escaping @Sendable () -> Void) {
