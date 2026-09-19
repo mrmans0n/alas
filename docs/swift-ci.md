@@ -1,5 +1,20 @@
 # Swift CI coverage
 
+The `Build` workflow skips entirely when a push to `main` or a pull request only
+touches files no job builds, tests, or reads: Markdown anywhere, `docs/`,
+`LICENSE`, `art/`, `assets/`, `renovate.json`, the `.agents/` and `.claude/`
+skill directories, the nightly and release workflows, and `.alas/` except for
+`.alas/scripts/`, whose build script the alas-build harness exercises. The
+filter lives in the `on:` block of `.github/workflows/build.yml` and
+`scripts/tests/ci-workflow` asserts both events share it and that representative
+source, script, and manifest paths still trigger a run. No branch protection
+requires these checks, so a skipped workflow leaves the pull request mergeable.
+
+That contract test is Ruby rather than Python because it only needs to parse
+`build.yml` and assert against it, and Ruby's standard library ships a YAML
+parser; Python has none built in and this repo doesn't otherwise depend on
+PyYAML, so Ruby avoids adding a dependency for a single test file.
+
 CI builds the test target once, then asks Xcode to enumerate the compiled tests
 with `test-without-building -enumerate-tests -test-enumeration-style flat
 -test-enumeration-format json`. No Swift source is parsed. The inventory and
