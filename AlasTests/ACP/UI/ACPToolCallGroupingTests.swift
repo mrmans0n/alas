@@ -420,4 +420,52 @@ struct ACPToolCallGroupExpansionSeedsTests {
         seeds.setExpanded(false, members: ["tc-a", "tc-b"])
         #expect(!seeds.isExpanded(members: ["tc-a", "tc-b"]))
     }
+
+    /// Regression test for the Codex finding: bare member-id overlap cannot
+    /// distinguish "the same still-expanded run growing" from "a collapsed
+    /// run reassembling from members some of which still carry a stale seed
+    /// from before the window trimmed them out." `syncLineage` folds
+    /// currently-visible members into whichever lineage is already present
+    /// among them on every render (not just at expand/collapse time), so a
+    /// LATER collapse — from any visible subset — clears every member that
+    /// was ever part of the same expand session, not just the ones passed
+    /// to that specific `setExpanded(false, ...)` call.
+    @Test("collapsing clears the whole lineage, including members outside the current window")
+    func collapsingClearsWholeLineageAcrossWindowTrim() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        // Expand the full run, then sync as backfill/trimming keeps the
+        // window changing while it stays expanded — folding every member
+        // that has ever been visible into the same lineage.
+        seeds.setExpanded(true, members: ["tc-5", "tc-10", "tc-20"])
+        seeds.syncLineage(members: ["tc-5", "tc-10", "tc-20"])
+
+        // The window trims to only the tail; the user collapses from what's
+        // currently visible.
+        seeds.setExpanded(false, members: ["tc-10", "tc-20"])
+
+        // Backfill later re-reveals tc-5, rejoining the same logical run —
+        // it must not silently re-expand from a stale seed.
+        #expect(!seeds.isExpanded(members: ["tc-5", "tc-10", "tc-20"]))
+        #expect(!seeds.isExpanded(members: ["tc-5"]))
+    }
+
+    @Test("syncLineage folds a newly joined member into an already-expanded run's lineage")
+    func syncLineageFoldsNewMemberIntoExistingLineage() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        // "tc-z" joined the run (e.g. backfill) but was never itself passed
+        // to setExpanded.
+        seeds.syncLineage(members: ["tc-z", "tc-a", "tc-b"])
+        // Collapsing from a subset that no longer includes the original
+        // members still clears "tc-z" too, since syncLineage folded it in.
+        seeds.setExpanded(false, members: ["tc-z"])
+        #expect(!seeds.isExpanded(members: ["tc-z", "tc-a", "tc-b"]))
+    }
+
+    @Test("syncLineage on a never-expanded group is a no-op")
+    func syncLineageNoOpWhenNeverExpanded() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.syncLineage(members: ["tc-a", "tc-b"])
+        #expect(!seeds.isExpanded(members: ["tc-a", "tc-b"]))
+    }
 }

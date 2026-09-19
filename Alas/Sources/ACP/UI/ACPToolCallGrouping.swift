@@ -149,17 +149,49 @@ struct ACPToolCallGroupSummary: Equatable {
 /// jump never inherit each other's expanded state: they share no member ids.
 @MainActor
 final class ACPToolCallGroupExpansionSeeds {
-    private var expandedMemberIds: Set<String> = []
+    /// Every member ever recorded as part of an expanded run, tagged with
+    /// that run's lineage. Bare member-id overlap alone can't tell "the
+    /// same still-expanded run growing" apart from "a collapsed run
+    /// reassembling from members some of which still carry a stale tag
+    /// from before the render window trimmed them out" — both look
+    /// identical from membership alone, since a member can leave and later
+    /// re-enter the window without ever being explicitly collapsed. A
+    /// lineage id, freshly minted per expand action and explicitly
+    /// invalidated by collapse (see `setExpanded`), disambiguates the two.
+    private var lineageByMemberId: [String: UUID] = [:]
 
     func isExpanded(members: [String]) -> Bool {
-        members.contains { expandedMemberIds.contains($0) }
+        members.contains { lineageByMemberId[$0] != nil }
     }
 
     func setExpanded(_ expanded: Bool, members: [String]) {
         if expanded {
-            expandedMemberIds.formUnion(members)
+            // Reuse an existing lineage if any current member already
+            // carries one (this run growing while still expanded);
+            // otherwise this is a fresh expand action.
+            let lineage = members.compactMap { lineageByMemberId[$0] }.first ?? UUID()
+            for member in members { lineageByMemberId[member] = lineage }
         } else {
-            expandedMemberIds.subtract(members)
+            // Clear every member sharing ANY lineage referenced by the
+            // current members — not just the ones passed in — so a
+            // collapse from a partially-windowed subset still invalidates
+            // members currently outside the window that `syncLineage`
+            // previously folded into the same run.
+            let lineages = Set(members.compactMap { lineageByMemberId[$0] })
+            guard !lineages.isEmpty else { return }
+            lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
         }
+    }
+
+    /// Folds `members` into whichever lineage is already present among
+    /// them, if any. Called on every render of an expanded group (not only
+    /// at expand/collapse time) so a member newly revealed by backfill, or
+    /// a member that was never itself passed to `setExpanded`, still gets
+    /// tagged — keeping a later collapse correct regardless of which
+    /// subset of the run happens to be visible when the user triggers it.
+    /// A no-op when none of `members` carries a lineage yet.
+    func syncLineage(members: [String]) {
+        guard let lineage = members.compactMap({ lineageByMemberId[$0] }).first else { return }
+        for member in members { lineageByMemberId[member] = lineage }
     }
 }

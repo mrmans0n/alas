@@ -602,6 +602,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 )
             }
             let memberStableIds = members.map { $0.row.stableId }
+            // Folds any member not yet tagged (e.g. newly revealed by
+            // backfill) into the run's existing lineage before reading it,
+            // so a later collapse from whichever subset happens to be
+            // visible still clears the whole run — see
+            // `ACPToolCallGroupExpansionSeeds.syncLineage`.
+            expansionSeeds.syncLineage(members: memberStableIds)
             let initiallyExpanded = expansionSeeds.isExpanded(members: memberStableIds)
             return ACPTranscriptRowSpec(
                 id: group.id,

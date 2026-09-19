@@ -955,6 +955,55 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
     }
 
+    /// Regression test for the Codex follow-up finding: an active tool call
+    /// finishing immediately after an existing bundle changes row ids from
+    /// `[group, tc-b]` to `[group]` — classified as `.removed`, not
+    /// `.reset`, since only one id vanished with everything else unchanged.
+    /// `tc-b` never reappears under its own id (it's now permanently
+    /// absorbed into the group as its newest member), so the pre-existing
+    /// "wait for the same id to come back" pending-anchor mechanism can
+    /// never resolve it; the removal's own compensation, meanwhile, shifts
+    /// by `tc-b`'s full height as if the content had simply vanished. The
+    /// `.removed` path now tries the same `resolveStaleRowId` remap
+    /// `.reset` restoration uses, immediately, before falling back to the
+    /// pending-anchor wait.
+    @Test("an anchor absorbed into an adjacent bundle via incremental removal resolves immediately")
+    func removalRemapsAnchorAbsorbedIntoAdjacentBundle() {
+        let (reconciler, scroller, tiling) = makeStack()
+        // A tall trailing spacer, not extra height ABOVE tc-b, gives the
+        // viewport room to actually scroll down to tc-b's position: content
+        // before tc-b shifts the scrollable maximum by the same amount it
+        // shifts tc-b's own position, leaving no net room, while content
+        // after it only raises the maximum.
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", height: 200), spec("tc-b", height: 80)]
+            + [spec("__composer_spacer__", height: 350)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 40pt into tc-b's own 80pt row: 40pt from its bottom edge.
+        scroller.setScrollY(tiling.row(withId: "tc-b")!.minY + 40)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tc-b")
+
+        reconciler.resolveStaleRowId = { $0 == "tc-b" ? (rowId: "tcg-tc-a", assumeHeadGrowth: true) : nil }
+
+        // tc-b finished and was absorbed as the group's newest (tail)
+        // member; the group's row grows by tc-b's own height, tc-b's own
+        // row disappears. Everything else is unchanged, so this is a pure
+        // `.removed`, not a `.reset`.
+        let new = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", token: 1, height: 280)]
+            + [spec("__composer_spacer__", height: 350)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id))
+            == .removed(index: 3, count: 1)
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-a")!
+        // Correct: 40pt from the group's NEW bottom edge (row.minY + 240).
+        // The bug would leave a dangling pending-anchor wait (never
+        // resolving, since "tc-b" never reappears) while the removal's own
+        // full-height compensation left the viewport elsewhere.
+        #expect(abs(scroller.scrollY - (row.minY + 240)) < 1)
+    }
+
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")
     func resetAnchorSkipsSyntheticRows() {
         // The head pagination spinner occupies row 0 (minY 24, maxY 38), so

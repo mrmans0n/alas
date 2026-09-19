@@ -294,18 +294,26 @@ final class ACPTranscriptScrollerReconciler {
     /// Carries the reading position across an update that removes the row it
     /// was anchored to — see `PendingAnchorRestore`.
     ///
-    /// Three outcomes, in priority order: the anchor row went away (remember
-    /// it), a previously remembered row came back (restore and forget), or
-    /// neither (age out anything remembered). Restoration deliberately runs
-    /// after the diff's own compensation, overwriting it: compensation
-    /// computed against a document that was missing the block is exactly what
-    /// produced the wrong offset.
+    /// Four outcomes, in priority order: the anchor row went away but
+    /// resolves immediately through `resolveStaleRowId` (correct now, done —
+    /// a finished tool call absorbed into an adjacent bundle never comes
+    /// back under its OWN id, so waiting for it would age out uselessly);
+    /// the anchor row went away and doesn't resolve (remember it, in case
+    /// it genuinely reappears later); a previously remembered row came back
+    /// (restore and forget); or neither (age out anything remembered).
+    /// Restoration deliberately runs after the diff's own compensation,
+    /// overwriting it: compensation computed against a document that was
+    /// missing the block is exactly what produced the wrong offset.
     private func trackAnchorAcrossUpdate(_ before: ScrollAnchor?, repinsToTail: Bool) {
         guard !repinsToTail else {
             pendingAnchorRestore = nil
             return
         }
-        if case .row(let id, let offsetWithinRow, _) = before, tiling.row(withId: id) == nil {
+        if case .row(let id, let offsetWithinRow, let oldRowHeight) = before, tiling.row(withId: id) == nil {
+            if restoreViaStaleResolution(id: id, offsetWithinRow: offsetWithinRow, oldRowHeight: oldRowHeight) {
+                pendingAnchorRestore = nil
+                return
+            }
             pendingAnchorRestore = PendingAnchorRestore(
                 id: id, offsetWithinRow: offsetWithinRow,
                 applyBudget: Self.pendingAnchorApplyBudget
@@ -578,17 +586,41 @@ final class ACPTranscriptScrollerReconciler {
         case .row(let id, let offsetWithinRow, let oldRowHeight):
             if let row = tiling.row(withId: id) {
                 scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
-            } else if let resolution = resolveStaleRowId(id), let row = tiling.row(withId: resolution.rowId) {
-                if resolution.assumeHeadGrowth {
-                    let distanceFromOldBottom = oldRowHeight - offsetWithinRow
-                    scroller.setScrollY(row.maxY - min(distanceFromOldBottom, row.height))
-                } else {
-                    scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
-                }
+            } else {
+                restoreViaStaleResolution(id: id, offsetWithinRow: offsetWithinRow, oldRowHeight: oldRowHeight)
             }
         case .bottomRelative(let distance):
             scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)
         }
+    }
+
+    /// Resolves `id` via `resolveStaleRowId` and, on success, applies the
+    /// same head-growth-aware restoration `restoreScrollAnchor` uses for a
+    /// `.reset`'s direct row lookup miss. Shared with `trackAnchorAcrossUpdate`
+    /// (the `.removed` diff path): a finished tool call absorbed into an
+    /// adjacent bundle via a single-row removal — rather than a wholesale
+    /// `.reset` — needs the identical remap, since its own row similarly
+    /// stops existing under its old id without the reader's position having
+    /// moved anywhere semantically. In that case the absorbed call becomes
+    /// the bundle's newest (chronologically last) member, joining at the
+    /// bundle's TAIL — the same "nothing changed below my anchor" invariant
+    /// `assumeHeadGrowth`'s bottom-relative math relies on for content
+    /// prepended at a bundle's head, so the same formula applies. (An
+    /// out-of-order merge into the middle of a run, which that invariant
+    /// would not cover, is not a case Codex's review has reported and is
+    /// not handled here.)
+    @discardableResult
+    private func restoreViaStaleResolution(id: String, offsetWithinRow: CGFloat, oldRowHeight: CGFloat) -> Bool {
+        guard let resolution = resolveStaleRowId(id), let row = tiling.row(withId: resolution.rowId) else {
+            return false
+        }
+        if resolution.assumeHeadGrowth {
+            let distanceFromOldBottom = oldRowHeight - offsetWithinRow
+            scroller.setScrollY(row.maxY - min(distanceFromOldBottom, row.height))
+        } else {
+            scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
+        }
+        return true
     }
 
     /// Heights for a wholesale geometry replacement. Rows whose recorded
