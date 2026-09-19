@@ -876,6 +876,7 @@
 		76D0B85664E226960BF98FE3 /* GGFollowEntryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91EB168941D6B9502D30082 /* GGFollowEntryModel.swift */; };
 		771CD72B94194370E783F7DD /* StartupScriptResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3C76F2F0F6BCE4023A9D7F /* StartupScriptResolverTests.swift */; };
 		773A165DED00A9B739F52357 /* WorktreeStatusStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55BE1D67415E85FB2DE2C0C /* WorktreeStatusStoreTests.swift */; };
+		77CB6DC97F0317B99AE470B8 /* RemotePairingLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1516FF03487DABCD05C51EC3 /* RemotePairingLinkTests.swift */; };
 		77CDD88F7C517095DE580B50 /* ReviewEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC11F5C6667A6ECB74E066AE /* ReviewEvidence.swift */; };
 		77D7244E04B1949523699AEB /* GGInboxTabsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649D5CB480CE056B1C4457D6 /* GGInboxTabsTests.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
@@ -897,6 +898,7 @@
 		7B25B1405BFDE5570B267213 /* NumstatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CA79B71B4AA72697392702 /* NumstatParser.swift */; };
 		7B309C87C042B3A18AB31D0F /* SearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49B5B544A3432F8D8105268 /* SearchModel.swift */; };
 		7B6910D954CE0BA90C9011D8 /* WorkspaceCheckoutRepairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 599AC418299364A6FD25A5D2 /* WorkspaceCheckoutRepairTests.swift */; };
+		7B78B3FC016923C5181DF3C7 /* RemotePairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6813FC9947160D33FB3C44F6 /* RemotePairingLink.swift */; };
 		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
 		7BB5B3A83C8D0CB185D2365E /* TrackedRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16D35671971686B20DEA33CB /* TrackedRevision.swift */; };
 		7BBF0BCBD3121E1C20EF93CA /* ReviewReadinessModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467E833E3CE05D82DB88C5C5 /* ReviewReadinessModel.swift */; };
@@ -2081,6 +2083,7 @@
 		14CEB6C5C076B4147D587909 /* ReviewThreadMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewThreadMutations.swift; sourceTree = "<group>"; };
 		14D1ECA099BBDCB5BB2EEC67 /* DiffReviewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModels.swift; sourceTree = "<group>"; };
 		1513AFD842F4CF16F8DEEA31 /* ChangesPreparationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesPreparationCard.swift; sourceTree = "<group>"; };
+		1516FF03487DABCD05C51EC3 /* RemotePairingLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingLinkTests.swift; sourceTree = "<group>"; };
 		152EB5D0C23CAEB13283C634 /* GGRestackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGRestackSheet.swift; sourceTree = "<group>"; };
 		153CE5618748C7830799DBCE /* TrackedRevisionResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevisionResolverTests.swift; sourceTree = "<group>"; };
 		155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessService.swift; sourceTree = "<group>"; };
@@ -2701,6 +2704,7 @@
 		67B6E33159E74B53749FDE5D /* AppState+RepoConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+RepoConfig.swift"; sourceTree = "<group>"; };
 		67E03BF5DB4E6BFF8C2FA6A2 /* ACPPermissionRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionRequest.swift; sourceTree = "<group>"; };
 		67FE3B76C1F63C58B56BEC61 /* CheckpointModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointModels.swift; sourceTree = "<group>"; };
+		6813FC9947160D33FB3C44F6 /* RemotePairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingLink.swift; sourceTree = "<group>"; };
 		6821B71680094791995C4975 /* ShortcutsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsPane.swift; sourceTree = "<group>"; };
 		6877F0319EB6602B047BCC3F /* RightRailSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightRailSizing.swift; sourceTree = "<group>"; };
 		68AC15742E7423AE2F3A203A /* ACPSessionInfoUpdateDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionInfoUpdateDecodeTests.swift; sourceTree = "<group>"; };
@@ -3900,6 +3904,7 @@
 				0369EB36833C674EA190F99E /* RemoteHTTPResponderTests.swift */,
 				2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */,
 				B73592A8A66932A0AEA0F324 /* RemoteOriginPolicyTests.swift */,
+				1516FF03487DABCD05C51EC3 /* RemotePairingLinkTests.swift */,
 				BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */,
 				C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */,
 				98DE51A11B5F4C7A84D715B4 /* RemoteQueueProjectionTests.swift */,
@@ -4621,6 +4626,7 @@
 			children = (
 				F18E4AD4B92330FB085C821C /* FileDeviceStore.swift */,
 				B16BDCBFE4C1EB1C8EA6D4D5 /* RemoteDevice.swift */,
+				6813FC9947160D33FB3C44F6 /* RemotePairingLink.swift */,
 				5F77AE52695B7B19A9F11B89 /* RemotePairingService.swift */,
 			);
 			path = Pairing;
@@ -7915,6 +7921,7 @@
 				4F2BB7482C39B07F5E35E9D1 /* RemoteMessageWireJSON.swift in Sources */,
 				528CB7F6FF36C6809DE532B8 /* RemoteNetwork.swift in Sources */,
 				31726A83ACD735465E6E021D /* RemoteOriginPolicy.swift in Sources */,
+				7B78B3FC016923C5181DF3C7 /* RemotePairingLink.swift in Sources */,
 				342C28B197D5048F78D2E8D6 /* RemotePairingService.swift in Sources */,
 				316A645ECCB46A0F74915EA4 /* RemoteProjectGitWatcher.swift in Sources */,
 				32674DB95F2B62C00FC0AAA2 /* RemoteProtocol.swift in Sources */,
@@ -8830,6 +8837,7 @@
 				6B51524A0970D593F6AEEAB1 /* RemoteLastActivityTests.swift in Sources */,
 				FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */,
 				3A932482E27ABE0E13C07869 /* RemoteOriginPolicyTests.swift in Sources */,
+				77CB6DC97F0317B99AE470B8 /* RemotePairingLinkTests.swift in Sources */,
 				E22E6141A5EF030F79CF8CBE /* RemotePairingServiceTests.swift in Sources */,
 				F53E906F828DEFF6A41C46BA /* RemotePollCadenceTests.swift in Sources */,
 				3D561C5EDA7AAB4831CA58CF /* RemoteProjectCollisionTests.swift in Sources */,
