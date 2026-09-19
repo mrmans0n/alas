@@ -23,6 +23,9 @@ enum AppKitDiffReviewRowID {
 
     static func thread(fileID: DiffReviewFileID, threadID: String) -> String { "file:\(fileID.rawValue):thread:\(threadID)" }
     static func annotation(fileID: DiffReviewFileID, annotationID: String) -> String { "file:\(fileID.rawValue):annotation:\(annotationID)" }
+    /// The draft review summary appended after the diff stack when the
+    /// surface is too narrow for the trailing rail.
+    static let reviewSummary = "review:summary"
 }
 
 struct AppKitDiffReviewActionPresence: Equatable {
@@ -354,13 +357,24 @@ struct AppKitDiffReviewRowPlan {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
-    static func build(inputs: [AppKitDiffReviewRowInput]) -> AppKitDiffReviewRowPlan {
-        build(inputs: inputs, maxAutomaticallyRenderedRows: DiffReviewRenderBudget.maxRenderedRows)
-    }
-
     static func build(
         inputs: [AppKitDiffReviewRowInput],
-        maxAutomaticallyRenderedRows: Int
+        trailingRows: [AppKitDiffRowSpec] = []
+    ) -> AppKitDiffReviewRowPlan {
+        build(
+            inputs: inputs,
+            maxAutomaticallyRenderedRows: DiffReviewRenderBudget.maxRenderedRows,
+            trailingRows: trailingRows
+        )
+    }
+
+    /// `trailingRows` are appended verbatim after the last file section. They
+    /// carry no file owner, so the scroll spy keeps reporting the last file
+    /// while they are in view.
+    static func build(
+        inputs: [AppKitDiffReviewRowInput],
+        maxAutomaticallyRenderedRows: Int,
+        trailingRows: [AppKitDiffRowSpec] = []
     ) -> AppKitDiffReviewRowPlan {
         var rows: [AppKitDiffRowSpec] = []
         var fallbackByTargetID: [String: String] = [:]
@@ -461,6 +475,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 }
             }
         }
+        rows.append(contentsOf: trailingRows)
         return AppKitDiffReviewRowPlan(
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
             headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID

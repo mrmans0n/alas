@@ -144,12 +144,15 @@ struct AppKitDiffReviewScroller: View {
     let onActiveFileChange: (DiffReviewFileID) -> Void
     let onProgrammaticScrollCompletion: (Int) -> Void
     var onDraftCommentReveal: (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
+    /// Rows appended after the last file section, e.g. the inline draft
+    /// review summary on narrow surfaces.
+    var trailingRows: [AppKitDiffRowSpec] = []
     @State private var scrollRequest: AppKitDiffScrollRequest?
     @State private var requestCoordinator = AppKitDiffReviewScrollRequestCoordinator()
     @State private var pendingCommentReveal: (command: DiffReviewDraftCommentScrollCommand, generation: Int)?
 
     var body: some View {
-        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: inputs)
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: inputs, trailingRows: trailingRows)
         let corePlan = plan.corePlan.withContentInsets(.init(top: 16, bottom: 16, left: 16, right: 16))
         AppKitDiffScroller(
             plan: corePlan,
