@@ -63,6 +63,17 @@ struct ACPTranscriptLogicalScrollModelTests {
         #expect(tail.knobProportion == top.knobProportion)
     }
 
+    @Test("a fractional top index (mid-way through a folded tool-call group) produces a fractional value")
+    func fractionalTopIndexProducesFractionalValue() {
+        let wholeMessage = ACPTranscriptLogicalScrollModel.metrics(
+            totalCount: 200, viewportHeight: 960, topGlobalIndex: 95, isAtTail: false
+        )
+        let halfwayThroughNext = ACPTranscriptLogicalScrollModel.metrics(
+            totalCount: 200, viewportHeight: 960, topGlobalIndex: 95.5, isAtTail: false
+        )
+        #expect(halfwayThroughNext.value > wholeMessage.value)
+    }
+
     @Test("release values map to clamped global top indices")
     func releaseMapping() {
         #expect(ACPTranscriptLogicalScrollModel.targetGlobalIndex(

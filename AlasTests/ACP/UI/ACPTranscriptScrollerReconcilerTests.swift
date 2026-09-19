@@ -849,6 +849,161 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(screenOffset(of: anchorId, tiling: tiling, scroller: scroller) - before) < 1)
     }
 
+    /// Regression test for the Codex finding: a folded tool-call bundle's
+    /// row id is derived from its first member, so a `.reset` that also
+    /// reveals an older adjacent finished call (which becomes the new first
+    /// member) changes that id. Without a remap, an anchor captured on the
+    /// bundle's OLD id finds nothing post-reset and restoration silently
+    /// no-ops — leaving `scroller`'s numeric offset unchanged against a
+    /// document whose geometry above the viewport just shifted, a hard
+    /// jump. `resolveStaleRowId` is the seam the owning Coordinator uses to
+    /// remap the old id to the bundle's replacement (this reconciler itself
+    /// has no notion of tool-call bundles, hence a plain closure hook here
+    /// rather than anything group-specific).
+    @Test("a stale group anchor is remapped to its replacement row instead of being dropped")
+    func resetRemapsStaleGroupAnchorViaResolver() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tcg-tc-5")
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tcg-tc-3", assumeHeadGrowth: true) : nil }
+
+        // Ids change at both ends at once (the head sentinel replaced, the
+        // bundle's id renamed) so this is a `.reset`.
+        let new = [spec("mA"), spec("tcg-tc-3", token: 1, height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id)) == .reset
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-3")!
+        #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
+    }
+
+    /// Regression test for the Codex follow-up finding: `resolveStaleRowId`
+    /// only ever fires when the anchor row's id changed, which — for a
+    /// folded tool-call group — happens only when its FIRST member changed,
+    /// i.e. content was prepended at the row's HEAD (plain tail growth,
+    /// appending a new last member, never changes the group's id, so it
+    /// never reaches this resolver at all). Reusing the captured
+    /// TOP-relative `offsetWithinRow` unchanged against a row that grew at
+    /// its head lands inside the newly prepended content instead of
+    /// preserving what the reader was viewing. Anchoring from the row's
+    /// BOTTOM edge instead is exact here, precisely because that growth
+    /// direction is guaranteed whenever this resolver path is taken.
+    @Test("a stale group anchor whose row grew at its head restores from the bottom edge, not the top")
+    func resetRemapsStaleGroupAnchorAccountingForHeadGrowth() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 600)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 400pt into a 600pt row: 200pt from its bottom edge.
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tcg-tc-3", assumeHeadGrowth: true) : nil }
+
+        // The replacement row is 400pt taller — four more member cards
+        // revealed above the previously-visible content.
+        let new = [spec("mA"), spec("tcg-tc-3", token: 1, height: 1000)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-3")!
+        // Correct: 200pt from the NEW row's bottom edge (row.minY + 800).
+        // The bug would instead reuse the raw 400pt-from-top offset
+        // unchanged (row.minY + 400), landing inside the newly prepended
+        // content rather than the content the reader was already viewing.
+        #expect(abs(scroller.scrollY - (row.minY + 800)) < 1)
+    }
+
+    /// Regression test for the Codex follow-up finding: a stale group id
+    /// also resolves when its OWNING SETTING was disabled, not only when
+    /// its run grew a head member — but that transition carries no "grew
+    /// at the head" guarantee (a short collapsed bundle can become a much
+    /// taller plain tool card once ungrouped). `resolveStaleRowId` signals
+    /// this via `assumeHeadGrowth: false`, and restoration must fall back
+    /// to top-relative — the same math as the direct same-id path — rather
+    /// than applying the bottom-relative math meant for genuine head growth.
+    @Test("a stale group anchor resolved because grouping was disabled restores from the top, not the bottom")
+    func resetRemapsStaleGroupAnchorWithoutAssumingHeadGrowth() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 600)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 400pt into a 600pt collapsed-bundle row.
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tc-5", assumeHeadGrowth: false) : nil }
+
+        // Grouping was disabled: the bundle dissolved into a single, much
+        // taller plain tool card (expanded output, say) — not "grew at the
+        // head".
+        let new = [spec("mA"), spec("tc-5", token: 1, height: 1400)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tc-5")!
+        // Correct: preserves the same 400pt-from-top depth the reader had
+        // in the collapsed bundle. The bug would instead compute a
+        // bottom-relative offset (1400 - (600-400) = 1200pt from the top),
+        // landing deep inside the new card instead of near where the
+        // reader actually was.
+        #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
+    }
+
+    /// Regression test for the Codex follow-up finding: an active tool call
+    /// finishing immediately after an existing bundle changes row ids from
+    /// `[group, tc-b]` to `[group]` — classified as `.removed`, not
+    /// `.reset`, since only one id vanished with everything else unchanged.
+    /// `tc-b` never reappears under its own id (it's now permanently
+    /// absorbed into the group as its newest member), so the pre-existing
+    /// "wait for the same id to come back" pending-anchor mechanism can
+    /// never resolve it; the removal's own compensation, meanwhile, shifts
+    /// by `tc-b`'s full height as if the content had simply vanished. The
+    /// `.removed` path now tries the same `resolveStaleRowId` remap
+    /// `.reset` restoration uses, immediately, before falling back to the
+    /// pending-anchor wait.
+    @Test("an anchor absorbed into an adjacent bundle via incremental removal resolves immediately")
+    func removalRemapsAnchorAbsorbedIntoAdjacentBundle() {
+        let (reconciler, scroller, tiling) = makeStack()
+        // A tall trailing spacer, not extra height ABOVE tc-b, gives the
+        // viewport room to actually scroll down to tc-b's position: content
+        // before tc-b shifts the scrollable maximum by the same amount it
+        // shifts tc-b's own position, leaving no net room, while content
+        // after it only raises the maximum.
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", height: 200), spec("tc-b", height: 80)]
+            + [spec("__composer_spacer__", height: 350)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 40pt into tc-b's own 80pt row: 40pt from its bottom edge.
+        scroller.setScrollY(tiling.row(withId: "tc-b")!.minY + 40)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tc-b")
+
+        reconciler.resolveStaleRowId = { $0 == "tc-b" ? (rowId: "tcg-tc-a", assumeHeadGrowth: true) : nil }
+
+        // tc-b finished and was absorbed as the group's newest (tail)
+        // member; the group's row grows by tc-b's own height, tc-b's own
+        // row disappears. Everything else is unchanged, so this is a pure
+        // `.removed`, not a `.reset`.
+        let new = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", token: 1, height: 280)]
+            + [spec("__composer_spacer__", height: 350)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id))
+            == .removed(index: 3, count: 1)
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tcg-tc-a")!
+        // Correct: 40pt from the group's NEW bottom edge (row.minY + 240).
+        // The bug would leave a dangling pending-anchor wait (never
+        // resolving, since "tc-b" never reappears) while the removal's own
+        // full-height compensation left the viewport elsewhere.
+        #expect(abs(scroller.scrollY - (row.minY + 240)) < 1)
+    }
+
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")
     func resetAnchorSkipsSyntheticRows() {
         // The head pagination spinner occupies row 0 (minY 24, maxY 38), so

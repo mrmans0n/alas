@@ -8,9 +8,9 @@ struct ACPVisibleRowsCacheTests {
     func sameKeyReturnsCachedRowsWithoutRebuilding() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
-            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
+            return [.message(ACPTranscriptVisibleRow(index: 0, stableId: "a"))]
         }
 
         let first = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -24,9 +24,9 @@ struct ACPVisibleRowsCacheTests {
     func bumpingGenerationRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
-            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
+            return [.message(ACPTranscriptVisibleRow(index: 0, stableId: "a"))]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -39,9 +39,9 @@ struct ACPVisibleRowsCacheTests {
     func changingHeadRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
-            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
+            return [.message(ACPTranscriptVisibleRow(index: 0, stableId: "a"))]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -54,9 +54,9 @@ struct ACPVisibleRowsCacheTests {
     func changingTailRebuilds() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
-            return [ACPTranscriptVisibleRow(index: 0, stableId: "a")]
+            return [.message(ACPTranscriptVisibleRow(index: 0, stableId: "a"))]
         }
 
         _ = cache.rows(generation: 1, head: 0, tail: 1, build: build)
@@ -65,15 +65,31 @@ struct ACPVisibleRowsCacheTests {
         #expect(buildCount == 2)
     }
 
+    @Test("changing the grouping options rebuilds")
+    func changingGroupingRebuilds() {
+        let cache = ACPVisibleRowsCache()
+        var buildCount = 0
+        func build() -> [ACPTranscriptRenderRow] {
+            buildCount += 1
+            return [.message(ACPTranscriptVisibleRow(index: 0, stableId: "a"))]
+        }
+
+        _ = cache.rows(generation: 1, head: 0, tail: 1, grouping: .disabled, build: build)
+        _ = cache.rows(generation: 1, head: 0, tail: 1, grouping: .init(enabled: true), build: build)
+        _ = cache.rows(generation: 1, head: 0, tail: 1, grouping: .init(enabled: true, breakAfterIndex: 0), build: build)
+
+        #expect(buildCount == 3)
+    }
+
     @Test("lookup is memoized alongside rows for the same key")
     func lookupMemoizedForSameKey() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
             return [
-                ACPTranscriptVisibleRow(index: 0, stableId: "a"),
-                ACPTranscriptVisibleRow(index: 1, stableId: "b")
+                .message(ACPTranscriptVisibleRow(index: 0, stableId: "a")),
+                .message(ACPTranscriptVisibleRow(index: 1, stableId: "b"))
             ]
         }
 
@@ -88,9 +104,9 @@ struct ACPVisibleRowsCacheTests {
     func lookupRebuildsWhenKeyChanges() {
         let cache = ACPVisibleRowsCache()
         var buildCount = 0
-        func build() -> [ACPTranscriptVisibleRow] {
+        func build() -> [ACPTranscriptRenderRow] {
             buildCount += 1
-            return [ACPTranscriptVisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)")]
+            return [.message(ACPTranscriptVisibleRow(index: buildCount - 1, stableId: "row-\(buildCount)"))]
         }
 
         let first = cache.lookup(generation: 1, head: 0, tail: 1, build: build)

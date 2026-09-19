@@ -2285,7 +2285,11 @@ final class ACPSession: ObservableObject, Identifiable {
         return rest.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "+" || $0 == "-" }
     }
 
-    private static func isFinalStatus(_ status: String) -> Bool {
+    /// The one allowlist of terminal tool-call statuses. Shared with
+    /// `ACPToolCallGrouping.isFinished` so a newly recognized terminal
+    /// status can't be added to one and missed by the other. Pure, hence
+    /// `nonisolated`: the grouping fold runs off the main actor in tests.
+    nonisolated static func isFinalStatus(_ status: String) -> Bool {
         switch status {
         case "completed", "failed", "canceled", "cancelled": return true
         default: return false

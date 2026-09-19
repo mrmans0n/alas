@@ -38,6 +38,7 @@ struct ACPMessageList: View {
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
+    var collapsesFinishedToolCalls: Bool = false
     @Environment(\.theme) private var theme
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
@@ -82,7 +83,8 @@ struct ACPMessageList: View {
                 onReconnect: onReconnect,
                 onOpenForkSource: onOpenForkSource,
                 agentDisplayName: agentDisplayName,
-                showMinimap: showMinimap
+                showMinimap: showMinimap,
+                collapsesFinishedToolCalls: collapsesFinishedToolCalls
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail
