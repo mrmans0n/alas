@@ -215,8 +215,26 @@ final class ACPToolCallGroupExpansionSeeds {
     /// tagged — keeping a later collapse correct regardless of which
     /// subset of the run happens to be visible when the user triggers it.
     /// A no-op when none of `members` carries a lineage yet.
+    ///
+    /// When `members` spans TWO previously separate lineages — two
+    /// independently expanded runs joining because the unfinished call that
+    /// used to separate them completed — every entry anywhere in the store
+    /// still carrying the discarded lineage is rewritten to the surviving
+    /// one, not just the currently-visible members. Rewriting only the
+    /// visible ones would let a hidden member of the discarded lineage keep
+    /// its stale tag; a later collapse of the merged bundle (which only
+    /// clears lineages referenced by ITS OWN currently-visible members,
+    /// see `setExpanded`) would then miss it, and revealing it again later
+    /// would make it look expanded on its own.
     func syncLineage(members: [String]) {
-        guard let lineage = members.compactMap({ lineageByMemberId[$0] }).first else { return }
-        for member in members { lineageByMemberId[member] = lineage }
+        let lineagesInOrder = members.compactMap { lineageByMemberId[$0] }
+        guard let canonical = lineagesInOrder.first else { return }
+        let lineages = Set(lineagesInOrder)
+        if lineages.count > 1 {
+            for (member, lineage) in lineageByMemberId where lineages.contains(lineage) {
+                lineageByMemberId[member] = canonical
+            }
+        }
+        for member in members { lineageByMemberId[member] = canonical }
     }
 }

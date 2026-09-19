@@ -510,6 +510,31 @@ struct ACPToolCallGroupExpansionSeedsTests {
         #expect(!seeds.isExpanded(members: ["tc-z", "tc-a", "tc-b"]))
     }
 
+    /// Regression test for the Codex finding: when two independently
+    /// expanded runs merge (the unfinished call that used to separate them
+    /// completes), `syncLineage` must reassign every member of the
+    /// discarded lineage — including ones outside the current window — to
+    /// the surviving lineage, not just the currently-visible members.
+    @Test("syncLineage merges a second lineage's hidden members too, not just the visible ones")
+    func syncLineageMergesHiddenMembersOfDiscardedLineage() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        // Two runs, independently expanded — two distinct lineages.
+        seeds.setExpanded(true, members: ["tc-a", "tc-b"])
+        seeds.setExpanded(true, members: ["tc-x", "tc-y"])
+
+        // The runs merge: the currently visible members span both, but
+        // "tc-y" has scrolled out of the window and is NOT passed here.
+        seeds.syncLineage(members: ["tc-a", "tc-b", "tc-x"])
+
+        // Collapsing from what's visible now only sees one lineage among
+        // its own members and clears that one.
+        seeds.setExpanded(false, members: ["tc-a", "tc-b", "tc-x"])
+
+        // "tc-y" must not still carry the discarded lineage: if it does,
+        // revealing it again later would make it look expanded on its own.
+        #expect(!seeds.isExpanded(members: ["tc-y"]))
+    }
+
     @Test("syncLineage on a never-expanded group is a no-op")
     func syncLineageNoOpWhenNeverExpanded() {
         let seeds = ACPToolCallGroupExpansionSeeds()
