@@ -1376,10 +1376,22 @@ struct RemoteWebAssetTests {
     // address was even tried.
     @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(1600) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
         #expect(pair.contains("const tryAt = (index, bestError) => {"))
         #expect(pair.contains(#"if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));"#))
         #expect(pair.contains(#"if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));"#))
         #expect(pair.contains("return tryAt(0, null);"))
+    }
+
+    // Regression: a 2xx from an unrelated responder (a
+    // captive portal, a reverse proxy's own error page) may not even be
+    // JSON, and even valid JSON might carry no usable token. Either used
+    // to abort the whole pairing attempt (an uncaught res.json() rejection)
+    // or accept a garbage, tokenless registry entry as success.
+    @Test func pairFallsThroughAfterAnInvalidOrTokenlessResponse() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(2400) })
+        #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
+        #expect(pair.contains(".catch(() => tryAt(index + 1, bestError));"))
     }
 }

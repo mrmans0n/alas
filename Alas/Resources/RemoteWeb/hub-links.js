@@ -458,7 +458,17 @@ function createLinks(deps, hooks) {
             if (res.status === 401) return tryAt(index + 1, bestError || pairError("expired"));
             if (res.status === 403) return tryAt(index + 1, bestError || pairError("origin"));
             if (!res.ok) return tryAt(index + 1, bestError);
-            return Promise.resolve(res.json()).then((body) => ({ origin, token: body.token }));
+            // A 2xx from an unrelated responder (a captive portal, a
+            // reverse proxy's own error page) may not even be JSON, or may
+            // be JSON without a usable token — either must fall through to
+            // the next origin rather than aborting the whole attempt or
+            // creating a registry entry with a garbage token.
+            return Promise.resolve(res.json())
+              .then((body) => {
+                if (!body || typeof body.token !== "string" || !body.token) return tryAt(index + 1, bestError);
+                return { origin, token: body.token };
+              })
+              .catch(() => tryAt(index + 1, bestError));
           },
           () => tryAt(index + 1, bestError)
         );

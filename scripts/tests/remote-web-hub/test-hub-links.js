@@ -489,6 +489,34 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     await assert.rejects(links.pair(["http://10.0.0.1:8765", "http://10.0.0.2:8765"], "CODE", "phone"), (err) => err.reason === "net");
   }
   {
+    // Regression: a 2xx from an unrelated responder (a
+    // captive portal, a reverse proxy's own error page) may not even be
+    // JSON. res.json() rejecting must fall through to the next origin
+    // instead of aborting the whole pairing attempt.
+    const { links } = harness({
+      fetchImpl: (url) => {
+        if (url.startsWith("http://localhost")) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error("not json")) });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "fresh" }) });
+      },
+    });
+    const result = await links.pair(["http://localhost:8765", "http://10.0.0.1:8765"], "CODE", "phone");
+    assert.deepEqual(result, { origin: "http://10.0.0.1:8765", token: "fresh" }, "a malformed 2xx body must not abort the whole attempt");
+  }
+  {
+    // A 2xx with a well-formed but tokenless body must not be accepted as
+    // a successful pairing either — it would create an unusable entry.
+    const { links } = harness({
+      fetchImpl: (url) => {
+        if (url.startsWith("http://localhost")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "fresh" }) });
+      },
+    });
+    const result = await links.pair(["http://localhost:8765", "http://10.0.0.1:8765"], "CODE", "phone");
+    assert.deepEqual(result, { origin: "http://10.0.0.1:8765", token: "fresh" }, "a tokenless 2xx body must not be accepted as success");
+  }
+  {
     const { clock, links } = harness({ fetchImpl: () => new Promise(() => {}) });
     const pending = links.pair(["http://10.0.0.1:8765"], "CODE", "phone");
     pending.catch(() => {}); // observed immediately so the rejection below is never "unhandled" during the awaited tick
