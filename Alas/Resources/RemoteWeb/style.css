@@ -441,6 +441,13 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 #status.is-server { cursor: pointer; }
 .bt-tab { position: relative; }
 #tab-settings-badge { position: absolute; top: 5px; left: calc(50% + 6px); color: var(--on-accent); background: var(--del); }
+/* #gate is opaque and sits at z-index 20, above the shared .sheet z-index of
+   10 — without this, #add-server-sheet (opened from #gate-pair) would be
+   invisible whenever a gate is showing, which is exactly when it's needed:
+   first-run pairing and "Pair again" after a revoked token. */
+#add-server-sheet { z-index: 30; }
+#gate-pair { margin-top: 10px; padding: 11px 20px; border: none; border-radius: 12px; background: var(--fill-strong); color: var(--fg-muted); font-size: 15px; font-weight: 600; cursor: pointer; }
+#gate-pair:active { transform: scale(0.97); }
 #add-server-manual summary { cursor: pointer; list-style: none; }
 #add-server-manual summary::-webkit-details-marker { display: none; }
 #add-server-manual[open] summary { margin-bottom: 8px; }
