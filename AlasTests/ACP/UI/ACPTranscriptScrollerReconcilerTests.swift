@@ -869,7 +869,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
         #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tcg-tc-5")
 
-        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? "tcg-tc-3" : nil }
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tcg-tc-3", assumeHeadGrowth: true) : nil }
 
         // Ids change at both ends at once (the head sentinel replaced, the
         // bundle's id renamed) so this is a `.reset`.
@@ -904,7 +904,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         // 400pt into a 600pt row: 200pt from its bottom edge.
         scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
 
-        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? "tcg-tc-3" : nil }
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tcg-tc-3", assumeHeadGrowth: true) : nil }
 
         // The replacement row is 400pt taller — four more member cards
         // revealed above the previously-visible content.
@@ -918,6 +918,41 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         // unchanged (row.minY + 400), landing inside the newly prepended
         // content rather than the content the reader was already viewing.
         #expect(abs(scroller.scrollY - (row.minY + 800)) < 1)
+    }
+
+    /// Regression test for the Codex follow-up finding: a stale group id
+    /// also resolves when its OWNING SETTING was disabled, not only when
+    /// its run grew a head member — but that transition carries no "grew
+    /// at the head" guarantee (a short collapsed bundle can become a much
+    /// taller plain tool card once ungrouped). `resolveStaleRowId` signals
+    /// this via `assumeHeadGrowth: false`, and restoration must fall back
+    /// to top-relative — the same math as the direct same-id path — rather
+    /// than applying the bottom-relative math meant for genuine head growth.
+    @Test("a stale group anchor resolved because grouping was disabled restores from the top, not the bottom")
+    func resetRemapsStaleGroupAnchorWithoutAssumingHeadGrowth() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-5", height: 600)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 400pt into a 600pt collapsed-bundle row.
+        scroller.setScrollY(tiling.row(withId: "tcg-tc-5")!.minY + 400)
+
+        reconciler.resolveStaleRowId = { $0 == "tcg-tc-5" ? (rowId: "tc-5", assumeHeadGrowth: false) : nil }
+
+        // Grouping was disabled: the bundle dissolved into a single, much
+        // taller plain tool card (expanded output, say) — not "grew at the
+        // head".
+        let new = [spec("mA"), spec("tc-5", token: 1, height: 1400)]
+            + [spec("__composer_spacer__", height: 220)]
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let row = tiling.row(withId: "tc-5")!
+        // Correct: preserves the same 400pt-from-top depth the reader had
+        // in the collapsed bundle. The bug would instead compute a
+        // bottom-relative offset (1400 - (600-400) = 1200pt from the top),
+        // landing deep inside the new card instead of near where the
+        // reader actually was.
+        #expect(abs(scroller.scrollY - (row.minY + 400)) < 1)
     }
 
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")

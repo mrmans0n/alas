@@ -132,10 +132,21 @@ struct ACPToolCallGroupingTests {
     func finishedStatus() {
         #expect(ACPToolCallGrouping.isFinished(status: "completed"))
         #expect(ACPToolCallGrouping.isFinished(status: "failed"))
+        #expect(ACPToolCallGrouping.isFinished(status: "canceled"))
         #expect(ACPToolCallGrouping.isFinished(status: "cancelled"))
         #expect(!ACPToolCallGrouping.isFinished(status: "in_progress"))
         #expect(!ACPToolCallGrouping.isFinished(status: "running"))
         #expect(!ACPToolCallGrouping.isFinished(status: "pending"))
+    }
+
+    @Test("an unrecognized status is treated as unfinished, not folded away")
+    func unrecognizedStatusIsUnfinished() {
+        // Matches ACPSession's own final-status allowlist: an adapter-
+        // specific status Alas doesn't yet recognize (e.g. a future
+        // "awaiting_permission") must stay visible rather than being
+        // silently hidden inside a collapsed bundle.
+        #expect(!ACPToolCallGrouping.isFinished(status: "awaiting_permission"))
+        #expect(!ACPToolCallGrouping.isFinished(status: "some_future_status"))
     }
 }
 
@@ -199,26 +210,52 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
     @Test("a stale plain member id that has since been bundled resolves to its group")
     func staleResolutionForBundledPlainId() {
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
-        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tc-b", lookup: lookup) == "tcg-tc-a")
+        let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tc-b", lookup: lookup, groupingEnabled: true
+        )
+        #expect(resolution?.rowId == "tcg-tc-a")
+        #expect(resolution?.assumeHeadGrowth == true)
     }
 
     @Test("a stale group id whose first member changed resolves via its old first member")
     func staleResolutionForRenamedGroupId() {
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
-        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tcg-tc-a", lookup: lookup) == "tcg-tc-a")
+        let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tcg-tc-a", lookup: lookup, groupingEnabled: true
+        )
+        #expect(resolution?.rowId == "tcg-tc-a")
+        #expect(resolution?.assumeHeadGrowth == true)
+    }
+
+    @Test("a stale group id resolved while grouping is now disabled is not assumed to be head growth")
+    func staleResolutionForDissolvedGroup() {
+        // The user turned "Collapse finished tool calls" off while
+        // scrolled inside an expanded bundle: the group id disappears
+        // because grouping stopped entirely, not because content was
+        // prepended at its head — a short collapsed group can become a
+        // much taller plain tool card, so restoration must not assume the
+        // new row grew at the top.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tcg-tc-a", lookup: lookup, groupingEnabled: false
+        )
+        #expect(resolution?.rowId == "tcg-tc-a")
+        #expect(resolution?.assumeHeadGrowth == false)
     }
 
     @Test("a stale plain id that is still a plain row resolves to itself")
     func staleResolutionForUnchangedPlainId() {
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
-        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tc-c", lookup: lookup) == "tc-c")
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            "tc-c", lookup: lookup, groupingEnabled: true
+        )?.rowId == "tc-c")
     }
 
     @Test("an unresolvable stale id returns nil")
     func staleResolutionForUnknownId() {
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
-        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("missing", lookup: lookup) == nil)
-        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tcg-missing", lookup: lookup) == nil)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("missing", lookup: lookup, groupingEnabled: true) == nil)
+        #expect(ACPTranscriptScroller.Coordinator.resolveStaleRowId("tcg-missing", lookup: lookup, groupingEnabled: true) == nil)
     }
 
     @Test("row id for a bundled member is the group id; plain rows map to themselves")

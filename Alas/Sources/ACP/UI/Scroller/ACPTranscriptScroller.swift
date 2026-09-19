@@ -142,7 +142,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             reconciler.resolveStaleRowId = { [weak self] staleId in
                 guard let self, let host = self.host else { return nil }
-                return Self.resolveStaleRowId(staleId, lookup: self.currentRowLookup(host: host))
+                guard let resolution = Self.resolveStaleRowId(
+                    staleId, lookup: self.currentRowLookup(host: host),
+                    groupingEnabled: host.collapsesFinishedToolCalls
+                ) else { return nil }
+                return (resolution.rowId, resolution.assumeHeadGrowth)
             }
             self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
@@ -1354,6 +1358,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
+        struct StaleRowIdResolution: Equatable {
+            let rowId: String
+            let assumeHeadGrowth: Bool
+        }
+
         /// Resolves a scroll anchor's row id that no longer exists in the
         /// current geometry to whatever row currently displays the same
         /// message — the seam `ACPTranscriptScrollerReconciler.resolveStaleRowId`
@@ -1363,14 +1372,29 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// `ACPTranscriptToolCallGroup.id`) — tried in that order, since
         /// only a message stable id is a valid key into `lookup`'s member
         /// map, while a group id must first be decoded back to one.
-        static func resolveStaleRowId(_ staleId: String, lookup: ACPTranscriptVisibleRowLookup) -> String? {
+        ///
+        /// `assumeHeadGrowth` tells the reconciler whether the replacement
+        /// row is taller because content was prepended at its head (true —
+        /// see `ACPTranscriptScrollerReconciler.restoreScrollAnchor`'s doc
+        /// comment) or not. A resolved GROUP id only implies head growth
+        /// while collapsing stays enabled: decoding one succeeds because
+        /// its first member changed WITHIN an ongoing group. If grouping
+        /// was disabled instead, the group id vanished because grouping
+        /// stopped entirely — a short collapsed bundle can become a much
+        /// taller plain tool card, the opposite of "grew a little at the
+        /// head" — so restoration must not assume bottom-relative there. A
+        /// resolved PLAIN id (Codex hasn't reported an equivalent gap for
+        /// this branch) is left `true`, matching prior behavior.
+        static func resolveStaleRowId(
+            _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
+        ) -> StaleRowIdResolution? {
             if let resolved = lookup.rowId(forStableId: staleId) {
-                return resolved
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: true)
             }
-            guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId) else {
-                return nil
-            }
-            return lookup.rowId(forStableId: staleStableId)
+            guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
+                  let resolved = lookup.rowId(forStableId: staleStableId)
+            else { return nil }
+            return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: groupingEnabled)
         }
 
         /// Pure scaling math behind `globalMessagePosition(at:)`, split out

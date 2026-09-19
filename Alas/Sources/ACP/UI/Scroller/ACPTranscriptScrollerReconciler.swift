@@ -61,7 +61,14 @@ final class ACPTranscriptScrollerReconciler {
     /// rows happen to occupy that same numeric range. This reconciler has
     /// no notion of tool-call bundles itself (it operates on opaque row
     /// ids); the Coordinator, which does, supplies the remap.
-    var resolveStaleRowId: (String) -> String? = { _ in nil }
+    ///
+    /// `assumeHeadGrowth` tells `restoreScrollAnchor` whether the
+    /// replacement row grew at its HEAD (bottom-relative restoration is
+    /// exact) or not (e.g. a bundle that dissolved because its owning
+    /// setting was disabled, where the replacement row's size relative to
+    /// the old one carries no such guarantee — top-relative is the
+    /// least-wrong fallback there, matching the direct same-id path).
+    var resolveStaleRowId: (String) -> (rowId: String, assumeHeadGrowth: Bool)? = { _ in nil }
 
     /// True for the entire duration of `apply()` (and the deferred
     /// width-settle reset). Suppresses `remeasureRow`'s reentrant path:
@@ -571,9 +578,13 @@ final class ACPTranscriptScrollerReconciler {
         case .row(let id, let offsetWithinRow, let oldRowHeight):
             if let row = tiling.row(withId: id) {
                 scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
-            } else if let resolvedId = resolveStaleRowId(id), let row = tiling.row(withId: resolvedId) {
-                let distanceFromOldBottom = oldRowHeight - offsetWithinRow
-                scroller.setScrollY(row.maxY - min(distanceFromOldBottom, row.height))
+            } else if let resolution = resolveStaleRowId(id), let row = tiling.row(withId: resolution.rowId) {
+                if resolution.assumeHeadGrowth {
+                    let distanceFromOldBottom = oldRowHeight - offsetWithinRow
+                    scroller.setScrollY(row.maxY - min(distanceFromOldBottom, row.height))
+                } else {
+                    scroller.setScrollY(row.minY + min(offsetWithinRow, row.height))
+                }
             }
         case .bottomRelative(let distance):
             scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)

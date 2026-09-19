@@ -49,10 +49,16 @@ enum ACPToolCallGrouping {
         var breakAfterIndex: Int? = nil
     }
 
+    /// An explicit allowlist, not a blocklist: an adapter-specific status
+    /// Alas doesn't yet recognize (e.g. a future "awaiting_permission")
+    /// must stay visible rather than being silently folded into a
+    /// collapsed bundle. Mirrors `ACPSession.isFinalStatus`'s own allowlist
+    /// (private to that file, so duplicated here rather than shared) and
+    /// `ACPToolCallCard`'s deliberate choice to render unknown statuses.
     static func isFinished(status: String) -> Bool {
         switch status {
-        case "in_progress", "running", "pending": false
-        default: true
+        case "completed", "failed", "canceled", "cancelled": true
+        default: false
         }
     }
 
