@@ -1,0 +1,38 @@
+<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+  <title>Codex</title>
+  <path
+    id="codex-cloud-hexagon"
+    d="
+      M 6.2 7.2
+      C 7.0 4.6 9.3 2.8 12.1 2.8
+      C 14.0 2.8 15.6 3.6 16.8 5.1
+      C 18.6 4.8 20.3 5.6 21.2 7.2
+      C 22.2 8.7 22.3 10.7 21.5 12.3
+      C 22.7 13.4 23.1 15.0 22.8 16.7
+      C 22.5 18.8 21.0 20.4 18.9 20.9
+      C 18.2 22.5 16.6 23.2 14.6 23.2
+      C 12.8 23.2 11.2 22.6 10.2 21.5
+      C 8.4 22.6 6.4 22.2 4.9 20.9
+      C 3.3 19.5 2.7 17.5 3.3 15.6
+      C 1.9 14.5 1.2 12.8 1.5 10.8
+      C 1.8 9.0 3.3 7.6 5.3 7.1
+      C 5.6 7.0 5.9 7.0 6.2 7.2
+      Z"
+    fill="url(#codex-gradient)"
+  />
+  <path
+    d="M8 9.2l2.1 3.3L8 15.8M13.2 15.1h4.5"
+    fill="none"
+    stroke="#fff"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="1.55"
+  />
+  <defs>
+    <linearGradient gradientUnits="userSpaceOnUse" id="codex-gradient" x1="12" x2="12" y1="3" y2="24.2">
+      <stop stop-color="#B1A7FF"/>
+      <stop offset=".5" stop-color="#7A9DFF"/>
+      <stop offset="1" stop-color="#3941FF"/>
+    </linearGradient>
+  </defs>
+</svg>
