@@ -796,4 +796,28 @@ struct RemoteProtocolTests {
         let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
         #expect(decoded == .fileDiffFailed(sessionId: "s1", path: "a.txt", reason: .unknown, message: nil))
     }
+
+    @Test func helloRoundTripsAndEncodesIdentityFields() throws {
+        let hello = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "srv-1", name: "Nacho's Mac", hubEnabled: true))
+        #expect(try roundTrip(hello) == hello)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(hello)) as? [String: Any])
+        #expect(object["type"] as? String == "hello")
+        #expect(object["protocolVersion"] as? Int == RemoteProtocolVersion.current)
+        #expect(object["serverId"] as? String == "srv-1")
+        #expect(object["name"] as? String == "Nacho's Mac")
+        #expect(object["hubEnabled"] as? Bool == true)
+    }
+
+    @Test func helloWithoutHubFlagDecodesDisabled() throws {
+        let data = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: data)
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false))
+    }
+
+    @Test func diagnosticsSnapshotDecodesWithoutIdentityFields() throws {
+        let data = Data(#"{"appName":"Alas","port":8765,"addresses":[],"usesPlainHTTP":true,"pairedDeviceCount":0}"#.utf8)
+        let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: data)
+        #expect(snapshot.serverId == nil)
+        #expect(snapshot.name == nil)
+    }
 }

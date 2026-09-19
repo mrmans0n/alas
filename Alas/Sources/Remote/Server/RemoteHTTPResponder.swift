@@ -7,6 +7,26 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     let addresses: [RemoteAdvertisedAddress]
     let usesPlainHTTP: Bool
     let pairedDeviceCount: Int
+    let serverId: String?
+    let name: String?
+
+    init(
+        appName: String,
+        port: UInt16?,
+        addresses: [RemoteAdvertisedAddress],
+        usesPlainHTTP: Bool,
+        pairedDeviceCount: Int,
+        serverId: String? = nil,
+        name: String? = nil
+    ) {
+        self.appName = appName
+        self.port = port
+        self.addresses = addresses
+        self.usesPlainHTTP = usesPlainHTTP
+        self.pairedDeviceCount = pairedDeviceCount
+        self.serverId = serverId
+        self.name = name
+    }
 }
 
 /// Builds HTTP/1.1 responses for non-WebSocket requests: the static web
