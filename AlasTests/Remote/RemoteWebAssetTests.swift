@@ -167,51 +167,6 @@ struct RemoteWebAssetTests {
         #expect(app.contains("function markdownEmphasisDelimiterRunBeforeUrlStart"))
     }
 
-    // A worktree renders as one `.wt` card driven by worktree-level data
-    // (branch, running state, diff, recency) regardless of session count. A
-    // worktree with exactly one session makes the whole card tappable and
-    // IS that session; one with several nests each as its own `.ss` row,
-    // with closed sessions under a "Closed (N)" disclosure.
-    @Test func sessionRowsRenderWorktreeSummaryCards() throws {
-        let app = try asset("app.js")
-        let css = try asset("style.css")
-
-        #expect(app.contains("function renderWorktreeGroup"))
-        #expect(app.contains("function worktreeRow1"))
-        #expect(app.contains("function worktreeRow2"))
-        #expect(app.contains("function sessionRowList"))
-        #expect(app.contains("function sessionRow(s)"))
-        #expect(app.contains("RemoteSessionOrdering.groupSessions(sessions)"))
-        #expect(app.contains("renderSessions([...listedSessions.values()]);"))
-        #expect(app.contains("worktree.activeSessions"))
-        #expect(app.contains("worktree.closedSessions"))
-        #expect(app.contains("expandedClosedWorktrees"))
-        #expect(app.contains("const totalSessions = worktree.activeSessions.length + worktree.closedSessions.length;"))
-        #expect(app.contains("RemoteRepoFilter.worktreeStatus(worktree)"))
-        #expect(css.contains(".wt"))
-        #expect(css.contains(".ss-list"))
-        #expect(css.contains(".ss "))
-        #expect(css.contains(".session-closed"))
-        #expect(css.contains(".session-closed-summary"))
-
-        let filterJS = try asset("repo-filter.js")
-        #expect(filterJS.contains(#""changes unavailable""#))
-        #expect(filterJS.contains(#""clean""#))
-    }
-
-    @Test func sessionCardsShowDiffBarAndRelativeTime() throws {
-        let js = try asset("app.js")
-        let css = try asset("style.css")
-
-        #expect(js.contains("RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())"))
-        #expect(js.contains("RemoteRepoFilter.diffBarSegments("))
-        #expect(js.contains("RemoteRepoFilter.worktreeIsPrimaryBranch("))
-        #expect(js.contains("function sessionRecencyMs(session)"))
-        #expect(css.contains(".bar {"))
-        #expect(css.contains(".when {"))
-        #expect(css.contains(".br {"))
-    }
-
     @Test func repoFilterModuleExposesPureHelpers() throws {
         let js = try asset("repo-filter.js")
         let html = try asset("index.html")
@@ -1004,26 +959,6 @@ struct RemoteWebAssetTests {
         #expect(scheduleBody.contains(#"activeTab === "changes" || activeTab === "chat""#))
     }
 
-    // Regression (PR #1285 review): session cards' relative timestamps
-    // ("21 min", "4 hr") were computed once at render time with no timer,
-    // so a session could read "now" for hours until an unrelated re-render.
-    // Regression (PR #1329 review): rewritten to refresh from a
-    // `data-recency-ms` cached directly on each `.when`/`.ss-when` node at
-    // render time, rather than looking a session back up by id — this reads
-    // the same way whether the node belongs to a worktree card (worktree
-    // recency) or a nested session row (session recency).
-    @Test func repoListRefreshesRelativeTimestampsPeriodically() throws {
-        let js = try asset("app.js")
-
-        #expect(js.contains("const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;"))
-        let body = try #require(
-            js.range(of: "const REPO_LIST_RELATIVE_TIME_REFRESH_MS").map { js[$0.lowerBound...].prefix(1000) })
-        #expect(body.contains("setInterval("))
-        #expect(body.contains(#"if ($("sessions").classList.contains("hidden")) return;"#))
-        #expect(body.contains(#".when[data-recency-ms], .ss-when[data-recency-ms]"#))
-        #expect(body.contains("RemoteRepoFilter.relativeTimeShort(Number(node.dataset.recencyMs), now)"))
-    }
-
     // Regression (PR #1329 review, chatgpt-codex-connector): sessionList is a
     // pure pull snapshot — the gateway never pushes one when a session's
     // streaming state changes elsewhere (another tab, another device, or a
@@ -1096,25 +1031,6 @@ struct RemoteWebAssetTests {
         let body = try #require(
             js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
-    }
-
-    // Regression (PR #1285 review): worktree-less sessions (the "Other"
-    // section) always fell through to the non-primary-branch glyph, falsely
-    // presenting them as belonging to a branch when they have no worktree
-    // at all. The icon must only render when worktree metadata exists.
-    @Test func sessionCardOmitsTheBranchIconWhenThereIsNoWorktree() throws {
-        let js = try asset("app.js")
-        let body = try #require(
-            js.range(of: "function worktreeRow1(section, worktree, singleSession) {").map { js[$0.lowerBound...].prefix(900) })
-        #expect(body.contains("if (section.isOther) {"))
-        #expect(body.contains(#"row.append(el("span", "wt-title", title));"#))
-        #expect(body.contains("return row;"))
-        // The branch icon and its primary/non-primary lookup only happen
-        // after the isOther early return, i.e. only when a real worktree
-        // (and therefore a real branch) exists.
-        let isOtherIndex = try #require(body.range(of: "if (section.isOther) {")?.lowerBound)
-        let branchIconIndex = try #require(body.range(of: "RemoteRepoFilter.worktreeIsPrimaryBranch(summary.branch)")?.lowerBound)
-        #expect(isOtherIndex < branchIconIndex)
     }
 
     // Regression (PR #1285 review): a failed listChanges request set

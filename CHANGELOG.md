@@ -10,6 +10,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add an experimental "Remote hub" setting to pair the remote web client with several Macs at once, switch between them, and see which ones need attention.
 
+## [0.18.7] - 2026-09-19
+
+### 🐛 Fixes
+
+- Prevent recursive minimap viewport updates from overflowing the stack (#1331).
+
+### 🏗️ Internal
+
+- Skip the build workflow for documentation-only and agent-configuration changes (#1330).
+
 ## [0.18.6] - 2026-09-19
 
 ### ✨ Features

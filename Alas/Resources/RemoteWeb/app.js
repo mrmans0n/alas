@@ -29,7 +29,7 @@ let queueItems = [];             // [{id, text, imageCount, resourceCount, statu
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let listedSessions = new Map();
-let expandedClosedWorktrees = new Set();
+let expandedWorktrees = new Set();
 let canDrive = false, canDriveKnown = false;
 let everConnected = false;      // has any onopen fired this page load? separates "loading" from "disconnected"
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
@@ -291,7 +291,7 @@ function resetServerScopedState() {
   hideCreateSheet(true);
   worktreeCreation.disconnect();
   createState = { ...createState, open: false, step: "worktree", worktrees: [], agents: [], selectedWorktreeId: null, selectedAgentId: null, filter: "", busy: false, error: "" };
-  listedSessions = new Map(); sessionTitles = new Map(); expandedClosedWorktrees = new Set();
+  listedSessions = new Map(); sessionTitles = new Map(); expandedWorktrees = new Set();
   repoOverrides = new Map();
   dismissedQuestion = null; deferredCreatePrompt = null;
   renderSessions([]);
@@ -613,16 +613,16 @@ function renderRepoHeader(section, expanded, forceExpanded) {
 }
 
 // Each worktree renders as one `.wt` card: an identity row (branch + running
-// agent badge) and a status row (state · diff · relative time), both driven
-// by worktree-level data so they read the same whether the worktree has one
-// session or several. A worktree with exactly one session (the common case)
-// makes the whole card tappable, opening straight into it — its identity IS
-// that session. A worktree with more than one session instead nests each as
-// its own `.ss` row (closed ones tucked under a "Closed (N)" disclosure),
-// since no single session can stand in for the card's identity.
+// agent badge) and a status row (state · diff · relative time). A worktree
+// with exactly one session opens it directly. A worktree with several
+// sessions expands into an indented chooser so the user selects the exact
+// session instead of the card guessing for them.
 function renderWorktreeGroup(section, worktree) {
   const totalSessions = worktree.activeSessions.length + worktree.closedSessions.length;
   const singleSession = totalSessions === 1 ? (worktree.activeSessions[0] || worktree.closedSessions[0]) : null;
+  const expansionKey = `${section.id}\u0000${worktree.id}`;
+  const searchExpanded = !singleSession && RemoteRepoFilter.worktreeSessionTitleMatchesQuery(worktree, repoSearchQuery);
+  const expanded = !singleSession && (searchExpanded || expandedWorktrees.has(expansionKey));
 
   const card = el("div", "wt");
   if (singleSession) {
@@ -636,32 +636,39 @@ function renderWorktreeGroup(section, worktree) {
     card.onkeydown = (event) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); card.click(); }
     };
+    card.append(worktreeRow1(section, worktree, singleSession, false), worktreeRow2(worktree));
+    return card;
   }
 
-  card.append(worktreeRow1(section, worktree, singleSession), worktreeRow2(worktree));
-
-  if (!singleSession) {
-    if (worktree.activeSessions.length) card.append(sessionRowList(worktree.activeSessions));
-    if (worktree.closedSessions.length) {
-      const details = document.createElement("details");
-      details.className = "session-closed";
-      details.open = expandedClosedWorktrees.has(worktree.id);
-      details.addEventListener("toggle", () => {
-        if (details.open) expandedClosedWorktrees.add(worktree.id);
-        else expandedClosedWorktrees.delete(worktree.id);
-      });
-      const summary = document.createElement("summary");
-      summary.className = "session-closed-summary";
-      summary.append(icon("chevR"), document.createTextNode(`Closed (${worktree.closedSessions.length})`));
-      details.append(summary, sessionRowList(worktree.closedSessions));
-      card.append(details);
-    }
+  const summary = document.createElement(searchExpanded ? "div" : "button");
+  summary.className = "wt-summary";
+  if (searchExpanded) {
+    summary.classList.add("wt-summary-static");
+  } else {
+    summary.type = "button";
+    summary.setAttribute("aria-expanded", String(expanded));
+    summary.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${totalSessions} sessions for ${worktree.title}`);
+    summary.onclick = () => {
+      if (expanded) expandedWorktrees.delete(expansionKey);
+      else expandedWorktrees.add(expansionKey);
+      renderSessions([...listedSessions.values()]);
+    };
   }
+  summary.append(worktreeRow1(section, worktree, null, expanded), worktreeRow2(worktree));
+  card.append(summary);
 
+  if (expanded) {
+    card.append(sessionCardList([...worktree.activeSessions, ...worktree.closedSessions]));
+  }
   return card;
 }
 
-function worktreeRow1(section, worktree, singleSession) {
+function appendSessionDisclosure(row, worktree, expanded) {
+  const count = worktree.activeSessions.length + worktree.closedSessions.length;
+  row.append(el("span", "session-count", String(count)), icon(expanded ? "chevD" : "chevR", "worktree-chev"));
+}
+
+function worktreeRow1(section, worktree, singleSession, expanded) {
   const row = el("div", "r1");
   // The "Other" group has no real worktree — no branch to show, so the
   // session's own title (or the group label, once it holds several) stands
@@ -669,6 +676,7 @@ function worktreeRow1(section, worktree, singleSession) {
   if (section.isOther) {
     const title = singleSession ? (sessionTitles.get(singleSession.id) || singleSession.title) : "Other";
     row.append(el("span", "wt-title", title));
+    if (!singleSession) appendSessionDisclosure(row, worktree, expanded);
     return row;
   }
 
@@ -683,6 +691,7 @@ function worktreeRow1(section, worktree, singleSession) {
     agent.append(icon("agent"));
     row.append(agent);
   }
+  if (!singleSession) appendSessionDisclosure(row, worktree, expanded);
   return row;
 }
 
@@ -711,23 +720,38 @@ function worktreeRow2(worktree) {
   return row;
 }
 
-function sessionRowList(sessions) {
-  const list = el("div", "ss-list");
-  sessions.forEach(session => list.append(sessionRow(session)));
+function sessionCardList(sessions) {
+  const list = el("div", "session-card-list");
+  sessions.forEach(session => list.append(sessionCard(session)));
   return list;
 }
 
-function sessionRow(s) {
+function sessionCard(session) {
+  const active = RemoteSessionOrdering.sessionIsActive(session);
+  const running = active && RemoteRepoFilter.sessionIsRunning(session);
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "ss" + (RemoteSessionOrdering.sessionIsActive(s) ? "" : " closed");
-  button.dataset.sessionId = s.id;
-  button.onclick = () => openSession(s.id);
-  button.append(el("span", `dot ${RemoteRepoFilter.sessionIsRunning(s) ? "run" : "idle"}`));
-  button.append(el("span", "ss-title", sessionTitles.get(s.id) || s.title));
-  const when = el("span", "ss-when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now()));
-  when.dataset.recencyMs = String(sessionRecencyMs(s));
-  button.append(when);
+  button.className = "session-card" + (active ? "" : " closed");
+  button.dataset.sessionId = session.id;
+  button.onclick = () => openSession(session.id);
+
+  const identity = el("div", "r1");
+  const iconWrap = el("span", "ico" + (running ? " run" : ""));
+  iconWrap.append(icon("agent"));
+  identity.append(iconWrap, el("span", "session-title", sessionTitles.get(session.id) || session.title));
+
+  const status = el("div", "r2");
+  const statusKind = running ? "run" : "idle";
+  const statusLabel = active ? (running ? "running" : "idle") : "closed";
+  const state = el("span", `st st-${statusKind}`);
+  state.append(el("span", `dot ${statusKind}`), document.createTextNode(statusLabel));
+  status.append(state);
+  if (session.agentId) status.append(el("span", "session-agent", session.agentId));
+  const when = el("span", "when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), Date.now()));
+  when.dataset.recencyMs = String(sessionRecencyMs(session));
+  status.append(when);
+
+  button.append(identity, status);
   return button;
 }
 
@@ -750,7 +774,7 @@ const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;
 setInterval(() => {
   if ($("sessions").classList.contains("hidden")) return;
   const now = Date.now();
-  document.querySelectorAll(".when[data-recency-ms], .ss-when[data-recency-ms]").forEach(node => {
+  document.querySelectorAll(".when[data-recency-ms]").forEach(node => {
     node.textContent = RemoteRepoFilter.relativeTimeShort(Number(node.dataset.recencyMs), now);
   });
 }, REPO_LIST_RELATIVE_TIME_REFRESH_MS);
@@ -1507,12 +1531,11 @@ function applySessionRenamed(sessionId, title) {
   // until the gateway's own sessionList refresh eventually lands.
   const cached = listedSessions.get(sessionId);
   if (cached) cached.title = title;
-  // A single-session worktree card shows its branch, not the session title —
-  // by design, only `.ss` rows (multi-session worktrees) and the "Other"
-  // group's `.wt-title` display a title at all, so this is a no-op elsewhere.
+  // A single-session worktree card shows its branch, not the session title;
+  // expanded session cards and the "Other" group's title show it directly.
   document.querySelectorAll("[data-session-id]").forEach(node => {
     if (node.dataset.sessionId !== sessionId) return;
-    const label = node.querySelector(".ss-title, .wt-title");
+    const label = node.querySelector(".session-title, .wt-title");
     if (label) label.textContent = title;
   });
   if (currentSession === sessionId) setDetailTitle(sessionId);
