@@ -239,6 +239,50 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.equal(clock.pending(), 1, "an offline link keeps its reconnect timer");
   }
 
+  // --- health probe verifies identity once it's known ------------------------
+  {
+    // Regression (Codex review, PR #1337): even a non-loopback origin can be
+    // reused (DHCP, a reassigned reverse proxy) and answer for a completely
+    // different Mac. Once a link knows its serverId, a 2xx /health response
+    // must match it before establishing revocation.
+    const { clock, sockets, links } = harness({
+      fetchImpl: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, serverId: "srv-other" }) }),
+    });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    links.get("b").serverId = "srv-B";
+    sockets[0].drop();
+    await settle();
+    assert.equal(links.get("b").state, "offline", "a healthy response from a different server must not establish revocation");
+    assert.equal(clock.pending(), 1, "an offline link keeps its reconnect timer");
+  }
+  {
+    // The matching-identity case still reports revocation.
+    const { sockets, links } = harness({
+      fetchImpl: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, serverId: "srv-B" }) }),
+    });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    links.get("b").serverId = "srv-B";
+    sockets[0].drop();
+    await settle();
+    assert.equal(links.get("b").state, "unauthorized", "a healthy response from the same server still establishes revocation");
+  }
+  {
+    // A legacy response with no serverId at all still falls back to
+    // trusting the bare 2xx — there's no better signal for an older Mac.
+    const { sockets, links } = harness({ fetchImpl: () => Promise.resolve({ ok: true, status: 200 }) });
+    links.add(serverB);
+    links.setActive("b");
+    links.connect("b");
+    links.get("b").serverId = "srv-B";
+    sockets[0].drop();
+    await settle();
+    assert.equal(links.get("b").state, "unauthorized", "an identity-free 2xx still falls back to the old trust-any-2xx behavior");
+  }
+
   // --- visibility ------------------------------------------------------------
   {
     const { clock, sockets, links } = harness();

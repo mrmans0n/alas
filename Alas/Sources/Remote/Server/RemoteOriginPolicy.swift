@@ -52,6 +52,12 @@ struct RemoteOriginPolicy: Equatable, Sendable {
               components.user == nil, components.password == nil else { return nil }
         let host = RemoteNetwork.normalizedHost(rawHost)
         guard !host.isEmpty else { return nil }
-        return ParsedOrigin(scheme: scheme, host: host, port: components.port)
+        // A browser's Origin header never carries a scheme-default port, so
+        // an allowlist entry typed or pasted with one (https://host:443,
+        // http://host:80) must canonicalize the same way or it can never
+        // match the request it was meant to allow.
+        let defaultPort = scheme == "https" ? 443 : 80
+        let port = components.port == defaultPort ? nil : components.port
+        return ParsedOrigin(scheme: scheme, host: host, port: port)
     }
 }

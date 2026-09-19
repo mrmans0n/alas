@@ -1261,7 +1261,7 @@ struct RemoteWebAssetTests {
     @Test func originRejectionDuringHealthProbeSurfacesAsBlockedNotOffline() throws {
         let links = try asset("hub-links.js")
         #expect(links.contains(#"state: "idle"|"connecting"|"online"|"offline"|"unauthorized"|"blocked""#))
-        #expect(links.contains("blocked: statuses.some((s) => s === 403),"))
+        #expect(links.contains("blocked: results.some((r) => r && r.status === 403),"))
         let onAllFailed = try #require(links.range(of: "function onAllOriginsFailed(link, order, attempt) {").map { links[$0.lowerBound...].prefix(400) })
         #expect(onAllFailed.contains(#"if (blocked) { setState(link, "blocked"); return; }"#))
 
@@ -1300,9 +1300,28 @@ struct RemoteWebAssetTests {
         #expect(registry.contains("isLoopbackOrigin,"), "isLoopbackOrigin must be exported for hub-links.js to use")
 
         let links = try asset("hub-links.js")
-        let probeAny = try #require(links.range(of: "function probeAny(origins) {").map { links[$0.lowerBound...].prefix(900) })
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(900) })
         #expect(probeAny.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
         #expect(probeAny.contains("const candidates = origins.filter((o) => !isLoopback(o));"))
         #expect(probeAny.contains("const toProbe = candidates.length ? candidates : origins;"))
+    }
+
+    // Regression (Codex review, PR #1337): even a non-loopback origin can be
+    // reused (DHCP, a reassigned reverse proxy) and answer for a completely
+    // different Mac, so a bare 2xx isn't proof of talking to the paired
+    // server. /health now includes the server's own serverId (see
+    // RemoteHTTPResponderTests.swift's healthIncludesServerIdWhenKnown), and
+    // the probe verifies it once the link knows one. See the node-executed
+    // "health probe verifies identity once it's known" coverage in
+    // test-hub-links.js.
+    @Test func healthProbeVerifiesServerIdWhenBothSidesKnowIt() throws {
+        let links = try asset("hub-links.js")
+        #expect(links.contains("serverId: server.serverId || null,"), "links must track the server's identity once known")
+        #expect(links.contains("function rememberServerId(link, msg) {"))
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(1800) })
+        #expect(probeAny.contains("if (expectedServerId && r.serverId) return r.serverId === expectedServerId;"))
+        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(900) })
+        #expect(probe.contains("res.json().then("))
+        #expect(probe.contains(#"typeof res.json !== "function""#))
     }
 }

@@ -52,6 +52,19 @@ struct RemoteOriginPolicyTests {
         #expect(RemoteOriginPolicy.parse("https://app.alas.build")?.port == nil)
     }
 
+    // Regression (Codex review, PR #1337): a browser's Origin header never
+    // carries a scheme-default port, so a configured allowlist entry typed
+    // or pasted with one (a common copy-paste from an address bar) must
+    // canonicalize the same way or it can never match a real request.
+    @Test func parseCanonicalizesSchemeDefaultPorts() {
+        #expect(RemoteOriginPolicy.parse("https://example.com:443")?.normalized == "https://example.com")
+        #expect(RemoteOriginPolicy.parse("http://example.com:80")?.normalized == "http://example.com")
+        #expect(RemoteOriginPolicy.parse("https://example.com:8443")?.port == 8443, "a non-default port is preserved")
+
+        let withDefaultPort = RemoteOriginPolicy(hostPolicy: .loopback, allowedOrigins: ["https://example.com:443"])
+        #expect(withDefaultPort.allows(originHeader: "https://example.com"), "the browser's own Origin header omits the default port")
+    }
+
     @Test func privateHostClassifierCoversLoopbackLinkLocalAndPrivateRanges() {
         for host in ["localhost", "127.0.0.1", "127.5.5.5", "::1", "10.1.1.1", "192.168.0.1", "172.31.0.1",
                      "100.64.0.1", "100.127.255.255", "169.254.9.9", "fe80::1", "fd7a:115c:a1e0::1", "fc00::1"] {

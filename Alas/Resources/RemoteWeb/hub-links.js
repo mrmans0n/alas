@@ -41,6 +41,7 @@ function createLinks(deps, hooks) {
       origins: [...server.origins],
       lastOrigin: server.lastOrigin || server.origins[0],
       token: server.token,
+      serverId: server.serverId || null,
       role: "idle",
       state: "idle",
       socket: null,
@@ -110,6 +111,7 @@ function createLinks(deps, hooks) {
     link.origins = [...server.origins];
     link.lastOrigin = server.lastOrigin || server.origins[0];
     link.token = server.token;
+    if (server.serverId) link.serverId = server.serverId;
     link.reconnectDelay = INITIAL_RECONNECT_MS;
     link.state = "idle";
     notify(link);
@@ -224,15 +226,23 @@ function createLinks(deps, hooks) {
     if (link.role === "idle") startPolling(link);
   }
 
+  // The health probe (see probeAny below) needs a known-good identity to
+  // verify a /health response against, independent of whatever app.js's
+  // hook does with the registry — recorded here so it's always current.
+  function rememberServerId(link, msg) {
+    if (typeof msg.serverId === "string" && msg.serverId) link.serverId = msg.serverId;
+  }
+
   function receive(link, msg) {
     if (!msg || typeof msg.type !== "string") return;
     if (link.awaitingHello) {
       link.awaitingHello = false;
-      if (msg.type === "hello") { if (h.onHello) h.onHello(link, msg); return; }
+      if (msg.type === "hello") { rememberServerId(link, msg); if (h.onHello) h.onHello(link, msg); return; }
       // A pre-hub Mac never says hello; treat its first frame as ordinary.
       link.legacy = true;
       if (h.onLegacy) h.onLegacy(link);
     } else if (msg.type === "hello") {
+      rememberServerId(link, msg);
       if (h.onHello) h.onHello(link, msg);
       return;
     }
@@ -264,7 +274,7 @@ function createLinks(deps, hooks) {
   // user where to fix it, not to re-pair); otherwise the Mac is simply
   // unreachable and we keep retrying.
   function onAllOriginsFailed(link, order, attempt) {
-    probeAny(order).then(({ reachable, blocked }) => {
+    probeAny(order, link.serverId).then(({ reachable, blocked }) => {
       if (attempt !== link.attempt) return;
       if (reachable) { setState(link, "unauthorized"); return; }
       if (blocked) { setState(link, "blocked"); return; }
@@ -273,7 +283,7 @@ function createLinks(deps, hooks) {
     });
   }
 
-  function probeAny(origins) {
+  function probeAny(origins, expectedServerId) {
     // Every server advertises "localhost" alongside its real addresses, but
     // that origin only actually reaches the paired Mac when the browser
     // happens to run on that same machine — otherwise it silently answers
@@ -286,24 +296,43 @@ function createLinks(deps, hooks) {
     const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;
     const candidates = origins.filter((o) => !isLoopback(o));
     const toProbe = candidates.length ? candidates : origins;
-    return Promise.all(toProbe.map(probe)).then((statuses) => ({
-      reachable: statuses.some((s) => s != null && s >= 200 && s < 300),
-      blocked: statuses.some((s) => s === 403),
+    return Promise.all(toProbe.map(probe)).then((results) => ({
+      // A non-loopback address can *also* be reused (DHCP, a reassigned
+      // reverse proxy) and answer for a completely different Mac. When we
+      // already know this link's serverId and the response carries one too,
+      // trust a 2xx only if they match; an identity-free response (a
+      // legacy Mac's /health, or a link whose serverId isn't known yet)
+      // falls back to trusting the bare status, since it's the only signal
+      // available in that case.
+      reachable: results.some((r) => {
+        if (!r || r.status < 200 || r.status >= 300) return false;
+        if (expectedServerId && r.serverId) return r.serverId === expectedServerId;
+        return true;
+      }),
+      blocked: results.some((r) => r && r.status === 403),
     }));
   }
 
-  // Resolves the /health response's status code, or null on timeout/network
-  // failure — distinct from a 403, which means the Mac answered but this
-  // origin isn't on its allowlist.
+  // Resolves { status, serverId } from the /health response, or null on
+  // timeout/network failure. serverId is null when the response has no
+  // parseable JSON body with one (a legacy Mac, or a non-2xx response).
   function probe(origin) {
     return new Promise((resolve) => {
       let done = false;
-      const timer = deps.setTimeout(() => { if (!done) { done = true; resolve(null); } }, PROBE_TIMEOUT_MS);
+      const finish = (value) => { if (!done) { done = true; deps.clearTimeout(timer); resolve(value); } };
+      const timer = deps.setTimeout(() => finish(null), PROBE_TIMEOUT_MS);
       Promise.resolve()
         .then(() => deps.fetch(origin + "/health", { method: "GET" }))
         .then(
-          (res) => { if (!done) { done = true; deps.clearTimeout(timer); resolve(res ? res.status : null); } },
-          () => { if (!done) { done = true; deps.clearTimeout(timer); resolve(null); } }
+          (res) => {
+            if (!res) { finish(null); return; }
+            if (res.status !== 200 || typeof res.json !== "function") { finish({ status: res.status, serverId: null }); return; }
+            res.json().then(
+              (data) => finish({ status: res.status, serverId: (data && typeof data.serverId === "string") ? data.serverId : null }),
+              () => finish({ status: res.status, serverId: null })
+            );
+          },
+          () => finish(null)
         );
     });
   }

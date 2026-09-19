@@ -32,6 +32,29 @@ struct RemoteHTTPResponderTests {
         #expect(out.contains("Vary: Origin\r\n"))
     }
 
+    // Regression (Codex review, PR #1337): the health probe used to treat
+    // any 2xx as proof of talking to the paired Mac, so a DHCP-reused
+    // address or a coincidental unrelated Alas instance could falsely mark
+    // a genuinely offline paired Mac as revoked. /health now includes the
+    // server's own identity so the client can verify it before trusting it.
+    @Test func healthIncludesServerIdWhenKnown() {
+        let responder = RemoteHTTPResponder(
+            pairing: RemotePairingService(store: InMemoryDeviceStore()),
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            diagnostics: {
+                RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true, pairedDeviceCount: 0, serverId: "srv-1")
+            },
+            originPolicy: RemoteOriginPolicy(hostPolicy: .loopback, allowedOrigins: [])
+        )
+        let out = text(responder.response(for: request("GET", "/health"), body: Data()))
+        #expect(out.contains(#""serverId":"srv-1""#))
+    }
+
+    @Test func healthOmitsServerIdWhenUnknown() {
+        let out = text(makeResponder().response(for: request("GET", "/health"), body: Data()))
+        #expect(!out.contains("serverId"))
+    }
+
     @Test func healthWithoutOriginHasNoCORSHeaders() {
         let out = text(makeResponder().response(for: request("GET", "/health"), body: Data()))
         #expect(out.hasPrefix("HTTP/1.1 200 OK"))

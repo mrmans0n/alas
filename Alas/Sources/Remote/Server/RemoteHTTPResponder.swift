@@ -53,7 +53,12 @@ struct RemoteHTTPResponder {
                 ])
         }
         if req.method == "GET", req.path == "/health" {
-            return Self.json(["ok": true], extraHeaders: cors)
+            // serverId lets a hub tell "this is really the paired Mac" apart
+            // from an unrelated Alas instance that happens to answer at the
+            // same address (a DHCP-reused LAN IP, or another server sharing
+            // this Mac's own loopback address) before trusting a 2xx as
+            // proof the paired Mac is still authorized.
+            return Self.json(["ok": true, "serverId": diagnostics().serverId], extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
             let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
@@ -79,8 +84,9 @@ struct RemoteHTTPResponder {
         return [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
     }
 
-    private static func json(_ object: [String: Bool], extraHeaders: [(String, String)] = []) -> Data {
-        let data = (try? JSONSerialization.data(withJSONObject: object, options: [])) ?? Data(#"{"ok":false}"#.utf8)
+    private static func json(_ object: [String: Any?], extraHeaders: [(String, String)] = []) -> Data {
+        let compacted = object.compactMapValues { $0 }
+        let data = (try? JSONSerialization.data(withJSONObject: compacted, options: [])) ?? Data(#"{"ok":false}"#.utf8)
         return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data, extraHeaders: extraHeaders)
     }
 

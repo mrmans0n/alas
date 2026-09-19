@@ -844,7 +844,10 @@ struct RemoteServerIntegrationTests {
         )
         #expect((infoResponse as? HTTPURLResponse)?.statusCode == 200)
         let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: infoData)
-        #expect(diagnosticsPorts == [port])
+        // /health now also reads diagnostics() for its serverId (PR #1337's
+        // health-probe identity check), so this request above already added
+        // one call before /remote-info's own.
+        #expect(diagnosticsPorts == [port, port])
         #expect(snapshot.port == port)
         #expect(snapshot.appName == "Alas")
         #expect(snapshot.pairedDeviceCount == 1)
