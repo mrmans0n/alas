@@ -423,6 +423,26 @@ struct ACPTranscriptVisibleRowLookupExpandedGroupTests {
         #expect(lookup.localIndexSpan(forRowId: "tc-a") == 1...1)
     }
 
+    @Test("a stale expanded-bundle header resolves to its member card without assuming head growth")
+    func staleExpandedHeaderResolvesTopRelative() {
+        // Two expanded runs merge when the active call between them
+        // finishes: the later run's header id disappears, because the
+        // merged bundle is keyed by the FIRST run's first member. The
+        // reader was parked on that vanished header.
+        //
+        // It decodes to its old first member, which is now tiled as its own
+        // card. A header is short and a tool card can be many viewports
+        // tall, so restoring bottom-relative (head growth) would drop the
+        // viewport to the bottom of that card; tops must be aligned.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
+        let staleHeaderId = ACPTranscriptToolCallGroup.idPrefix + "tc-b"
+        let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+            staleHeaderId, lookup: lookup, groupingEnabled: true
+        )
+        #expect(resolution?.rowId == "tc-b")
+        #expect(resolution?.assumeHeadGrowth == false)
+    }
+
     @Test("a middle member absorbed into a merged expanded group needs no stale remap")
     func middleMemberNeedsNoStaleRemap() {
         // The "preserve middle-member anchors during group merges" case:

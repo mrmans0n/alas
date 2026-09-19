@@ -1498,9 +1498,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// see `ACPTranscriptScrollerReconciler.restoreScrollAnchor`'s doc
         /// comment) or not.
         ///
-        /// A resolved GROUP id only implies head growth while collapsing
-        /// stays enabled: decoding one succeeds because its first member
-        /// changed WITHIN an ongoing group. If grouping was disabled
+        /// A resolved GROUP id implies head growth only when it resolves to
+        /// ANOTHER BUNDLE ROW and collapsing stays enabled: decoding one
+        /// succeeds because its first member changed WITHIN an ongoing
+        /// collapsed group, which is the case where the replacement really
+        /// did grow at its head. When the decoded member is tiled as its own
+        /// row instead — the run is expanded, so a stale header resolves to
+        /// a member CARD — see the guard at the bottom of the
+        /// implementation. If grouping was disabled
         /// instead, the group id vanished because grouping stopped entirely
         /// — a short collapsed bundle can become a much taller plain tool
         /// card, the opposite of "grew a little at the head" — so
@@ -1517,13 +1522,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// bottom-relative restoration would drag the viewport down by the
         /// height of every later member; top-relative is right there.
         ///
-        /// Note this whole path only ever concerns a COLLAPSED bundle,
-        /// which is the only kind that swallows its members' row ids. An
-        /// expanded bundle tiles each member as its own row keyed by its
-        /// own stable id (see `ACPTranscriptRenderRow`), so expanding,
-        /// collapsing or disabling the setting while parked on one of its
-        /// cards leaves that card's row id untouched and never produces a
-        /// stale id to resolve in the first place.
+        /// Note a MEMBER's own stale id only ever arises from a COLLAPSED
+        /// bundle, which is the only kind that swallows its members' row
+        /// ids. An expanded bundle tiles each member as its own row keyed
+        /// by its own stable id (see `ACPTranscriptRenderRow`), so
+        /// expanding, collapsing or disabling the setting while parked on
+        /// one of its cards leaves that card's row id untouched. A stale
+        /// GROUP id can still arise either way, since a bundle's id follows
+        /// its first member and two runs merging re-keys the later one.
         static func resolveStaleRowId(
             _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
         ) -> StaleRowIdResolution? {
@@ -1535,6 +1541,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
                   let resolved = lookup.rowId(forStableId: staleStableId)
             else { return nil }
+            // The decoded member is tiled as its own row, so the run is
+            // EXPANDED (or grouping stopped): the replacement is that member
+            // CARD, not another bundle row. The stale header sat immediately
+            // above the card, so align tops. Bottom-relative here would drop
+            // the viewport to the bottom of a card that can be many
+            // viewports tall — the header is short, the card need not be.
+            guard resolved != staleStableId else {
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: false)
+            }
             return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: groupingEnabled)
         }
 
