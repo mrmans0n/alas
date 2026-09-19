@@ -22,12 +22,19 @@ final class RemoteConnection: @unchecked Sendable {
     private let responder: @MainActor (HTTPRequest, Data) -> Data
     private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
     private let accessPolicy: RemoteAccessPolicy
+    private let originPolicy: RemoteOriginPolicy
+    private let makeHello: @MainActor () -> RemoteServerMessage?
     private let onAuthenticated: ((RemoteConnection, String) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
     // Queue-confined state.
     private var inbound = Data()
     private var isWebSocket = false
+    /// Set once hello (or, if there is none, nothing) has been sent and the
+    /// connection is ready to process inbound client frames. `drain()` must
+    /// not route to `drainFrames()` before this is true, or a pipelined
+    /// client frame's response could be written ahead of `hello` on the wire.
+    private var framesEnabled = false
     private var gateway: RemoteSessionGateway?
     private var closed = false
     /// Set once a terminal response has been queued. This closes the gap between
@@ -65,7 +72,9 @@ final class RemoteConnection: @unchecked Sendable {
          responder: @escaping @MainActor (HTTPRequest, Data) -> Data,
          authorize: @escaping @MainActor (String) -> String?,
          accessPolicy: RemoteAccessPolicy,
+         originPolicy: RemoteOriginPolicy = .loopback,
          makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
+         makeHello: @escaping @MainActor () -> RemoteServerMessage? = { nil },
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
         self.conn = conn
@@ -73,7 +82,9 @@ final class RemoteConnection: @unchecked Sendable {
         self.responder = responder
         self.authorize = authorize
         self.accessPolicy = accessPolicy
+        self.originPolicy = originPolicy
         self.makeGateway = makeGateway
+        self.makeHello = makeHello
         self.onAuthenticated = onAuthenticated
         self.onClose = onClose
     }
@@ -126,8 +137,10 @@ final class RemoteConnection: @unchecked Sendable {
     // MARK: HTTP / upgrade
 
     private func drain() {
-        if isWebSocket { drainFrames()
-        return }
+        if isWebSocket {
+            if framesEnabled { drainFrames() }
+            return
+        }
 
         // Peek headers on a copy WITHOUT consuming `inbound`, so we can wait for
         // the full Content-Length body before committing. Parse once, here.
@@ -161,7 +174,19 @@ final class RemoteConnection: @unchecked Sendable {
         }
 
         let headerByteCount = inbound.count - peek.count   // bytes through CRLFCRLF
-        if req.headers["upgrade"]?.lowercased() == "websocket" {
+        let isUpgrade = req.headers["upgrade"]?.lowercased() == "websocket"
+        // Routes a hub served by another Mac reaches cross-origin carry a
+        // browser Origin; reject disallowed ones before any handler runs.
+        if Self.isOriginGated(path: req.path, isUpgrade: isUpgrade),
+           !originPolicy.allows(originHeader: req.headers["origin"]) {
+            sendAndClose(RemoteHTTPResponder.http(
+                status: "403 Forbidden",
+                contentType: "text/plain",
+                body: Data("forbidden origin".utf8)
+            ))
+            return
+        }
+        if isUpgrade {
             inbound.removeFirst(headerByteCount)
             guard req.method == "GET", req.path == "/ws" else {
                 sendAndClose(RemoteHTTPResponder.http(
@@ -209,6 +234,12 @@ final class RemoteConnection: @unchecked Sendable {
         }
     }
 
+    /// Static assets and `/remote-info` stay Host-allowlist only; the socket,
+    /// pairing, and health routes are what a cross-origin hub needs.
+    static func isOriginGated(path: String, isUpgrade: Bool) -> Bool {
+        isUpgrade || path == "/pair" || path == "/health"
+    }
+
     private func handleUpgrade(_ req: HTTPRequest) {
         // Token from Sec-WebSocket-Protocol (web client sends it as a
         // subprotocol) or, as a fallback, a ?token= query parameter.
@@ -249,10 +280,28 @@ final class RemoteConnection: @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let gateway = self.makeGateway { [weak self] msg in self?.sendServerMessage(msg) }
+            let helloFrame = self.makeHello()
+                .flatMap { try? JSONEncoder().encode($0) }
+                .map { WebSocketFrame.encode(opcode: .text, payload: $0) }
             self.onQueue { [weak self] in
                 guard let self else { return }
                 self.gateway = gateway
-                self.send(Data(head.utf8)) { [weak self] in self?.drainFrames() }
+                self.send(Data(head.utf8)) { [weak self] in
+                    guard let self else { return }
+                    // `hello` is the first frame on every socket: the gateway
+                    // has not seen a client message yet, and its own sends hop
+                    // through `onQueue` behind this one.
+                    if let helloFrame {
+                        self.send(helloFrame) { [weak self] in
+                            guard let self else { return }
+                            self.framesEnabled = true
+                            self.drainFrames()
+                        }
+                    } else {
+                        self.framesEnabled = true
+                        self.drainFrames()
+                    }
+                }
             }
         }
     }

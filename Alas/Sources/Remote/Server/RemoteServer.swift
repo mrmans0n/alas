@@ -26,6 +26,8 @@ final class RemoteServer {
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
     private var accessPolicy: RemoteAccessPolicy
+    private var originPolicy: RemoteOriginPolicy
+    private let identityProvider: @MainActor () -> RemoteServerIdentity
     private let diagnosticsProvider: @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
@@ -46,6 +48,7 @@ final class RemoteServer {
         assets: RemoteWebAssets,
         provider: RemoteSessionsProvider,
         accessPolicy: RemoteAccessPolicy = .loopback,
+        originPolicy: RemoteOriginPolicy = .loopback,
         diagnostics: @escaping @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot = { port in
             RemoteDiagnosticsSnapshot(
                 appName: "Alas",
@@ -54,13 +57,18 @@ final class RemoteServer {
                 usesPlainHTTP: true,
                 pairedDeviceCount: 0
             )
+        },
+        identity: @escaping @MainActor () -> RemoteServerIdentity = {
+            RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
         }
     ) {
         self.pairing = pairing
         self.assets = assets
         self.provider = provider
         self.accessPolicy = accessPolicy
+        self.originPolicy = originPolicy
         self.diagnosticsProvider = diagnostics
+        self.identityProvider = identity
     }
 
     /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
@@ -151,15 +159,24 @@ final class RemoteServer {
         }
     }
 
+    func updateOriginPolicy(_ policy: RemoteOriginPolicy) {
+        originPolicy = policy
+        for (oid, conn) in connections where connectionDevice[oid] == nil {
+            conn.cancel()
+        }
+    }
+
     private func accept(_ nwConn: NWConnection) {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
         let responder = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
-            diagnostics: { self.diagnosticsProvider(self.port) }
+            diagnostics: { self.diagnosticsProvider(self.port) },
+            originPolicy: originPolicy
         )
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
+        let identity = self.identityProvider
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
@@ -170,9 +187,11 @@ final class RemoteServer {
                 return id
             },
             accessPolicy: accessPolicy,
+            originPolicy: originPolicy,
             makeGateway: { send in
                 RemoteSessionGateway(provider: provider, send: send)
             },
+            makeHello: { RemoteServerMessage.hello(identity()) },
             onAuthenticated: { [weak self] conn, did in
                 Task { @MainActor in
                     guard let self else { return }
