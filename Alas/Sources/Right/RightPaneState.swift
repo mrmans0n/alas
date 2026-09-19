@@ -109,6 +109,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var checkpointSummaries: [WorktreeCheckpointSummary] = []
     var checkpointStorageUsage: Int64 = 0
     var checkpointsExpanded: Bool = true
+    var automaticCheckpointsExpanded: Bool = false
     var expandedCheckpointIDs: Set<CheckpointID> = []
     var checkpointManifests: [CheckpointID: WorktreeCheckpointManifest] = [:]
     var loadingCheckpointManifestIDs: Set<CheckpointID> = []
@@ -762,6 +763,12 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointJournalDiscoverySucceeded = false
             checkpointLoadError = error.message
         }
+    }
+
+    func refreshCheckpoints() async {
+        let generation = snapshotInvalidationGeneration
+        let result = await loadCheckpointSnapshot(target: checkpointTarget)
+        publishCheckpointSnapshot(result, snapshotGeneration: generation)
     }
 
     func checkpointMutationsDisabledAfterJournalRevalidation() async -> Bool {

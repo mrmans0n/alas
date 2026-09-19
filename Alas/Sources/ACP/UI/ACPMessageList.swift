@@ -35,6 +35,7 @@ struct ACPMessageList: View {
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
+    var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
@@ -63,6 +64,7 @@ struct ACPMessageList: View {
                 forkTargets: forkTargets,
                 onQuote: onQuote,
                 onFork: onFork,
+                onRestoreCheckpoint: onRestoreCheckpoint,
                 rememberedScrollAnchor: rememberedScrollAnchor,
                 onRememberScrollAnchor: onRememberScrollAnchor,
                 onOpenTranscriptLink: onOpenTranscriptLink,

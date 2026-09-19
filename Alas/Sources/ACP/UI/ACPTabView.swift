@@ -528,6 +528,12 @@ private struct ACPSessionView: View {
                     )
                 }
             },
+            onRestoreCheckpoint: { checkpointID in
+                guard let pane = state.rightPaneStore.activeState(worktreeId: worktree.id) else { return }
+                Task {
+                    await pane.previewCheckpointRestore(id: checkpointID)
+                }
+            },
             onOpenForkSource: { sourceSessionID in
                 Task {
                     if let owner {

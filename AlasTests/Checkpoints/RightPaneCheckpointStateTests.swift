@@ -142,6 +142,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     func calls() -> Int { callCount }
     func failNextCreate() { createShouldFail = true }
     func failLoads(_ value: Bool) { loadShouldFail = value }
+    func makeSummaryAvailable() { created = true }
     func markSummaryUnavailable() {
         created = true
         summaryUnavailable = true
@@ -181,6 +182,23 @@ struct RightPaneCheckpointStateTests {
         #expect(createdManifest?.id == UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
         #expect(state.checkpointSummaries.map(\.label) == ["Before edit"])
         #expect(state.checkpointManifests.values.flatMap(\.exclusions).map(\.relativePath) == [".env"])
+    }
+
+    @Test func targetedCheckpointRefreshPublishesExternalAutomaticCaptures() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+
+        await state.refreshCheckpoints()
+        #expect(state.checkpointSummaries.isEmpty)
+
+        await service.makeSummaryAvailable()
+        await state.refreshCheckpoints()
+
+        #expect(state.checkpointSummaries.map(\.id) == [
+            UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        ])
     }
 
     @Test func remoteWorktreesExposeTheApprovedReasonWithoutCallingTheService() async throws {

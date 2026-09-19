@@ -57,7 +57,7 @@ final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
-    private let onCheckpointCapture: (@MainActor () async -> CheckpointID?)?
+    private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -154,7 +154,7 @@ final class ACPSessionRunner {
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
-         onCheckpointCapture: (@MainActor () async -> CheckpointID?)? = nil,
+         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
          ownerInstanceId: String? = nil,
@@ -1827,6 +1827,8 @@ extension ACPSessionRunner {
                 }
                 return
             }
+            let checkpointPrompt = Self.textPreview(of: blocks)
+            let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
             let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?) in
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -1890,7 +1892,7 @@ extension ACPSessionRunner {
                 return
             }
             if let messageID = promptRecording.messageID,
-               let checkpointID = await self.onCheckpointCapture?() {
+               let checkpointID = await self.onCheckpointCapture?(checkpointPrompt, checkpointHasAttachments) {
                 await MainActor.run {
                     guard self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
                           let index = self.session.transcript.messages.firstIndex(where: { message in

@@ -41,6 +41,8 @@ struct ACPMessageGutter<Content: View>: View {
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
+    let checkpointID: CheckpointID?
+    let onRestoreCheckpoint: (CheckpointID) -> Void
     @ViewBuilder var content: Content
 
     @StateObject private var hover = ACPDelayedHoverVisibility()
@@ -81,12 +83,12 @@ struct ACPMessageGutter<Content: View>: View {
     @ViewBuilder private var actions: some View {
         if showsInlineTimestamp, messageCreatedAt != nil {
             VStack(alignment: .leading, spacing: ACPMessageGutterLayout.timestampVerticalSpacing) {
-                dotsMenu
+                actionButtons
                 timestamp
             }
             .frame(width: ACPMessageGutterLayout.timestampWidth, alignment: .leading)
         } else {
-            dotsMenu
+            actionButtons
         }
     }
 
@@ -110,6 +112,32 @@ struct ACPMessageGutter<Content: View>: View {
         }
     }
 
+
+    private var actionButtons: some View {
+        HStack(spacing: 4) {
+            if let checkpointID {
+                Button {
+                    onRestoreCheckpoint(checkpointID)
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(width: 19, height: 19)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.color("fg-muted"))
+                .background(theme.color("bg-3").opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
+                .help("Restore files to before this request")
+                .accessibilityLabel("Restore files to before this request")
+            }
+            dotsMenu
+        }
+    }
     private var dotsMenu: some View {
         ACPMessageActionsButton(
             copySource: copySource,
@@ -118,6 +146,8 @@ struct ACPMessageGutter<Content: View>: View {
             forkTargets: forkTargets,
             onQuote: onQuote,
             onFork: onFork,
+            checkpointID: checkpointID,
+            onRestoreCheckpoint: onRestoreCheckpoint,
             tint: theme.color("fg-muted")
         )
             .frame(width: 19, height: 19)
@@ -139,6 +169,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
+    let checkpointID: CheckpointID?
+    let onRestoreCheckpoint: (CheckpointID) -> Void
     let tint: Color
 
     func makeCoordinator() -> Coordinator {
@@ -148,6 +180,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
             onQuote: onQuote,
+            checkpointID: checkpointID,
+            onRestoreCheckpoint: onRestoreCheckpoint,
             onFork: onFork
         )
     }
@@ -167,6 +201,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         context.coordinator.forkTargets = forkTargets
         context.coordinator.onQuote = onQuote
         context.coordinator.onFork = onFork
+        context.coordinator.checkpointID = checkpointID
+        context.coordinator.onRestoreCheckpoint = onRestoreCheckpoint
         button.contentTintColor = NSColor(tint)
     }
 
@@ -178,6 +214,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         var forkTargets: [ACPSessionForkTarget]
         var onQuote: (String) -> Void
         var onFork: (ACPForkMessageBoundary, String) -> Void
+        var checkpointID: CheckpointID?
+        var onRestoreCheckpoint: (CheckpointID) -> Void
 
         init(
             copySource: ACPMessageCopySource,
@@ -185,6 +223,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             forkBoundary: ACPForkMessageBoundary?,
             forkTargets: [ACPSessionForkTarget],
             onQuote: @escaping (String) -> Void,
+            checkpointID: CheckpointID?,
+            onRestoreCheckpoint: @escaping (CheckpointID) -> Void,
             onFork: @escaping (ACPForkMessageBoundary, String) -> Void
         ) {
             self.copySource = copySource
@@ -192,6 +232,8 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             self.forkBoundary = forkBoundary
             self.forkTargets = forkTargets
             self.onQuote = onQuote
+            self.checkpointID = checkpointID
+            self.onRestoreCheckpoint = onRestoreCheckpoint
             self.onFork = onFork
         }
 
@@ -201,6 +243,16 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
                 let timestampItem = NSMenuItem(title: timestampText, action: nil, keyEquivalent: "")
                 timestampItem.isEnabled = false
                 menu.addItem(timestampItem)
+                menu.addItem(.separator())
+            }
+            if checkpointID != nil {
+                let restoreItem = NSMenuItem(
+                    title: "Restore files to before this request",
+                    action: #selector(restoreCheckpoint(_:)),
+                    keyEquivalent: ""
+                )
+                restoreItem.target = self
+                menu.addItem(restoreItem)
                 menu.addItem(.separator())
             }
             let copyItem = NSMenuItem(
@@ -246,6 +298,11 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
                 at: NSPoint(x: 0, y: sender.bounds.height + 2),
                 in: sender
             )
+        }
+
+        @objc private func restoreCheckpoint(_ sender: NSMenuItem) {
+            guard let checkpointID else { return }
+            onRestoreCheckpoint(checkpointID)
         }
 
         @objc private func copyMessage(_ sender: NSMenuItem) {

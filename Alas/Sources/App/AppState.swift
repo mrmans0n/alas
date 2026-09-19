@@ -11023,12 +11023,21 @@ final class AppState {
                     retainActivePrompt: retainActivePrompt
                 )
             },
-            onCheckpointCapture: { [weak self] in
+            onCheckpointCapture: { [weak self] prompt, hasAttachments in
                 guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
-                return try? await self.automaticCheckpointService.createAutomatic(
-                    target: target,
-                    label: "Before agent prompt"
-                ).id
+                do {
+                    let checkpoint = try await self.automaticCheckpointService.createAutomatic(
+                        target: target,
+                        label: AutomaticCheckpointLabel.make(
+                            prompt: prompt,
+                            hasAttachments: hasAttachments
+                        )
+                    )
+                    await self.rightPaneStore.activeState(worktreeId: worktree.id)?.refreshCheckpoints()
+                    return checkpoint.id
+                } catch {
+                    return nil
+                }
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }

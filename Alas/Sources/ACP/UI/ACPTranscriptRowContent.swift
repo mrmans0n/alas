@@ -57,6 +57,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     let forkTargets: [ACPSessionForkTarget]
     var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
+    var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
@@ -130,6 +131,14 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         return buffer.phase
     }
 
+    static func checkpointID(in message: ACPMessage) -> CheckpointID? {
+        guard case .user(_, _, _, let attachments, _) = message else { return nil }
+        for attachment in attachments {
+            if let checkpointID = attachment.checkpointID { return checkpointID }
+        }
+        return nil
+    }
+
     static func showsInlineTimestamp(
         availableRowContentWidth: CGFloat,
         availableTrailingGutterWidth: CGFloat
@@ -151,7 +160,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 forkBoundary: forkBoundary(kind: .user),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
-                onFork: onFork
+                onFork: onFork,
+                checkpointID: Self.checkpointID(in: message),
+                onRestoreCheckpoint: onRestoreCheckpoint
             ) {
                 UserMessageRow(
                     text: text,
@@ -172,7 +183,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 forkBoundary: forkBoundary(kind: .agent),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
-                onFork: onFork
+                onFork: onFork,
+                checkpointID: nil,
+                onRestoreCheckpoint: onRestoreCheckpoint
             ) {
                 if buf.phase == .commentary {
                     ACPCommentaryRow(

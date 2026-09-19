@@ -115,6 +115,22 @@ struct ACPTranscriptRowContentTests {
         #expect(a != b)
     }
 
+    @Test("user rows expose their saved checkpoint")
+    @MainActor
+    func userRowsExposeSavedCheckpoint() {
+        let checkpointID = UUID()
+        let message = ACPMessage.user(
+            id: UUID(),
+            text: "change it",
+            attachments: [.checkpointReference(id: checkpointID)]
+        )
+
+        #expect(ACPTranscriptRowContent.checkpointID(in: message) == checkpointID)
+        #expect(ACPTranscriptRowContent.checkpointID(
+            in: ACPMessage.systemNotice(id: UUID(), text: "notice")
+        ) == nil)
+    }
+
     @Test("row equality detects a phase adopted by its streaming buffer")
     @MainActor
     func rowContentEqualityDetectsAdoptedPhase() {
