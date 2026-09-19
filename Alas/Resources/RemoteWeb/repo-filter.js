@@ -37,8 +37,45 @@ function worktreeIsActive(worktree) {
   return worktree.activeSessions.length > 0;
 }
 
+// "Running" = an open session whose agent is mid-turn (streaming, or parked
+// on a permission/question prompt). Idle open tabs don't count — the chip is
+// about which agents are working right now, not which tabs exist.
+function sessionIsRunning(session) {
+  return !!session && session.status != null && session.status !== "idle";
+}
+
+function worktreeIsRunning(worktree) {
+  return worktree.activeSessions.some(sessionIsRunning);
+}
+
 function worktreeIsDirty(worktree) {
   return !!(worktree.summary && worktree.summary.changedFileCount > 0);
+}
+
+// The card's second-row status: what the agent is doing beats what the tree
+// looks like, and the tree's dirtiness beats "clean".
+//   { kind: "run" | "dirty" | "idle", label }
+function worktreeStatus(worktree) {
+  if (worktreeIsRunning(worktree)) return { kind: "run", label: "running" };
+  const summary = worktree.summary;
+  if (summary && summary.metricsAvailable === false) return { kind: "idle", label: "changes unavailable" };
+  if (summary && summary.conflictCount > 0) {
+    return { kind: "dirty", label: `${summary.conflictCount} conflict${summary.conflictCount === 1 ? "" : "s"}` };
+  }
+  if (summary && summary.changedFileCount > 0) {
+    return { kind: "dirty", label: `${summary.changedFileCount} file${summary.changedFileCount === 1 ? "" : "s"}` };
+  }
+  return { kind: "idle", label: "clean" };
+}
+
+// Most recent activity across every session in the worktree, in Unix
+// milliseconds. The wire's `updatedAt` is Unix seconds.
+function worktreeRecencyMs(worktree, nowMs) {
+  const stamps = [...worktree.activeSessions, ...worktree.closedSessions]
+    .map((session) => Number(session.updatedAt))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((seconds) => seconds * 1000);
+  return stamps.length ? Math.max(...stamps) : nowMs;
 }
 
 function relativeTimeShort(updatedAtMs, nowMs) {
@@ -66,7 +103,7 @@ function diffBarSegments(added, deleted) {
 
 function sectionMatchesFilter(section, filter) {
   if (filter === "all") return true;
-  if (filter === "active") return section.worktrees.some(worktreeIsActive);
+  if (filter === "running") return section.worktrees.some(worktreeIsRunning);
   if (filter === "dirty") return section.worktrees.some(worktreeIsDirty);
   return true;
 }
@@ -88,10 +125,10 @@ function sectionMatchesQuery(section, query) {
 }
 
 function sectionCounts(sections) {
-  const counts = { all: 0, active: 0, dirty: 0 };
+  const counts = { all: 0, running: 0, dirty: 0 };
   for (const section of sections) {
     counts.all += 1;
-    if (sectionMatchesFilter(section, "active")) counts.active += 1;
+    if (sectionMatchesFilter(section, "running")) counts.running += 1;
     if (sectionMatchesFilter(section, "dirty")) counts.dirty += 1;
   }
   return counts;
@@ -102,7 +139,11 @@ globalThis.RemoteRepoFilter = {
   repoInitials,
   worktreeIsPrimaryBranch,
   worktreeIsActive,
+  sessionIsRunning,
+  worktreeIsRunning,
   worktreeIsDirty,
+  worktreeStatus,
+  worktreeRecencyMs,
   relativeTimeShort,
   diffBarSegments,
   sectionMatchesFilter,

@@ -488,10 +488,12 @@ function renderSessions(sessions) {
 }
 
 function renderSection(section) {
-  const element = el("section", "session-section");
+  const element = el("section", "grp");
   if (section.isOther) {
-    element.append(el("h2", "session-section-title", section.title));
-    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
+    element.append(el("div", "other-title", section.title));
+    const kids = el("div", "kids");
+    section.worktrees.forEach(worktree => kids.append(renderWorktreeGroup(section, worktree)));
+    element.append(kids);
     return element;
   }
 
@@ -500,23 +502,25 @@ function renderSection(section) {
   const expanded = forceExpanded || ownExpanded;
   element.append(renderRepoHeader(section, expanded, forceExpanded));
   if (expanded) {
-    section.worktrees.forEach(worktree => element.append(renderWorktreeGroup(section, worktree)));
+    const kids = el("div", "kids");
+    section.worktrees.forEach(worktree => kids.append(renderWorktreeGroup(section, worktree)));
+    element.append(kids);
   }
   return element;
 }
 
 function renderRepoHeader(section, expanded, forceExpanded) {
-  const header = el("div", "repo-header");
-  if (forceExpanded) header.classList.add("repo-header-static");
+  const header = el("div", "rh");
+  if (forceExpanded) header.classList.add("rh-static");
 
-  const chev = el("span", "repo-chev", expanded ? "▾" : "▸");
-  const tile = el("span", "repo-tile", RemoteRepoFilter.repoInitials(section.title));
+  const chev = icon(expanded ? "chevD" : "chevR", "chev");
+  const tile = el("span", "tile", RemoteRepoFilter.repoInitials(section.title));
   tile.style.background = RemoteRepoFilter.repoTileColor(section.title);
-  const name = el("span", "repo-name", section.title);
+  const name = el("span", "rn", section.title);
 
   header.append(chev, tile, name);
   if (!expanded) {
-    header.append(el("span", "repo-count", String(section.worktrees.length)));
+    header.append(el("span", "cnt", String(section.worktrees.length)));
   }
 
   if (!forceExpanded) {
@@ -538,41 +542,123 @@ function renderRepoHeader(section, expanded, forceExpanded) {
   return header;
 }
 
+// Each worktree renders as one `.wt` card: an identity row (branch + running
+// agent badge) and a status row (state · diff · relative time), both driven
+// by worktree-level data so they read the same whether the worktree has one
+// session or several. A worktree with exactly one session (the common case)
+// makes the whole card tappable, opening straight into it — its identity IS
+// that session. A worktree with more than one session instead nests each as
+// its own `.ss` row (closed ones tucked under a "Closed (N)" disclosure),
+// since no single session can stand in for the card's identity.
 function renderWorktreeGroup(section, worktree) {
-  const group = el("div", "session-worktree-group");
-  if (!section.isOther) {
-    const header = el("div", "session-worktree-header");
-    header.append(el("span", "session-worktree-name", worktree.summary.worktreeName));
-    const meta = el("div", "session-worktree-meta");
-    sessionMetaParts(worktree.summary).forEach(part => meta.append(part));
-    header.append(meta);
-    group.append(header);
+  const totalSessions = worktree.activeSessions.length + worktree.closedSessions.length;
+  const singleSession = totalSessions === 1 ? (worktree.activeSessions[0] || worktree.closedSessions[0]) : null;
+
+  const card = el("div", "wt");
+  if (singleSession) {
+    card.classList.add("tap");
+    if (!RemoteSessionOrdering.sessionIsActive(singleSession)) card.classList.add("closed");
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.dataset.sessionId = singleSession.id;
+    card.title = (singleSession.worktree && singleSession.worktree.path) || "";
+    card.onclick = () => openSession(singleSession.id);
+    card.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); card.click(); }
+    };
   }
 
-  if (worktree.activeSessions.length) {
-    const rows = el("div", "session-section-list");
-    worktree.activeSessions.forEach(session => rows.append(renderSessionRow(session)));
-    group.append(rows);
+  card.append(worktreeRow1(section, worktree, singleSession), worktreeRow2(worktree));
+
+  if (!singleSession) {
+    if (worktree.activeSessions.length) card.append(sessionRowList(worktree.activeSessions));
+    if (worktree.closedSessions.length) {
+      const details = document.createElement("details");
+      details.className = "session-closed";
+      details.open = expandedClosedWorktrees.has(worktree.id);
+      details.addEventListener("toggle", () => {
+        if (details.open) expandedClosedWorktrees.add(worktree.id);
+        else expandedClosedWorktrees.delete(worktree.id);
+      });
+      const summary = document.createElement("summary");
+      summary.className = "session-closed-summary";
+      summary.append(icon("chevR"), document.createTextNode(`Closed (${worktree.closedSessions.length})`));
+      details.append(summary, sessionRowList(worktree.closedSessions));
+      card.append(details);
+    }
   }
 
-  if (worktree.closedSessions.length) {
-    const closed = document.createElement("details");
-    closed.className = "session-closed";
-    closed.open = expandedClosedWorktrees.has(worktree.id);
-    closed.addEventListener("toggle", () => {
-      if (closed.open) {
-        expandedClosedWorktrees.add(worktree.id);
-      } else {
-        expandedClosedWorktrees.delete(worktree.id);
-      }
+  return card;
+}
+
+function worktreeRow1(section, worktree, singleSession) {
+  const row = el("div", "r1");
+  // The "Other" group has no real worktree — no branch to show, so the
+  // session's own title (or the group label, once it holds several) stands
+  // in as the identity instead.
+  if (section.isOther) {
+    const title = singleSession ? (sessionTitles.get(singleSession.id) || singleSession.title) : "Other";
+    row.append(el("span", "wt-title", title));
+    return row;
+  }
+
+  const summary = worktree.summary;
+  const isPrimary = RemoteRepoFilter.worktreeIsPrimaryBranch(summary.branch);
+  const iconWrap = el("span", "ico" + (RemoteRepoFilter.worktreeIsRunning(worktree) ? " run" : ""));
+  iconWrap.append(icon(isPrimary ? "home" : "branch"));
+  row.append(iconWrap, el("span", "br", summary.branch));
+  if (RemoteRepoFilter.worktreeIsRunning(worktree)) {
+    const agent = el("span", "agent");
+    agent.title = "Agent running";
+    agent.append(icon("agent"));
+    row.append(agent);
+  }
+  return row;
+}
+
+function worktreeRow2(worktree) {
+  const row = el("div", "r2");
+  const status = RemoteRepoFilter.worktreeStatus(worktree);
+  const st = el("span", `st st-${status.kind}`);
+  st.append(el("span", `dot ${status.kind}`), document.createTextNode(status.label));
+  row.append(st);
+
+  const summary = worktree.summary;
+  if (summary && (summary.addedLines > 0 || summary.deletedLines > 0)) {
+    const bar = el("span", "bar");
+    RemoteRepoFilter.diffBarSegments(summary.addedLines, summary.deletedLines).forEach(isAdd => {
+      bar.append(el("i", isAdd ? "a" : "d"));
     });
-    closed.append(el("summary", "session-closed-summary", `Closed (${worktree.closedSessions.length})`));
-    const rows = el("div", "session-section-list");
-    worktree.closedSessions.forEach(session => rows.append(renderSessionRow(session)));
-    closed.append(rows);
-    group.append(closed);
+    row.append(bar);
+    const diff = el("span", "diff");
+    diff.append(el("span", "add", "+" + summary.addedLines), el("span", "del", "−" + summary.deletedLines));
+    row.append(diff);
   }
-  return group;
+
+  const when = el("span", "when", RemoteRepoFilter.relativeTimeShort(RemoteRepoFilter.worktreeRecencyMs(worktree, Date.now()), Date.now()));
+  when.dataset.recencyMs = String(RemoteRepoFilter.worktreeRecencyMs(worktree, Date.now()));
+  row.append(when);
+  return row;
+}
+
+function sessionRowList(sessions) {
+  const list = el("div", "ss-list");
+  sessions.forEach(session => list.append(sessionRow(session)));
+  return list;
+}
+
+function sessionRow(s) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ss" + (RemoteSessionOrdering.sessionIsActive(s) ? "" : " closed");
+  button.dataset.sessionId = s.id;
+  button.onclick = () => openSession(s.id);
+  button.append(el("span", `dot ${RemoteRepoFilter.sessionIsRunning(s) ? "run" : "idle"}`));
+  button.append(el("span", "ss-title", sessionTitles.get(s.id) || s.title));
+  const when = el("span", "ss-when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now()));
+  when.dataset.recencyMs = String(sessionRecencyMs(s));
+  button.append(when);
+  return button;
 }
 
 function sessionRecencyMs(session) {
@@ -583,97 +669,36 @@ function sessionRecencyMs(session) {
   return Number.isFinite(updatedAt) ? updatedAt * 1000 : Date.now();
 }
 
-function renderSessionRow(s) {
-  const row = document.createElement("div");
-  row.dataset.sessionId = s.id;
-  row.className = "session-row";
-  const active = RemoteSessionOrdering.sessionIsActive(s);
-  row.classList.add(active ? "session-row-active" : "session-row-inactive");
-
-  const open = document.createElement("button");
-  open.type = "button";
-  open.className = "session-open";
-  open.onclick = () => openSession(s.id);
-
-  const head = el("div", "session-head");
-  const worktree = s.worktree;
-  const title = el("span", "session-title card-branch", s.title);
-  const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
-  if (worktree) {
-    const branchIcon = el("span", "card-branch-icon", RemoteRepoFilter.worktreeIsPrimaryBranch(worktree.branch) ? "⌂" : "⑂");
-    head.append(branchIcon);
-  }
-  head.append(title, state);
-  open.append(head);
-
-  const meta = el("div", "session-row-meta");
-  meta.append(el("span", "card-when", RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(s), Date.now())));
-  if (worktree && (worktree.addedLines > 0 || worktree.deletedLines > 0)) {
-    const bar = el("span", "card-diffbar");
-    RemoteRepoFilter.diffBarSegments(worktree.addedLines, worktree.deletedLines).forEach(isAdd => {
-      bar.append(el("i", isAdd ? "seg seg-add" : "seg seg-del"));
-    });
-    const counts = el("span", "meta-lines");
-    counts.append(el("span", "meta-add", "+" + worktree.addedLines), el("span", "meta-del", "-" + worktree.deletedLines));
-    meta.append(bar, counts);
-  }
-  meta.append(el("span", "status", s.status));
-  open.append(meta);
-
-  const rename = el("button", "rename-btn", "✎");
-  rename.type = "button";
-  rename.setAttribute("aria-label", "Rename session");
-  rename.onclick = () => showRenameSheet(s.id);
-
-  if (s.worktree) {
-    row.classList.add("session-row-card");
-    row.title = s.worktree.path || "";
-  } else {
-    row.classList.add("session-row-minimal");
-  }
-
-  row.append(open, rename);
-  return row;
-}
-
 const REPO_LIST_RELATIVE_TIME_REFRESH_MS = 60 * 1000;
 
-// Session cards show a relative timestamp ("21 min", "4 hr") computed once,
-// at the moment renderSessions() runs — with no live timer it freezes there
-// until the next full re-render (a search keystroke, a filter tap, a fresh
-// sessionList push). Refresh just the `.card-when` text in place instead of
-// re-rendering the whole list, which would blow away scroll position,
-// search focus, and collapse state.
+// Relative timestamps ("21 min", "4 hr") are computed once, at the moment
+// renderSessions() runs — with no live timer they'd freeze there until the
+// next full re-render (a search keystroke, a filter tap, a fresh sessionList
+// push). Refresh the text in place from the recency each node cached at
+// render time, instead of re-rendering the whole list, which would blow away
+// scroll position, search focus, and collapse state.
 setInterval(() => {
   if ($("sessions").classList.contains("hidden")) return;
   const now = Date.now();
-  document.querySelectorAll(".session-row[data-session-id]").forEach(row => {
-    const session = listedSessions.get(row.dataset.sessionId);
-    const when = row.querySelector(".card-when");
-    if (!session || !when) return;
-    when.textContent = RemoteRepoFilter.relativeTimeShort(sessionRecencyMs(session), now);
+  document.querySelectorAll(".when[data-recency-ms], .ss-when[data-recency-ms]").forEach(node => {
+    node.textContent = RemoteRepoFilter.relativeTimeShort(Number(node.dataset.recencyMs), now);
   });
 }, REPO_LIST_RELATIVE_TIME_REFRESH_MS);
 
-function sessionMetaParts(worktree) {
-  if (!worktree.metricsAvailable) return [el("span", "", "changes unavailable")];
-
-  const parts = [];
-  if (worktree.commitCount > 0) parts.push(el("span", "", plural(worktree.commitCount, "commit")));
-  if (worktree.conflictCount > 0) parts.push(el("span", "meta-conflict", plural(worktree.conflictCount, "conflict")));
-  if (worktree.changedFileCount > 0) parts.push(el("span", "", plural(worktree.changedFileCount, "file")));
-
-  const line = [];
-  if (worktree.addedLines > 0) line.push(el("span", "meta-add", "+" + worktree.addedLines));
-  if (worktree.deletedLines > 0) line.push(el("span", "meta-del", "-" + worktree.deletedLines));
-  if (line.length) {
-    const group = el("span", "meta-lines");
-    line.forEach(item => group.append(item));
-    parts.push(group);
-  }
-
-  return parts.length ? parts : [el("span", "", "clean")];
-}
+// `sessionList` is otherwise a pure pull snapshot — the gateway only sends
+// one on connect or as a side effect of a request THIS connection made
+// (listSessions, createSession, renameSession); it never pushes one when a
+// session's streaming state changes elsewhere (another tab, another device,
+// or a turn this same client started and then navigated away from). Without
+// this, the Running filter, the per-worktree status dot, and the run-state
+// pips would freeze at whatever they were when the list was last fetched.
+// Re-requesting on an interval — like the relative-time refresh above —
+// keeps them live without needing a server-side push mechanism.
+const SESSION_LIST_POLL_MS = 15 * 1000;
+setInterval(() => {
+  if ($("sessions").classList.contains("hidden")) return;
+  send({ type: "listSessions" });
+}, SESSION_LIST_POLL_MS);
 
 function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
@@ -695,7 +720,8 @@ function openSession(id) {
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
   lastStreamingState = "idle";
-  $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
+  $("bar").classList.add("is-detail");
+  $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar becomes ‹ title · rename
   $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("bottom-tabbar").classList.add("hidden");
@@ -1124,8 +1150,10 @@ function showSessions() {
   messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
+  $("bar").classList.remove("is-detail");
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("detail-title-block").classList.add("hidden"); $("detail-rename").classList.add("hidden");
+  $("messages").classList.remove("is-streaming");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   $("bottom-tabbar").classList.remove("hidden");
@@ -1179,9 +1207,10 @@ function setDetailSubtitle(sessionId) {
   const streamState = lastStreamingState === "idle" ? "idle" : "streaming";
   const el2 = $("detail-subtitle");
   el2.innerHTML = "";
-  const dot = el("span", `subtitle-dot ${streamState}`);
-  const label = el("span", "", streamState);
-  el2.append(dot, label);
+  el2.classList.toggle("streaming", streamState === "streaming");
+  const state = el("span", "subtitle-state");
+  state.append(el("span", `dot ${streamState === "streaming" ? "run" : "idle"}`), document.createTextNode(streamState));
+  el2.append(state);
   if (branch) {
     el2.append(el("span", "subtitle-sep", "·"), el("span", "subtitle-branch", branch));
   }
@@ -1248,10 +1277,14 @@ function applySessionRenamed(sessionId, title) {
   // until the gateway's own sessionList refresh eventually lands.
   const cached = listedSessions.get(sessionId);
   if (cached) cached.title = title;
-  const row = Array.from(document.querySelectorAll("[data-session-id]"))
-    .find(candidate => candidate.dataset.sessionId === sessionId);
-  const rowTitle = row && row.querySelector(".session-title");
-  if (rowTitle) rowTitle.textContent = title;
+  // A single-session worktree card shows its branch, not the session title —
+  // by design, only `.ss` rows (multi-session worktrees) and the "Other"
+  // group's `.wt-title` display a title at all, so this is a no-op elsewhere.
+  document.querySelectorAll("[data-session-id]").forEach(node => {
+    if (node.dataset.sessionId !== sessionId) return;
+    const label = node.querySelector(".ss-title, .wt-title");
+    if (label) label.textContent = title;
+  });
   if (currentSession === sessionId) setDetailTitle(sessionId);
   if (renameTarget === sessionId) $("rename-input").value = title;
 }
@@ -1778,6 +1811,37 @@ function upsertMessage(m) {
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function jparse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// Small inline glyph set for the repo list and transcript cards — kept as
+// literal, trusted SVG strings (never interpolated with server/user data) so
+// icon() can set them via innerHTML without any injection risk.
+const ICON_SVG = {
+  chevD: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4.5L12 6"/></svg>',
+  chevR: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4.5 4-4.5 4"/></svg>',
+  home: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7.2 8 2.8l5.5 4.4V12.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/></svg>',
+  branch: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="6" r="1.5"/><path d="M4 5v6"/><path d="M12 7.5c0 2.5-2 3-4 3"/></svg>',
+  agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5.5" width="10" height="7.5" rx="2"/><path d="M8 2v3.5M5.8 9h.01M10.2 9h.01"/></svg>',
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>',
+  cross: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+  stop: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
+};
+
+// Three-dot "thinking"/"running" indicator — a live element (built from DOM
+// nodes, not an ICON_SVG string) so its dots can be targeted and animated by
+// CSS independently of any static glyph.
+function pipsEl() {
+  const span = el("span", "pips");
+  span.append(el("i"), el("i"), el("i"));
+  return span;
+}
+
+function icon(name, cls) {
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  if (name === "pips") { span.append(pipsEl()); return span; }
+  span.innerHTML = ICON_SVG[name] || "";
+  return span;
+}
 
 function linkifyBareUrls(text) {
   if (!text || (!text.includes("http://") && !text.includes("https://"))) return text || "";
@@ -2595,7 +2659,8 @@ function md(text) {
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 const TOOL_VERB = { read: "Read", search: "Searched", execute: "Ran", run: "Ran", edit: "Edit" };
-const TOOL_STATUS = { completed: ["✓", "ok"], failed: ["✕", "err"], in_progress: ["•", "run"], pending: ["•", "run"], canceled: ["■", "run"], cancelled: ["■", "run"] };
+// status → [icon name, color class]; the icon comes from ICON_SVG.
+const TOOL_STATUS = { completed: ["check", "ok"], failed: ["cross", "err"], in_progress: ["pips", "run"], pending: ["pips", "run"], canceled: ["stop", "run"], cancelled: ["stop", "run"] };
 
 // Mirrors the native ACP pane: plain agent prose, accent user bubbles, a
 // collapsed "Thinking…" row, and collapsed tool/structured cards.
@@ -2627,8 +2692,9 @@ function renderMessage(m, sid, open) {
 
 function thoughtCard(text) {
   const d = el("div", "msg m-thought m-collapsible");
-  const button = el("button", "thought-toggle", "Thinking…");
+  const button = el("button", "thought-toggle");
   button.type = "button";
+  button.append(icon("pips"), document.createTextNode("Thinking…"));
   button.dataset.cardToggle = "true";
   button.setAttribute("aria-expanded", "false");
   const body = el("div", "thought-body", text);
@@ -2643,8 +2709,9 @@ function toolCard(tc) {
   const verb = TOOL_VERB[tc.kind] || (tc.kind ? cap(tc.kind) : "Tool");
   const name = toolDisplayName(tc, verb);
   const card = structCard(verb, name, toolBody(tc), tc.preview || toolCollapsedPreview(tc));
-  const [ch, scls] = TOOL_STATUS[tc.status] || [tc.status || "", "run"];
-  card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", el("span", "tool-status " + scls, ch));
+  const [iconName, scls] = TOOL_STATUS[tc.status] || [null, "run"];
+  const status = iconName ? icon(iconName, "tool-status " + scls) : el("span", "tool-status " + scls, tc.status || "");
+  card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", status);
   return card;
 }
 
@@ -2719,15 +2786,9 @@ function handleCardToggleKeydown(event) {
   if (card) setCardOpen(card, !card.classList.contains("is-open"));
 }
 
-function toolGlyph(verb) {
-  const v = (verb || "").toLowerCase();
-  if (v === "read") return "□";
-  if (v === "searched") return "⌕";
-  if (v === "ran") return "›";
-  if (v === "edit") return "✎";
-  return "⚙";
-}
-
+// One collapsed row: › VERB command ✓ ⌄ — the command slot shows the tool's
+// name (path, command line) and falls back to the input preview when the
+// tool has no name of its own.
 function structCard(verb, name, body, preview) {
   const d = el("div", "msg m-tool m-collapsible");
   const toggle = el("div", "tool-toggle");
@@ -2735,11 +2796,10 @@ function structCard(verb, name, body, preview) {
   toggle.setAttribute("role", "button");
   toggle.setAttribute("aria-expanded", "false");
   toggle.tabIndex = 0;
-  toggle.append(el("span", "tool-glyph", toolGlyph(verb)));
+  toggle.append(icon("chevR", "tool-exp"));
   toggle.append(el("span", "tool-verb", verb));
-  toggle.append(el("span", "tool-name", name || ""));
-  toggle.append(el("span", "tool-preview", preview || ""));
-  toggle.append(el("span", "tool-chev", "⌄"));
+  toggle.append(el("span", "tool-cmd", name || preview || ""));
+  toggle.append(icon("chevD", "tool-chev"));
   const content = el("pre", "tool-body", body || "");
   content.dataset.cardBody = "true";
   content.hidden = true;
@@ -3137,6 +3197,8 @@ function renderDriveBar(streamingState) {
   // Send with no way to cancel the running turn.
   lastStreamingState = streamingState;
   if (currentSession) setDetailSubtitle(currentSession);
+  // Lets the stylesheet animate only the live turn's newest "Thinking…" pips.
+  $("messages").classList.toggle("is-streaming", streamingState !== "idle");
   const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
   const action = composerAction(streamingState, hasText);
   $("send").classList.toggle("hidden", action !== "send");
