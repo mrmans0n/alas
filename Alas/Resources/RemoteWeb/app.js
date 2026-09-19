@@ -685,6 +685,21 @@ setInterval(() => {
   });
 }, REPO_LIST_RELATIVE_TIME_REFRESH_MS);
 
+// `sessionList` is otherwise a pure pull snapshot — the gateway only sends
+// one on connect or as a side effect of a request THIS connection made
+// (listSessions, createSession, renameSession); it never pushes one when a
+// session's streaming state changes elsewhere (another tab, another device,
+// or a turn this same client started and then navigated away from). Without
+// this, the Running filter, the per-worktree status dot, and the run-state
+// pips would freeze at whatever they were when the list was last fetched.
+// Re-requesting on an interval — like the relative-time refresh above —
+// keeps them live without needing a server-side push mechanism.
+const SESSION_LIST_POLL_MS = 15 * 1000;
+setInterval(() => {
+  if ($("sessions").classList.contains("hidden")) return;
+  send({ type: "listSessions" });
+}, SESSION_LIST_POLL_MS);
+
 function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
