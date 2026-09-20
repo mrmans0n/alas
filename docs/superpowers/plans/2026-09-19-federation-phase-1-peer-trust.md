@@ -1982,7 +1982,16 @@ final class RemotePeerManager {
          pairer: RemotePeerPairer = .live,
          localIdentity: @escaping @MainActor () -> LocalIdentity,
          makeConnection: @escaping MakeConnection = { peer, onEvent in
-             RemotePeerConnection(origins: peer.origins, lastOrigin: peer.lastOrigin, token: peer.token, onEvent: onEvent)
+             // `expectedServerId` makes the link's /health probe prove it is
+             // talking to THIS peer before reporting the token revoked. Without
+             // it, any server answering 200 at a reused address drives a
+             // terminal `.unauthorized`.
+             RemotePeerConnection(
+                 origins: peer.origins,
+                 lastOrigin: peer.lastOrigin,
+                 token: peer.token,
+                 expectedServerId: peer.serverId,
+                 onEvent: onEvent)
          },
          now: @escaping () -> Date = { Date() }) {
         self.store = store
