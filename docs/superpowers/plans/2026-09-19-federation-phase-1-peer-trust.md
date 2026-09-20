@@ -1026,6 +1026,10 @@ In `RemoteHTTPResponder.swift`, add after `var originPolicy: RemoteOriginPolicy 
     var acceptsPeers: @MainActor () -> Bool = { false }
     /// Fired after a peer redeemed a code here, so the app can pair back.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)? = nil
+    /// The identity this Mac advertises. Shared with the `hello` frame so a
+    /// pairing reply and the socket that follows it can never disagree.
+    /// Nil means "no identity configured" and omits both keys from the reply.
+    var identity: (@MainActor () -> RemoteServerIdentity)?
 ```
 
 Replace `pairResponse` (lines 87-97):
@@ -1061,8 +1065,15 @@ Replace `pairResponse` (lines 87-97):
             guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued
         }
-        let snapshot = diagnostics()
-        let reply = PairReply(token: token, serverId: snapshot.serverId, name: snapshot.name)
+        // Identity comes from the same closure that builds `hello`, so a
+        // pairing reply and the socket that follows it cannot disagree. Nil
+        // (an unset fixture) omits both keys, leaving the body exactly
+        // `{"token":"…"}` for the browser path.
+        let id = identity?()
+        let reply = PairReply(
+            token: token,
+            serverId: id?.serverId.isEmpty == false ? id?.serverId : nil,
+            name: id.map(\.name))
         let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
         return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }
@@ -1088,6 +1099,7 @@ In `accept(_:)` replace the `let responder = RemoteHTTPResponder(...)` (lines 18
             originPolicy: originPolicy
         )
         configured.acceptsPeers = { identity().federationEnabled }
+        configured.identity = identity
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
         let responder = configured   // immutable copy so the escaping closure below captures a value
 ```
