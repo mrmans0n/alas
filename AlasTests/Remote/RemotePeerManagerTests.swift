@@ -10,14 +10,25 @@ struct RemotePeerManagerTests {
         var connectCalls = 0
         var disconnectCalls = 0
         let emit: @MainActor (RemotePeerConnection.Event) -> Void
+        /// Set by a test to simulate the link resolving the instant
+        /// `connect()` runs, so a reciprocal-confirmation wait in `addPeer`
+        /// resolves on its first check instead of idling out the timeout.
+        var onConnect: (@MainActor () -> Void)?
         init(emit: @escaping @MainActor (RemotePeerConnection.Event) -> Void) { self.emit = emit }
-        func connect() { connectCalls += 1 }
+        func connect() { connectCalls += 1
+        onConnect?() }
         func disconnect() { disconnectCalls += 1 }
         func send(_ message: RemoteClientMessage) {}
     }
 
     final class Links {
         var byPeerId: [String: FakeLink] = [:]
+        /// If set, every new `FakeLink` synchronously reports this state the
+        /// instant `connect()` is called — the FIRST connect happens inside
+        /// `upsert`, before a test could otherwise reach the link to arm it,
+        /// so this lets a test drive `addPeer`'s reciprocal-confirmation wait
+        /// deterministically, with no real delay.
+        var resolveNewLinksTo: RemotePeerConnection.State?
     }
 
     final class Requests {
@@ -39,13 +50,23 @@ struct RemotePeerManagerTests {
     private func makeManager(store: InMemoryPeerStore = InMemoryPeerStore(),
                              pairing: RemotePairingService = RemotePairingService(store: InMemoryDeviceStore()),
                              pairer: RemotePeerPairer, links: Links,
-                             identity: RemotePeerManager.LocalIdentity? = nil) -> RemotePeerManager {
+                             identity: RemotePeerManager.LocalIdentity? = nil,
+                             // Short but non-zero real time: long enough that a
+                             // sleeping poll loop would visibly slow the suite
+                             // down if a link's resolution were ever missed,
+                             // short enough that the "no answer yet" timeout
+                             // path in every OTHER test costs only ~20ms.
+                             reciprocalConfirmationTimeout: TimeInterval = 0.05) -> RemotePeerManager {
         let identity = identity ?? self.identity
         return RemotePeerManager(
             store: store, pairing: pairing, pairer: pairer,
+            reciprocalConfirmationTimeout: reciprocalConfirmationTimeout,
             localIdentity: { identity },
             makeConnection: { peer, onEvent in
                 let link = FakeLink(emit: onEvent)
+                if let resolved = links.resolveNewLinksTo {
+                    link.onConnect = { onEvent(.stateChanged(resolved)) }
+                }
                 links.byPeerId[peer.id] = link
                 return link
             },
@@ -93,6 +114,59 @@ struct RemotePeerManagerTests {
         let counterCode = try #require(ad["counterCode"] as? String)
         // The counter-code is a real code on this Mac: A can redeem it.
         #expect((try? pairing.redeem(code: counterCode, deviceName: "Mac A")) != nil)
+    }
+
+    // The core of the Codex fix: A's own /pair reply succeeding only proves
+    // OUR call to A worked, not that A's reciprocal pair-back to US did. If
+    // A cannot reach us, A revokes the device it just minted, and OUR link
+    // (using that now-dead token) resolves to one of the three failure
+    // states below. `addPeer` must wait for that and report it, rather than
+    // return success just because the first leg answered.
+    @Test func addPeerReportsFailureAndForgetsThePeerWhenTheReciprocalLinkIsRefused() async {
+        let requests = Requests()
+        let store = InMemoryPeerStore()
+        let links = Links()
+        links.resolveNewLinksTo = .unauthorized
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: links)
+        manager.connectAll()
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        // Forgotten, not left half-paired: no dangling record with a token
+        // that A has already revoked.
+        #expect(manager.peers.isEmpty)
+        #expect(store.saved.isEmpty)
+        #expect(links.byPeerId.values.first?.disconnectCalls == 1)
+    }
+
+    // A slow-but-eventually-working exchange must not be punished for
+    // outlasting the wait: "no answer yet" still means success, exactly as
+    // before this check existed.
+    @Test func addPeerReportsSuccessWhenTheLinkIsStillConnectingOnceTheWaitElapses() async {
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  links: Links())
+        manager.connectAll()
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        #expect(manager.peers.count == 1)
+    }
+
+    // The happy path resolves fast rather than by exhausting the wait
+    // window — proven by timing, since the return value alone (`nil`) is
+    // identical whether the link truly came online or the wait just timed
+    // out with nothing better to report.
+    @Test func addPeerResolvesQuicklyWhenTheReciprocalLinkComesOnline() async {
+        let links = Links()
+        links.resolveNewLinksTo = .online
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  links: links)
+        manager.connectAll()
+        let start = Date()
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        // The manager's own timeout for this suite is 0.05s; resolving in
+        // under half of it shows the wait didn't just idle out.
+        #expect(Date().timeIntervalSince(start) < 0.025)
+        #expect(manager.peers.count == 1)
     }
 
     @Test func addPeerSurfacesPairerOutcomes() async {

@@ -333,6 +333,8 @@ struct RemoteServerPane: View {
                 peerError = "Couldn't reach that Mac at any of its addresses."
             case .noLocalAddress?:
                 peerError = "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
+            case .reciprocalPairingFailed?:
+                peerError = "Paired, but that Mac couldn't pair back to confirm it. Try again — it may need to reach this Mac at one of the addresses above."
             }
         }
     }

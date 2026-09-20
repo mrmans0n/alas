@@ -29,6 +29,11 @@ final class RemotePeerManager {
         /// This Mac advertises no address a peer could dial back on, so the
         /// exchange cannot complete even if the far side is reachable.
         case noLocalAddress
+        /// The far side's reciprocal pair-back was confirmed to have failed —
+        /// our own link came up `.unauthorized`, `.identityMismatch`, or
+        /// `.incompatible` before the wait in `addPeer` gave up. The
+        /// half-completed peer has already been forgotten.
+        case reciprocalPairingFailed
     }
 
     typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -48,12 +53,19 @@ final class RemotePeerManager {
     private let localIdentity: @MainActor () -> LocalIdentity
     private let makeConnection: MakeConnection
     private let now: () -> Date
+    /// How long `addPeer` waits for its own link to confirm the reciprocal
+    /// exchange before treating "no answer yet" as success. Real wall-clock
+    /// time — never `now()`, which tests freeze — so a fake link that
+    /// resolves synchronously never actually waits, and one that never
+    /// resolves times out for real rather than spinning forever.
+    private let reciprocalConfirmationTimeout: TimeInterval
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
     init(store: RemotePeerStore,
          pairing: RemotePairingService,
          pairer: RemotePeerPairer = .live,
+         reciprocalConfirmationTimeout: TimeInterval = 5,
          localIdentity: @escaping @MainActor () -> LocalIdentity,
          makeConnection: @escaping MakeConnection = { peer, onEvent in
              // `expectedServerId` binds the link to the identity this record
@@ -72,6 +84,7 @@ final class RemotePeerManager {
         self.store = store
         self.pairing = pairing
         self.pairer = pairer
+        self.reciprocalConfirmationTimeout = reciprocalConfirmationTimeout
         self.localIdentity = localIdentity
         self.makeConnection = makeConnection
         self.now = now
@@ -105,7 +118,27 @@ final class RemotePeerManager {
             guard let serverId, !serverId.isEmpty else { return .unreachable }
             upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
-            return nil
+            // `upsert` redeemed A's code and issued OUR own link a token, but
+            // that only proves OUR call to A succeeded — not that A's
+            // reciprocal pair-back to US will. If A cannot reach us, it
+            // revokes the device it just minted, and our own link (using
+            // that now-dead token) will shortly reach one of these three
+            // states. Waiting briefly for that here means reporting failure
+            // instead of a "success" the user would watch flip to revoked
+            // moments later, for the wrong reason.
+            guard isActive, let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
+            switch await waitForConfirmationOrFailure(peerId: peer.id) {
+            case .unauthorized, .identityMismatch, .incompatible:
+                forget(peerId: peer.id)
+                return .reciprocalPairingFailed
+            default:
+                // `.online` (confirmed), or the window elapsed with the link
+                // still `.connecting`/`.offline`: a legitimately slow-but-
+                // working exchange must not be punished for outlasting this
+                // wait, so treat "no answer yet" as success, same as before
+                // this check existed.
+                return nil
+            }
         case .expiredCode: return .expiredCode
         case .originRejected: return .originRejected
         case .unreachable: return .unreachable
@@ -163,6 +196,25 @@ final class RemotePeerManager {
             onRevokeDevice?(deviceId)
         }
         store.save(peers)
+    }
+
+    /// Polls `states[peerId]` on a real clock until it reaches a resolved
+    /// state (`.online` or a definite failure) or `reciprocalConfirmationTimeout`
+    /// elapses, whichever comes first. Checks before sleeping, so a link
+    /// that resolves synchronously (a test's fake, or a same-machine
+    /// loopback connection) never actually waits.
+    private func waitForConfirmationOrFailure(peerId: String) async -> RemotePeerConnection.State? {
+        let deadline = Date().addingTimeInterval(reciprocalConfirmationTimeout)
+        while true {
+            switch states[peerId] {
+            case .online, .unauthorized, .identityMismatch, .incompatible:
+                return states[peerId]
+            default:
+                break
+            }
+            if Date() >= deadline { return states[peerId] }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     // MARK: - Links
