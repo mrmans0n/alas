@@ -66,8 +66,13 @@ struct RemoteHTTPResponder {
             // from an unrelated Alas instance that happens to answer at the
             // same address (a DHCP-reused LAN IP, or another server sharing
             // this Mac's own loopback address) before trusting a 2xx as
-            // proof the paired Mac is still authorized.
-            return Self.json(["ok": true, "serverId": diagnostics().serverId], extraHeaders: cors)
+            // proof the paired Mac is still authorized. federationEnabled
+            // lets a peer connection tell "the flag is temporarily off over
+            // there" apart from "our token was actually revoked" — the
+            // upgrade is refused identically in both cases, but only the
+            // second one should ever stop the link from retrying.
+            return Self.json(["ok": true, "serverId": diagnostics().serverId,
+                              "federationEnabled": identity?().federationEnabled], extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
             let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)

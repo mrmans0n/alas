@@ -139,17 +139,24 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 first = message
             case .failed:
                 if Task.isCancelled { return }
-                let alive = await healthOK(origin)
+                let peerFederationEnabled = await healthCheck(origin)
                 // A disconnect() during the probe already moved us to .idle;
                 // reporting .unauthorized on top of it would resurrect a link
                 // the caller just tore down.
                 if Task.isCancelled { return }
-                if alive {
-                    // The Mac answers HTTP but refused the upgrade: our token is gone.
+                if peerFederationEnabled == true {
+                    // The Mac answers HTTP, confirms its identity, and
+                    // federation is CURRENTLY on there — so a refused upgrade
+                    // really does mean our token is gone.
                     setState(.unauthorized)
                     runner = nil
                     return
                 }
+                // Either unreachable/unconfirmed (nil), or the Mac is real and
+                // reachable but has federation off right now (false) — the
+                // owner there can flip it back on at any time, so this must
+                // stay retryable rather than becoming the same terminal state
+                // as an actual revocation.
                 continue
             case .noUsableFrame:
                 // The upgrade itself succeeded, so the token is fine — the
@@ -283,22 +290,30 @@ final class RemotePeerConnection: RemotePeerConnecting {
         }
     }
 
-    /// Whether `origin` answers as the paired Mac. A 2xx alone only proves
-    /// that *something* serves HTTP at this address, which is why `/health`
+    /// Whether `origin` answers as the paired Mac, and if so, whether
+    /// federation is CURRENTLY on there. A 2xx alone only proves that
+    /// *something* serves HTTP at this address, which is why `/health`
     /// reports a `serverId`: when this link knows which one to expect, an
     /// unrelated Alas — or any web server — on a reused address must not be
     /// read as "the paired Mac refused us", since that state is terminal.
-    private func healthOK(_ origin: String) async -> Bool {
-        struct Health: Decodable { let serverId: String? }
+    /// `federationEnabled` then separates a real revocation from the far
+    /// side merely having the experiment flag off right now, which is not:
+    /// a missing key (an older Alas build) defaults to `true` so an old
+    /// server is never mistaken for one that toggled the flag.
+    /// Returns `nil` when the probe fails or answers as someone else.
+    private func healthCheck(_ origin: String) async -> Bool? {
+        struct Health: Decodable { let serverId: String?
+        let federationEnabled: Bool? }
         guard let normalized = RemotePairingLink.normalizeOrigin(origin),
-              let url = URL(string: normalized + "/health") else { return false }
+              let url = URL(string: normalized + "/health") else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = config.handshakeTimeout
         guard let (data, response) = try? await session.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         guard let expectedServerId else { return true }
-        guard let health = try? JSONDecoder().decode(Health.self, from: data) else { return false }
-        return health.serverId == expectedServerId
+        guard let health = try? JSONDecoder().decode(Health.self, from: data),
+              health.serverId == expectedServerId else { return nil }
+        return health.federationEnabled ?? true
     }
 
     private func scheduleReconnect(reportedState: State = .offline) {
