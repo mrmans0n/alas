@@ -459,6 +459,24 @@ final class AppState {
     /// file isn't touched unless the remote feature is actually exercised.
     @ObservationIgnored
     private(set) lazy var remotePairing = RemotePairingService(store: FileDeviceStore())
+    /// Outbound peers (other Macs running Alas). Lazy like `remotePairing`.
+    @ObservationIgnored
+    private(set) lazy var remotePeers: RemotePeerManager = {
+        let manager = RemotePeerManager(
+            store: FilePeerStore(),
+            pairing: remotePairing,
+            localIdentity: { [weak self] in
+                RemotePeerManager.LocalIdentity(
+                    serverId: self?.config.remote.serverId ?? "",
+                    name: self?.remoteDisplayName ?? "Alas",
+                    // Loopback is meaningless to another Mac; everything else is in rank order.
+                    origins: self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url) ?? [])
+            })
+        manager.onRevokeDevice = { [weak self] deviceId in
+            self?.remoteServer?.disconnectDevice(deviceId)
+        }
+        return manager
+    }()
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -573,6 +591,7 @@ final class AppState {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
                 refreshRemoteAccessState()
+                syncRemotePeers()
                 return
             }
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
@@ -606,6 +625,9 @@ final class AppState {
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
             }
+            server.onPeerPaired = { [weak self] request in
+                Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
+            }
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
@@ -613,6 +635,7 @@ final class AppState {
                 try server.start(port: boundPort)
                 remoteServer = server
                 lastRemoteError = nil
+                syncRemotePeers()
             } catch {
                 remoteServer = nil
                 remotePort = nil
@@ -621,12 +644,23 @@ final class AppState {
                 lastRemoteError = error.localizedDescription
             }
         } else {
+            remotePeers.disconnectAll()
             remoteServer?.stop()
             remoteServer = nil
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
+        }
+    }
+
+    /// Keeps peer links alive only while the server is up and the experiment
+    /// is on; peers stay stored either way.
+    func syncRemotePeers() {
+        if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
+            remotePeers.connectAll()
+        } else {
+            remotePeers.disconnectAll()
         }
     }
 

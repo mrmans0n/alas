@@ -62,13 +62,14 @@ struct AdvancedPane: View {
                     }
                     SettingsRow(
                         name: "Remote peers",
-                        desc: "Lets this Mac pair with other Macs running Alas so each can see the other's sessions."
+                        desc: "Lets this Mac pair with other Macs running Alas."
                     ) {
                         AlasToggle(on: Binding(
                             get: { state.config.remote.federationEnabled },
                             set: { enabled in
                                 state.config.remote.federationEnabled = enabled
                                 state.saveConfig()
+                                state.syncRemotePeers()
                                 state.remoteServer?.broadcastHello()
                             }
                         ))
