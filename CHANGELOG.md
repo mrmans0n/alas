@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-20
+
+### ✨ Features
+
+- Show ghost-text argument hints for slash commands in the ACP composer (#1351).
+- Animate completed ACP tool calls as they fold into their bundle header (#1344).
+
+### 🐛 Fixes
+
+- Keep transcript scrolling responsive over horizontally scrollable blocks and align collapsed tool-call cards to their bundle header (#1348, #1349).
+- Fix run report header alignment and colors (#1347).
+- Prevent the worktree branch-name caret from racing the first keystroke and give branch names more room before truncation (#1345, #1350).
+- Restore hover and press feedback for the sparkle and run-script toolbar menus (#1342).
+
+### 🎨 Changed
+
+- Replace generic ellipsis icons with brain and hammer icons in ACP transcript rows (#1343).
+
 ## [0.19.0] - 2026-09-20
 
 ### ✨ Features
