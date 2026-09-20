@@ -72,6 +72,35 @@ struct RemotePeerPairerTests {
         #expect(outcome == .originRejected)
     }
 
+    // Same class of bug as the 401 case: a 403 at one origin can be an
+    // unrelated Alas instance with federation off, correctly refusing us,
+    // while the real target at a later origin has it on and accepts the code.
+    @Test func a403AtOneOriginDoesNotStopTheRemainingOnesFromBeingTried() async {
+        let recorder = Recorder()
+        let p = pairer(["10.0.0.1:8765": (403, "{}"),
+                        "10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(recorder.requests.count == 2)
+    }
+
+    @Test func originRejectedIsReportedOnlyAfterEveryOriginRejectsIt() async {
+        let recorder = Recorder()
+        let p = pairer(["10.0.0.1:8765": (403, "{}"), "10.0.0.9:8765": (403, "{}")], recorder: recorder)
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .originRejected)
+        #expect(recorder.requests.count == 2)
+    }
+
+    // Neither code is a fully reliable global answer, but a dead code is the
+    // more fundamental problem to report: fixing a setting on some OTHER Mac
+    // would not make an already-expired code work.
+    @Test func expiredCodeTakesPriorityOverOriginRejectedWhenBothOccur() async {
+        let p = pairer(["10.0.0.1:8765": (403, "{}"), "10.0.0.9:8765": (401, "{}")], recorder: Recorder())
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .expiredCode)
+    }
+
     @Test func nothingAnsweringIsUnreachable() async {
         let p = pairer([:], recorder: Recorder())
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.2:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)

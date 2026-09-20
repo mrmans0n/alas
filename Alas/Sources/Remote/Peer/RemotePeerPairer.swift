@@ -1,8 +1,10 @@
 import Foundation
 
 /// Redeems a pairing code on another Mac, trying each origin in order the way
-/// `hub-links.js` does: a network failure moves on, a 401 means the code is
-/// dead everywhere, a 403 means that Mac refuses peers or this address.
+/// `hub-links.js` does: a network failure moves on, and so does a 401 (code
+/// unrecognized here) or 403 (peers refused here) — either can be answered by
+/// a stale address that has been reassigned to an unrelated Alas instance, so
+/// neither is trusted as a final answer until every origin has been tried.
 struct RemotePeerPairer {
     enum Outcome: Equatable, Sendable {
         case paired(token: String, serverId: String?, name: String?, origin: String)
@@ -50,13 +52,17 @@ struct RemotePeerPairer {
             let name: String?
         }
         let body = try? JSONEncoder().encode(Body(code: code, deviceName: deviceName, peer: advertisement))
-        // A 401 only proves the code is dead AT THAT origin: a stale advertised
-        // address can have been reassigned to an unrelated Alas instance, which
-        // correctly rejects a code it has never seen while the real target,
-        // reachable at a later origin, may still redeem it. So a 401 is
-        // remembered rather than treated as an immediate, global answer, and
-        // only reported once every origin has had a chance to answer.
+        // A 401 or 403 only proves what THAT origin thinks: a stale advertised
+        // address can have been reassigned to an unrelated Alas instance,
+        // which correctly rejects a code it has never seen (401) or simply
+        // has federation off (403), while the real target, reachable at a
+        // later origin, may still redeem it. So neither is treated as an
+        // immediate, global answer; both are remembered and only reported
+        // once every origin has had a chance to answer. A 401 wins if both
+        // occurred: a dead code is the more fundamental blocker to describe,
+        // since fixing a setting on some other Mac would not help either way.
         var sawExpiredCode = false
+        var sawOriginRejected = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -79,12 +85,15 @@ struct RemotePeerPairer {
                 sawExpiredCode = true
                 continue
             case 403:
-                return .originRejected
+                sawOriginRejected = true
+                continue
             default:
                 continue
             }
         }
-        return sawExpiredCode ? .expiredCode : .unreachable
+        if sawExpiredCode { return .expiredCode }
+        if sawOriginRejected { return .originRejected }
+        return .unreachable
     }
 }
 
