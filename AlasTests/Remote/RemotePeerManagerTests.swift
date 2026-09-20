@@ -247,6 +247,28 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.localDeviceId == "dev-a")
     }
 
+    // Codex: an unmatched confirmation buffered by an EARLIER, unrelated
+    // attempt (one whose own addPeer never reached upsert) must not sit
+    // around forever and then wrongly satisfy a LATER, different attempt's
+    // wait for the same peer.
+    @Test func aStaleBufferedConfirmationFromAnEarlierAttemptDoesNotSatisfyALaterOne() async {
+        let manager = makeManager(
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+            links: Links(), reciprocalConfirmationTimeout: 0.02)
+        // Simulates A's reciprocal call landing for a PRIOR attempt that
+        // never got as far as creating a record (e.g. our own outbound leg
+        // to A failed after this had already arrived), then going stale
+        // before any add for "srv-a" actually happens.
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil, localDeviceId: "stale-dev"))
+        try? await Task.sleep(nanoseconds: 40_000_000)   // outlast the 0.02s window
+        // Nothing confirms THIS attempt — the stale buffered entry must not
+        // stand in for it.
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        #expect(manager.peers.isEmpty)
+    }
+
     @Test func forgetRevokesTheInboundDeviceAndDisconnects() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")

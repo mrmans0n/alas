@@ -68,19 +68,23 @@ final class RemotePeerManager {
     /// hang the UI far longer than the worst case that can still succeed.
     private let reciprocalConfirmationTimeout: TimeInterval
     /// Reciprocal confirmations that arrived before the local record they
-    /// belong to existed, keyed by `serverId`. A's reciprocal call competes
-    /// with A's own reply to our original request — A schedules it right
-    /// after redeeming our code, before A's HTTP response has even finished
-    /// transmitting — so it can land on our `/pair` endpoint before our own
-    /// `addPeer` has returned from the network call that will create this
-    /// record. Without buffering, `handleInboundPeer`'s lookup finds nothing
-    /// and silently drops the only confirmation this attempt will ever get.
+    /// belong to existed, keyed by `serverId`, each with the real-clock
+    /// moment it arrived. A's reciprocal call competes with A's own reply to
+    /// our original request — A schedules it right after redeeming our
+    /// code, before A's HTTP response has even finished transmitting — so it
+    /// can land on our `/pair` endpoint before our own `addPeer` has
+    /// returned from the network call that will create this record. Without
+    /// buffering, `handleInboundPeer`'s lookup finds nothing and silently
+    /// drops the only confirmation this attempt will ever get.
     /// `upsert` consumes an entry the moment it creates or updates the
-    /// matching record. An entry that is never consumed (no matching add
-    /// ever happens) is bounded by the same 120s single-use expiry and rate
-    /// limiting that already governs pairing codes, since reaching this
-    /// buffer at all requires having redeemed one.
-    @ObservationIgnored private var pendingReciprocalConfirmations: [String: String] = [:]
+    /// matching record — but only if it is still within
+    /// `reciprocalConfirmationTimeout` of having arrived. Without that
+    /// bound, an entry left over from an EARLIER, unrelated attempt whose
+    /// own `addPeer` never reached `upsert` (our own outbound leg failed,
+    /// say) would sit here indefinitely and then wrongly satisfy a LATER,
+    /// different attempt for the same peer, reporting success for an
+    /// exchange that never actually confirmed.
+    @ObservationIgnored private var pendingReciprocalConfirmations: [String: (localDeviceId: String, receivedAt: Date)] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -192,7 +196,7 @@ final class RemotePeerManager {
             // A's reciprocal call arrived first. Buffer it so `upsert` can
             // apply it the moment the record exists, rather than losing the
             // only confirmation this attempt will get.
-            pendingReciprocalConfirmations[request.peerServerId] = request.localDeviceId
+            pendingReciprocalConfirmations[request.peerServerId] = (localDeviceId: request.localDeviceId, receivedAt: Date())
         }
     }
 
@@ -295,13 +299,22 @@ final class RemotePeerManager {
                         token: String, localDeviceId: String?) {
         // A confirmation buffered by `handleInboundPeer` (A's reciprocal call
         // arrived before this record existed) proves THIS attempt already
-        // completed, and always wins. Otherwise, `localDeviceId` is resolved
-        // to exactly what the caller passed — including `nil` from
-        // `addPeer`'s own call site, which must actually CLEAR a re-paired
-        // record's old value: preserving it would let a stale confirmation
-        // from a PREVIOUS attempt satisfy this one's wait trivially, before
-        // this attempt's own reciprocal exchange has had any chance to run.
-        let resolvedLocalDeviceId = pendingReciprocalConfirmations.removeValue(forKey: serverId) ?? localDeviceId
+        // completed — but only if it is fresh enough to plausibly BE this
+        // attempt: an entry left over from an earlier, unrelated attempt
+        // that never reached `upsert` must not silently pass for a signal
+        // this attempt never actually received. Removed unconditionally
+        // either way, so a stale entry cannot linger to fool a later one.
+        var resolvedLocalDeviceId = localDeviceId
+        if let buffered = pendingReciprocalConfirmations.removeValue(forKey: serverId),
+           Date().timeIntervalSince(buffered.receivedAt) <= reciprocalConfirmationTimeout {
+            resolvedLocalDeviceId = buffered.localDeviceId
+        }
+        // Otherwise, `localDeviceId` is resolved to exactly what the caller
+        // passed — including `nil` from `addPeer`'s own call site, which
+        // must actually CLEAR a re-paired record's old value: preserving it
+        // would let a stale confirmation from a PREVIOUS attempt satisfy
+        // this one's wait trivially, before this attempt's own reciprocal
+        // exchange has had any chance to run.
         let peer: RemotePeer
         if let index = peers.firstIndex(where: { $0.serverId == serverId }) {
             var merged = peers[index].origins
