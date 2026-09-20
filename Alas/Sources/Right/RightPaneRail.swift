@@ -11,6 +11,7 @@ struct RightPaneRail: View {
     let changesCount: Int
     var activeAgentCount: Int = 0
     var activeRunCount: Int = 0
+    var activeScheduleCount: Int = 0
     let onAction: (RightPaneRailAction) -> Void
 
     @Environment(\.theme) private var theme
@@ -31,7 +32,8 @@ struct RightPaneRail: View {
                         for: tab,
                         changesCount: changesCount,
                         activeAgentCount: activeAgentCount,
-                        activeRunCount: activeRunCount
+                        activeRunCount: activeRunCount,
+                        activeScheduleCount: activeScheduleCount
                     ),
                     collapsed: collapsed,
                     onTap: {
@@ -57,6 +59,7 @@ struct RightPaneRail: View {
         case .files:   return "Files"
         case .agent:   return "Agent"
         case .run:     return "Run"
+        case .schedules: return "Schedules"
         }
     }
 
@@ -66,6 +69,7 @@ struct RightPaneRail: View {
         case .files:   return "folder"
         case .agent:   return "cpu"
         case .run:     return "play"
+        case .schedules: return "clock"
         }
     }
 }

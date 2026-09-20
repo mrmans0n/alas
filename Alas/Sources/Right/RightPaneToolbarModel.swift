@@ -16,9 +16,18 @@ enum RightPaneToolbarModel {
         branch: String,
         activeAgentCount: Int,
         waitingAgentCount: Int,
-        runningScriptNames: [String]
+        runningScriptNames: [String],
+        scheduleCount: Int = 0,
+        schedulesPaused: Bool = false
     ) -> String {
         switch tab {
+        case .schedules:
+            if schedulesPaused { return "Paused" }
+            switch scheduleCount {
+            case 0:  return "No schedules"
+            case 1:  return "1 schedule"
+            default: return "\(scheduleCount) schedules"
+            }
         case .changes:
             return branch.isEmpty ? "Detached HEAD" : branch
         case .files:
@@ -42,7 +51,7 @@ enum RightPaneToolbarModel {
             return (totalAdd == 0 && totalDel == 0) ? .none : .diffTotals(add: totalAdd, del: totalDel)
         case .files:
             return .search
-        case .agent, .run:
+        case .agent, .run, .schedules:
             return .none
         }
     }

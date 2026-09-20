@@ -174,24 +174,30 @@ else about the launch path changes.
 
 ## UI
 
-- `SettingsSection.schedules` ("Schedules", icon `clock`) → `SchedulesPane`.
-  - Header text: "Schedules only fire while Alas is running. Nothing runs
-    while the app is quit."
-  - Gap banner when `lastGap` is set: "Alas was asleep / not running from X
-    to Y."
-  - Global pause toggle. Per-project pause toggles for projects that own
-    schedules.
-  - One row per schedule: name, target label, host label ("This Mac" or the
-    SSH host), trigger summary, last outcome + relative time, next fire
-    time, enable toggle, Run Now, Edit, Delete (confirmation).
-  - "New Schedule" opens `RunScheduleEditorView` as a sheet.
-- `RunScheduleEditorView`: name, project picker, target segment (main
-  worktree / specific worktree / all projects), script picker from the target
-  worktree's discovered scripts (async; remote goes through SSH discovery),
-  trigger segment with interval (value + unit) or time (hour, minute,
-  weekday checkboxes), missed-run policy, composition toggle with branch
-  template and agent picker. Save is disabled until valid.
-- Projects menu gains "Schedules…" opening that settings section.
+Schedules get their own right-rail tab (`RightPaneTab.schedules`, icon
+`clock`, ⌘⌃5) rather than a Settings pane or a Run-tab subsection: they carry
+operational state (last outcome, next fire, Run Now), and the Run tab is
+already busy.
+
+- Scoping (`RunSchedulePresentation.visibleSchedules`): a non-main worktree
+  shows schedules aimed at it; a project's main worktree shows every schedule
+  for the project, including "all projects" ones and ones aimed at worktrees
+  that have since been deleted, so nothing goes invisible.
+- `SchedulesTabView`: a section band with the count, a pause menu (pause all
+  / pause this project) and a "+" button; the "only while Alas is running"
+  notice; the sleep / not-running gap notice when `lastGap` is set; then one
+  card per schedule (name, status dot, Run Now, overflow menu with Enabled /
+  Edit / Delete, trigger summary, action summary, target and host, last
+  outcome with relative time, next fire, missed-occurrence line).
+- The rail badge shows a live dot while a visible schedule is running; the
+  toolbar leading text is the schedule count, or "Paused".
+- `RunScheduleEditorView` (sheet): name, target segment (worktree / main
+  worktree / all projects) with project and worktree pickers, script picker
+  discovered from the target worktree (async; remote through SSH discovery),
+  trigger segment with interval (value + unit) or time (hour, minute, weekday
+  checkboxes), missed-run policy, composition toggle with branch template
+  (live preview) and agent picker. `RunScheduleDraft` holds the pure
+  validation and draft → schedule mapping.
 - `RunSchedulePresentation` holds the pure label formatting so the tests can
   cover it without SwiftUI.
 
@@ -225,7 +231,9 @@ Swift Testing suites:
   already-running are skipped, composition creates a worktree in a temp git
   repo, runs the script there and launches the agent terminal attributed to
   the new worktree, agent-unavailable leaves `launchFailed`.
-- `SettingsSectionTests`: the new section sorts with the others.
-- `RunSchedulePresentationTests`: labels for targets, triggers, outcomes.
+- `RightPaneTabTests`, `RightPaneTabShortcutTests`, `ShortcutActionTests`:
+  the fifth rail tab and its ⌘⌃5 binding.
+- `RunSchedulePresentationTests`: labels for targets, triggers, outcomes,
+  per-worktree visibility scoping, and `RunScheduleDraft` validation.
 
 Local checks: the suites above plus a `-quiet build`.

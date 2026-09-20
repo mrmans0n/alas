@@ -979,7 +979,7 @@ private extension AppConfig {
     mutating func unbindNewActionDefaultsClaimedByOverrides() {
         let newActions: [ShortcutAction] = [
             .launchAgentInTerminal, .launchAgentInChat,
-            .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab,
+            .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab,
         ]
         for action in newActions {
             guard !shortcutOverrides.keys.contains(action.rawValue) else { continue }

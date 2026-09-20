@@ -4,10 +4,10 @@ import Observation
 import os
 
 enum RightPaneTab: String {
-    case changes, files, agent, run
+    case changes, files, agent, run, schedules
 
     static func available() -> [Self] {
-        [.changes, .files, .agent, .run]
+        [.changes, .files, .agent, .run, .schedules]
     }
 }
 

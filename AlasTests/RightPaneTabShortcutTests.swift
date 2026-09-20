@@ -58,12 +58,13 @@ struct RightPaneTabShortcutTests {
             ShortcutAction.rightPaneFilesTab.defaultBinding,
             ShortcutAction.rightPaneAgentTab.defaultBinding,
             ShortcutAction.rightPaneRunTab.defaultBinding,
+            ShortcutAction.rightPaneSchedulesTab.defaultBinding,
         ]
-        #expect(Set(bindings).count == 4)
+        #expect(Set(bindings).count == 5)
         for binding in bindings {
             #expect(binding.modifiers == [.command, .control])
         }
-        #expect(bindings.map(\.key) == ["1", "2", "3", "4"])
+        #expect(bindings.map(\.key) == ["1", "2", "3", "4", "5"])
     }
 
     /// Cmd+digit is the center tab switcher and Cmd+Option+digit selects a
@@ -74,6 +75,7 @@ struct RightPaneTabShortcutTests {
             ShortcutAction.rightPaneFilesTab.defaultBinding,
             ShortcutAction.rightPaneAgentTab.defaultBinding,
             ShortcutAction.rightPaneRunTab.defaultBinding,
+            ShortcutAction.rightPaneSchedulesTab.defaultBinding,
         ]
         for binding in tabBindings {
             #expect(!ShortcutAction.reservedBindings.contains(binding))
@@ -128,7 +130,7 @@ struct RightPaneTabShortcutTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         for action in [ShortcutAction.rightPaneChangesTab, .rightPaneFilesTab,
-                       .rightPaneAgentTab, .rightPaneRunTab] {
+                       .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab] {
             #expect(decoded.shortcutOverrides[action.rawValue] == nil)
         }
     }

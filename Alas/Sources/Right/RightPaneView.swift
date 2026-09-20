@@ -202,6 +202,8 @@ struct RightPaneView: View {
                 }
             case .run:
                 RunTabView(state: state, worktree: worktree)
+            case .schedules:
+                SchedulesTabView(state: state, worktree: worktree)
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
@@ -237,6 +239,7 @@ struct RightPaneView: View {
                 changesCount: rps.displayChanges.count,
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
+                activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
                 onAction: { action in handle(action, rps: rps) }
             )
         }
@@ -251,6 +254,9 @@ struct RightPaneView: View {
             activeAgentCount: agentRollup.active.count,
             waitingAgentCount: waitingAgentCount,
             runningScriptNames: runningScriptNames,
+            scheduleCount: visibleSchedules.count,
+            schedulesPaused: state.runScheduler.isPausedGlobally
+                || state.runScheduler.pausedProjectIDs.contains(worktree.projectId),
             showIgnored: state.config.files.showIgnored,
             onToggleShowIgnored: {
                 state.config.files.showIgnored.toggle()
@@ -306,6 +312,15 @@ struct RightPaneView: View {
             .records(worktreeID: worktree.id)
             .filter { $0.status.isActive }
             .map(\.scriptName)
+    }
+
+    private var visibleSchedules: [RunSchedule] {
+        RunSchedulePresentation.visibleSchedules(
+            state.runScheduler.schedules,
+            worktreeID: worktree.id,
+            projectID: worktree.projectId,
+            isMainWorktree: state.projectsManager.visibleMainWorktree(projectId: worktree.projectId)?.id == worktree.id
+        )
     }
 }
 
