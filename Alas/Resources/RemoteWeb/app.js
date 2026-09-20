@@ -1394,7 +1394,12 @@ function renderServerList() {
     row.append(menu);
     const activate = () => { if (server.id !== hub.activeId) { switchServer(server.id); showRepos(); } };
     row.onclick = activate;
-    row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); } };
+    // e.target === row excludes a keydown bubbled up from the menu button —
+    // without it, Enter/Space on a focused "⋯" both switched the server by
+    // mistake and, via preventDefault(), suppressed the button's own
+    // synthesized click, making the Re-pair/Forget menu unreachable by
+    // keyboard entirely.
+    row.onkeydown = (e) => { if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activate(); } };
     box.append(row);
   }
 }

@@ -1496,4 +1496,15 @@ struct RemoteWebAssetTests {
         #expect(reset.contains("lastSentText = null;"))
         #expect(reset.contains("lastSentAttachments = [];"))
     }
+
+    // Regression: a server row's keydown handler fired on
+    // any Enter/Space that bubbled up to it, including from the trailing
+    // "⋯" menu button. That both switched the server by mistake and, via
+    // preventDefault(), suppressed the button's own synthesized click —
+    // making the Re-pair/Forget menu unreachable from the keyboard.
+    @Test func serverRowKeydownIgnoresBubbledEventsFromTheMenuButton() throws {
+        let js = try asset("app.js")
+        let list = try #require(js.range(of: "function renderServerList() {").map { js[$0.lowerBound...].prefix(2000) })
+        #expect(list.contains(#"row.onkeydown = (e) => { if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activate(); } };"#))
+    }
 }
