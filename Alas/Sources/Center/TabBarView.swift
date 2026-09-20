@@ -415,7 +415,7 @@ private struct AgentSparkleMenu: View {
     let onLaunchAgent: (String) -> Void
     let onLaunchACPSession: (String) -> Void
     var body: some View {
-        Menu {
+        ToolbarMenuButton(iconName: "sparkle", help: helpText) {
             if case .some(.loading) = availability {
                 Text("Checking agents on SSH host…")
             } else if case .some(.failed(let message)) = availability {
@@ -457,13 +457,7 @@ private struct AgentSparkleMenu: View {
                     }
                 }
             }
-        } label: {
-            ToolbarMenuIconLabel(iconName: "sparkle")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(helpText)
     }
 
     private var helpText: String {
@@ -485,7 +479,7 @@ private struct RunScriptMenu: View {
     let onNew: (RunScriptScope) -> Void
     let onEdit: () -> Void
     var body: some View {
-        Menu {
+        ToolbarMenuButton(iconName: "play", help: "Run script (⌘R)") {
             // Menu content closures are evaluated when the menu opens, so
             // this is the rescan-on-open point for the toolbar entrypoint.
             let scripts = loadScripts()
@@ -518,41 +512,7 @@ private struct RunScriptMenu: View {
             Button("New Repository Script…") { onNew(.repo) }
             Button("New Global Script…") { onNew(.global) }
             Button("Edit Scripts…") { onEdit() }
-        } label: {
-            ToolbarMenuIconLabel(iconName: "play")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Run script (⌘R)")
-    }
-}
-
-/// `Menu` owns an AppKit control, so interaction modifiers on the menu itself
-/// do not reliably receive pointer state. Keep the visual surface in its
-/// SwiftUI label, alongside the hover and press tracking that drive it.
-private struct ToolbarMenuIconLabel: View {
-    let iconName: String
-    @Environment(\.theme) private var theme
-    @State private var hovering = false
-    @GestureState private var isPressed = false
-
-    var body: some View {
-        Icon(
-            name: iconName,
-            size: 13,
-            color: hovering ? theme.color("fg") : theme.color("fg-faint")
-        )
-        .toolbarControlSurface(isLit: ToolbarMenuControlPresentation.isLit(
-            hovering: hovering,
-            isPressed: isPressed
-        ))
-        .toolbarMenuControlPressFeedback(isPressed: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .updating($isPressed) { _, state, _ in state = true }
-        )
-        .onHover { hovering = $0 }
     }
 }
 

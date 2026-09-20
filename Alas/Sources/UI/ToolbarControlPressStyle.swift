@@ -117,3 +117,67 @@ extension View {
         modifier(ToolbarControlSurface(isLit: isLit, metrics: metrics))
     }
 }
+
+/// A menu-backed toolbar control that behaves like its `Button` neighbours:
+/// the same surface, the same hover fill, the same press dip.
+///
+/// The menu style is the whole point of this type. `.menuStyle(.borderlessButton)`
+/// hands the label to an AppKit `SwiftUIPopupButton`, which keeps only the
+/// glyph: the SwiftUI label never enters the view tree (it reports a zero
+/// frame), the `toolbarControlSurface` fill is dropped, the control shrinks to
+/// the glyph's intrinsic size, and the popup's tracking loop swallows
+/// mouse-down. No amount of hover or press bookkeeping in the label can show
+/// up on screen, because that label is never rendered or hit-tested.
+///
+/// `.menuStyle(.button)` keeps the label in SwiftUI, so `.onHover` fires and a
+/// `ButtonStyle` receives `isPressed` — which is why the press step here is
+/// `.toolbarControl`, the exact style the neighbouring `Button`s use, rather
+/// than a hand-rolled gesture.
+struct ToolbarMenuButton<Content: View>: View {
+    private let iconName: String
+    private let iconSize: CGFloat
+    private let metrics: ToolbarControlMetrics
+    private let restingColorToken: String
+    private let help: String
+    /// Kept as a closure: SwiftUI evaluates menu content when the menu opens,
+    /// which is the rescan-on-open point for callers that build their items
+    /// from disk.
+    private let content: () -> Content
+
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    init(
+        iconName: String,
+        iconSize: CGFloat = 13,
+        metrics: ToolbarControlMetrics = .standard,
+        restingColorToken: String = "fg-faint",
+        help: String,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.iconName = iconName
+        self.iconSize = iconSize
+        self.metrics = metrics
+        self.restingColorToken = restingColorToken
+        self.help = help
+        self.content = content
+    }
+
+    var body: some View {
+        Menu(content: content) {
+            Icon(
+                name: iconName,
+                size: iconSize,
+                color: theme.color(hovering ? "fg" : restingColorToken)
+            )
+            .toolbarControlSurface(isLit: hovering, metrics: metrics)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.toolbarControl)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
