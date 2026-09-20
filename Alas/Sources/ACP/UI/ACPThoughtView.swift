@@ -16,7 +16,7 @@ struct ACPThoughtView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 7) {
-                        Image(systemName: "ellipsis")
+                        Image(systemName: "brain")
                             .font(.system(size: 11))
                             .foregroundStyle(theme.color("fg-faint"))
                         Text(expanded ? "Hide thinking" : "Thinking…")
