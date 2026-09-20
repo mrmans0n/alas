@@ -266,6 +266,31 @@ for the native sidebar without the phone hub being on.
   peer's session is answered only through the peer's own policy evaluation,
   and the gateway cannot accept a permission the home instance would refuse.
 
+### Known gap: a peer identity is claimed, not proved
+
+`serverId` is self-reported, at pairing and on the wire. Nothing ties it to
+anything the claimant had to possess. So a holder of one live pairing code
+can redeem it while advertising an *existing* peer's `serverId`: the peer
+store keys on that identity, so the claimant's token and origin replace the
+row's, and this Mac's outbound link then dials the claimant instead of the
+peer whose name the row still carries.
+
+Two smaller consequences are already closed. A link refuses a socket whose
+`hello` reports an id other than the one its record was paired with, so an
+address that has merely been reassigned cannot re-key a record; and a peer
+redeem no longer deletes earlier device records for the same identity, so the
+impersonated peer keeps its inbound access. Forgetting the peer revokes every
+device carrying the identity, which removes the claimant's access too.
+
+Phase 1 accepts the remaining gap: the flag is off by default, no session
+data crosses a peer link, and the actor must hold a code the user
+deliberately displayed, within its 120-second window. It does not stay
+acceptable. Binding a peer record to verified key material — the peer proving
+possession of a key committed to at pairing time, with `serverId` derived
+from or pinned to it — is a precondition for the phase that aggregates peer
+sessions, because that is the phase in which a row in the peer store starts
+carrying real data rather than only a link's address.
+
 ## Testing
 
 - Protocol round-trip tests for `hello`/`helloAck` and the version-mismatch
