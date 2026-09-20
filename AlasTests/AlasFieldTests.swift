@@ -160,19 +160,35 @@ struct AlasFieldTests {
         window.contentViewController = controller
         window.makeKeyAndOrderFront(nil)
         controller.view.layoutSubtreeIfNeeded()
-        pump(0.3)
 
-        let sheet = try! #require(window.attachedSheet)
-        let field = try! #require(Self.firstTextField(in: sheet.contentView!))
-        let editor = try! #require(field.currentEditor() as? NSTextView)
+        // Poll in small increments rather than sleeping a fixed, generous
+        // window before asserting: a long fixed pump would give the buggy
+        // deferred (DispatchQueue.main.async) correction time to catch up
+        // before this test ever looks at the selection, letting a regression
+        // pass here by luck on a fast machine. Stop polling the instant the
+        // editor exists, then assert immediately — before typing anything —
+        // that the caret is already at the end, not mid-flight to it.
+        var editor: NSTextView?
+        for _ in 0..<200 {
+            if let sheet = window.attachedSheet,
+               let field = Self.firstTextField(in: sheet.contentView!),
+               let currentEditor = field.currentEditor() as? NSTextView {
+                editor = currentEditor
+                break
+            }
+            pump(0.01)
+        }
+        let unwrappedEditor = try! #require(editor)
+
+        #expect(unwrappedEditor.selectedRange() == NSRange(location: (unwrappedEditor.string as NSString).length, length: 0))
 
         for character in "feature" {
-            editor.insertText(String(character), replacementRange: editor.selectedRange())
+            unwrappedEditor.insertText(String(character), replacementRange: unwrappedEditor.selectedRange())
             pump()
         }
 
-        #expect(editor.string == "nacho/feature")
-        #expect(editor.selectedRange() == NSRange(location: (editor.string as NSString).length, length: 0))
+        #expect(unwrappedEditor.string == "nacho/feature")
+        #expect(unwrappedEditor.selectedRange() == NSRange(location: (unwrappedEditor.string as NSString).length, length: 0))
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {
