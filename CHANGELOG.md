@@ -6,9 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-20
+
 ### ✨ Features
 
-- Add an experimental "Remote hub" setting to pair the remote web client with several Macs at once, switch between them, and see which ones need attention.
+- Add an experimental remote hub to pair the web client with several Macs, switch between them, and see which ones need attention, with agent logos in the PWA (#1337, #1338).
+- Collapse completed ACP tool calls into expandable groups and present expanded bundles as a header with individual member rows (#1332, #1340).
+- Improve automatic checkpoint creation, status, and restore workflows (#1339).
+
+### 🐛 Fixes
+
+- Render Mermaid diagrams in the correct orientation (#1335).
+- Preserve the selected worktree across multiple remote sessions (#1336).
+- Collapse the draft summary rail on narrow review panes (#1333).
+
+### 🏗️ Internal
+
+- Rebalance Swift test shards to reduce CI runner contention (#1334).
 
 ## [0.18.7] - 2026-09-19
 
