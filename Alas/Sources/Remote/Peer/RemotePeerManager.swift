@@ -210,16 +210,20 @@ final class RemotePeerManager {
             }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
-        } else if let index = peers.firstIndex(where: { $0.serverId == request.peerServerId }) {
-            peers[index].localDeviceId = request.localDeviceId
-            store.save(peers)
         } else {
-            // Our own `addPeer` for this peer hasn't created the record yet —
-            // A's reciprocal call arrived first. Buffer it, keyed by the code
-            // it just redeemed, so the matching `addPeer` attempt (the one
-            // whose own counter-code this is) can claim it the moment it
-            // starts waiting, rather than losing the only confirmation that
-            // attempt will get.
+            // We are the initiator: this is A's reciprocal call redeeming
+            // OUR counter-code. Always buffer it, keyed by that code, rather
+            // than writing straight to a record even when a re-pair means
+            // one already exists: writing directly raced `addPeer`'s own
+            // `upsert`, which resets `localDeviceId` to nil the moment it
+            // runs — a confirmation landing first was silently erased the
+            // instant `upsert` executed, leaving `addPeer` to wait out the
+            // full timeout despite the exchange having actually succeeded.
+            // Matching by `serverId` alone also accepted ANY confirmation
+            // for this peer, not just the one THIS attempt's own counter-code
+            // earned. Buffering unconditionally means `waitForReciprocalRedemption`
+            // is the only place that ever writes `localDeviceId`, and it only
+            // ever claims the entry keyed to the exact attempt that is waiting.
             let now = Date()
             // Sweep anything old enough that no attempt could still
             // plausibly claim it, so an entry nobody ever consumes does not
@@ -260,24 +264,20 @@ final class RemotePeerManager {
     }
 
     /// Waits for A's reciprocal call to redeem THIS attempt's own
-    /// `counterCode` — checked two ways, since the confirmation can arrive
-    /// either before or after this record existed:
-    /// - `peers[peerId].localDeviceId` becoming non-nil: the record already
-    ///   existed when A's call landed (a re-pair), so
-    ///   `handleInboundPeer`'s "record already exists" branch wrote it
-    ///   directly.
-    /// - `pendingReciprocalConfirmations[counterCode]`: the record did not
-    ///   exist yet, so the confirmation was buffered; claimed here and
-    ///   applied to the record the moment it appears.
-    /// Real wall-clock deadline — checked before sleeping, so a confirmation
-    /// that already landed resolves with no real wait — and runs regardless
-    /// of `isActive`: this depends only on the SERVER receiving A's
-    /// reciprocal call, which has nothing to do with whether this manager's
-    /// own outbound links are currently being dialed.
+    /// `counterCode`, regardless of whether it lands before or after this
+    /// record was created: `handleInboundPeer` always buffers a no-counter-code
+    /// confirmation keyed by the code it redeemed, and this is the only place
+    /// that ever claims one and applies it to the peer record — so a
+    /// confirmation can only ever satisfy the ONE attempt whose own
+    /// counter-code it actually redeemed, never a different or earlier one
+    /// for the same peer. Real wall-clock deadline — checked before sleeping,
+    /// so a confirmation that already landed resolves with no real wait —
+    /// and runs regardless of `isActive`: this depends only on the SERVER
+    /// receiving A's reciprocal call, which has nothing to do with whether
+    /// this manager's own outbound links are currently being dialed.
     private func waitForReciprocalRedemption(peerId: String, counterCode: String) async -> Bool {
         let deadline = Date().addingTimeInterval(reciprocalConfirmationTimeout)
         while true {
-            if peers.first(where: { $0.id == peerId })?.localDeviceId != nil { return true }
             if let buffered = pendingReciprocalConfirmations.removeValue(forKey: counterCode) {
                 if let index = peers.firstIndex(where: { $0.id == peerId }) {
                     peers[index].localDeviceId = buffered.localDeviceId

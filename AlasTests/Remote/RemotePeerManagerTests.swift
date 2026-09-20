@@ -429,6 +429,33 @@ struct RemotePeerManagerTests {
         #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
     }
 
+    // Codex: `handleInboundPeer`'s "peer already exists" branch used to write
+    // `localDeviceId` directly onto the record, racing `addPeer`'s own
+    // `upsert` (called right after the network reply returns), which resets
+    // `localDeviceId` to nil — a confirmation landing while that network
+    // call was still in flight was silently erased the instant `upsert` ran,
+    // and `addPeer` then waited out the full timeout despite the exchange
+    // having already succeeded. A delayed reply forces the confirmation to
+    // land squarely inside that window.
+    @Test func aReciprocalConfirmationForAnExistingPeerThatArrivesBeforeUpsertIsNotErased() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            return (Data(#"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairer: delayedPairer, links: Links())
+        manager.connectAll()
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: "fresh-dev-id")
+        #expect(await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765") == nil)
+        #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
+    }
+
     @Test func forgetRevokesByPeerServerIdWhenNoLocalDeviceIdWasRecorded() throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
