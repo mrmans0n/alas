@@ -125,70 +125,39 @@ struct AlasFieldTests {
     }
 
     /// Every real call site (`NewWorktreeDialog`, `WorkspaceDialogs`) presents
-    /// this field inside a `.sheet`, not a plain top-level window — first
-    /// responder is acquired automatically via `focusOnAppear`, never by a
-    /// manual `makeFirstResponder` call from the caller. Acquiring first
-    /// responder selects all of the pre-filled text by default (AppKit's
-    /// behavior); the field must move the caret to the end in that same pass so
-    /// the very first keystroke appends instead of replacing the whole
-    /// selection. A deferred (async) correction loses that race.
-    private struct SheetHost: View {
-        @Binding var text: String
-        let theme: Theme
-        var body: some View {
-            Color.clear
-                .frame(width: 300, height: 100)
-                .sheet(isPresented: .constant(true)) {
-                    AlasField(text: $text, monospaced: true, focusOnAppear: true, inputFilter: .branchName)
-                        .environment(\.theme, theme)
-                        .frame(width: 260)
-                        .padding()
-                }
-        }
-    }
-
-    @Test func firstKeystrokeAfterAutomaticFocusAppendsRatherThanReplacesPrefilledText() {
-        var text = "nacho/"
-        let binding = Binding(get: { text }, set: { text = $0 })
-        let controller = NSHostingController(rootView: SheetHost(text: binding, theme: currentTheme()))
+    /// `focusAndPlaceCaretAtEnd()` is the exact synchronous call `updateNSView`
+    /// makes when `focusOnAppear` fires — no SwiftUI rendering, no
+    /// `RunLoop.run(until:)` pumping, nothing between "focus acquired" and this
+    /// assertion. That matters: `RunLoop.run(until:)` doesn't stop the instant
+    /// something happens, it keeps draining ready sources for its whole
+    /// window, so even a very short pump could let a deferred
+    /// `DispatchQueue.main.async` correction run before the assertion — making
+    /// a pump-based test pass against a regression by luck depending on
+    /// scheduling. Calling the method directly and asserting on its return
+    /// removes that ambiguity: acquiring first responder selects all of the
+    /// field's pre-filled text by default (AppKit's behavior), and this must
+    /// already be corrected to end-of-string by the time the call returns, or
+    /// the very next keystroke would replace the whole selection instead of
+    /// appending to it.
+    @Test func focusAndPlaceCaretAtEndCorrectsSelectionBeforeReturning() {
+        let field = AlasNSTextFieldView(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+        field.stringValue = "nacho/"
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 28),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
-        window.contentViewController = controller
-        window.makeKeyAndOrderFront(nil)
-        controller.view.layoutSubtreeIfNeeded()
+        window.contentView = field
 
-        // Poll in small increments rather than sleeping a fixed, generous
-        // window before asserting: a long fixed pump would give the buggy
-        // deferred (DispatchQueue.main.async) correction time to catch up
-        // before this test ever looks at the selection, letting a regression
-        // pass here by luck on a fast machine. Stop polling the instant the
-        // editor exists, then assert immediately — before typing anything —
-        // that the caret is already at the end, not mid-flight to it.
-        var editor: NSTextView?
-        for _ in 0..<200 {
-            if let sheet = window.attachedSheet,
-               let field = Self.firstTextField(in: sheet.contentView!),
-               let currentEditor = field.currentEditor() as? NSTextView {
-                editor = currentEditor
-                break
-            }
-            pump(0.01)
-        }
-        let unwrappedEditor = try! #require(editor)
+        #expect(field.focusAndPlaceCaretAtEnd())
 
-        #expect(unwrappedEditor.selectedRange() == NSRange(location: (unwrappedEditor.string as NSString).length, length: 0))
+        let editor = try! #require(field.currentEditor() as? NSTextView)
+        #expect(editor.selectedRange() == NSRange(location: 6, length: 0))
 
-        for character in "feature" {
-            unwrappedEditor.insertText(String(character), replacementRange: unwrappedEditor.selectedRange())
-            pump()
-        }
-
-        #expect(unwrappedEditor.string == "nacho/feature")
-        #expect(unwrappedEditor.selectedRange() == NSRange(location: (unwrappedEditor.string as NSString).length, length: 0))
+        editor.insertText("feature", replacementRange: editor.selectedRange())
+        #expect(editor.string == "nacho/feature")
+        #expect(editor.selectedRange() == NSRange(location: 13, length: 0))
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {
