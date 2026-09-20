@@ -331,6 +331,8 @@ struct RemoteServerPane: View {
                 peerError = "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
             case .unreachable?:
                 peerError = "Couldn't reach that Mac at any of its addresses."
+            case .noLocalAddress?:
+                peerError = "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
             }
         }
     }

@@ -26,6 +26,9 @@ final class RemotePeerManager {
         case expiredCode
         case originRejected
         case unreachable
+        /// This Mac advertises no address a peer could dial back on, so the
+        /// exchange cannot complete even if the far side is reachable.
+        case noLocalAddress
     }
 
     typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -80,6 +83,12 @@ final class RemotePeerManager {
     func addPeer(link: String) async -> AddError? {
         guard let parts = RemotePairingLink.parse(link) else { return .invalidLink }
         let me = localIdentity()
+        // With no advertisable address the counter-code is unusable: the far
+        // side's pair-back finds nothing to dial, gives up, and revokes the
+        // device it just minted for us. Reporting success here and failing
+        // moments later on "revoked" would blame the wrong machine, so refuse
+        // before minting a code and point the user at their own settings.
+        guard !me.origins.isEmpty else { return .noLocalAddress }
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {

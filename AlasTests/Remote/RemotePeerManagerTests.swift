@@ -38,8 +38,9 @@ struct RemotePeerManagerTests {
 
     private func makeManager(store: InMemoryPeerStore = InMemoryPeerStore(),
                              pairing: RemotePairingService = RemotePairingService(store: InMemoryDeviceStore()),
-                             pairer: RemotePeerPairer, links: Links) -> RemotePeerManager {
-        let identity = self.identity
+                             pairer: RemotePeerPairer, links: Links,
+                             identity: RemotePeerManager.LocalIdentity? = nil) -> RemotePeerManager {
+        let identity = identity ?? self.identity
         return RemotePeerManager(
             store: store, pairing: pairing, pairer: pairer,
             localIdentity: { identity },
@@ -101,6 +102,24 @@ struct RemotePeerManagerTests {
         #expect(await forbidden.addPeer(link: linkFromA) == .originRejected)
         let dead = makeManager(pairer: pairer([:], requests: Requests()), links: Links())
         #expect(await dead.addPeer(link: linkFromA) == .unreachable)
+    }
+
+    // With nothing to advertise, the far side's pair-back has nothing to dial
+    // and revokes the device it just minted. Reporting success and then
+    // "revoked" blames the other Mac for a local misconfiguration, so the add
+    // is refused up front — before a counter-code is even minted.
+    @Test func addPeerWithNoAdvertisableAddressIsRefusedBeforeAnyNetworkCall() async {
+        let requests = Requests()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let manager = makeManager(
+            pairing: pairing,
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+            links: Links(),
+            identity: RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "Mac B", origins: []))
+        #expect(await manager.addPeer(link: linkFromA) == .noLocalAddress)
+        #expect(requests.seen.isEmpty)
+        #expect(manager.peers.isEmpty)
+        #expect(pairing.devices.isEmpty)
     }
 
     @Test func inboundPeerWithCounterCodePairsBackWithoutNesting() async throws {
