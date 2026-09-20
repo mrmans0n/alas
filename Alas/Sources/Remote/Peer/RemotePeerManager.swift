@@ -55,10 +55,11 @@ final class RemotePeerManager {
          pairer: RemotePeerPairer = .live,
          localIdentity: @escaping @MainActor () -> LocalIdentity,
          makeConnection: @escaping MakeConnection = { peer, onEvent in
-             // `expectedServerId` makes the link's /health probe prove it is
-             // talking to THIS peer before reporting the token revoked. Without
-             // it, any server answering 200 at a reused address drives a
-             // terminal `.unauthorized`.
+             // `expectedServerId` binds the link to the identity this record
+             // was paired with: the socket's `hello` must report it or the
+             // connection is refused, and the /health probe must report it
+             // before a refused upgrade counts as "our token was revoked".
+             // Without it, whatever answers a stored address decides both.
              RemotePeerConnection(
                  origins: peer.origins,
                  lastOrigin: peer.lastOrigin,

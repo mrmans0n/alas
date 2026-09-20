@@ -520,12 +520,18 @@ Append inside `RemotePairingServiceTests`:
         #expect(device.name == "Studio")
     }
 
-    @Test func redeemPeerReplacesAnEarlierRecordForTheSameServer() throws {
+    // A peer redeem must NOT evict an earlier record for the same
+    // `peerServerId`: the identity beside a code is an unverified claim, so
+    // evicting on it would let one code holder cut an established peer's
+    // access. "No token issued to a peer outlives the user forgetting that
+    // peer" is carried instead by `RemotePeerManager.forget` (Task 10), which
+    // revokes every device matching the identity.
+    @Test func redeemPeerKeepsEarlierRecordsForTheSameServer() throws {
         let svc = make()
         let first = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
         let second = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio (renamed)", peerServerId: "srv-b")
-        #expect(svc.devices.filter { $0.peerServerId == "srv-b" }.count == 1)
-        #expect(svc.validate(token: first.token) == nil)
+        #expect(svc.devices.filter { $0.peerServerId == "srv-b" }.count == 2)
+        #expect(svc.validate(token: first.token) == first.deviceId)
         #expect(svc.validate(token: second.token) == second.deviceId)
     }
 
@@ -561,8 +567,13 @@ Replace `redeem(code:deviceName:)` (lines 57-73) with:
         try redeemCore(code: code, deviceName: deviceName, kind: .browser, peerServerId: nil).token
     }
 
-    /// Same exchange for another Alas instance. A previous record for the same
-    /// `peerServerId` is replaced so re-pairing never leaves a stale token valid.
+    /// Same exchange for another Alas instance. Existing records for the same
+    /// `peerServerId` are left alone: a redeem only proves the caller holds a
+    /// live pairing code, never that it is the peer whose identity it claims,
+    /// so evicting on that claim would let one code holder cut an established
+    /// peer's access. Re-pairing therefore adds a row rather than replacing
+    /// one; `RemotePeerManager.forget` revokes every device carrying the
+    /// identity, so no token outlives the user forgetting the peer.
     func redeemPeer(code: String, deviceName: String, peerServerId: String) throws -> RemotePeerRedeemResult {
         try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
     }
@@ -583,9 +594,6 @@ Replace `redeem(code:deviceName:)` (lines 57-73) with:
         }
         pendingCodes.remove(at: idx)   // consume only the matched code
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
-        if let peerServerId {
-            devices.removeAll { $0.kind == .alasInstance && $0.peerServerId == peerServerId }
-        }
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
                                   tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
@@ -1035,6 +1043,12 @@ In `RemoteHTTPResponder.swift`, add after `var originPolicy: RemoteOriginPolicy 
 Replace `pairResponse` (lines 87-97):
 
 ```swift
+    /// A real Mac advertises a handful of addresses (tailnet, LAN, a couple of
+    /// interfaces); anything beyond this is a probe list, not a peer.
+    private static let maxPeerOrigins = 8
+    /// Upper bound on peer-supplied display strings, which are stored and shown.
+    private static let maxPeerTextLength = 200
+
     private func pairResponse(body: Data, extraHeaders: [(String, String)]) -> Data {
         struct PairRequest: Decodable {
             let code: String
@@ -1048,13 +1062,27 @@ Replace `pairResponse` (lines 87-97):
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
                                      body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
+        func forbidden(_ error: String) -> Data {
+            Self.http(status: "403 Forbidden", contentType: "application/json",
+                      body: Data(#"{"error":"\#(error)"}"#.utf8), extraHeaders: extraHeaders)
+        }
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body) else { return unauthorized }
         let token: String
         if let peer = pr.peer {
-            guard acceptsPeers() else {
-                return Self.http(status: "403 Forbidden", contentType: "application/json",
-                                 body: Data(#"{"error":"federation disabled"}"#.utf8), extraHeaders: extraHeaders)
-            }
+            guard acceptsPeers() else { return forbidden("federation disabled") }
+            // Everything in `peer` is attacker-controlled and only the 1 MB
+            // body cap bounds it. Reject an implausible advertisement BEFORE
+            // redeeming, so a rejected request leaves the pairing code
+            // unconsumed: `origins` is walked sequentially by the pair-back
+            // with a POST each, which would otherwise turn one code into a
+            // port scan of the local network; an empty `serverId` collapses
+            // every peer onto one identity; and `name`/`deviceName` are both
+            // adopted into records and shown in Settings.
+            guard peer.origins.count <= Self.maxPeerOrigins,
+                  !peer.serverId.isEmpty,
+                  peer.name.count <= Self.maxPeerTextLength,
+                  pr.deviceName.count <= Self.maxPeerTextLength
+            else { return forbidden("peer rejected") }
             guard let result = try? pairing.redeemPeer(code: pr.code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId) else { return unauthorized }
             token = result.token
@@ -1322,13 +1350,21 @@ git commit -m "feat(remote): add the outbound peer pairer with origin fallback"
     func send(_ message: RemoteClientMessage)
 }
 @MainActor final class RemotePeerConnection: RemotePeerConnecting {
-    enum State: Equatable { case idle, connecting, online, offline, unauthorized, incompatible(remoteVersion: Int) }
+    enum State: Equatable { case idle, connecting, online, offline, unauthorized, incompatible(remoteVersion: Int), identityMismatch(expected: String, actual: String) }
     enum Event { case stateChanged(State); case hello(serverId: String, name: String, protocolVersion: Int, federationEnabled: Bool); case originChanged(String); case message(RemoteServerMessage) }
     struct Config { var handshakeTimeout: TimeInterval = 4; var initialBackoff: TimeInterval = 1.5; var maxBackoff: TimeInterval = 30; var localProtocolVersion: Int = RemoteProtocolVersion.current }
-    init(origins: [String], lastOrigin: String?, token: String, config: Config = Config(), session: URLSession = .shared, onEvent: @escaping @MainActor (Event) -> Void)
+    init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil, config: Config = Config(), session: URLSession = .shared, onEvent: @escaping @MainActor (Event) -> Void)
     private(set) var lastOrigin: String?
+    static func socketURL(for origin: String) -> URL?
 }
 ```
+
+`expectedServerId` is the identity the record was paired with. When set it
+gates two things: the `/health` probe only counts as proof the paired Mac is
+up if it reports that id, and a socket whose `hello` reports a different id is
+refused with the terminal `identityMismatch` state instead of being adopted.
+Both matter because whoever answers a stored origin would otherwise decide who
+this link is talking to.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1348,15 +1384,29 @@ struct RemotePeerConnectionTests {
         var all: [RemotePeerConnection.Event] = []
         var states: [RemotePeerConnection.State] { all.compactMap { if case .stateChanged(let s) = $0 { return s } else { return nil } } }
         var hellos: [String] { all.compactMap { if case .hello(let id, _, _, _) = $0 { return id } else { return nil } } }
+        var helloNames: [String] { all.compactMap { if case .hello(_, let name, _, _) = $0 { return name } else { return nil } } }
+        var helloVersions: [Int] { all.compactMap { if case .hello(_, _, let v, _) = $0 { return v } else { return nil } } }
+        /// Without this the `federationEnabled` the link forwards is untested,
+        /// so mixing up the `hello` frame's trailing fields stays green.
+        var helloFederation: [Bool] { all.compactMap { if case .hello(_, _, _, let f) = $0 { return f } else { return nil } } }
         var origins: [String] { all.compactMap { if case .originChanged(let o) = $0 { return o } else { return nil } } }
         var messages: [RemoteServerMessage] { all.compactMap { if case .message(let m) = $0 { return m } else { return nil } } }
     }
 
-    private func startServer(pairing: RemotePairingService, provider: RemoteSessionsProvider = FakeSessionsProvider()) async throws -> (RemoteServer, String) {
+    /// `serverId` is what `/health` reports. Nil reproduces the default
+    /// diagnostics snapshot exactly, so it changes nothing for the tests that
+    /// do not care; the health-identity tests set it.
+    private func startServer(pairing: RemotePairingService,
+                             provider: RemoteSessionsProvider = FakeSessionsProvider(),
+                             serverId: String? = nil) async throws -> (RemoteServer, String) {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: provider,
+            diagnostics: { port in
+                RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
+                                          usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
+            },
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
         )
         try server.start(port: 0)
@@ -1395,6 +1445,10 @@ struct RemotePeerConnectionTests {
         defer { link.disconnect() }
         try await waitUntil { link.state == .online }
         #expect(events.hellos == ["srv-a"])
+        #expect(events.helloNames == ["Mac A"])
+        #expect(events.helloVersions == [RemoteProtocolVersion.current])
+        // `startServer`'s identity sets federationEnabled: true.
+        #expect(events.helloFederation == [true])
         #expect(events.origins == [origin])
         #expect(link.lastOrigin == origin)
         #expect(events.states.first == .connecting)
@@ -1475,6 +1529,101 @@ struct RemotePeerConnectionTests {
         link.disconnect()
         #expect(link.state == .idle)
     }
+
+    @Test func disconnectImmediatelyAfterConnectSettlesIdle() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token, config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        link.disconnect()
+        #expect(link.state == .idle)
+        // disconnect() clears `runner` and sets .idle synchronously, but the
+        // task connect() spawned is still queued and has not run its body
+        // yet. Give it a real chance to start — without the cancellation
+        // guard at the top of run(), it announces .connecting right back on
+        // top of the .idle disconnect() just set, and with `runner` already
+        // nil nothing is left to move the state again. A bare `waitUntil`
+        // can't catch this: it checks its condition before ever suspending,
+        // so it would see the already-idle state and return before the
+        // orphaned task got to run at all.
+        for _ in 0..<25 {
+            await Task.yield()
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(link.state == .idle)
+        #expect(!events.states.contains(.connecting))
+    }
+
+    @Test func aDisconnectedLinkIsNotResurrectedByAnEarlierReconnectTimer() async throws {
+        let events = Events()
+        let link = RemotePeerConnection(origins: ["http://127.0.0.1:1"], lastOrigin: nil, token: "t", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        // First attempt fails and arms a reconnect timer.
+        try await waitUntil { link.state == .offline }
+        // A connect() while that timer is pending used to drop it without
+        // cancelling, so the next failure's timer became the only one
+        // disconnect() could reach.
+        link.connect()
+        try await waitUntil { events.states.filter { $0 == .offline }.count >= 2 }
+        link.disconnect()
+        #expect(link.state == .idle)
+        // Well past both backoff delays: an orphaned timer would have redialled.
+        try await Task.sleep(nanoseconds: 800_000_000)
+        #expect(link.state == .idle)
+    }
+
+    @Test func healthProbeFromAnUnexpectedServerDoesNotRevokeTheLink() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, origin) = try await startServer(pairing: pairing, serverId: "srv-a")
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: "not-a-token",
+                                        expectedServerId: "srv-somewhere-else", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        // The upgrade is refused and the address answers 200, but as a Mac we
+        // never paired with — so this is "unreachable peer", not "revoked".
+        try await waitUntil { link.state == .offline }
+        #expect(!events.states.contains(.unauthorized))
+    }
+
+    @Test func helloFromAnotherIdentityIsRefusedAndNeverRetried() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        // The server's `hello` reports "srv-a" (see `startServer`'s identity);
+        // this link was written for a different Mac, so the socket must be
+        // dropped rather than adopted.
+        let (server, origin) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-elsewhere", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
+        // Terminal: no online state, no `hello` event handed to the owner, and
+        // well past two backoff delays no second attempt.
+        try await Task.sleep(nanoseconds: 800_000_000)
+        #expect(!events.states.contains(.online))
+        #expect(events.hellos.isEmpty)
+        #expect(events.states.filter { $0 == .connecting }.count == 1)
+    }
+
+    @Test func healthProbeFromTheExpectedServerStillReportsUnauthorized() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, origin) = try await startServer(pairing: pairing, serverId: "srv-a")
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: "not-a-token",
+                                        expectedServerId: "srv-a", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .unauthorized }
+        #expect(events.states.filter { $0 == .connecting }.count == 1)
+    }
 }
 ```
 
@@ -1500,7 +1649,15 @@ protocol RemotePeerConnecting: AnyObject {
 /// One outbound WebSocket to a paired Mac. Mirrors `hub-links.js`: try the
 /// last good origin then the rest with a handshake timeout, expect `hello`
 /// first, answer `helloAck`, tell "revoked" from "unreachable" with a
-/// `/health` probe, and back off between attempts.
+/// `/health` probe, and back off between attempts. On top of that it refuses
+/// any socket whose `hello` reports an identity other than `expectedServerId`.
+///
+/// **The owner must call `disconnect()`.** Dropping the last reference is not
+/// enough: an in-flight `run()` resolves its weak `self` to a strong one for
+/// the whole call and stays suspended in `pump` for the entire online
+/// lifetime, so a connected link cannot deallocate, and there is no `deinit`
+/// to close the socket. Releasing an owner without disconnecting leaks the
+/// object, its task, and an open socket to the peer.
 @MainActor
 final class RemotePeerConnection: RemotePeerConnecting {
     enum State: Equatable, Sendable {
@@ -1510,6 +1667,11 @@ final class RemotePeerConnection: RemotePeerConnecting {
         case offline
         case unauthorized
         case incompatible(remoteVersion: Int)
+        /// The socket's `hello` reported an identity other than the one this
+        /// link was created for. Terminal and never retried: the address is
+        /// answering for somebody else, so redialing it can only keep talking
+        /// to the wrong Mac.
+        case identityMismatch(expected: String, actual: String)
     }
 
     enum Event {
@@ -1530,7 +1692,14 @@ final class RemotePeerConnection: RemotePeerConnecting {
     private(set) var lastOrigin: String?
 
     private let origins: [String]
+    /// The peer's token. Travels only as the WebSocket subprotocol; it is
+    /// never logged, never part of an error, and never in the URL.
     private let token: String
+    /// The `serverId` this peer is expected to report. When set, a `/health`
+    /// probe only counts as proof the paired Mac is up if it reports this id,
+    /// and a socket whose `hello` reports a different id is refused outright
+    /// rather than adopted.
+    private let expectedServerId: String?
     private let config: Config
     private let session: URLSession
     private let onEvent: @MainActor (Event) -> Void
@@ -1539,11 +1708,13 @@ final class RemotePeerConnection: RemotePeerConnecting {
     private var reconnectTimer: Task<Void, Never>?
     private var backoff: TimeInterval
 
-    init(origins: [String], lastOrigin: String?, token: String, config: Config = Config(),
-         session: URLSession = .shared, onEvent: @escaping @MainActor (Event) -> Void) {
+    init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
+         config: Config = Config(), session: URLSession = .shared,
+         onEvent: @escaping @MainActor (Event) -> Void) {
         self.origins = origins
         self.lastOrigin = lastOrigin
         self.token = token
+        self.expectedServerId = expectedServerId
         self.config = config
         self.session = session
         self.onEvent = onEvent
@@ -1552,6 +1723,12 @@ final class RemotePeerConnection: RemotePeerConnecting {
 
     func connect() {
         guard runner == nil else { return }
+        // A pending reconnect belongs to an attempt this call supersedes.
+        // Letting it go without cancelling would orphan it: `disconnect()`
+        // only knows about the newest timer, so a dropped one would still
+        // fire and redial a link the owner had torn down.
+        reconnectTimer?.cancel()
+        reconnectTimer = nil
         runner = Task { [weak self] in await self?.run() }
     }
 
@@ -1572,6 +1749,11 @@ final class RemotePeerConnection: RemotePeerConnecting {
     // MARK: - Lifecycle
 
     private func run() async {
+        // This body does not start until the main actor yields, so a
+        // `disconnect()` can land first. Announcing `.connecting` then would
+        // strand the link there: the task returns immediately afterwards with
+        // `runner` already nil, and nothing would ever move the state again.
+        if Task.isCancelled { return }
         setState(.connecting)
         var ordered: [String] = []
         for origin in [lastOrigin].compactMap({ $0 }) + origins where !ordered.contains(origin) {
@@ -1582,16 +1764,38 @@ final class RemotePeerConnection: RemotePeerConnecting {
             guard let url = Self.socketURL(for: origin) else { continue }
             let candidate = session.webSocketTask(with: url, protocols: [token])
             candidate.resume()
-            guard let first = await receive(from: candidate, timeout: config.handshakeTimeout) else {
-                candidate.cancel(with: .goingAway, reason: nil)
+            let first: RemoteServerMessage
+            switch await receive(from: candidate, timeout: config.handshakeTimeout) {
+            case .message(let message):
+                first = message
+            case .failed:
                 if Task.isCancelled { return }
-                if await healthOK(origin) {
+                let alive = await healthOK(origin)
+                // A disconnect() during the probe already moved us to .idle;
+                // reporting .unauthorized on top of it would resurrect a link
+                // the caller just tore down.
+                if Task.isCancelled { return }
+                if alive {
                     // The Mac answers HTTP but refused the upgrade: our token is gone.
                     setState(.unauthorized)
                     runner = nil
                     return
                 }
                 continue
+            case .noUsableFrame:
+                // The upgrade itself succeeded, so the token is fine — the
+                // peer was merely slow or opened with a frame this build
+                // cannot read. Probing `/health` here would call a live
+                // pairing revoked; move on and let backoff retry instead.
+                if Task.isCancelled { return }
+                continue
+            }
+            // disconnect() cannot close this socket — it is not `self.socket`
+            // until the handshake succeeds — so close it here rather than
+            // leaving it open and flipping a torn-down link back online.
+            if Task.isCancelled {
+                candidate.cancel(with: .goingAway, reason: nil)
+                return
             }
             guard case .hello(let version, let serverId, let name, _, let federationEnabled) = first else {
                 candidate.cancel(with: .protocolError, reason: nil)
@@ -1600,6 +1804,18 @@ final class RemotePeerConnection: RemotePeerConnecting {
             if version != config.localProtocolVersion {
                 candidate.cancel(with: .goingAway, reason: nil)
                 setState(.incompatible(remoteVersion: version))
+                runner = nil
+                return
+            }
+            // The `hello` on the socket that carries traffic — not only the
+            // `/health` probe — has to prove this is the Mac the record was
+            // written for. Whoever answers the origin would otherwise decide
+            // the link's identity, and the manager would adopt it: a reused
+            // address or a squatter could silently take a peer's place. Not
+            // retried, because backoff against a wrong Mac never converges.
+            if let expectedServerId, serverId != expectedServerId {
+                candidate.cancel(with: .policyViolation, reason: nil)
+                setState(.identityMismatch(expected: expectedServerId, actual: serverId))
                 runner = nil
                 return
             }
@@ -1615,7 +1831,10 @@ final class RemotePeerConnection: RemotePeerConnecting {
             backoff = config.initialBackoff
             setState(.online)
             await pump(candidate)
-            closeSocket(.goingAway)
+            // A runner cancelled by disconnect() can reach here long after a
+            // newer runner adopted a socket of its own, so close only the one
+            // this attempt owns — never whatever happens to be current.
+            closeSocket(.goingAway, ifCurrent: candidate)
             if Task.isCancelled { return }
             scheduleReconnect()
             return
@@ -1640,34 +1859,69 @@ final class RemotePeerConnection: RemotePeerConnecting {
         }
     }
 
-    private func receive(from socket: URLSessionWebSocketTask, timeout: TimeInterval) async -> RemoteServerMessage? {
-        await withTaskGroup(of: RemoteServerMessage?.self) { group in
+    /// What a handshake's first frame produced. `failed` is kept apart from
+    /// `noUsableFrame` because only a failed receive can mean the peer refused
+    /// the upgrade: a timeout or an unreadable frame both prove the socket was
+    /// accepted, so probing `/health` on those would report a slow peer — or
+    /// one a protocol revision ahead — as having revoked our pairing.
+    private enum Handshake {
+        case message(RemoteServerMessage)
+        case failed
+        case noUsableFrame
+    }
+
+    private func receive(from socket: URLSessionWebSocketTask, timeout: TimeInterval) async -> Handshake {
+        await withTaskGroup(of: Handshake.self) { group in
             group.addTask {
-                guard let raw = try? await socket.receive() else { return nil }
+                guard let raw = try? await socket.receive() else { return .failed }
                 let payload: Data
                 switch raw {
                 case .data(let d): payload = d
                 case .string(let s): payload = Data(s.utf8)
-                @unknown default: return nil
+                @unknown default: return .noUsableFrame
                 }
-                return try? JSONDecoder().decode(RemoteServerMessage.self, from: payload)
+                guard let message = try? JSONDecoder().decode(RemoteServerMessage.self, from: payload) else {
+                    return .noUsableFrame
+                }
+                return .message(message)
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return nil
+                return .noUsableFrame
             }
-            let first = await group.next() ?? nil
+            let first = await group.next() ?? .failed
+            switch first {
+            case .message:
+                break
+            case .failed, .noUsableFrame:
+                // `URLSessionWebSocketTask.receive()` does not observe task
+                // cancellation, so on the timeout branch the group would wait
+                // on it forever against a peer that upgraded and then went
+                // quiet. Cancelling the socket is what ends that wait; the
+                // caller discards this socket on every non-message outcome.
+                socket.cancel(with: .goingAway, reason: nil)
+            }
             group.cancelAll()
             return first
         }
     }
 
+    /// Whether `origin` answers as the paired Mac. A 2xx alone only proves
+    /// that *something* serves HTTP at this address, which is why `/health`
+    /// reports a `serverId`: when this link knows which one to expect, an
+    /// unrelated Alas — or any web server — on a reused address must not be
+    /// read as "the paired Mac refused us", since that state is terminal.
     private func healthOK(_ origin: String) async -> Bool {
-        guard let url = URL(string: origin + "/health") else { return false }
+        struct Health: Decodable { let serverId: String? }
+        guard let normalized = RemotePairingLink.normalizeOrigin(origin),
+              let url = URL(string: normalized + "/health") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = config.handshakeTimeout
-        guard let (_, response) = try? await session.data(for: request) else { return false }
-        return (response as? HTTPURLResponse)?.statusCode == 200
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        guard let expectedServerId else { return true }
+        guard let health = try? JSONDecoder().decode(Health.self, from: data) else { return false }
+        return health.serverId == expectedServerId
     }
 
     private func scheduleReconnect() {
@@ -1675,6 +1929,9 @@ final class RemotePeerConnection: RemotePeerConnecting {
         runner = nil
         let delay = backoff
         backoff = min(backoff * 2, config.maxBackoff)
+        // Never overwrite a live timer without cancelling it; the field is
+        // all `disconnect()` has to reach them by.
+        reconnectTimer?.cancel()
         reconnectTimer = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled else { return }
@@ -1683,7 +1940,12 @@ final class RemotePeerConnection: RemotePeerConnecting {
         }
     }
 
-    private func closeSocket(_ code: URLSessionWebSocketTask.CloseCode) {
+    /// Closes the adopted socket. `ifCurrent` guards callers that own a
+    /// particular socket: passing it makes the close a no-op unless that is
+    /// still the adopted one, so a stale runner cannot cancel a live link's.
+    private func closeSocket(_ code: URLSessionWebSocketTask.CloseCode,
+                             ifCurrent expected: URLSessionWebSocketTask? = nil) {
+        if let expected, socket !== expected { return }
         socket?.cancel(with: code, reason: nil)
         socket = nil
     }
@@ -1695,7 +1957,12 @@ final class RemotePeerConnection: RemotePeerConnecting {
     }
 
     static func socketURL(for origin: String) -> URL? {
-        guard var components = URLComponents(string: origin) else { return nil }
+        // Origins reach a peer link from a stored record whose address the
+        // peer itself advertised, so normalize before dialing: anything but
+        // a bare http(s) origin is refused, and no path, query or userinfo
+        // can be smuggled into the request target.
+        guard let normalized = RemotePairingLink.normalizeOrigin(origin),
+              var components = URLComponents(string: normalized) else { return nil }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = "/ws"
         return components.url
@@ -1723,13 +1990,13 @@ git commit -m "feat(remote): add the outbound peer WebSocket connection"
 - Create: `AlasTests/Remote/RemotePeerManagerTests.swift`
 
 **Interfaces:**
-- Consumes: `RemotePeerStore`, `RemotePeer` (Task 5); `RemotePairingLink.parse`, `RemotePeerAdvertisement`, `RemotePeerPairingRequest` (Task 6); `RemotePeerPairer` (Task 8); `RemotePeerConnecting`, `RemotePeerConnection.Event` (Task 9); `RemotePairingService.beginPairing/revoke`.
+- Consumes: `RemotePeerStore`, `RemotePeer` (Task 5); `RemotePairingLink.parse`, `RemotePeerAdvertisement`, `RemotePeerPairingRequest` (Task 6); `RemotePeerPairer` (Task 8); `RemotePeerConnecting`, `RemotePeerConnection.Event` (Task 9); `RemotePairingService.beginPairing/revoke/devices`.
 - Produces:
 
 ```swift
 @MainActor @Observable final class RemotePeerManager {
     struct LocalIdentity { let serverId: String; let name: String; let origins: [String] }
-    enum AddError: Error, Equatable { case invalidLink, expiredCode, originRejected, unreachable }
+    enum AddError: Error, Equatable { case invalidLink, expiredCode, originRejected, unreachable, noLocalAddress }
     private(set) var peers: [RemotePeer]
     private(set) var states: [String: RemotePeerConnection.State]
     var onRevokeDevice: (@MainActor (String) -> Void)?
@@ -1785,8 +2052,9 @@ struct RemotePeerManagerTests {
 
     private func makeManager(store: InMemoryPeerStore = InMemoryPeerStore(),
                              pairing: RemotePairingService = RemotePairingService(store: InMemoryDeviceStore()),
-                             pairer: RemotePeerPairer, links: Links) -> RemotePeerManager {
-        let identity = self.identity
+                             pairer: RemotePeerPairer, links: Links,
+                             identity: RemotePeerManager.LocalIdentity? = nil) -> RemotePeerManager {
+        let identity = identity ?? self.identity
         return RemotePeerManager(
             store: store, pairing: pairing, pairer: pairer,
             localIdentity: { identity },
@@ -1799,7 +2067,10 @@ struct RemotePeerManagerTests {
     }
 
     private func body(of request: URLRequest) throws -> [String: Any] {
-        try #require(JSONSerialization.jsonObject(with: try #require(request.httpBody)) as? [String: Any])
+        // Two statements, not one: a `#require` nested inside another
+        // `#require` is rejected as a recursive macro expansion.
+        let body = try #require(request.httpBody)
+        return try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
     }
 
     @Test func invalidLinkIsRejectedWithoutNetwork() async {
@@ -1845,6 +2116,24 @@ struct RemotePeerManagerTests {
         #expect(await forbidden.addPeer(link: linkFromA) == .originRejected)
         let dead = makeManager(pairer: pairer([:], requests: Requests()), links: Links())
         #expect(await dead.addPeer(link: linkFromA) == .unreachable)
+    }
+
+    // With nothing to advertise, the far side's pair-back has nothing to dial
+    // and revokes the device it just minted. Reporting success and then
+    // "revoked" blames the other Mac for a local misconfiguration, so the add
+    // is refused up front — before a counter-code is even minted.
+    @Test func addPeerWithNoAdvertisableAddressIsRefusedBeforeAnyNetworkCall() async {
+        let requests = Requests()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let manager = makeManager(
+            pairing: pairing,
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+            links: Links(),
+            identity: RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "Mac B", origins: []))
+        #expect(await manager.addPeer(link: linkFromA) == .noLocalAddress)
+        #expect(requests.seen.isEmpty)
+        #expect(manager.peers.isEmpty)
+        #expect(pairing.devices.isEmpty)
     }
 
     @Test func inboundPeerWithCounterCodePairsBackWithoutNesting() async throws {
@@ -1894,6 +2183,77 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    @Test func rePairingAnExistingPeerReplacesTheTokenMergesOriginsAndSwapsTheLink() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let links = Links()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  links: links)
+        manager.connectAll()
+        let oldLink = try #require(links.byPeerId["p1"])
+        #expect(await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765") == nil)
+        #expect(manager.peers.count == 1)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.id == "p1")
+        #expect(peer.token == "tokA")
+        #expect(peer.name == "Mac A")
+        #expect(peer.origins == ["http://10.0.0.1:8765", "http://10.0.0.9:8765"])
+        #expect(peer.lastOrigin == "http://10.0.0.9:8765")
+        #expect(peer.localDeviceId == "dev-a")
+        #expect(store.saved == manager.peers)
+        // The stale link must be torn down, not left running alongside a
+        // second one dialing the same peer with the new token.
+        #expect(oldLink.disconnectCalls == 1)
+        let newLink = try #require(links.byPeerId["p1"])
+        #expect(newLink !== oldLink)
+        #expect(newLink.connectCalls == 1)
+    }
+
+    @Test func forgetRevokesByPeerServerIdWhenNoLocalDeviceIdWasRecorded() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
+        var revoked: [String] = []
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer([:], requests: Requests()), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.forget(peerId: "p1")
+        #expect(manager.peers.isEmpty)
+        #expect(revoked == [inbound.deviceId])
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
+    // The safety property that replaces the eviction `redeemPeer` used to do:
+    // a peer redeem no longer invalidates an earlier record for the same
+    // identity, so re-pairing can leave several device rows. Forgetting the
+    // peer must take all of them, or a superseded token would stay valid
+    // after the user revoked the peer.
+    @Test func forgetRevokesEveryDeviceCarryingThePeersIdentity() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let first = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let second = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let other = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac C", peerServerId: "srv-c")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil,
+                               localDeviceId: first.deviceId, addedAt: Date())])
+        var revoked: [String] = []
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer([:], requests: Requests()), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.forget(peerId: "p1")
+        #expect(pairing.validate(token: first.token) == nil)
+        #expect(pairing.validate(token: second.token) == nil)
+        #expect(revoked.sorted() == [first.deviceId, second.deviceId].sorted())
+        // A different peer's access is untouched.
+        #expect(pairing.validate(token: other.token) == other.deviceId)
+    }
+
     @Test func linkEventsUpdateStateNameVersionAndOrigin() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765", "http://10.0.0.5:8765"],
@@ -1910,6 +2270,26 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.protocolVersion == 1)
         #expect(manager.peers.first?.lastOrigin == "http://10.0.0.5:8765")
         #expect(store.saved.first?.lastOrigin == "http://10.0.0.5:8765")
+    }
+
+    // A `hello` is whatever answered the origin. Adopting its identity would
+    // let a reassigned address or a squatter re-key the record, and because
+    // `forget` revokes devices by identity the user would then revoke the
+    // wrong peer's access while the impostor kept its own.
+    @Test func helloNeverRewritesTheStoredServerId() throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+        link.emit(.hello(serverId: "srv-impostor", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        #expect(manager.peers.first?.serverId == "srv-a")
+        #expect(store.saved.first?.serverId == "srv-a")
+        // The cosmetic fields are still adopted.
+        #expect(manager.peers.first?.name == "Mac A")
+        #expect(manager.peers.first?.protocolVersion == 1)
     }
 
     @Test func connectAllIsIdempotentAndDisconnectAllTearsDown() {
@@ -1944,6 +2324,13 @@ import Observation
 /// both halves of reciprocal pairing. Session traffic over the links is
 /// consumed by a later `FederatedSessionsProvider`; for now `.message`
 /// events are dropped.
+///
+/// **The owner must call `disconnectAll()` before releasing this manager.**
+/// It holds a `RemotePeerConnection` per peer, and dropping the last reference
+/// to one of those is not enough to close it: a connected link keeps itself,
+/// its task, and an authenticated socket to the peer alive until `disconnect()`
+/// is called. Releasing the manager without `disconnectAll()` leaks one of each
+/// per connected peer.
 @MainActor
 @Observable
 final class RemotePeerManager {
@@ -1958,6 +2345,9 @@ final class RemotePeerManager {
         case expiredCode
         case originRejected
         case unreachable
+        /// This Mac advertises no address a peer could dial back on, so the
+        /// exchange cannot complete even if the far side is reachable.
+        case noLocalAddress
     }
 
     typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -1965,7 +2355,9 @@ final class RemotePeerManager {
     private(set) var peers: [RemotePeer]
     private(set) var states: [String: RemotePeerConnection.State] = [:]
     /// Called with a `RemoteDevice.id` when forgetting a peer should also cut
-    /// its live inbound socket (AppState wires this to `RemoteServer.disconnectDevice`).
+    /// its live inbound socket. Nothing sets it yet; the owner that adopts this
+    /// manager is expected to point it at `RemoteServer.disconnectDevice`,
+    /// since revoking the device record alone leaves an open socket authorized.
     @ObservationIgnored var onRevokeDevice: (@MainActor (String) -> Void)?
 
     private let store: RemotePeerStore
@@ -1982,10 +2374,11 @@ final class RemotePeerManager {
          pairer: RemotePeerPairer = .live,
          localIdentity: @escaping @MainActor () -> LocalIdentity,
          makeConnection: @escaping MakeConnection = { peer, onEvent in
-             // `expectedServerId` makes the link's /health probe prove it is
-             // talking to THIS peer before reporting the token revoked. Without
-             // it, any server answering 200 at a reused address drives a
-             // terminal `.unauthorized`.
+             // `expectedServerId` binds the link to the identity this record
+             // was paired with: the socket's `hello` must report it or the
+             // connection is refused, and the /health probe must report it
+             // before a refused upgrade counts as "our token was revoked".
+             // Without it, whatever answers a stored address decides both.
              RemotePeerConnection(
                  origins: peer.origins,
                  lastOrigin: peer.lastOrigin,
@@ -2010,11 +2403,25 @@ final class RemotePeerManager {
     func addPeer(link: String) async -> AddError? {
         guard let parts = RemotePairingLink.parse(link) else { return .invalidLink }
         let me = localIdentity()
+        // With no advertisable address the counter-code is unusable: the far
+        // side's pair-back finds nothing to dial, gives up, and revokes the
+        // device it just minted for us. Reporting success here and failing
+        // moments later on "revoked" would blame the wrong machine, so refuse
+        // before minting a code and point the user at their own settings.
+        guard !me.origins.isEmpty else { return .noLocalAddress }
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
         case .paired(let token, let serverId, let name, let origin):
-            upsert(serverId: serverId ?? origin, name: name ?? origin, origins: parts.origins,
+            // An origin is an address, never an identity. Standing in for a
+            // missing `serverId` with one would key the record — and the
+            // `/health` probe's expected id, and the device records `forget`
+            // revokes — on a string no peer will ever report, so the record
+            // could never be matched again or revoked. A reply with no usable
+            // identity is not a peer we can hold, so refuse the add. Only the
+            // display name falls back to the origin.
+            guard let serverId, !serverId.isEmpty else { return .unreachable }
+            upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
             return nil
         case .expiredCode: return .expiredCode
@@ -2032,7 +2439,15 @@ final class RemotePeerManager {
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
-            else { return }   // inbound trust stands; the other side can retry from its end
+            else {
+                // The peer already holds a token for this Mac: it was minted
+                // before this branch ran. Returning empty-handed would leave it
+                // standing access with no peer record to forget it by, so take
+                // the inbound grant back and let the exchange start over.
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
         } else if let index = peers.firstIndex(where: { $0.serverId == request.peerServerId }) {
@@ -2047,7 +2462,21 @@ final class RemotePeerManager {
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
-        if let deviceId = peer.localDeviceId {
+        // Revoke by the peer's identity rather than by the stored
+        // `localDeviceId`. That id is a snapshot taken before an HTTP round
+        // trip, and a peer redeem adds a device row without removing earlier
+        // ones for the same `peerServerId` — so a peer that re-paired in the
+        // meantime is represented by several devices, at most one of which
+        // the record remembers, and revoking the remembered id alone would
+        // leave live tokens behind. Sweeping the identity is also what makes
+        // that additive redeem safe. The stored id is still revoked as a
+        // hint, for records written before the peer's device carried a
+        // `peerServerId`.
+        var deviceIds = pairing.devices
+            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
+            .map(\.id)
+        if let hint = peer.localDeviceId, !deviceIds.contains(hint) { deviceIds.append(hint) }
+        for deviceId in deviceIds {
             pairing.revoke(deviceId: deviceId)
             onRevokeDevice?(deviceId)
         }
@@ -2082,9 +2511,17 @@ final class RemotePeerManager {
         switch event {
         case .stateChanged(let state):
             states[peerId] = state
-        case .hello(let serverId, let name, let protocolVersion, _):
+        case .hello(_, let name, let protocolVersion, _):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
-            peers[index].serverId = serverId
+            // The identity is deliberately NOT adopted from the frame. It is
+            // the key everything else hangs off — the link's expected id, the
+            // `/health` check, and the device records `forget` revokes — so
+            // letting the far side rewrite it would mean whoever answers the
+            // origin decides who this record is. The connection this manager
+            // builds is handed the record's `serverId` and refuses a socket
+            // reporting a different one, so in practice the frame's id
+            // already matches; ignoring it here is the backstop. Name and
+            // protocol version are cosmetic and safe to take from the peer.
             peers[index].name = name
             peers[index].protocolVersion = protocolVersion
             store.save(peers)
@@ -2185,7 +2622,13 @@ After `server.onConnectionDeviceCountsChange = ...` add:
 
 After `lastRemoteError = nil` inside the `do` block add `syncRemotePeers()`.
 
-In the `else` (disabled) branch, before `remoteServer?.stop()` add `remotePeers.disconnectAll()`.
+In the `else` (disabled) branch, before `remoteServer?.stop()` add
+`if remoteServer != nil { remotePeers.disconnectAll() }`. The guard is the
+point: `remotePeers` is lazy and its initializer also takes `remotePairing`,
+so an unconditional call would build both and read `remote-peers.json` and
+`remote-devices.json` on every ordinary launch with the flags off. Links only
+exist while a server is up, so there is nothing to tear down otherwise. The
+check is safe there because the line that nils `remoteServer` comes after it.
 
 Add the method after `syncRemoteServer()`:
 
@@ -2195,7 +2638,10 @@ Add the method after `syncRemoteServer()`:
     func syncRemotePeers() {
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
-        } else {
+        } else if remoteServer != nil {
+            // Same reason as `syncRemoteServer`'s disabled branch: without a
+            // server no link was ever opened, and reaching for `remotePeers`
+            // would force the lazy manager and its stores into existence.
             remotePeers.disconnectAll()
         }
     }
@@ -2294,6 +2740,8 @@ Next to `copyAddress` (line 255):
         case .offline: return "Offline. Retrying."
         case .unauthorized: return "This Mac's token was revoked there. Forget and pair again."
         case .incompatible(let version): return "Needs a matching Alas version (protocol \(version))."
+        case .identityMismatch:
+            return "A different Mac answered at that address. Forget this peer and pair again."
         case .idle: return "Not connected"
         }
     }
@@ -2316,6 +2764,8 @@ Next to `copyAddress` (line 255):
                 peerError = "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
             case .unreachable?:
                 peerError = "Couldn't reach that Mac at any of its addresses."
+            case .noLocalAddress?:
+                peerError = "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
             }
         }
     }
