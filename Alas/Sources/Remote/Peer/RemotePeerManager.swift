@@ -1,0 +1,184 @@
+import Foundation
+import Observation
+
+/// Owns this Mac's outbound peers: the persisted records, one link each, and
+/// both halves of reciprocal pairing. Session traffic over the links is
+/// consumed by a later `FederatedSessionsProvider`; for now `.message`
+/// events are dropped.
+@MainActor
+@Observable
+final class RemotePeerManager {
+    struct LocalIdentity: Equatable, Sendable {
+        let serverId: String
+        let name: String
+        let origins: [String]
+    }
+
+    enum AddError: Error, Equatable {
+        case invalidLink
+        case expiredCode
+        case originRejected
+        case unreachable
+    }
+
+    typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
+
+    private(set) var peers: [RemotePeer]
+    private(set) var states: [String: RemotePeerConnection.State] = [:]
+    /// Called with a `RemoteDevice.id` when forgetting a peer should also cut
+    /// its live inbound socket. Nothing sets it yet; the owner that adopts this
+    /// manager is expected to point it at `RemoteServer.disconnectDevice`,
+    /// since revoking the device record alone leaves an open socket authorized.
+    @ObservationIgnored var onRevokeDevice: (@MainActor (String) -> Void)?
+
+    private let store: RemotePeerStore
+    private let pairing: RemotePairingService
+    private let pairer: RemotePeerPairer
+    private let localIdentity: @MainActor () -> LocalIdentity
+    private let makeConnection: MakeConnection
+    private let now: () -> Date
+    @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
+    @ObservationIgnored private var isActive = false
+
+    init(store: RemotePeerStore,
+         pairing: RemotePairingService,
+         pairer: RemotePeerPairer = .live,
+         localIdentity: @escaping @MainActor () -> LocalIdentity,
+         makeConnection: @escaping MakeConnection = { peer, onEvent in
+             // `expectedServerId` makes the link's /health probe prove it is
+             // talking to THIS peer before reporting the token revoked. Without
+             // it, any server answering 200 at a reused address drives a
+             // terminal `.unauthorized`.
+             RemotePeerConnection(
+                 origins: peer.origins,
+                 lastOrigin: peer.lastOrigin,
+                 token: peer.token,
+                 expectedServerId: peer.serverId,
+                 onEvent: onEvent)
+         },
+         now: @escaping () -> Date = { Date() }) {
+        self.store = store
+        self.pairing = pairing
+        self.pairer = pairer
+        self.localIdentity = localIdentity
+        self.makeConnection = makeConnection
+        self.now = now
+        self.peers = store.load()
+    }
+
+    // MARK: - Pairing
+
+    /// Pastes another Mac's pairing link: redeems its code there while
+    /// offering a counter-code so that Mac pairs back with us.
+    func addPeer(link: String) async -> AddError? {
+        guard let parts = RemotePairingLink.parse(link) else { return .invalidLink }
+        let me = localIdentity()
+        let counterCode = pairing.beginPairing()
+        let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
+        switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
+        case .paired(let token, let serverId, let name, let origin):
+            upsert(serverId: serverId ?? origin, name: name ?? origin, origins: parts.origins,
+                   lastOrigin: origin, token: token, localDeviceId: nil)
+            return nil
+        case .expiredCode: return .expiredCode
+        case .originRejected: return .originRejected
+        case .unreachable: return .unreachable
+        }
+    }
+
+    /// The server saw another Mac redeem a code here. With a counter-code we
+    /// are the responder and pair back; without one we are the initiator and
+    /// only learn which local device record represents the peer.
+    func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
+        if let counterCode = request.counterCode {
+            let me = localIdentity()
+            let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
+            guard case .paired(let token, _, _, let origin) = await pairer.pair(
+                origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
+            else { return }   // inbound trust stands; the other side can retry from its end
+            upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
+                   lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
+        } else if let index = peers.firstIndex(where: { $0.serverId == request.peerServerId }) {
+            peers[index].localDeviceId = request.localDeviceId
+            store.save(peers)
+        }
+    }
+
+    func forget(peerId: String) {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+        let peer = peers.remove(at: index)
+        connections[peerId]?.disconnect()
+        connections[peerId] = nil
+        states[peerId] = nil
+        if let deviceId = peer.localDeviceId {
+            pairing.revoke(deviceId: deviceId)
+            onRevokeDevice?(deviceId)
+        }
+        store.save(peers)
+    }
+
+    // MARK: - Links
+
+    func connectAll() {
+        isActive = true
+        for peer in peers where connections[peer.id] == nil {
+            connect(peer)
+        }
+    }
+
+    func disconnectAll() {
+        isActive = false
+        for connection in connections.values { connection.disconnect() }
+        connections = [:]
+        states = [:]
+    }
+
+    private func connect(_ peer: RemotePeer) {
+        connections[peer.id]?.disconnect()
+        let id = peer.id
+        let connection = makeConnection(peer) { [weak self] event in self?.handle(event, peerId: id) }
+        connections[id] = connection
+        connection.connect()
+    }
+
+    private func handle(_ event: RemotePeerConnection.Event, peerId: String) {
+        switch event {
+        case .stateChanged(let state):
+            states[peerId] = state
+        case .hello(let serverId, let name, let protocolVersion, _):
+            guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+            peers[index].serverId = serverId
+            peers[index].name = name
+            peers[index].protocolVersion = protocolVersion
+            store.save(peers)
+        case .originChanged(let origin):
+            guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+            peers[index].lastOrigin = origin
+            store.save(peers)
+        case .message:
+            break
+        }
+    }
+
+    private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String,
+                        token: String, localDeviceId: String?) {
+        let peer: RemotePeer
+        if let index = peers.firstIndex(where: { $0.serverId == serverId }) {
+            var merged = peers[index].origins
+            for origin in origins where !merged.contains(origin) { merged.append(origin) }
+            peers[index].name = name
+            peers[index].origins = merged
+            peers[index].lastOrigin = lastOrigin
+            peers[index].token = token
+            if let localDeviceId { peers[index].localDeviceId = localDeviceId }
+            peer = peers[index]
+        } else {
+            peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, origins: origins,
+                              lastOrigin: lastOrigin, token: token, protocolVersion: nil,
+                              localDeviceId: localDeviceId, addedAt: now())
+            peers.append(peer)
+        }
+        store.save(peers)
+        if isActive { connect(peer) }
+    }
+}

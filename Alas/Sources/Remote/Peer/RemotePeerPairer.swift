@@ -31,8 +31,14 @@ struct RemotePeerPairer {
         })
     }
 
+    /// Runs on the caller's executor: this type holds a non-Sendable `fetch`,
+    /// so a main-actor owner calling a `@concurrent` `pair` would have to send
+    /// itself across executors. Inheriting the caller's isolation keeps the
+    /// value where it already lives; a nonisolated caller still gets `nil` and
+    /// runs exactly as before.
     func pair(origins: [String], code: String, deviceName: String,
-              advertisement: RemotePeerAdvertisement?) async -> Outcome {
+              advertisement: RemotePeerAdvertisement?,
+              isolation: isolated (any Actor)? = #isolation) async -> Outcome {
         struct Body: Encodable {
             let code: String
             let deviceName: String
