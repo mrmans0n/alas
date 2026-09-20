@@ -1340,6 +1340,217 @@ struct ACPComposerDraftBridgeTests {
         #expect(!textView.isSlashPanelOpen)
     }
 
+    // MARK: - Argument hint ghost text
+
+    private func makeGhostHintTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        coordinator.promptSuggestions = [
+            ACPPromptSuggestion(command: "/init", description: "Initialize"),
+            ACPPromptSuggestion(command: "/read-jira-ticket", description: "Read", hint: "<CPCL-XXXX>"),
+            ACPPromptSuggestion(command: "/review", description: "Review", hint: ""),
+        ]
+        return (textView, coordinator, window)
+    }
+
+    @Test("ghost hint shows for exactly `/cmd ` with the caret at the end")
+    func ghostHintShowsAfterAcceptedCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-jira-ticket "
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("ghost hint is nil when the command has no hint or an empty hint")
+    func ghostHintNilWithoutHint() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+
+        textView.string = "/init "
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+        #expect(textView.argumentGhostHint == nil)
+
+        textView.string = "/review "
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        #expect(textView.argumentGhostHint == nil)
+    }
+
+    @Test("ghost hint is nil once the buffer holds anything beyond `/cmd `")
+    func ghostHintNilWhenBufferDiverges() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+
+        for text in [
+            "/read-jira-ticket",        // trailing space deleted
+            "/read-jira-ticket C",      // argument typed
+            "/read-jira-ticket \n",     // newline added
+            "/read-jira-ticket  ",      // two spaces
+            "/Read-Jira-Ticket ",       // case differs
+            " /read-jira-ticket ",      // leading space
+        ] {
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            #expect(textView.argumentGhostHint == nil, "expected no ghost for \(text.debugDescription)")
+        }
+    }
+
+    @Test("ghost hint is nil unless the selection is an empty caret at the end")
+    func ghostHintNilWhenCaretNotAtEnd() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-jira-ticket "
+
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        #expect(textView.argumentGhostHint == nil)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 18))
+        #expect(textView.argumentGhostHint == nil)
+
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("ghost hint is nil while the slash picker is open")
+    func ghostHintNilWhileSlashPanelOpen() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-jira-ticket "
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+
+        // Force the picker open over the same buffer: the row's ‹hint›
+        // takes over while it is visible.
+        textView.string = "/read"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+        textView.string = "/read-jira-ticket "
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+        #expect(textView.argumentGhostHint == nil)
+
+        textView.dismissSlashPanel()
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("ghost hint appears after accepting a suggestion from the picker")
+    func ghostHintAppearsAfterPickerAccept() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-j"
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+        #expect(textView.argumentGhostHint == nil)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(textView.string == "/read-jira-ticket ")
+        #expect(!textView.isSlashPanelOpen)
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("drawing the ghost hint never touches the text storage")
+    func ghostHintDrawLeavesStorageUntouched() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-jira-ticket "
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+        #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+
+        let image = NSImage(size: textView.bounds.size)
+        image.lockFocus()
+        textView.draw(textView.bounds)
+        image.unlockFocus()
+
+        #expect(textView.string == "/read-jira-ticket ")
+        #expect(textView.selectedRange() == NSRange(location: 18, length: 0))
+    }
+
+    /// `argumentGhostHint` returning the right string proves the logic is
+    /// wired correctly, but not that anything actually lands on screen —
+    /// `endOfBufferGhostOrigin()` could still compute a degenerate or
+    /// off-canvas point. Mirrors `makeNSView`'s exact setup (typography,
+    /// insets, colors, delegate) rather than the bare initializer, then
+    /// renders to an offscreen bitmap twice — with and without a hint on
+    /// the same typed text — and diffs the pixels: real painted ghost
+    /// text shows up as a color difference somewhere past the caret.
+    ///
+    /// Must use `bitmapImageRepForCachingDisplay`/`cacheDisplay(in:to:)` —
+    /// the standard AppKit offscreen-rendering pair, which renders through
+    /// the view's own flipped coordinate space. Locking focus on a bare
+    /// `NSImage` and calling `draw(_:)` directly skips that transform
+    /// entirely and silently paints nothing (verified empirically: every
+    /// pixel came back as a single flat color, including the typed text
+    /// itself, not just the ghost hint).
+    @Test("ghost hint actually paints pixels past the caret, not just logically returns a string")
+    func ghostHintPaintsVisiblePixels() throws {
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 40)
+        let textView = ACPNSTextView(frame: frame)
+        // Mirror makeNSView's exact setup, not just the bare initializer.
+        textView.applyChatTypography(.default)
+        textView.isRichText = true
+        textView.allowsUndo = true
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.focusRingType = .none
+        textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
+        textView.insertionPointColor = NSColor.controlAccentColor
+        let window = NSWindow(contentRect: frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(textView)
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+        textView.delegate = coordinator
+        textView.string = "/init "
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+
+        func render(hint: String?) throws -> NSBitmapImageRep {
+            coordinator.promptSuggestions = [
+                ACPPromptSuggestion(command: "/init", description: nil, hint: hint),
+            ]
+            let rep = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+            textView.cacheDisplay(in: textView.bounds, to: rep)
+            return rep
+        }
+
+        let without = try render(hint: nil)
+        #expect(textView.argumentGhostHint == nil)
+        let with = try render(hint: "ARG")
+        #expect(textView.argumentGhostHint == "ARG")
+
+        var foundDifferingPixel = false
+        outer: for y in 0..<Int(frame.height) {
+            for x in 0..<Int(frame.width) {
+                guard let baseline = without.colorAt(x: x, y: y),
+                      let withHint = with.colorAt(x: x, y: y)
+                else { continue }
+                let dist = abs(baseline.redComponent - withHint.redComponent)
+                    + abs(baseline.greenComponent - withHint.greenComponent)
+                    + abs(baseline.blueComponent - withHint.blueComponent)
+                if dist > 0.05 {
+                    foundDifferingPixel = true
+                    break outer
+                }
+            }
+        }
+        #expect(foundDifferingPixel)
+    }
+
+    @Test("caret moves without text edits schedule a repaint")
+    func ghostHintRepaintsOnSelectionChange() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = (coordinator, window)
+        textView.string = "/read-jira-ticket "
+        textView.setSelectedRange(NSRange(location: 18, length: 0))
+        textView.needsDisplay = false
+
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+
+        #expect(textView.needsDisplay)
+    }
+
     private func keyEvent(
         keyCode: UInt16,
         modifiers: NSEvent.ModifierFlags,
