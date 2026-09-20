@@ -151,7 +151,10 @@ final class RemotePeerManager {
             // could never be matched again or revoked. A reply with no usable
             // identity is not a peer we can hold, so refuse the add. Only the
             // display name falls back to the origin.
-            guard let serverId, !serverId.isEmpty else { return .unreachable }
+            guard let serverId, !serverId.isEmpty else {
+                revokeBufferedConfirmation(forCounterCode: counterCode)
+                return .unreachable
+            }
             // Snapshot the record as it stood before this attempt, if one
             // exists. If THIS attempt's own reciprocal exchange fails, the
             // PREVIOUS relationship — untouched by anything that happens
@@ -178,16 +181,45 @@ final class RemotePeerManager {
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode) {
                 return nil
             }
+            // The wait gave up without finding a match, but a confirmation
+            // could still land in the buffer right at that boundary. It
+            // authorized a device on the far side's say-so, so with no peer
+            // relationship left to vouch for it, that grant must be revoked
+            // rather than left sitting unclaimed until some unrelated later
+            // request happens to sweep it out.
+            revokeBufferedConfirmation(forCounterCode: counterCode)
             if let previousState {
                 restorePreviousState(previousState, peerId: peer.id)
             } else {
                 forget(peerId: peer.id)
             }
             return .reciprocalPairingFailed
-        case .expiredCode: return .expiredCode
-        case .originRejected: return .originRejected
-        case .unreachable: return .unreachable
+        case .expiredCode:
+            revokeBufferedConfirmation(forCounterCode: counterCode)
+            return .expiredCode
+        case .originRejected:
+            revokeBufferedConfirmation(forCounterCode: counterCode)
+            return .originRejected
+        case .unreachable:
+            // Our own leg failing does not mean the peer's did: A's reply to
+            // us can be lost on the wire after A already redeemed our
+            // counter-code and paired back, leaving an authorized device
+            // buffered here with no peer row this attempt will ever create
+            // to forget it by.
+            revokeBufferedConfirmation(forCounterCode: counterCode)
+            return .unreachable
         }
+    }
+
+    /// Revokes and drops a buffered reciprocal confirmation for the given
+    /// counter-code, if one arrived. A buffered entry always corresponds to
+    /// a device this Mac already authorized on the far side's say-so; if
+    /// nothing ever claims it into a real peer relationship, that grant must
+    /// not be left standing.
+    private func revokeBufferedConfirmation(forCounterCode counterCode: String) {
+        guard let buffered = pendingReciprocalConfirmations.removeValue(forKey: counterCode) else { return }
+        pairing.revoke(deviceId: buffered.localDeviceId)
+        onRevokeDevice?(buffered.localDeviceId)
     }
 
     /// The server saw another Mac redeem a code here. With a counter-code we
@@ -227,7 +259,14 @@ final class RemotePeerManager {
             let now = Date()
             // Sweep anything old enough that no attempt could still
             // plausibly claim it, so an entry nobody ever consumes does not
-            // accumulate indefinitely.
+            // accumulate indefinitely. Each swept entry is a device this Mac
+            // already authorized on the far side's say-so that no attempt
+            // ever turned into a real peer relationship, so it is revoked
+            // rather than just dropped.
+            for (_, stale) in pendingReciprocalConfirmations where now.timeIntervalSince(stale.receivedAt) > reciprocalConfirmationTimeout {
+                pairing.revoke(deviceId: stale.localDeviceId)
+                onRevokeDevice?(stale.localDeviceId)
+            }
             pendingReciprocalConfirmations = pendingReciprocalConfirmations.filter {
                 now.timeIntervalSince($0.value.receivedAt) <= reciprocalConfirmationTimeout
             }

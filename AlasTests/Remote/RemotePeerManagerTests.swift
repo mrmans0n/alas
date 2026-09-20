@@ -456,6 +456,60 @@ struct RemotePeerManagerTests {
         #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
     }
 
+    // Codex: our own outbound leg failing does not mean A's reciprocal leg
+    // did — A can still redeem our counter-code and pair back even if OUR
+    // read of A's reply is lost on the wire. That buffers a confirmation
+    // that authorizes a device for A; addPeer's failure path used to just
+    // return without checking it, leaving that device standing with no peer
+    // row this attempt will ever create to forget it by.
+    @Test func addPeerRevokesABufferedReciprocalDeviceWhenOurOwnLegFails() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let requests = Requests()
+        var revoked: [String] = []
+        // A delayed, always-failing reply gives the confirming task time to
+        // land while addPeer's own call is still in flight, before it
+        // resolves to .unreachable.
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            throw URLError(.cannotConnectToHost)
+        }, timeout: 1)
+        let manager = makeManager(pairing: pairing, pairer: delayedPairer, links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: inbound.deviceId)
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .unreachable)
+        #expect(manager.peers.isEmpty)
+        #expect(revoked == [inbound.deviceId])
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
+    // Codex: a confirmation that arrives with no addPeer attempt left waiting
+    // for its counter-code (the attempt it belonged to already gave up, or
+    // never existed) sits buffered until swept by expiry — the device it
+    // authorized must be revoked at that point, not just silently dropped.
+    @Test func aNeverClaimedBufferedConfirmationIsRevokedOnceItExpires() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        var revoked: [String] = []
+        let manager = makeManager(pairing: pairing,
+                                  pairer: pairer([:], requests: Requests()),
+                                  links: Links(), reciprocalConfirmationTimeout: 0.02)
+        manager.onRevokeDevice = { revoked.append($0) }
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil,
+            localDeviceId: inbound.deviceId, redeemedCode: "orphaned-code"))
+        try? await Task.sleep(nanoseconds: 40_000_000)   // outlast the 0.02s window
+        // A later, unrelated confirmation triggers the sweep that finds the
+        // first one expired.
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-c", peerName: "Mac C", origins: ["http://10.0.0.3:8765"], counterCode: nil,
+            localDeviceId: "dev-c", redeemedCode: "unrelated-code"))
+        #expect(revoked == [inbound.deviceId])
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
     @Test func forgetRevokesByPeerServerIdWhenNoLocalDeviceIdWasRecorded() throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
