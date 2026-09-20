@@ -113,7 +113,7 @@ struct ACPCommentaryRow: View {
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 7) {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "hammer")
                         .font(.system(size: 11))
                         .foregroundStyle(theme.color("fg-faint"))
                     Text("Working…")
