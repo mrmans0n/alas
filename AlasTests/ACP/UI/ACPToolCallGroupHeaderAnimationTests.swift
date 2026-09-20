@@ -15,8 +15,10 @@ struct ACPToolCallGroupHeaderAnimationTests {
         var description: String { reason }
     }
 
-    private static func snapshot(count: Int, head: Int = 10, tail: Int = 90) -> Snapshot {
-        Snapshot(count: count, window: .init(head: head, tail: tail))
+    /// `tail: nil` is the live tail, where `ACPTranscript.visibleTail` stays
+    /// unset for the whole turn. A number is a window the reader has pinned.
+    private static func snapshot(count: Int, tail: Int? = nil) -> Snapshot {
+        Snapshot(count: count, window: .init(visibleTail: tail))
     }
 
     /// The pulse claims "a tool call just finished and folded in here". Only a
@@ -36,12 +38,12 @@ struct ACPToolCallGroupHeaderAnimationTests {
             Case(
                 previous: snapshot(count: 1), current: snapshot(count: 2),
                 reduceMotion: false, expected: true,
-                reason: "a call finished and folded in"
+                reason: "a call finished and folded in at the live tail"
             ),
             Case(
                 previous: snapshot(count: 2), current: snapshot(count: 5),
                 reduceMotion: false, expected: true,
-                reason: "several calls folded in at once"
+                reason: "several calls folded in at once at the live tail"
             ),
             Case(
                 previous: snapshot(count: 3), current: snapshot(count: 3),
@@ -59,9 +61,14 @@ struct ACPToolCallGroupHeaderAnimationTests {
                 reason: "scrolling down revealed already-finished calls at the tail"
             ),
             Case(
-                previous: snapshot(count: 2, head: 10), current: snapshot(count: 6, head: 0),
+                previous: snapshot(count: 2, tail: nil), current: snapshot(count: 6, tail: 120),
                 reduceMotion: false, expected: false,
-                reason: "history backfill revealed already-finished calls at the head"
+                reason: "leaving the live tail pinned the window"
+            ),
+            Case(
+                previous: snapshot(count: 3, tail: 90), current: snapshot(count: 4, tail: 90),
+                reduceMotion: false, expected: true,
+                reason: "a call finished while the reader browsed a pinned window"
             ),
             Case(
                 previous: snapshot(count: 1), current: snapshot(count: 2),

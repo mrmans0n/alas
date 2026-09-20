@@ -45,7 +45,7 @@ struct ACPToolCallGroupHeaderRow: View {
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
-        window: ACPToolCallGroupHeaderAnimation.Window = .init(head: 0, tail: 0),
+        window: ACPToolCallGroupHeaderAnimation.Window = .init(visibleTail: nil),
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary

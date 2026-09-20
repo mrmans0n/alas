@@ -718,10 +718,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // always reaches the mounted view, even when this bundle's own
             // count did not change in the same update — otherwise the view
             // would compare the next genuine absorption against a stale
-            // window. See `ACPToolCallGroupHeaderAnimation`.
+            // window.
+            //
+            // `visibleTail` is the raw optional on purpose. `visibleTailBound`
+            // resolves to `messages.count` at the live tail, so it would churn
+            // this token on every arriving message AND read as navigation
+            // during exactly the turn the pulse is for. See
+            // `ACPToolCallGroupHeaderAnimation.Window`.
             let window = ACPToolCallGroupHeaderAnimation.Window(
-                head: transcript.visibleHead,
-                tail: transcript.visibleTailBound
+                visibleTail: transcript.visibleTail
             )
             return ACPTranscriptRowSpec(
                 id: group.id,

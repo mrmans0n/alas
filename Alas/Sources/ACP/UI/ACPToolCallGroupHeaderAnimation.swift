@@ -4,15 +4,28 @@ import Foundation
 /// can be tested without standing up SwiftUI — same shape as
 /// `ACPPlanPillState.outlineIsAnimated(reduceMotion:)`.
 enum ACPToolCallGroupHeaderAnimation {
-    /// The transcript slice a header was built from, as local message
-    /// indices. Any move means rows entered or left the render window.
+    /// Where the transcript's render window has been pinned, if anywhere.
+    ///
+    /// This is `ACPTranscript.visibleTail` — the RAW optional — and
+    /// deliberately not `visibleTailBound`. That bound resolves to
+    /// `messages.count` while the transcript follows the live tail, so it
+    /// advances with every arriving message and would read as navigation on
+    /// exactly the updates this pulse exists for, suppressing the animation
+    /// throughout a live turn. The raw value stays `nil` for the whole of
+    /// that turn and only takes a number once the reader has pinned the
+    /// window, which is the thing worth reacting to.
+    ///
+    /// `visibleHead` is deliberately absent. Head backfill can only grow a
+    /// bundle by revealing finished calls contiguous with its current FIRST
+    /// member, and a bundle's row id is derived from that member (see
+    /// `ACPTranscriptToolCallGroup.id`). Such a bundle is therefore re-keyed
+    /// and remounted fresh, which means no previous value to compare against
+    /// and no pulse, with or without a guard here.
     struct Window: Equatable, Sendable {
-        let head: Int
-        let tail: Int
+        let boundedTail: Int?
 
-        init(head: Int, tail: Int) {
-            self.head = head
-            self.tail = tail
+        init(visibleTail: Int?) {
+            self.boundedTail = visibleTail
         }
     }
 
@@ -45,8 +58,11 @@ enum ACPToolCallGroupHeaderAnimation {
     ///   window calls `ACPTranscript.stepTailForward`, which appends
     ///   already-finished calls to a bundle whose first member — and so whose
     ///   row id — never changed, leaving the reconciler to update that same
-    ///   mounted header in place. Head backfill does the same from the other
-    ///   side. Pulsing there would flash at a reader who absorbed nothing.
+    ///   mounted header in place. Pulsing there would flash at a reader who
+    ///   absorbed nothing.
+    ///
+    /// A live turn keeps the window at `nil` throughout, so absorptions
+    /// during one always pass the window check — see `Window`.
     static func absorbs(from previous: Snapshot, to current: Snapshot, reduceMotion: Bool) -> Bool {
         guard !reduceMotion else { return false }
         guard previous.window == current.window else { return false }
