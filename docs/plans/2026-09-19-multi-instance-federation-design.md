@@ -2,23 +2,30 @@
 
 ## Goal
 
-Let one person control multiple Alas instances (several Macs, or one Mac plus
-peers reachable over the user's own network) from a single paired client, and
-let instances find each other — without any Alas-operated server, account
-system, or cloud relay.
+Let one person control multiple Alas instances from a paired client and find
+other instances on networks they choose. Local, LAN, and tailnet operation
+must work without an Alas account or hosted service.
+
+An optional service at `app.alas.build` adds cross-network reach, a fleet
+dashboard, and push notifications. It does not own session execution or
+replace direct connections. This document specifies that hosted tier; it
+does not claim the service exists.
 
 ## Non-goals
 
-- No Alas-operated coordination server, directory, account, or relay. Anything
-  that requires a server the project operator must run is out; the feature must
-  work with only the instances themselves and networks the user already has.
-- No NAT traversal, hole punching, or TURN-style rendezvous. Cross-LAN reach
-  comes from networks the user already operates (Tailscale, WireGuard, VPN) or
-  from manual host:port entry.
-- No syncing of pairing/device state through iCloud or any third-party cloud.
-- No merge of security boundaries: each instance stays authoritative for its
-  own sessions, prompts, permissions, and writer leases. No instance can grant
-  access to another instance's data.
+- No mandatory Alas-operated directory, account, or relay. A hosted outage,
+  account lockout, or expired subscription must not disable local use or
+  already-paired direct access.
+- No custom NAT traversal or hole punching. Direct connections use reachable
+  LAN, tailnet, VPN, or manually configured addresses. The optional relay
+  connects endpoints through outbound connections when direct access is
+  unavailable. Entering an address alone does not make it reachable.
+- No cloud storage of plaintext pairing tokens, device private keys, source
+  code, or transcripts. The hosted directory may store approved public keys
+  and routing metadata.
+- No transfer of execution authority to the hosted service. Each home
+  instance evaluates its own permissions and writer leases. A user may
+  explicitly authorize a gateway to relay commands on their behalf.
 - No multi-user story. Every peer and every paired client belongs to the same
   person who owns the instances.
 
@@ -30,7 +37,7 @@ The Remote stack already provides a per-instance control plane:
   WebSocket server on an `NWListener`, multiple simultaneous connections, a
   writer lease with `takeOver` per session.
 - `RemotePairingService` + `FileDeviceStore`: short-TTL single-use pairing
-  codes, per-device 128-bit tokens stored as SHA-256 hashes, constant-time
+  codes, per-device 256-bit tokens stored as SHA-256 hashes, constant-time
   comparison, brute-force rate limiting, per-device revocation.
 - `RemoteNetwork`: classifies loopback, LAN, and Tailscale ranges
   (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) and already recommends tailnet
@@ -48,9 +55,9 @@ spec in `docs/superpowers/specs/2026-09-19-remote-hub-multi-server-design.md`)
 changes that last point and lands several of this document's prerequisites.
 It is treated here as the baseline; see "Relationship to PR #1337" below.
 
-What is still missing for multi-instance use is discovery, instance-to-instance
-trust, and a server-side aggregation surface. None of that requires central
-infrastructure.
+Discovery, instance trust, and gateway aggregation define the account-free
+path below. The optional hosted tier adds a directory, relay, and notification
+delivery without making them prerequisites for that path.
 
 ## Relationship to PR #1337
 
@@ -131,16 +138,16 @@ it has today. Three new pieces connect instances and clients.
 - Default off. A "Discoverable on this network" toggle in Settings → Remote
   controls both advertisement and browsing. Pairing codes remain the gate;
   discovery only surfaces host:port candidates, it grants nothing.
-- Off-LAN discovery is intentionally not built. On a user's tailnet, MagicDNS
-  names are stable and manually entering host:port is fine; `RemoteNetwork`
-  already flags tailnet addresses as recommended. If a design needs a server
-  the user does not own, it is out of scope.
+- Bonjour discovery remains link-local. Elsewhere, users can add reachable
+  addresses manually or opt into the hosted directory described below.
+  Hosted enrollment neither enables Bonjour nor exposes an inbound listener
+  to the internet.
 
 ### 2. Trust: an instance is just another paired device
 
-- Reuse `RemotePairingService` and `FileDeviceStore` unchanged. An Alas
-  instance redeems a code like any other device; its device record gains a
-  `kind` field distinguishing browser/app devices from `alasInstance` peers.
+- Extend the existing `RemotePairingService` and `FileDeviceStore` model.
+  An Alas instance redeems a code like any other device; its device record
+  gains a `kind` field distinguishing browsers from `alasInstance` peers.
 - Pairing is reciprocal: when instance B redeems a code on instance A, B's
   redeem request carries B's own advertised origins and a fresh counter-code.
   A automatically stores B as a peer with the counter-code redeemable into a
@@ -160,8 +167,10 @@ it has today. Three new pieces connect instances and clients.
   record so forgetting a peer revokes both directions.
 - Implementation plan for this section and the handshake:
   `docs/superpowers/plans/2026-09-19-federation-phase-1-peer-trust.md`.
-- Tokens never leave the machine that issued them. The device list is not
-  replicated through any cloud.
+- The issuer stores the token hash; the paired client must hold the token to
+  authenticate. Native outbound credentials belong in Keychain before
+  hosted access ships. Cloud metadata must not contain either endpoint's
+  plaintext credentials.
 - Revocation uses the existing per-device revoke + live-socket disconnect
   (`RemotePairingService.revoke`, `RemoteServer.disconnectDevice`).
 
@@ -187,10 +196,11 @@ it has today. Three new pieces connect instances and clients.
   opaque string and needs no change to any handler. `sessionList` rows gain an
   optional `serverId` and `serverName` so the client can group; rows without
   them are local, as today.
-- Invariant: the gateway is a proxy, not a primary. Every session has exactly
-  one home instance. Writer leases, `canDrive`, and permission policy are
-  evaluated only at the home instance. The gateway never evaluates policy for
-  a peer's sessions; it forwards requests and responses.
+- Every session has exactly one home instance. Writer leases, `canDrive`,
+  and permission policy are evaluated there. A gateway is nevertheless a
+  trusted controller: it can read forwarded content and send commands using
+  its peer credential. Allowing its clients to control a peer is explicit
+  delegation, not something the account or relay may infer.
 - Loop guard: a gateway never re-exports sessions it received from a peer.
   `FederatedSessionsProvider` only forwards rows whose `serverId` is absent
   (local) from each peer, so A↔B↔C pairings cannot echo sessions around the
@@ -258,13 +268,18 @@ for the native sidebar without the phone hub being on.
   which is the same posture as any non-browser client today.
 - Token hashes stay in the issuing instance's `remote-devices.json`. A peer
   connection's token is a normal per-device token scoped to that pair.
-- A hostile LAN sees at most the Bonjour name and port of instances with
-  discoverability enabled. No secrets, paths, or session data in TXT records.
-- Revoking a peer severs the link immediately; existing sockets close via
-  `disconnectDevice`. Re-pairing requires a fresh code on the revoking side.
-- The gateway proxies but cannot widen policy: a permission request from a
-  peer's session is answered only through the peer's own policy evaluation,
-  and the gateway cannot accept a permission the home instance would refuse.
+- Discovery exposes a service name, port, and the advertised TXT metadata,
+  never secrets, paths, or session data. This is not transport encryption:
+  the current `NWParameters.tcp` listener uses plaintext HTTP/WebSocket.
+  Non-loopback use needs a trusted encrypted network or a separately secured
+  transport. Host and Origin checks do not encrypt traffic.
+- Revoking an inbound device closes its live sockets on that instance.
+  Forgetting a peer also deletes this Mac's outbound credential. Fleet-wide
+  revocation must report which other instances have received the change;
+  an offline instance cannot apply a revocation immediately.
+- Home-instance checks still apply to commands sent by a gateway, but a
+  compromised gateway can exercise its delegated authority. The hosted
+  relay must not receive that authority or those credentials.
 
 ### Known gap: a peer identity is claimed, not proved
 
@@ -285,11 +300,236 @@ device carrying the identity, which removes the claimant's access too.
 Phase 1 accepts the remaining gap: the flag is off by default, no session
 data crosses a peer link, and the actor must hold a code the user
 deliberately displayed, within its 120-second window. It does not stay
-acceptable. Binding a peer record to verified key material — the peer proving
-possession of a key committed to at pairing time, with `serverId` derived
-from or pinned to it — is a precondition for the phase that aggregates peer
-sessions, because that is the phase in which a row in the peer store starts
-carrying real data rather than only a link's address.
+acceptable. Bind each peer record to verified key material. The peer must
+prove possession of a key committed to at pairing time, with `serverId`
+derived from or pinned to it. This is a prerequisite for both aggregation
+and hosted access, not a property an account login can supply. No real
+session data may cross those links before that binding exists.
+
+## Hosted fleet tier
+
+### Decision and product scope
+
+Offer `app.alas.build` as an optional directory, relay, and push service for
+one person's devices. Ship a self-hostable implementation using the same
+public protocol and a configurable endpoint. Neither local features nor
+direct connections check a hosted entitlement.
+
+The first hosted release focuses on reaching agents and handling work that
+needs attention:
+
+- A fleet dashboard lists enrolled instances, connection state, and last-seen
+  time. Session status comes from each instance. Cached status is visibly
+  dated, never presented as live.
+- An attention inbox collects permission requests, questions, and failures
+  from reachable instances. Each action identifies its home instance and
+  session before the user approves it.
+- Existing prompt, stop, transcript, changes, and file-reading operations work
+  through a relay when the browser cannot reach the Mac directly. Both
+  endpoints connect outbound, without router port forwarding or a VPN.
+- Opt-in push notifies the user without an open dashboard tab. Account
+  sign-in locates the fleet; trusted-device approval still gates enrollment.
+
+User-operated infrastructure could also provide these capabilities. The
+hosted value is removing that setup and maintaining one browser entry point,
+not making peer-to-peer control possible. Firewalls and corporate proxies
+can still block outbound connections.
+
+Fleet search and usage summaries are possible extensions. Start with
+client-side aggregation of data reachable instances expose. Report missing
+or offline instances and distinguish provider-reported usage from estimates
+and unavailable data. No plaintext cloud search index is required.
+
+Encrypted history backup is separately opt-in. Define key recovery,
+retention, deletion including backups, and storage quotas before adding it.
+Restoring a transcript does not migrate a running agent, its process state,
+or its worktree. Archives are not a prerequisite for fleet control.
+
+### Connection model
+
+The hosted service is not a gateway instance. A gateway terminates a trusted
+peer connection and can read its data. The relay carries encrypted traffic
+between an authorized client and the home instance.
+
+```text
+Browser/PWA ---- outbound WSS ---- Relay ---- outbound WSS ---- Mac A
+                                 |
+                                 +--------- outbound WSS ---- Mac B
+
+Each browser-to-Mac channel authenticates and encrypts end to end.
+```
+
+Each enrolled Mac maintains an outbound connection while Alas is running
+and hosted access is enabled. The dashboard reaches each home instance
+through the relay; no always-on gateway Mac is required. This does not
+introduce an unattended daemon independent of Alas. Disabling hosted access
+closes its channels and rejects new hosted commands even with valid account
+credentials.
+
+Reuse `RemoteClientMessage` and `RemoteServerMessage` operations inside the
+encrypted channel, then apply the existing gateway and home-instance policy
+checks. Add negotiated envelopes for command identity and delivery tracking
+rather than assuming the current wire already provides them. Never treat a
+relay connection as an authenticated local caller or expose a generic TCP
+tunnel or arbitrary URL fetcher.
+
+The outer relay protocol needs its own version and capabilities, independent
+of `RemoteProtocolVersion`. Use opaque routing IDs and bounded frames. Bind
+endpoint identities, routing context, and protocol version into the
+authenticated channel, and reject replay. Qualify instance-local objects
+with `serverId` across lists, actions, and pending requests.
+
+Native clients may prefer a direct authenticated route and use the relay
+when it fails. Verify the same pinned identity on both routes; reconcile
+subscriptions after switching. Never replay a mutation merely because a
+different route connected.
+
+The HTTPS dashboard cannot assume access to plaintext `http://` and
+`ws://` LAN endpoints. CORS does not solve
+[mixed-content restrictions][mixed-content]. Use the secure relay unless a
+browser-compatible authenticated direct transport is available. The existing
+locally served browser client remains a separate outage path.
+
+Browser storage is already origin-scoped. The hosted dashboard cannot read
+the local client's `alas.remote.hub` registry or inherit its tokens.
+Authorize each new dashboard browser instead of copying its stored
+credentials to the service.
+
+### Enrollment, keys, and recovery
+
+Account authentication grants service access and discovery, not permission
+to read a Mac or control its agents.
+
+- Bootstrap a fleet from a locally confirmed Mac. Generate device keys there,
+  retain native private keys in Keychain, and pin the fleet's initial
+  approval identity independently of the hosted directory.
+- Enroll subsequent devices through a short-lived, single-use exchange
+  approved by an already trusted device. Bind approval to the joining key,
+  fleet, role, selected instances, and expiry. QR-carried key or verification
+  code comparison must prevent directory key substitution.
+- Home instances verify the approved key chain and their own policy before
+  accepting access. Inserting a hosted database row cannot grant control.
+  Controller grants may include permission approval; do not describe them
+  as read-only status access. Distinguish controller and Mac identities.
+- Keep relay-account credentials separate from Alas device credentials.
+  Any instance token a client needs travels only inside the verified
+  end-to-end channel, never in a relay URL, log, or outer frame.
+
+Use an established, reviewed authenticated key-exchange and encryption
+implementation. Review its browser support, nonce handling, replay
+protection, and rotation before release. Two TLS connections terminated at
+the relay are not end-to-end encryption.
+
+Account recovery must not recover device private keys or silently authorize
+a replacement controller. Without a trusted device or a separately designed
+user-held recovery mechanism, require local re-enrollment on surviving Macs.
+A password reset alone does not restore fleet authority.
+
+The service cuts off a revoked controller's relay access immediately.
+Reachable home instances verify signed revocations and close its channels.
+Persist revocation state and reject older membership updates. An offline Mac
+must synchronize revocations before accepting hosted commands on reconnect.
+Show pending acknowledgements; do not promise immediate revocation of
+disconnected direct peers.
+
+### Data visibility and browser trust
+
+The service stores account records, approved public-key membership, opaque
+routing IDs, presence timestamps, push subscriptions, and bounded encrypted
+attention records. It observes IP addresses, connection times, traffic
+volume, and routing relationships. Names, session titles, paths, transcripts,
+and approval content belong in encrypted payloads.
+
+Do not log tokens, pairing links, command bodies, or decrypted session data.
+The operator must still secure service credentials for account sessions,
+TLS, and push delivery. No device private keys on the server does not mean
+there are no server secrets.
+
+End-to-end encryption protects against passive relay inspection and storage
+compromise. A browser still trusts the JavaScript `app.alas.build` serves.
+A compromised web deployment can read decrypted content or issue commands
+using that browser's authority. Non-exportable browser keys do not prevent
+this.
+
+Separate web deployment and relay administration, exclude third-party
+scripts from the dashboard, and enforce a restrictive content security
+policy. These reduce risk but do not remove trust in delivered code. Users
+who need independence from hosted web delivery need an independently
+distributed native client or a self-hosted client whose delivery they trust.
+Do not advertise the browser dashboard as protected from a malicious
+operator.
+
+### Push, stale state, and delivery
+
+Use standards-based Web Push with explicit permission and capability checks.
+On iOS and iPadOS the supported path requires an installed Home Screen web
+app; see [WebKit's Web Push requirements][web-push]. Keep the inbox usable
+when permission is denied or push is unavailable.
+
+Default to generic notification text such as "Alas needs your attention".
+Push services and lock screens should not receive source code, prompts, or
+permission details. Bound and expire encrypted attention records. Clicking
+a notification reconnects to the home instance and fetches the current
+request; the push payload is not authority to approve it.
+
+Push does not guarantee waking a sleeping Mac or starting Alas. Show
+last-seen state for asleep, offline, or quit instances and disable actions
+that require them. Notifications may be delayed, duplicated, or refer to
+requests already resolved elsewhere.
+
+Do not ship server-queued execution in the first hosted release. A user can
+keep a draft locally, but the UI must not say it was sent until the home
+instance acknowledges it. Prompt submission, stop, permission decisions,
+and worktree creation must never replay automatically on reconnect.
+
+Commands need unique operation IDs and home-side deduplication across
+reconnections. On a lost acknowledgement, reconcile before offering retry.
+If the home instance cannot establish the result, show "outcome unknown".
+Permission and question responses also bind the session generation and
+pending request so a stale click cannot answer a different request. Offline
+command queues need a separate design covering expiry, cancellation,
+revocation, and durable deduplication.
+
+### Outages, self-hosting, and operation
+
+Disconnecting `app.alas.build` must leave local use and previously authorized
+direct LAN and tailnet access unchanged. The hosted dashboard may be
+unavailable and push stops. Never silently downgrade it to an insecure
+transport. A user relying only on the relay must establish direct pairing
+before claiming an outage path.
+
+Ship a self-hostable service with the same public protocol, enrollment, and
+revocation rules, plus deployment, upgrade, backup, and deletion procedures.
+It must not require an `app.alas.build` account. Moving providers requires
+confirming the new endpoint and fleet identity; never send stored
+credentials to an arbitrary replacement URL.
+
+Operating the service requires authentication security, bandwidth and
+connection quotas, bounded queues and frames, slow-client backpressure,
+abuse handling, push delivery, dependency updates, incident response, and
+support. Publish retention and deletion rules, including backup expiry,
+before launch. Account deletion removes hosted records and subscriptions,
+not local sessions or direct pairings.
+
+A paid tier may cover relay capacity and push convenience. Billing stays out
+of local authorization and execution. Search, usage reports, and encrypted
+archives remain separate product decisions, not reasons to upload
+transcripts by default. Team access, remote software installation, and a
+general remote shell remain out of scope.
+
+### Hosted release gates
+
+- Close the peer-identity gap above before real session data crosses either
+  a gateway or hosted channel.
+- Review encryption, enrollment, recovery, revocation, and the browser-code
+  delivery threat model before opening the service.
+- Ship working relay access and the attention inbox before adding archives
+  or offline command queues.
+- Publish the self-hosted path, retention policy, operating limits, and
+  outage recovery procedure with the hosted offering.
+
+[mixed-content]: https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Mixed_content
+[web-push]: https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/
 
 ## Testing
 
@@ -317,6 +557,32 @@ carrying real data rather than only a link's address.
   the gateway only, driving a session on the peer end to end; then quit the
   gateway and confirm the phone falls back to its direct link to the peer.
 
+Hosted acceptance checks supplement the direct federation checks:
+
+- From a separate network, prompt a Mac and answer a pending request over
+  the encrypted relay without inbound ports.
+- Substitute a directory key or use account login without approved device
+  enrollment. The home instance must reject access.
+- Revoke connected and offline controllers. Verify live disconnect, pending
+  acknowledgement display, and refusal after the offline Mac returns.
+- Inspect relay storage and logs for plaintext credentials and content.
+  Review web-deployment compromise separately; empty relay storage is not
+  proof of browser-client safety.
+- Drop acknowledgements during prompt submission and worktree creation.
+  Reconnect on another route and verify no duplicate operation. Reject
+  stale approvals after a session restart or local resolution.
+- Exercise denied push permission, delayed and duplicate notifications,
+  and a sleeping Mac. Stale notifications must not authorize actions.
+- Stop the service and confirm local work and pre-established LAN and
+  tailnet connections still function without an account check.
+- Exercise enrollment, relay, revocation, and deletion on a self-hosted
+  deployment using the same clients. Verify one fleet cannot route to or
+  retrieve another fleet's records.
+
+These are implementation acceptance criteria, not checks performed by this
+documentation change. Source-text and asset-wiring assertions are not
+substitutes for these observable behaviors.
+
 ## Rollout
 
 0. PR #1337 merges: `hello`, `serverId`, pairing link with `hosts`, Origin
@@ -338,3 +604,23 @@ Steps 1 to 3 are Mac-only and independently useful. Step 4 is the first one
 that changes what the phone sees. Step 5 is the only web-client change, and it
 is small because #1337 already isolated per-server state and treats session
 IDs as opaque.
+
+
+Hosted access has a separate rollout and does not require a proxying gateway
+in the data path. Verified device identity is a shared prerequisite: complete
+it before direct aggregation in step 4 above or any hosted data access.
+
+1. Review authenticated encryption, scoped enrollment, recovery, and
+   revocation. Bind peer and controller records to verified device keys.
+2. Add the optional account directory, service connection, and self-hostable
+   relay. Its opt-in setting is separate from `hubEnabled` and
+   `federationEnabled`; it does not enable LAN discovery.
+3. Serve the fleet dashboard and attention inbox through encrypted channels
+   to home instances. Exercise uncertain delivery and outage behavior before
+   releasing them.
+4. Add opt-in Web Push and bounded encrypted attention records. Document
+   installation, permissions, and sleeping-host limitations.
+
+Fleet search, usage aggregation, and encrypted history backup can follow
+under separate designs. They do not block direct federation or the hosted
+control and notification release.
