@@ -184,28 +184,12 @@ final class RemoteServer {
         var configured = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
-            diagnostics: {
-                let snapshot = self.diagnosticsProvider(self.port)
-                // Callers with app state fold serverId/name into their own
-                // diagnostics closure already; this fallback only fires for
-                // the bare default (no app state, e.g. tests) so /pair still
-                // replies with a real identity when one is set.
-                guard snapshot.serverId == nil, snapshot.name == nil else { return snapshot }
-                let id = identity()
-                return RemoteDiagnosticsSnapshot(
-                    appName: snapshot.appName,
-                    port: snapshot.port,
-                    addresses: snapshot.addresses,
-                    usesPlainHTTP: snapshot.usesPlainHTTP,
-                    pairedDeviceCount: snapshot.pairedDeviceCount,
-                    serverId: id.serverId.isEmpty ? nil : id.serverId,
-                    name: id.name
-                )
-            },
+            diagnostics: { self.diagnosticsProvider(self.port) },
             originPolicy: originPolicy
         )
         configured.acceptsPeers = { identity().federationEnabled }
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.identity = identity
         let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(

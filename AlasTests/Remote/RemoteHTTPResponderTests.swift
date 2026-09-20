@@ -109,13 +109,13 @@ struct RemoteHTTPResponderTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             diagnostics: {
-                RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true,
-                                          pairedDeviceCount: 0, serverId: "srv-a", name: "Mac A")
+                RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true, pairedDeviceCount: 0)
             },
             originPolicy: RemoteOriginPolicy(hostPolicy: .loopback, allowedOrigins: [])
         )
         responder.acceptsPeers = { accepts }
         responder.onPeerPaired = { sink.requests.append($0) }
+        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) }
         return responder
     }
 

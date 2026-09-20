@@ -45,6 +45,10 @@ struct RemoteHTTPResponder {
     var acceptsPeers: @MainActor () -> Bool = { false }
     /// Fired after a peer redeemed a code here, so the app can pair back.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)? = nil
+    /// The identity this Mac advertises. Shared with the `hello` frame so a
+    /// pairing reply and the socket that follows it can never disagree.
+    /// Nil means "no identity configured" and omits both keys from the reply.
+    var identity: (@MainActor () -> RemoteServerIdentity)?
 
     func response(for req: HTTPRequest, body: Data) -> Data {
         let cors = corsHeaders(for: req)
@@ -125,8 +129,11 @@ struct RemoteHTTPResponder {
             guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued
         }
-        let snapshot = diagnostics()
-        let reply = PairReply(token: token, serverId: snapshot.serverId, name: snapshot.name)
+        let id = identity?()
+        let reply = PairReply(
+            token: token,
+            serverId: id?.serverId.isEmpty == false ? id?.serverId : nil,
+            name: id.map(\.name))
         let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
         return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }
