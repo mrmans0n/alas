@@ -30,11 +30,19 @@ struct RemotePeerStoreTests {
         #expect(FilePeerStore(url: url).load() == [peer])
     }
 
+    // Seeded through FilePeerStore, not a throwaway JSONDecoder: the behaviour
+    // under test is that the PRODUCTION load path tolerates a record written
+    // without the optional keys. FilePeerStore.load() decodes the whole file as
+    // one array and returns [] on any error, so a wrongly-strict field loses
+    // every peer, not one.
     @Test func recordWithoutOptionalKeysDecodes() throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let json = Data(#"[{"id":"p1","serverId":"srv-b","name":"Studio","origins":["http://a:1"],"token":"t","addedAt":"2026-01-02T03:04:05Z"}]"#.utf8)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let peers = try decoder.decode([RemotePeer].self, from: json)
+        try json.write(to: url)
+        let peers = FilePeerStore(url: url).load()
+        #expect(peers.count == 1)
         #expect(peers.first?.lastOrigin == nil)
         #expect(peers.first?.protocolVersion == nil)
         #expect(peers.first?.localDeviceId == nil)
