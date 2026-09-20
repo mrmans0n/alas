@@ -644,6 +644,111 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    // A peer's token predates the toggle, so it must not keep opening new
+    // sockets once federation is off — only browser/phone devices are exempt
+    // from this gate.
+    @Test func authorizeRefusesAnAlasInstanceTokenWhileFederationIsOff() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let result = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        var federationEnabled = false
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: federationEnabled) }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        func attemptUpgrade() async throws -> String {
+            let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+            let queue = DispatchQueue(label: "io.alas.tests.remote.federation-authorize-\(UUID())")
+            try await start(conn, on: queue)
+            defer { conn.cancel() }
+            let request = [
+                "GET /ws HTTP/1.1",
+                "Host: 127.0.0.1",
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                "Sec-WebSocket-Version: 13",
+                "Sec-WebSocket-Protocol: \(result.token)"
+            ].joined(separator: "\r\n") + "\r\n\r\n"
+            try await send(request, on: conn)
+            let response = try await receiveHTTPResponse(from: conn, on: queue)
+            return try #require(String(data: response, encoding: .utf8))
+        }
+
+        let refused = try await attemptUpgrade()
+        #expect(refused.hasPrefix("HTTP/1.1 401 Unauthorized"))
+
+        federationEnabled = true
+        let accepted = try await attemptUpgrade()
+        #expect(accepted.hasPrefix("HTTP/1.1 101 Switching Protocols"))
+    }
+
+    // `disconnectAllPeerDevices()` is the sweep `AppState` runs when the
+    // "Remote peers" toggle turns off while remote control stays on: it must
+    // cut every `.alasInstance` socket and leave a browser's alone.
+    @Test func disconnectAllPeerDevicesClosesOnlyAlasInstanceSockets() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let peerResult = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        let browserToken = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        // `federationEnabled: true` so the peer's own connection can come up
+        // in the first place — the sweep this test exercises is a distinct
+        // capability the server exposes for the moment the flag turns OFF,
+        // not something gated by the flag's current value itself.
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let peerTask = URLSession.shared.webSocketTask(with: wsURL, protocols: [peerResult.token])
+        let browserTask = URLSession.shared.webSocketTask(with: wsURL, protocols: [browserToken])
+        peerTask.resume()
+        browserTask.resume()
+        // Drain each socket's `hello` so we know both are authenticated
+        // before sweeping.
+        _ = try await peerTask.receive()
+        _ = try await browserTask.receive()
+
+        server.disconnectAllPeerDevices()
+
+        var peerClosed = false
+        for _ in 0..<50 {
+            do { _ = try await peerTask.receive() } catch { peerClosed = true
+            break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(peerClosed, "expected the peer's WS to close")
+
+        // The browser's socket must still be alive: send it a message and
+        // read the reply, rather than merely absence-of-error, since a
+        // half-closed socket can still accept a write.
+        try await browserTask.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))
+        let stillAlive = try await browserTask.receive()
+        switch stillAlive {
+        case .data, .string: break
+        @unknown default: Issue.record("unexpected frame kind")
+        }
+
+        peerTask.cancel(with: .goingAway, reason: nil)
+        browserTask.cancel(with: .goingAway, reason: nil)
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()

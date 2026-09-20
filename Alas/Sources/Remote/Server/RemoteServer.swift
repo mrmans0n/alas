@@ -144,6 +144,19 @@ final class RemoteServer {
         }
     }
 
+    /// Closes every live connection authenticated as an `.alasInstance`
+    /// device, leaving browser/phone devices untouched. Called when
+    /// federation is turned off while remote control stays on, so an
+    /// already-open peer socket does not outlive the flag that gated it: the
+    /// `authorize` closure in `accept(_:)` only stops a NEW upgrade from a
+    /// peer device, it does nothing to one that opened before the toggle
+    /// flipped.
+    func disconnectAllPeerDevices() {
+        for device in pairing.devices where device.kind == .alasInstance {
+            disconnectDevice(device.id)
+        }
+    }
+
     /// Pushes a fresh `hello` to every authenticated connection — e.g. after
     /// the "Remote hub" toggle changes, so already-connected browsers pick up
     /// the new `hubEnabled` without waiting for a reconnect.
@@ -198,6 +211,16 @@ final class RemoteServer {
             responder: { req, body in responder.response(for: req, body: body) },
             authorize: { [weak self] token in
                 guard let self, let id = self.pairing.validate(token: token) else { return nil }
+                // A valid token alone is not enough for an Alas peer while
+                // federation is off: without this, an already-issued
+                // `.alasInstance` token keeps working across the toggle, and
+                // `disconnectAllPeerDevices()` at the moment of disabling
+                // would only be a one-time sweep a reconnect could undo.
+                // Browser/phone devices are unaffected by the flag either way.
+                if !identity().federationEnabled,
+                   self.pairing.devices.first(where: { $0.id == id })?.kind == .alasInstance {
+                    return nil
+                }
                 self.pairing.touch(deviceId: id)
                 return id
             },

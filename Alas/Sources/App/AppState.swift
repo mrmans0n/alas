@@ -670,6 +670,13 @@ final class AppState {
             // server no link was ever opened, and reaching for `remotePeers`
             // would force the lazy manager and its stores into existence.
             remotePeers.disconnectAll()
+            // Cuts an already-open peer socket immediately: `disconnectAll()`
+            // above only stops OUR outbound links, it does nothing to a
+            // connection another Mac holds INTO this one. The `authorize`
+            // closure in `RemoteServer.accept` refuses a peer's token going
+            // forward; this closes the sockets that opened before the toggle
+            // flipped.
+            remoteServer?.disconnectAllPeerDevices()
         }
     }
 
