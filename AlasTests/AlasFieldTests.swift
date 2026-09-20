@@ -120,8 +120,44 @@ struct AlasFieldTests {
         }
     }
 
-    private func pump() {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    private func pump(_ seconds: TimeInterval = 0.05) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Every real call site (`NewWorktreeDialog`, `WorkspaceDialogs`) presents
+    /// `focusAndPlaceCaretAtEnd()` is the exact synchronous call `updateNSView`
+    /// makes when `focusOnAppear` fires — no SwiftUI rendering, no
+    /// `RunLoop.run(until:)` pumping, nothing between "focus acquired" and this
+    /// assertion. That matters: `RunLoop.run(until:)` doesn't stop the instant
+    /// something happens, it keeps draining ready sources for its whole
+    /// window, so even a very short pump could let a deferred
+    /// `DispatchQueue.main.async` correction run before the assertion — making
+    /// a pump-based test pass against a regression by luck depending on
+    /// scheduling. Calling the method directly and asserting on its return
+    /// removes that ambiguity: acquiring first responder selects all of the
+    /// field's pre-filled text by default (AppKit's behavior), and this must
+    /// already be corrected to end-of-string by the time the call returns, or
+    /// the very next keystroke would replace the whole selection instead of
+    /// appending to it.
+    @Test func focusAndPlaceCaretAtEndCorrectsSelectionBeforeReturning() {
+        let field = AlasNSTextFieldView(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+        field.stringValue = "nacho/"
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 28),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = field
+
+        #expect(field.focusAndPlaceCaretAtEnd())
+
+        let editor = try! #require(field.currentEditor() as? NSTextView)
+        #expect(editor.selectedRange() == NSRange(location: 6, length: 0))
+
+        editor.insertText("feature", replacementRange: editor.selectedRange())
+        #expect(editor.string == "nacho/feature")
+        #expect(editor.selectedRange() == NSRange(location: 13, length: 0))
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {

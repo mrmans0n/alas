@@ -110,19 +110,13 @@ private struct AlasNSTextField: NSViewRepresentable {
         // field is already being edited by then, re-acquiring first responder would reset
         // the field editor's selection to select-all and eat the next keystroke, so skip
         // the focus/selection dance entirely and just consume the flag.
-        if focusOnAppear, nsView.focusOnAppear, let window = nsView.window {
+        if focusOnAppear, nsView.focusOnAppear, nsView.window != nil {
             guard !context.coordinator.isEditing, nsView.currentEditor() == nil else {
                 nsView.focusOnAppear = false
                 return
             }
-            if window.firstResponder !== nsView {
-                window.makeFirstResponder(nsView)
-            }
             nsView.focusOnAppear = false
-            DispatchQueue.main.async {
-                guard let editor = window.fieldEditor(false, for: nsView) as? NSTextView else { return }
-                editor.setSelectedRange(NSRange(location: nsView.stringValue.count, length: 0))
-            }
+            nsView.focusAndPlaceCaretAtEnd()
         }
     }
 
@@ -224,6 +218,26 @@ private struct AlasNSTextField: NSViewRepresentable {
 
 class AlasNSTextFieldView: NSTextField {
     var focusOnAppear = false
+
+    /// Acquires first responder and moves the caret to the end of the
+    /// current text, synchronously, in a single call. Acquiring first
+    /// responder selects all of the field's text by default (AppKit's
+    /// behavior), so the caret-to-end correction must happen in this same
+    /// call rather than being deferred to a later run-loop turn: a deferred
+    /// fix loses the race against the user's first keystroke, which lands
+    /// while the whole string is still selected and gets replaced by it
+    /// instead of appended to.
+    @discardableResult
+    func focusAndPlaceCaretAtEnd() -> Bool {
+        guard let window else { return false }
+        if window.firstResponder !== self, !window.makeFirstResponder(self) {
+            return false
+        }
+        if let editor = currentEditor() as? NSTextView {
+            editor.setSelectedRange(NSRange(location: stringValue.count, length: 0))
+        }
+        return true
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
