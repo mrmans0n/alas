@@ -601,14 +601,18 @@ final class ACPTranscriptScrollerReconciler {
     /// adjacent bundle via a single-row removal — rather than a wholesale
     /// `.reset` — needs the identical remap, since its own row similarly
     /// stops existing under its old id without the reader's position having
-    /// moved anywhere semantically. In that case the absorbed call becomes
-    /// the bundle's newest (chronologically last) member, joining at the
-    /// bundle's TAIL — the same "nothing changed below my anchor" invariant
-    /// `assumeHeadGrowth`'s bottom-relative math relies on for content
-    /// prepended at a bundle's head, so the same formula applies. (An
-    /// out-of-order merge into the middle of a run, which that invariant
-    /// would not cover, is not a case Codex's review has reported and is
-    /// not handled here.)
+    /// moved anywhere semantically.
+    ///
+    /// Which branch that absorption takes is the resolver's call, and it
+    /// answers "no head growth": the card folded into a COLLAPSED bundle,
+    /// whose one-line header did not grow to hold it — the card's height
+    /// simply left the document. So it lands in the top-relative branch
+    /// below, where `min(offsetWithinRow, row.height)` caps a reader who was
+    /// deep inside a tall card at the header's bottom edge, exactly as a row
+    /// shrinking in place is handled. The bottom-relative branch, which
+    /// measures from the OLD row's height, is only right when the new row
+    /// actually contains the old content and is reserved for a re-keyed
+    /// bundle row (see `resolveStaleRowId`).
     @discardableResult
     private func restoreViaStaleResolution(id: String, offsetWithinRow: CGFloat, oldRowHeight: CGFloat) -> Bool {
         guard let resolution = resolveStaleRowId(id), let row = tiling.row(withId: resolution.rowId) else {

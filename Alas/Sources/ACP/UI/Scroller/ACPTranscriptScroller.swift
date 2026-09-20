@@ -1533,31 +1533,40 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// restoration must not assume bottom-relative there.
         ///
         /// A resolved PLAIN id (a card that has since been folded into a
-        /// bundle) implies head growth only when that card is now the
-        /// bundle's LAST member: everything else in the bundle sits above
-        /// it, so the old card's bottom edge is the bundle's bottom edge and
-        /// bottom-relative restoration is exact. If the card landed anywhere
-        /// else in the bundle — typically its FIRST member, as when the
-        /// setting is turned on with the reader parked on the first of a
-        /// run of finished calls — the bundle grew below it, and
-        /// bottom-relative restoration would drag the viewport down by the
-        /// height of every later member; top-relative is right there.
+        /// bundle) NEVER implies head growth. A member's own stale id only
+        /// ever arises from a COLLAPSED bundle, which is the only kind that
+        /// swallows its members' row ids — an expanded bundle tiles each
+        /// member as its own row keyed by its own stable id (see
+        /// `ACPTranscriptRenderRow`), so expanding, collapsing or disabling
+        /// the setting while parked on one of its cards leaves that card's
+        /// row id untouched. And a collapsed bundle is a one-line "Ran N
+        /// tools" header whose height does not depend on how many calls it
+        /// holds: the card's content is gone from the document, not moved
+        /// into a taller row. The replacement therefore did not grow at its
+        /// head (or anywhere), and the only honest restoration is the same
+        /// one every row that shrinks in place gets: tops aligned, offset
+        /// capped at the new height.
         ///
-        /// Note a MEMBER's own stale id only ever arises from a COLLAPSED
-        /// bundle, which is the only kind that swallows its members' row
-        /// ids. An expanded bundle tiles each member as its own row keyed
-        /// by its own stable id (see `ACPTranscriptRenderRow`), so
-        /// expanding, collapsing or disabling the setting while parked on
-        /// one of its cards leaves that card's row id untouched. A stale
-        /// GROUP id can still arise either way, since a bundle's id follows
-        /// its first member and two runs merging re-keys the later one.
+        /// This used to report head growth when the card was the bundle's
+        /// LAST member, on the reasoning that its bottom edge coincided with
+        /// the bundle's. That holds only when the bundle row contains the
+        /// card's rendered height, which a collapsed header never does.
+        /// Bottom-relative restoration from the OLD card's height, clamped
+        /// to the NEW header's, pinned the viewport to within one line of the
+        /// header's bottom — i.e. jumped the reader up to wherever the run of
+        /// tools began, which on a long live turn is far above the tail.
+        /// That was the "transcript scrolls up when a tool call collapses"
+        /// bug, and it recurred on every fold while a scroll gesture kept
+        /// the tail re-pin suppressed.
+        ///
+        /// A stale GROUP id can still arise for a collapsed OR expanded
+        /// bundle, since a bundle's id follows its first member and two runs
+        /// merging re-keys the later one — handled below.
         static func resolveStaleRowId(
             _ staleId: String, lookup: ACPTranscriptVisibleRowLookup, groupingEnabled: Bool
         ) -> StaleRowIdResolution? {
             if let resolved = lookup.rowId(forStableId: staleId) {
-                let isLastMember = lookup.transcriptIndex(for: staleId) != nil
-                    && lookup.transcriptIndex(for: staleId) == lookup.localIndexSpan(forRowId: resolved)?.upperBound
-                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: isLastMember)
+                return StaleRowIdResolution(rowId: resolved, assumeHeadGrowth: false)
             }
             guard let staleStableId = ACPTranscriptToolCallGroup.firstMemberStableId(forGroupId: staleId),
                   let resolved = lookup.rowId(forStableId: staleStableId)
