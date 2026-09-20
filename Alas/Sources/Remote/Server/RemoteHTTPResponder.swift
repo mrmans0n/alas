@@ -40,6 +40,11 @@ struct RemoteHTTPResponder {
     let assets: RemoteWebAssets
     let diagnostics: () -> RemoteDiagnosticsSnapshot
     var originPolicy: RemoteOriginPolicy = .loopback
+    /// Whether `POST /pair` may carry a `peer` object. Off means a peer
+    /// request gets 403 and its code stays unconsumed.
+    var acceptsPeers: @MainActor () -> Bool = { false }
+    /// Fired after a peer redeemed a code here, so the app can pair back.
+    var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)? = nil
 
     func response(for req: HTTPRequest, body: Data) -> Data {
         let cors = corsHeaders(for: req)
@@ -91,15 +96,39 @@ struct RemoteHTTPResponder {
     }
 
     private func pairResponse(body: Data, extraHeaders: [(String, String)]) -> Data {
-        struct PairRequest: Decodable { let code: String
-        let deviceName: String }
-        guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body),
-              let token = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else {
-            return Self.http(status: "401 Unauthorized", contentType: "application/json",
-                             body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
+        struct PairRequest: Decodable {
+            let code: String
+            let deviceName: String
+            let peer: RemotePeerAdvertisement?
         }
-        return Self.http(status: "200 OK", contentType: "application/json",
-                         body: Data(#"{"token":"\#(token)"}"#.utf8), extraHeaders: extraHeaders)
+        struct PairReply: Encodable {
+            let token: String
+            let serverId: String?
+            let name: String?
+        }
+        let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
+                                     body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
+        guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body) else { return unauthorized }
+        let token: String
+        if let peer = pr.peer {
+            guard acceptsPeers() else {
+                return Self.http(status: "403 Forbidden", contentType: "application/json",
+                                 body: Data(#"{"error":"federation disabled"}"#.utf8), extraHeaders: extraHeaders)
+            }
+            guard let result = try? pairing.redeemPeer(code: pr.code, deviceName: pr.deviceName,
+                                                       peerServerId: peer.serverId) else { return unauthorized }
+            token = result.token
+            onPeerPaired?(RemotePeerPairingRequest(
+                peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
+                counterCode: peer.counterCode, localDeviceId: result.deviceId))
+        } else {
+            guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
+            token = issued
+        }
+        let snapshot = diagnostics()
+        let reply = PairReply(token: token, serverId: snapshot.serverId, name: snapshot.name)
+        let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
+        return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }
 
     /// Pure response framing — `nonisolated` so the connection state machine can

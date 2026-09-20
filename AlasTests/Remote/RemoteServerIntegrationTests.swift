@@ -1046,6 +1046,38 @@ struct RemoteServerIntegrationTests {
         #expect(String(data: data, encoding: .utf8) == #"{"name":"Alas Remote"}"#)
     }
 
+    @Test func serverForwardsPeerPairingToTheApp() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+        )
+        final class Sink { var requests: [RemotePeerPairingRequest] = [] }
+        let sink = Sink()
+        server.onPeerPaired = { sink.requests.append($0) }
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        let code = pairing.beginPairing()
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        req.httpMethod = "POST"
+        req.httpBody = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://127.0.0.1:1"],"counterCode":"X"}}"#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["serverId"] as? String == "srv-a")
+        for _ in 0..<50 where sink.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(sink.requests.first?.peerServerId == "srv-b")
+        #expect(sink.requests.first?.counterCode == "X")
+    }
+
     private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()

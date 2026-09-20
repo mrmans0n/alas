@@ -40,6 +40,8 @@ final class RemoteServer {
     /// Invoked on the main actor whenever authenticated remote socket counts
     /// change. AppState snapshots this so Settings observes live disconnects.
     var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
+    /// Fired on the main actor after another Alas instance paired here.
+    var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
 
     /// Callers with app state should pass a diagnostics closure; the default is
     /// a safe empty fallback for contexts that do not have app state available.
@@ -178,14 +180,34 @@ final class RemoteServer {
     private func accept(_ nwConn: NWConnection) {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
-        let responder = RemoteHTTPResponder(
+        let identity = self.identityProvider
+        var configured = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
-            diagnostics: { self.diagnosticsProvider(self.port) },
+            diagnostics: {
+                let snapshot = self.diagnosticsProvider(self.port)
+                // Callers with app state fold serverId/name into their own
+                // diagnostics closure already; this fallback only fires for
+                // the bare default (no app state, e.g. tests) so /pair still
+                // replies with a real identity when one is set.
+                guard snapshot.serverId == nil, snapshot.name == nil else { return snapshot }
+                let id = identity()
+                return RemoteDiagnosticsSnapshot(
+                    appName: snapshot.appName,
+                    port: snapshot.port,
+                    addresses: snapshot.addresses,
+                    usesPlainHTTP: snapshot.usesPlainHTTP,
+                    pairedDeviceCount: snapshot.pairedDeviceCount,
+                    serverId: id.serverId.isEmpty ? nil : id.serverId,
+                    name: id.name
+                )
+            },
             originPolicy: originPolicy
         )
+        configured.acceptsPeers = { identity().federationEnabled }
+        configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
-        let identity = self.identityProvider
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
