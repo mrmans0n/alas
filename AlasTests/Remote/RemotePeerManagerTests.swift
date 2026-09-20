@@ -67,19 +67,33 @@ struct RemotePeerManagerTests {
     }
 
     /// Simulates A's reciprocal call landing WHILE `addPeer`'s confirmation
-    /// wait is still polling — the real-world timing this represents. A tiny
-    /// real delay lets `addPeer` start waiting first; well under any test's
-    /// confirmation timeout, so it always lands inside the window.
+    /// wait is still polling — the real-world timing this represents.
+    /// Captures the REAL counter-code this specific attempt minted, from
+    /// its outgoing request body, rather than a fabricated one: a
+    /// confirmation is now bound to the exact counter-code it redeems, so a
+    /// simulated one has to carry the one `addPeer` is actually waiting for.
     @discardableResult
-    private func confirmReciprocalPairing(on manager: RemotePeerManager, peerServerId: String,
+    private func confirmReciprocalPairing(on manager: RemotePeerManager, requests: Requests,
+                                          peerServerId: String,
                                           peerName: String = "Mac A",
                                           origins: [String] = ["http://10.0.0.1:8765"],
                                           localDeviceId: String = "dev-a") -> Task<Void, Never> {
         Task {
-            try? await Task.sleep(nanoseconds: 5_000_000)
+            var redeemedCode: String?
+            for _ in 0..<200 {
+                if let last = requests.seen.last,
+                   let body = try? self.body(of: last),
+                   let ad = body["peer"] as? [String: Any],
+                   let code = ad["counterCode"] as? String {
+                    redeemedCode = code
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            guard let redeemedCode else { return }
             await manager.handleInboundPeer(RemotePeerPairingRequest(
                 peerServerId: peerServerId, peerName: peerName, origins: origins,
-                counterCode: nil, localDeviceId: localDeviceId))
+                counterCode: nil, localDeviceId: localDeviceId, redeemedCode: redeemedCode))
         }
     }
 
@@ -102,7 +116,7 @@ struct RemotePeerManagerTests {
         manager.connectAll()
         // Simulates A actually redeeming our counter-code, which is what
         // `addPeer` now waits to confirm before reporting success.
-        confirmReciprocalPairing(on: manager, peerServerId: "srv-a")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
         #expect(await manager.addPeer(link: linkFromA) == nil)
         let peer = try #require(manager.peers.first)
         #expect(peer.serverId == "srv-a")
@@ -157,15 +171,16 @@ struct RemotePeerManagerTests {
     // timed out with nothing better to report. (Timing out now means
     // failure, not success — see the test above.)
     @Test func addPeerResolvesQuicklyOnceReciprocalConfirmationArrives() async {
-        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
                                   links: Links())
         manager.connectAll()
-        confirmReciprocalPairing(on: manager, peerServerId: "srv-a")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
         let start = Date()
         #expect(await manager.addPeer(link: linkFromA) == nil)
-        // The manager's own timeout for this suite is 0.05s; the confirming
-        // task's own delay is 5ms — resolving well under the timeout shows
-        // the wait picked up the confirmation rather than idling out.
+        // The manager's own timeout for this suite is 0.05s; resolving well
+        // under it shows the wait picked up the confirmation rather than
+        // idling out.
         #expect(Date().timeIntervalSince(start) < 0.03)
         #expect(manager.peers.count == 1)
         #expect(manager.peers.first?.localDeviceId == "dev-a")
@@ -202,7 +217,8 @@ struct RemotePeerManagerTests {
         let requests = Requests()
         let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests), links: Links())
         await manager.handleInboundPeer(RemotePeerPairingRequest(
-            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC", localDeviceId: "dev-a"))
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC",
+            localDeviceId: "dev-a", redeemedCode: "ABC123"))
         let peer = try #require(manager.peers.first)
         #expect(peer.serverId == "srv-a")
         #expect(peer.token == "tokA")
@@ -220,7 +236,7 @@ struct RemotePeerManagerTests {
     @Test func inboundPeerWithoutCounterCodeLinksTheDeviceRecord() async throws {
         let requests = Requests()
         let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests), links: Links())
-        confirmReciprocalPairing(on: manager, peerServerId: "srv-a")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
         #expect(await manager.addPeer(link: linkFromA) == nil)
         #expect(manager.peers.count == 1)
         #expect(manager.peers.first?.localDeviceId == "dev-a")
@@ -233,15 +249,14 @@ struct RemotePeerManagerTests {
     // and reach `handleInboundPeer` before our own `addPeer` has returned
     // from the network call that creates this record. Without buffering,
     // the "else" branch's lookup finds nothing and the ONLY confirmation
-    // this attempt will ever get is silently dropped.
+    // this attempt will ever get is silently dropped. `confirmReciprocalPairing`
+    // fires as soon as the outgoing request appears, which can land before
+    // `addPeer` has created the record at all — exercised here by the same
+    // wait loop that checks the buffer on every poll, including its first.
     @Test func aReciprocalConfirmationThatArrivesBeforeTheRecordExistsIsNotLost() async throws {
         let requests = Requests()
         let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests), links: Links())
-        // Arrives immediately, synchronously — before `addPeer` has even
-        // started, let alone created a record for "srv-a".
-        await manager.handleInboundPeer(RemotePeerPairingRequest(
-            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil, localDeviceId: "dev-a"))
-        #expect(manager.peers.isEmpty)   // buffered, not a dangling record
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
         #expect(await manager.addPeer(link: linkFromA) == nil)
         #expect(manager.peers.count == 1)
         #expect(manager.peers.first?.localDeviceId == "dev-a")
@@ -250,7 +265,9 @@ struct RemotePeerManagerTests {
     // Codex: an unmatched confirmation buffered by an EARLIER, unrelated
     // attempt (one whose own addPeer never reached upsert) must not sit
     // around forever and then wrongly satisfy a LATER, different attempt's
-    // wait for the same peer.
+    // wait for the same peer. It is isolated by carrying a different
+    // counter-code from the one this attempt mints; this test also proves
+    // the buffer is pruned on expiry rather than growing unbounded.
     @Test func aStaleBufferedConfirmationFromAnEarlierAttemptDoesNotSatisfyALaterOne() async {
         let manager = makeManager(
             pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
@@ -260,10 +277,28 @@ struct RemotePeerManagerTests {
         // to A failed after this had already arrived), then going stale
         // before any add for "srv-a" actually happens.
         await manager.handleInboundPeer(RemotePeerPairingRequest(
-            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil, localDeviceId: "stale-dev"))
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil,
+            localDeviceId: "stale-dev", redeemedCode: "earlier-attempts-code"))
         try? await Task.sleep(nanoseconds: 40_000_000)   // outlast the 0.02s window
         // Nothing confirms THIS attempt — the stale buffered entry must not
         // stand in for it.
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        #expect(manager.peers.isEmpty)
+    }
+
+    // Codex: keying the buffer by peer alone let a genuinely CURRENT
+    // confirmation from an unrelated attempt for the same peer satisfy this
+    // attempt merely by arriving inside the timeout window. Binding to the
+    // exact counter-code this attempt minted rules that out regardless of
+    // timing — this confirmation is fresh, not stale, and still must not match.
+    @Test func aConfirmationForADifferentAttemptsCounterCodeNeverSatisfiesThisOne() async {
+        let manager = makeManager(
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+            links: Links())
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil,
+            localDeviceId: "other-attempt-dev", redeemedCode: "other-attempts-code"))
         let error = await manager.addPeer(link: linkFromA)
         #expect(error == .reciprocalPairingFailed)
         #expect(manager.peers.isEmpty)
@@ -280,7 +315,8 @@ struct RemotePeerManagerTests {
         manager.onRevokeDevice = { revoked.append($0) }
         manager.connectAll()
         await manager.handleInboundPeer(RemotePeerPairingRequest(
-            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC", localDeviceId: inbound.deviceId))
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC",
+            localDeviceId: inbound.deviceId, redeemedCode: "ABC123"))
         let peer = try #require(manager.peers.first)
         manager.forget(peerId: peer.id)
         #expect(manager.peers.isEmpty)
@@ -296,15 +332,16 @@ struct RemotePeerManagerTests {
                                lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
                                localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
         let links = Links()
+        let requests = Requests()
         let manager = makeManager(store: store,
-                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
                                   links: links)
         manager.connectAll()
         let oldLink = try #require(links.byPeerId["p1"])
         // A fresh confirmation for THIS attempt — the record's OLD
         // localDeviceId ("dev-a" from the seeded store) must not be enough
         // on its own; see rePairingResetsStaleReciprocalConfirmation below.
-        confirmReciprocalPairing(on: manager, peerServerId: "srv-a", localDeviceId: "dev-a")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: "dev-a")
         #expect(await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765") == nil)
         #expect(manager.peers.count == 1)
         let peer = try #require(manager.peers.first)
@@ -327,8 +364,11 @@ struct RemotePeerManagerTests {
     // confirmation wait was trivially satisfied by a signal from a PREVIOUS
     // attempt, before this attempt's own reciprocal exchange had any chance
     // to run — meaning `addPeer` could report success and leave the link
-    // unauthorized moments later if the NEW callback actually failed.
-    @Test func rePairingResetsStaleReciprocalConfirmationAndWaitsForAFreshOne() async {
+    // unauthorized moments later if the NEW callback actually failed. When the
+    // fresh wait then genuinely times out, the previous, untouched
+    // relationship is restored rather than destroyed — see
+    // rePairingFailureRestoresThePreviousPeerRatherThanForgettingIt below.
+    @Test func rePairingResetsStaleReciprocalConfirmationAndWaitsForAFreshOne() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
                                lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
@@ -340,7 +380,36 @@ struct RemotePeerManagerTests {
         // No confirmation for THIS attempt ever arrives.
         let error = await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765")
         #expect(error == .reciprocalPairingFailed)
-        #expect(manager.peers.isEmpty)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "old-token")
+        #expect(peer.localDeviceId == "stale-dev-id")
+    }
+
+    // Codex: re-pairing an existing, working peer whose NEW reciprocal
+    // exchange fails used to `forget()` unconditionally — destroying a
+    // previous relationship that this attempt never touched and that could
+    // still be entirely valid, and revoking a device grant that was never
+    // actually superseded.
+    @Test func rePairingFailureRestoresThePreviousPeerRatherThanForgettingIt() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let original = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: original.deviceId, addedAt: Date(timeIntervalSince1970: 1))])
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  links: Links())
+        manager.connectAll()
+        // No confirmation for THIS re-pair attempt ever arrives.
+        let error = await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765")
+        #expect(error == .reciprocalPairingFailed)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "old-token")
+        #expect(peer.origins == ["http://10.0.0.1:8765"])
+        #expect(peer.localDeviceId == original.deviceId)
+        // The previously-valid inbound device grant was never revoked.
+        #expect(pairing.validate(token: original.token) == original.deviceId)
     }
 
     @Test func rePairingSucceedsOnceAFreshReciprocalConfirmationArrives() async throws {
@@ -348,13 +417,14 @@ struct RemotePeerManagerTests {
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
                                lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
                                localDeviceId: "stale-dev-id", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
         let manager = makeManager(store: store,
-                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
                                   links: Links())
         manager.connectAll()
         // A NEW, different device id proves the record picked up THIS
         // attempt's confirmation, not the stale one from before.
-        confirmReciprocalPairing(on: manager, peerServerId: "srv-a", localDeviceId: "fresh-dev-id")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: "fresh-dev-id")
         #expect(await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765") == nil)
         #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
     }

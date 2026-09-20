@@ -147,7 +147,7 @@ struct RemoteHTTPResponderTests {
         #expect(device.peerServerId == "srv-b")
         #expect(sink.requests == [RemotePeerPairingRequest(
             peerServerId: "srv-b", peerName: "Mac B", origins: ["http://100.64.1.9:8765"],
-            counterCode: "C0DE", localDeviceId: device.id)])
+            counterCode: "C0DE", localDeviceId: device.id, redeemedCode: code)])
     }
 
     @Test func pairWithPeerIsForbiddenWhenFederationIsOff() {

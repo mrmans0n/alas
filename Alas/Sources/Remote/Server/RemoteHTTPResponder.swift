@@ -149,7 +149,7 @@ struct RemoteHTTPResponder {
             token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
-                counterCode: peer.counterCode, localDeviceId: result.deviceId))
+                counterCode: peer.counterCode, localDeviceId: result.deviceId, redeemedCode: pr.code))
         } else {
             guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued

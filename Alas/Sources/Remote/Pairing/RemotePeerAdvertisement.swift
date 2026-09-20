@@ -18,4 +18,11 @@ struct RemotePeerPairingRequest: Equatable, Sendable {
     let counterCode: String?
     /// The `RemoteDevice.id` just created for the peer on this Mac.
     let localDeviceId: String
+    /// The code this exchange redeemed — the counter-code the corresponding
+    /// `addPeer` attempt minted on itself, when this request is that
+    /// attempt's own reciprocal callback arriving. Ties a confirmation to
+    /// the ONE attempt it actually belongs to: a `serverId` alone cannot
+    /// distinguish a stray, unrelated attempt's callback (one whose own
+    /// `/pair` reply never made it back) from the current attempt's own.
+    let redeemedCode: String
 }
