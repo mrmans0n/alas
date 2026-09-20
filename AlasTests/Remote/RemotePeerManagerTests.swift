@@ -150,6 +150,51 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    @Test func rePairingAnExistingPeerReplacesTheTokenMergesOriginsAndSwapsTheLink() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let links = Links()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: Requests()),
+                                  links: links)
+        manager.connectAll()
+        let oldLink = try #require(links.byPeerId["p1"])
+        #expect(await manager.addPeer(link: "http://10.0.0.9:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765") == nil)
+        #expect(manager.peers.count == 1)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.id == "p1")
+        #expect(peer.token == "tokA")
+        #expect(peer.name == "Mac A")
+        #expect(peer.origins == ["http://10.0.0.1:8765", "http://10.0.0.9:8765"])
+        #expect(peer.lastOrigin == "http://10.0.0.9:8765")
+        #expect(peer.localDeviceId == "dev-a")
+        #expect(store.saved == manager.peers)
+        // The stale link must be torn down, not left running alongside a
+        // second one dialing the same peer with the new token.
+        #expect(oldLink.disconnectCalls == 1)
+        let newLink = try #require(links.byPeerId["p1"])
+        #expect(newLink !== oldLink)
+        #expect(newLink.connectCalls == 1)
+    }
+
+    @Test func forgetRevokesByPeerServerIdWhenNoLocalDeviceIdWasRecorded() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
+        var revoked: [String] = []
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer([:], requests: Requests()), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.forget(peerId: "p1")
+        #expect(manager.peers.isEmpty)
+        #expect(revoked == [inbound.deviceId])
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
     @Test func linkEventsUpdateStateNameVersionAndOrigin() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765", "http://10.0.0.5:8765"],

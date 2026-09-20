@@ -5,6 +5,13 @@ import Observation
 /// both halves of reciprocal pairing. Session traffic over the links is
 /// consumed by a later `FederatedSessionsProvider`; for now `.message`
 /// events are dropped.
+///
+/// **The owner must call `disconnectAll()` before releasing this manager.**
+/// It holds a `RemotePeerConnection` per peer, and dropping the last reference
+/// to one of those is not enough to close it: a connected link keeps itself,
+/// its task, and an authenticated socket to the peer alive until `disconnect()`
+/// is called. Releasing the manager without `disconnectAll()` leaks one of each
+/// per connected peer.
 @MainActor
 @Observable
 final class RemotePeerManager {
@@ -77,7 +84,15 @@ final class RemotePeerManager {
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
         case .paired(let token, let serverId, let name, let origin):
-            upsert(serverId: serverId ?? origin, name: name ?? origin, origins: parts.origins,
+            // An origin is an address, never an identity. Standing in for a
+            // missing `serverId` with one would key the record — and the
+            // `/health` probe's expected id, and the device records `forget`
+            // revokes — on a string no peer will ever report, so the record
+            // could never be matched again or revoked. A reply with no usable
+            // identity is not a peer we can hold, so refuse the add. Only the
+            // display name falls back to the origin.
+            guard let serverId, !serverId.isEmpty else { return .unreachable }
+            upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
             return nil
         case .expiredCode: return .expiredCode
@@ -95,7 +110,15 @@ final class RemotePeerManager {
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
-            else { return }   // inbound trust stands; the other side can retry from its end
+            else {
+                // The peer already holds a token for this Mac: it was minted
+                // before this branch ran. Returning empty-handed would leave it
+                // standing access with no peer record to forget it by, so take
+                // the inbound grant back and let the exchange start over.
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
         } else if let index = peers.firstIndex(where: { $0.serverId == request.peerServerId }) {
@@ -110,7 +133,20 @@ final class RemotePeerManager {
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
-        if let deviceId = peer.localDeviceId {
+        // Revoke by the peer's identity rather than by the stored
+        // `localDeviceId`. That id is a snapshot taken before an HTTP round
+        // trip, and `RemotePairingService` replaces any existing
+        // `.alasInstance` device for the same `peerServerId` on every peer
+        // redeem — so a peer that re-paired in the meantime is represented by
+        // a device the record has never heard of, and revoking the remembered
+        // id alone would leave it holding a live token. The stored id is still
+        // revoked as a hint, for records written before the peer's device
+        // carried a `peerServerId`.
+        var deviceIds = pairing.devices
+            .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
+            .map(\.id)
+        if let hint = peer.localDeviceId, !deviceIds.contains(hint) { deviceIds.append(hint) }
+        for deviceId in deviceIds {
             pairing.revoke(deviceId: deviceId)
             onRevokeDevice?(deviceId)
         }
