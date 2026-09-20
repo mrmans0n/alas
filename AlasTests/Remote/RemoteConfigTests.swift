@@ -117,4 +117,22 @@ struct RemoteConfigTests {
         #expect(back.remote.displayName == "")
         #expect(back.remote.hubEnabled == false)
     }
+
+    @Test func federationDefaultsOffAndRoundTrips() throws {
+        #expect(AppConfig.defaults.remote.federationEnabled == false)
+        var cfg = AppConfig.defaults
+        cfg.remote.federationEnabled = true
+        let back = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+        #expect(back.remote.federationEnabled == true)
+    }
+
+    @Test func oldRemoteConfigWithoutFederationKeyDecodesFalse() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var remote = try #require(json["remote"] as? [String: Any])
+        remote.removeValue(forKey: "federationEnabled")
+        json["remote"] = remote
+        let back = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(back.remote.federationEnabled == false)
+    }
 }

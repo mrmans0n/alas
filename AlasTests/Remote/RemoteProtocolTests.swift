@@ -820,4 +820,14 @@ struct RemoteProtocolTests {
         #expect(snapshot.serverId == nil)
         #expect(snapshot.name == nil)
     }
+
+    @Test func helloEncodesFederationEnabledAndDefaultsItOff() throws {
+        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(on)) as? [String: Any])
+        #expect(object["federationEnabled"] as? Bool == true)
+
+        let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n","hubEnabled":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
+    }
 }

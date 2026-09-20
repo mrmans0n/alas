@@ -540,7 +540,8 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            hubEnabled: config.remote.hubEnabled
+            hubEnabled: config.remote.hubEnabled,
+            federationEnabled: config.remote.federationEnabled
         )
     }
 

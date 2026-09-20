@@ -60,6 +60,19 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Remote peers",
+                        desc: "Lets this Mac pair with other Macs running Alas so each can see the other's sessions."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.remote.federationEnabled },
+                            set: { enabled in
+                                state.config.remote.federationEnabled = enabled
+                                state.saveConfig()
+                                state.remoteServer?.broadcastHello()
+                            }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
