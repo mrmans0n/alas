@@ -36,9 +36,10 @@ final class RemotePeerManager {
     private(set) var peers: [RemotePeer]
     private(set) var states: [String: RemotePeerConnection.State] = [:]
     /// Called with a `RemoteDevice.id` when forgetting a peer should also cut
-    /// its live inbound socket. Nothing sets it yet; the owner that adopts this
-    /// manager is expected to point it at `RemoteServer.disconnectDevice`,
-    /// since revoking the device record alone leaves an open socket authorized.
+    /// its live inbound socket. `AppState` points this at
+    /// `RemoteServer.disconnectDevice`, which is what makes `forget` sever a
+    /// peer's access immediately: revoking the device record alone would leave
+    /// an already-open socket authorized until it happened to close.
     @ObservationIgnored var onRevokeDevice: (@MainActor (String) -> Void)?
 
     private let store: RemotePeerStore
