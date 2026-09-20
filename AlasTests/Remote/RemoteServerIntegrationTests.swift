@@ -1069,8 +1069,14 @@ struct RemoteServerIntegrationTests {
             }
             if let data, !data.isEmpty {
                 let snapshot = accumulator.append(data)
-                if snapshot.range(of: headerTerminator) != nil {
-                    completion.finish(.success(snapshot), continuation: continuation)
+                if let terminatorRange = snapshot.range(of: headerTerminator) {
+                    // Trim to the header block only. A fast local write can
+                    // coalesce the response headers with whatever the server
+                    // sends immediately after (e.g. a WebSocket upgrade's
+                    // very next binary frame) into this same read; including
+                    // those trailing bytes made `String(data:encoding:.utf8)`
+                    // return nil on an otherwise-successful response.
+                    completion.finish(.success(snapshot.subdata(in: snapshot.startIndex..<terminatorRange.upperBound)), continuation: continuation)
                     return
                 }
             }
