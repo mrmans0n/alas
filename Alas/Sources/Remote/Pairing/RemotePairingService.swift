@@ -2,6 +2,11 @@ import Foundation
 import CryptoKit
 import Observation
 
+struct RemotePeerRedeemResult: Equatable, Sendable {
+    let token: String
+    let deviceId: String
+}
+
 @MainActor
 @Observable
 final class RemotePairingService {
@@ -49,6 +54,17 @@ final class RemotePairingService {
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
     func redeem(code: String, deviceName: String) throws -> String {
+        try redeemCore(code: code, deviceName: deviceName, kind: .browser, peerServerId: nil).token
+    }
+
+    /// Same exchange for another Alas instance. A previous record for the same
+    /// `peerServerId` is replaced so re-pairing never leaves a stale token valid.
+    func redeemPeer(code: String, deviceName: String, peerServerId: String) throws -> RemotePeerRedeemResult {
+        try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
+    }
+
+    private func redeemCore(code: String, deviceName: String, kind: RemoteDeviceKind,
+                            peerServerId: String?) throws -> RemotePeerRedeemResult {
         // Drop failures outside the window, then throttle if too many remain.
         recentFailedRedeems = recentFailedRedeems.filter { now().timeIntervalSince($0) < Self.rateWindow }
         guard recentFailedRedeems.count < Self.maxFailedRedeems else {
@@ -63,12 +79,16 @@ final class RemotePairingService {
         }
         pendingCodes.remove(at: idx)   // consume only the matched code
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
+        if let peerServerId {
+            devices.removeAll { $0.kind == .alasInstance && $0.peerServerId == peerServerId }
+        }
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
-                                  tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil)
+                                  tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
+                                  kind: kind, peerServerId: peerServerId)
         devices.append(device)
         store.save(devices)
-        return token
+        return RemotePeerRedeemResult(token: token, deviceId: device.id)
     }
 
     /// Returns the matching device id for a valid token (constant-time compare), else nil.
