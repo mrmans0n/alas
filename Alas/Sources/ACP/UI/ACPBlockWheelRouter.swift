@@ -67,29 +67,41 @@ final class ACPBlockWheelRoutingView: NSView {
             pendingEvent: event
         )
         defer { routingState.completeCurrentEventRouting() }
-        scroller.markdownScrollRoutingState = routingState
+
         if shouldForward {
-            for pendingEvent in routingState.consumePendingEvents() {
+            let pendingEvents = routingState.consumePendingEvents()
+            // The vertical route's first event carries `.began`; the
+            // scroller's own `scrollWheel` reset rewrites the shared state
+            // mid-delivery. Consume, forward, run the terminal reset, and
+            // only then publish the finalized local state — otherwise the
+            // premature write-back loses buffered events and later ticks
+            // re-classify instead of staying latched to this gesture.
+            scroller.scrollMarkdownWheel(with: event)
+            for pendingEvent in pendingEvents {
                 scroller.scrollMarkdownWheel(with: pendingEvent)
             }
-            scroller.scrollMarkdownWheel(with: event)
+            routingState.completeCurrentEventRouting()
+            scroller.markdownScrollRoutingState = routingState
             return nil
         }
         // Undecided gesture start with buffered events: hold the tick the
         // same way markdown text views do, so neither axis sees jitter.
         if routingState.forwarding == nil, routingState.hasPendingEvents {
+            scroller.markdownScrollRoutingState = routingState
             return nil
         }
         // Horizontal route selected after a buffered start: replay the
-        // buffered beginning through normal dispatch, alongside the current
-        // event, so the block's own scroll view receives the whole gesture.
-        // (Over block padding there is no markdown text view downstream to
-        // flush them.) Ambiguous buffers carry no dominant-axis delta, so
-        // replaying them cannot double-scroll.
-        for pendingEvent in routingState.consumePendingEvents() {
+        // buffered beginning through the block's own scroll machinery, then
+        // hand the current tick to normal dispatch — exactly once. (Over
+        // block padding there is no markdown text view downstream to flush
+        // buffered starts.) Ambiguous buffers carry no dominant-axis delta,
+        // so replaying them cannot double-scroll.
+        let pendingEvents = routingState.consumePendingEvents()
+        routingState.completeCurrentEventRouting()
+        scroller.markdownScrollRoutingState = routingState
+        for pendingEvent in pendingEvents {
             dispatchBlockEvent(pendingEvent)
         }
-        dispatchBlockEvent(event)
         return event
     }
 
