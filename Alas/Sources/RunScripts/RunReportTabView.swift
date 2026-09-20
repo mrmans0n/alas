@@ -5,6 +5,7 @@ struct RunReportTabView: View {
     let state: AppState
     let tabState: RunReportTabState
 
+    @Environment(\.theme) private var theme
     @State private var content = RunReportContent.loading
 
     var body: some View {
@@ -34,47 +35,80 @@ struct RunReportTabView: View {
     private func report(_ entry: RunHistoryEntry) -> some View {
         VStack(spacing: 0) {
             reportHeader(entry)
-            Divider()
             reportOutput(entry.output)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func reportHeader(_ entry: RunHistoryEntry) -> some View {
-        HStack(alignment: .center, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
                     Text(entry.scriptName)
-                        .font(.headline)
-                    Text("\(entry.branch) • \(entry.target.hostLabel) • \(entry.finishedAt.formatted(date: .abbreviated, time: .shortened)) • \(RunTabPresentation.format(duration: entry.duration))")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(entry.target.workingDirectory)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    if let endpoint = entry.endpoint {
-                        Text(endpoint.absoluteString)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                    outcomePill(entry.outcome)
                 }
-                Spacer()
-                Text(outcomeText(entry.outcome))
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(outcomeColor(entry.outcome).opacity(0.16), in: Capsule())
-                    .foregroundStyle(outcomeColor(entry.outcome))
+                Text(headerDetail(entry))
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(entry.target.workingDirectory)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                if let endpoint = entry.endpoint {
+                    Text(endpoint.absoluteString)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
             }
+            Spacer(minLength: 12)
             if case let .available(text, _) = entry.output {
                 Button("Copy Output") { Clipboard.copy(text) }
+                    .controlSize(.small)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(.bar)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    /// Matches the app's status-pill style (see `AgentTabPresentation`).
+    private func outcomePill(_ outcome: RunOutcome) -> some View {
+        let color = outcomeColor(outcome)
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(outcomeText(outcome))
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .frame(height: 18)
+        .background(color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.22), lineWidth: 0.5))
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Outcome: \(outcomeText(outcome))")
+    }
+
+    private func headerDetail(_ entry: RunHistoryEntry) -> String {
+        [
+            entry.branch,
+            entry.target.hostLabel,
+            entry.finishedAt.formatted(date: .abbreviated, time: .shortened),
+            RunTabPresentation.format(duration: entry.duration),
+        ].joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -124,10 +158,10 @@ struct RunReportTabView: View {
 
     private func outcomeColor(_ outcome: RunOutcome) -> Color {
         switch outcome {
-        case .succeeded: .green
-        case .failed: .red
-        case .stopped: .orange
-        case .unknown: .secondary
+        case .succeeded: theme.color("add")
+        case .failed: theme.color("del")
+        case .stopped: theme.color("warn")
+        case .unknown: theme.color("fg-faint")
         }
     }
 
