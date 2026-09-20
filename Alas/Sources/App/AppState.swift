@@ -644,7 +644,13 @@ final class AppState {
                 lastRemoteError = error.localizedDescription
             }
         } else {
-            remotePeers.disconnectAll()
+            // Only touch `remotePeers` when a server actually ran: the lazy
+            // property builds the manager, which builds `remotePairing` too,
+            // so an unconditional call would read `remote-peers.json` and
+            // `remote-devices.json` on every launch with both flags off.
+            // Links only exist while the server is up, so there is nothing to
+            // tear down otherwise. Safe here because the nil-out is below.
+            if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
             remotePort = nil
@@ -659,7 +665,10 @@ final class AppState {
     func syncRemotePeers() {
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
-        } else {
+        } else if remoteServer != nil {
+            // Same reason as `syncRemoteServer`'s disabled branch: without a
+            // server no link was ever opened, and reaching for `remotePeers`
+            // would force the lazy manager and its stores into existence.
             remotePeers.disconnectAll()
         }
     }
