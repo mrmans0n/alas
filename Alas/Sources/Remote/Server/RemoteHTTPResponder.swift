@@ -99,6 +99,12 @@ struct RemoteHTTPResponder {
         return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data, extraHeaders: extraHeaders)
     }
 
+    /// A real Mac advertises a handful of addresses (tailnet, LAN, a couple of
+    /// interfaces); anything beyond this is a probe list, not a peer.
+    private static let maxPeerOrigins = 8
+    /// Upper bound on peer-supplied display strings, which are stored and shown.
+    private static let maxPeerTextLength = 200
+
     private func pairResponse(body: Data, extraHeaders: [(String, String)]) -> Data {
         struct PairRequest: Decodable {
             let code: String
@@ -112,13 +118,27 @@ struct RemoteHTTPResponder {
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
                                      body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
+        func forbidden(_ error: String) -> Data {
+            Self.http(status: "403 Forbidden", contentType: "application/json",
+                      body: Data(#"{"error":"\#(error)"}"#.utf8), extraHeaders: extraHeaders)
+        }
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body) else { return unauthorized }
         let token: String
         if let peer = pr.peer {
-            guard acceptsPeers() else {
-                return Self.http(status: "403 Forbidden", contentType: "application/json",
-                                 body: Data(#"{"error":"federation disabled"}"#.utf8), extraHeaders: extraHeaders)
-            }
+            guard acceptsPeers() else { return forbidden("federation disabled") }
+            // Everything in `peer` is attacker-controlled and only the 1 MB
+            // body cap bounds it. Reject an implausible advertisement BEFORE
+            // redeeming, so a rejected request leaves the pairing code
+            // unconsumed: `origins` is walked sequentially by the pair-back
+            // with a POST each, which would otherwise turn one code into a
+            // port scan of the local network; an empty `serverId` collapses
+            // every peer onto one identity; and `name`/`deviceName` are both
+            // adopted into records and shown in Settings.
+            guard peer.origins.count <= Self.maxPeerOrigins,
+                  !peer.serverId.isEmpty,
+                  peer.name.count <= Self.maxPeerTextLength,
+                  pr.deviceName.count <= Self.maxPeerTextLength
+            else { return forbidden("peer rejected") }
             guard let result = try? pairing.redeemPeer(code: pr.code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId) else { return unauthorized }
             token = result.token
