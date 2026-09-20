@@ -178,6 +178,7 @@ struct ACPMarkdownText: View {
             tableViewportWidth = width
         }
         .background(theme.color("bg-1").opacity(0.4))
+        .background(ACPBlockWheelRouter())
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
@@ -570,6 +571,7 @@ private struct CodeBlockView: View {
                 codeText
                     .padding(.horizontal, 10).padding(.vertical, 8)
             }
+            .background(ACPBlockWheelRouter())
         }
         .background(theme.color("bg-0").opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 6))
