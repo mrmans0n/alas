@@ -778,16 +778,84 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard (string).isEmpty, !placeholderText.isEmpty else { return }
+        let font = font ?? chatTypography.appKitFont()
+        if string.isEmpty {
+            guard !placeholderText.isEmpty else { return }
+            let origin = NSPoint(
+                x: textContainerInset.width + textContainer!.lineFragmentPadding + 1,
+                y: textContainerInset.height
+            )
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+            (placeholderText as NSString).draw(at: origin, withAttributes: attrs)
+            return
+        }
+        guard let hint = argumentGhostHint, let origin = endOfBufferGhostOrigin() else { return }
+        // Dimmer than the empty-composer placeholder — this sits right next
+        // to text the user just typed, so it reads as a faint suggestion
+        // rather than competing with it. `tertiaryLabelColor` is the
+        // system's own next step down from `secondaryLabelColor`, so it
+        // keeps tracking dark/light mode and accessibility contrast
+        // settings instead of a hand-picked alpha value.
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font ?? chatTypography.appKitFont(),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .font: font,
+            .foregroundColor: NSColor.tertiaryLabelColor,
         ]
-        let origin = NSPoint(
-            x: textContainerInset.width + textContainer!.lineFragmentPadding + 1,
-            y: textContainerInset.height
+        (hint as NSString).draw(at: origin, withAttributes: attrs)
+    }
+
+    /// The slash command's argument hint (`input.hint` over ACP, e.g. a
+    /// Claude skill's `argument-hint` frontmatter) to draw as ghost text
+    /// after the caret, or nil when nothing should be shown.
+    ///
+    /// Recomputed from live state on every call — nothing is cached — so a
+    /// stale ghost is impossible and a draft restored as exactly `/cmd ` on
+    /// remount shows it with no extra bookkeeping. The ghost is only ever
+    /// drawn (see `draw(_:)`), never inserted into the storage, so it can't
+    /// be submitted, persisted as a draft, or restyled.
+    var argumentGhostHint: String? {
+        guard slashPanel == nil, let coord = coordinator else { return nil }
+        let text = string
+        guard text.hasPrefix("/") else { return nil }
+        let sel = selectedRange()
+        guard sel.length == 0, sel.location == (text as NSString).length,
+              let suggestion = coord.promptSuggestions.first(where: { text == $0.command + " " }),
+              let hint = suggestion.hint, !hint.isEmpty
+        else { return nil }
+        return hint
+    }
+
+    /// View-space top-left for text drawn right after the last glyph, on
+    /// its line. Computed from the layout manager rather than
+    /// `firstRect(forCharacterRange:)`, which answers in screen coordinates.
+    private func endOfBufferGhostOrigin() -> NSPoint? {
+        guard let layoutManager, let textContainer else { return nil }
+        let glyphCount = layoutManager.numberOfGlyphs
+        guard glyphCount > 0 else { return nil }
+        let lastGlyph = NSRange(location: glyphCount - 1, length: 1)
+        let line = layoutManager.lineFragmentRect(forGlyphAt: lastGlyph.location, effectiveRange: nil)
+        let glyph = layoutManager.boundingRect(forGlyphRange: lastGlyph, in: textContainer)
+        return NSPoint(
+            x: glyph.maxX + textContainerOrigin.x,
+            y: line.minY + textContainerOrigin.y
         )
-        (placeholderText as NSString).draw(at: origin, withAttributes: attrs)
+    }
+
+    /// Caret moves without text edits don't fire `didChangeText`, and the
+    /// ghost hint depends on the selection, so force a repaint here.
+    /// `setSelectedRanges(_:affinity:stillSelecting:)` is the primitive
+    /// method NSTextView funnels every other selection-setting call
+    /// through (mouse clicks, arrow keys, `setSelectedRange`), so this
+    /// catches all of them.
+    override func setSelectedRanges(
+        _ ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting stillSelectingFlag: Bool
+    ) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        needsDisplay = true
     }
 
     override func didChangeText() {
