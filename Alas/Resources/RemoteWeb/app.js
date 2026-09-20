@@ -50,6 +50,7 @@ let lastSentText = null;        // text of the most recent sendPrompt, kept so a
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
+let composerGeneration = 0;     // bumped by resetServerScopedState(); invalidates in-flight onFilesPicked() reads from a server the user has since left
 let renameTarget = null;
 let deferredCreatePrompt = null;
 let createState = {
@@ -337,6 +338,11 @@ function resetServerScopedState() {
   autoGrowPrompt();
   lastSentText = null;
   lastSentAttachments = [];
+  // Invalidates any onFilesPicked() read still awaiting a FileReader from
+  // before this reset — its continuation checks this generation before
+  // appending to pendingAttachments, so a slow read from the old session
+  // can't land in the new one's composer.
+  composerGeneration++;
   renderSessions([]);
   showRepos();
 }
@@ -3709,8 +3715,13 @@ function readAttachment(file) {
 }
 
 async function onFilesPicked(files) {
+  const generation = composerGeneration;
   for (const file of files) {
     const b64 = await readAttachment(file);
+    // The active server changed while this read was in flight — the old
+    // session's image must not land in whichever server's composer is
+    // open now.
+    if (generation !== composerGeneration) return;
     if (attachedBytes() + b64Bytes(b64) > ATTACH_CAP) {
       alert("Attachments can total at most 10 MB.");
       break;

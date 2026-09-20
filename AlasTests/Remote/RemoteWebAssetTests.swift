@@ -1507,4 +1507,19 @@ struct RemoteWebAssetTests {
         let list = try #require(js.range(of: "function renderServerList() {").map { js[$0.lowerBound...].prefix(2000) })
         #expect(list.contains(#"row.onkeydown = (e) => { if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activate(); } };"#))
     }
+
+    // Regression: switching servers cleared the composer
+    // synchronously, but onFilesPicked() reads a picked image via an
+    // awaited FileReader — a read still in flight from the server just
+    // left could resolve afterward and append the old session's image
+    // into whichever server's composer is open now.
+    @Test func filesPickedFromABeforeSwitchingToBAreDiscarded() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let composerGeneration = 0;"))
+        let reset = try #require(js.range(of: "function resetServerScopedState() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(reset.contains("composerGeneration++;"))
+        let picked = try #require(js.range(of: "async function onFilesPicked(files) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(picked.contains("const generation = composerGeneration;"))
+        #expect(picked.contains("if (generation !== composerGeneration) return;"))
+    }
 }
