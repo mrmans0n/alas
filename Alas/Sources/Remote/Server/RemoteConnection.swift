@@ -35,6 +35,13 @@ final class RemoteConnection: @unchecked Sendable {
     /// not route to `drainFrames()` before this is true, or a pipelined
     /// client frame's response could be written ahead of `hello` on the wire.
     private var framesEnabled = false
+    /// Set when sendHello() arrives before the handshake's own hello has
+    /// finished sending. The connection is already authenticated (and so
+    /// already a broadcastHello() target) from the moment authorize()
+    /// succeeds, well before framesEnabled — a refresh landing in that
+    /// window would otherwise be silently dropped and never redelivered
+    /// until the client reconnects.
+    private var pendingHelloRefresh = false
     private var gateway: RemoteSessionGateway?
     private var closed = false
     /// Set once a terminal response has been queued. This closes the gap between
@@ -120,7 +127,13 @@ final class RemoteConnection: @unchecked Sendable {
     /// alone; its `completeUpgrade` hello already reflects current identity.
     func sendHello() {
         onQueue { [weak self] in
-            guard let self, self.framesEnabled else { return }
+            guard let self else { return }
+            guard self.framesEnabled else {
+                // The handshake's own hello hasn't finished sending yet;
+                // completeUpgrade() sends a fresh one once it does.
+                self.pendingHelloRefresh = true
+                return
+            }
             Task { @MainActor [weak self] in
                 guard let self, let hello = self.makeHello() else { return }
                 self.sendServerMessage(hello)
@@ -320,16 +333,26 @@ final class RemoteConnection: @unchecked Sendable {
                     // through `onQueue` behind this one.
                     if let helloFrame {
                         self.send(helloFrame) { [weak self] in
-                            guard let self else { return }
-                            self.framesEnabled = true
-                            self.drainFrames()
+                            self?.enableFramesAndFlushPendingHello()
                         }
                     } else {
-                        self.framesEnabled = true
-                        self.drainFrames()
+                        self.enableFramesAndFlushPendingHello()
                     }
                 }
             }
+        }
+    }
+
+    /// Runs on `queue`, right after the handshake's own hello (if any) has
+    /// finished sending. A sendHello() that arrived before this point only
+    /// recorded `pendingHelloRefresh`, since `framesEnabled` guarantees
+    /// hello stays the first frame — this delivers that queued refresh now.
+    private func enableFramesAndFlushPendingHello() {
+        framesEnabled = true
+        drainFrames()
+        if pendingHelloRefresh {
+            pendingHelloRefresh = false
+            sendHello()
         }
     }
 

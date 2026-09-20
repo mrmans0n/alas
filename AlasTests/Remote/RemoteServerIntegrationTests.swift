@@ -221,6 +221,32 @@ struct RemoteServerIntegrationTests {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    // Regression: broadcastHello()'s target connection is
+    // authenticated (added to connectionDevice) well before framesEnabled
+    // is set — completeUpgrade() still has to build the gateway, encode
+    // its own hello, and wait for that send to complete. A refresh
+    // requested inside that window used to be silently dropped by
+    // sendHello()'s framesEnabled guard and never redelivered until the
+    // client reconnected. This is a source-level check (the race itself
+    // isn't practical to force deterministically in an integration test)
+    // verifying the pending-refresh state exists and is flushed once
+    // frames actually enable.
+    @Test func pendingHelloRefreshIsFlushedOnceFramesEnable() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Alas/Sources/Remote/Server/RemoteConnection.swift"),
+            encoding: .utf8
+        )
+        #expect(source.contains("private var pendingHelloRefresh = false"))
+        #expect(source.contains("self.pendingHelloRefresh = true"))
+        let flush = try #require(source.range(of: "private func enableFramesAndFlushPendingHello() {").map { source[$0.lowerBound...].prefix(300) })
+        #expect(flush.contains("framesEnabled = true"))
+        #expect(flush.contains("if pendingHelloRefresh {"))
+        #expect(flush.contains("pendingHelloRefresh = false"))
+        #expect(flush.contains("sendHello()"))
+    }
+
     @Test func webSocketWithPublicOriginIsRejectedBeforeTokenValidation() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
