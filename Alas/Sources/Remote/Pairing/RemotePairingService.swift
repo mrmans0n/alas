@@ -20,7 +20,10 @@ final class RemotePairingService {
     private var pendingCodes: [PendingCode] = []
     private(set) var devices: [RemoteDevice]
 
-    private static let codeTTL: TimeInterval = 120
+    /// How long a minted code stays redeemable. Not private: `RemotePeerManager`
+    /// aligns how long it remembers an ended attempt's counter-code to this,
+    /// since the far side could still redeem it anytime up to this TTL.
+    static let codeTTL: TimeInterval = 120
 
     // Throttle brute-force code guessing: at most `maxFailedRedeems` failed
     // /pair attempts within `rateWindow` seconds before we reject outright.
