@@ -45,6 +45,9 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
 
 /// Client → server. `type` discriminates.
 enum RemoteClientMessage: Equatable, Sendable {
+    /// Sent by Alas peer connections after the server's `hello`. Browsers
+    /// never send it and servers never wait for it.
+    case helloAck(protocolVersion: Int)
     case listSessions
     case listWorktrees
     case listAgents
@@ -82,11 +85,12 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, protocolVersion }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
+        case "helloAck": self = .helloAck(protocolVersion: try c.decode(Int.self, forKey: .protocolVersion))
         case "listSessions": self = .listSessions
         case "listWorktrees": self = .listWorktrees
         case "listAgents": self = .listAgents
@@ -191,6 +195,9 @@ extension RemoteClientMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .helloAck(let protocolVersion):
+            try c.encode("helloAck", forKey: .type)
+            try c.encode(protocolVersion, forKey: .protocolVersion)
         case .listSessions: try c.encode("listSessions", forKey: .type)
         case .listWorktrees:
             try c.encode("listWorktrees", forKey: .type)

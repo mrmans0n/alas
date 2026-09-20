@@ -26,6 +26,17 @@ struct RemoteProtocolTests {
         #expect(object["agentId"] as? String == "codex")
     }
 
+    @Test func helloAckRoundTripsAndEncodesType() throws {
+        let ack = RemoteClientMessage.helloAck(protocolVersion: 1)
+        #expect(try roundTrip(ack) == ack)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
+        #expect(object["type"] as? String == "helloAck")
+        #expect(object["protocolVersion"] as? Int == 1)
+        #expect(ack.isControl == false)
+        #expect(ack.fileRequestDedupKey == nil)
+        #expect(ack.isDriveOrdering == false)
+    }
+
     @Test func worktreeCreationServerMessagesRoundTripAndEncodeRequiredFields() throws {
         let projects = [RemoteProjectOption(id: "project-1", name: "alas")]
         #expect(try roundTrip(RemoteServerMessage.projectList(projects: projects)) == .projectList(projects: projects))
