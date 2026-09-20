@@ -16,6 +16,17 @@ import SwiftUI
 struct ACPToolCallGroupHeaderRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
+    /// The transcript slice this header was built from. Carried so the pulse
+    /// can tell a tool call finishing apart from the render window revealing
+    /// calls that finished long ago — see
+    /// `ACPToolCallGroupHeaderAnimation.absorbs(from:to:reduceMotion:)`.
+    ///
+    /// It is folded into the row's equality token, which is what keeps this
+    /// value current. Were it left out, a window move that did not also change
+    /// this bundle's count would skip the rebuild, and the mounted view would
+    /// carry a stale window into the NEXT comparison — suppressing a genuine
+    /// absorption instead of a spurious one.
+    let window: ACPToolCallGroupHeaderAnimation.Window
     let onToggle: (Bool) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -34,15 +45,21 @@ struct ACPToolCallGroupHeaderRow: View {
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
+        window: ACPToolCallGroupHeaderAnimation.Window = .init(head: 0, tail: 0),
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary
         self.expanded = expanded
+        self.window = window
         self.onToggle = onToggle
     }
 
     private var label: String {
         expanded ? summary.expandedLabel : summary.collapsedLabel
+    }
+
+    private var snapshot: ACPToolCallGroupHeaderAnimation.Snapshot {
+        .init(count: summary.count, window: window)
     }
 
     var body: some View {
@@ -71,18 +88,21 @@ struct ACPToolCallGroupHeaderRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel(label)
         }
-        .onChange(of: summary.count) { previousCount, currentCount in
-            absorb(previousCount: previousCount, currentCount: currentCount)
+        .onChange(of: snapshot) { previous, current in
+            absorb(from: previous, to: current)
         }
     }
 
-    /// A count change can only reach an already-mounted header: a fresh mount
-    /// has no previous value to compare against, so `onChange` stays silent
-    /// there and first paint is never a pulse.
-    private func absorb(previousCount: Int, currentCount: Int) {
+    /// A snapshot change can only reach an already-mounted header: a fresh
+    /// mount has no previous value to compare against, so `onChange` stays
+    /// silent there and first paint is never a pulse.
+    private func absorb(
+        from previous: ACPToolCallGroupHeaderAnimation.Snapshot,
+        to current: ACPToolCallGroupHeaderAnimation.Snapshot
+    ) {
         guard ACPToolCallGroupHeaderAnimation.absorbs(
-            previousCount: previousCount,
-            currentCount: currentCount,
+            from: previous,
+            to: current,
             reduceMotion: reduceMotion
         ) else { return }
         // Both halves are driven by animations, and the decay is started from

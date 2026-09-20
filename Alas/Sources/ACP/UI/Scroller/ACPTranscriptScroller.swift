@@ -711,10 +711,22 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
             let expanded = expansionSeeds.isExpanded(members: memberStableIds)
+            // The render window is an input to the header's absorb pulse, not
+            // to its appearance: a bundle grows both when a call finishes and
+            // when the window reveals calls that finished long ago, and only
+            // the first should flash. It belongs in the token so a window move
+            // always reaches the mounted view, even when this bundle's own
+            // count did not change in the same update — otherwise the view
+            // would compare the next genuine absorption against a stale
+            // window. See `ACPToolCallGroupHeaderAnimation`.
+            let window = ACPToolCallGroupHeaderAnimation.Window(
+                head: transcript.visibleHead,
+                tail: transcript.visibleTailBound
+            )
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
-                    ToolCallGroupTokenInputs(summary: summary, expanded: expanded),
+                    ToolCallGroupTokenInputs(summary: summary, expanded: expanded, window: window),
                     host: host
                 ),
                 build: {
@@ -722,6 +734,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         ACPToolCallGroupHeaderRow(
                             summary: summary,
                             expanded: expanded,
+                            window: window,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
                         )
                     }
@@ -732,6 +745,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
             let expanded: Bool
+            let window: ACPToolCallGroupHeaderAnimation.Window
         }
 
         static func messageRow(
