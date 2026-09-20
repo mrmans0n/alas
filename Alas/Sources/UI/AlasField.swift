@@ -119,8 +119,13 @@ private struct AlasNSTextField: NSViewRepresentable {
                 window.makeFirstResponder(nsView)
             }
             nsView.focusOnAppear = false
-            DispatchQueue.main.async {
-                guard let editor = window.fieldEditor(false, for: nsView) as? NSTextView else { return }
+            // Acquiring first responder (above) synchronously selects all of the
+            // field's text (AppKit's default). Move the caret to the end in the
+            // same pass rather than deferring to the next run-loop turn: a
+            // deferred fix loses the race against the user's first keystroke,
+            // which lands while the whole string is still selected and gets
+            // replaced by it instead of appended to.
+            if let editor = nsView.currentEditor() as? NSTextView {
                 editor.setSelectedRange(NSRange(location: nsView.stringValue.count, length: 0))
             }
         }

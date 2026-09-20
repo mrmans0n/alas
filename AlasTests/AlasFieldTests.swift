@@ -120,8 +120,59 @@ struct AlasFieldTests {
         }
     }
 
-    private func pump() {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    private func pump(_ seconds: TimeInterval = 0.05) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Every real call site (`NewWorktreeDialog`, `WorkspaceDialogs`) presents
+    /// this field inside a `.sheet`, not a plain top-level window — first
+    /// responder is acquired automatically via `focusOnAppear`, never by a
+    /// manual `makeFirstResponder` call from the caller. Acquiring first
+    /// responder selects all of the pre-filled text by default (AppKit's
+    /// behavior); the field must move the caret to the end in that same pass so
+    /// the very first keystroke appends instead of replacing the whole
+    /// selection. A deferred (async) correction loses that race.
+    private struct SheetHost: View {
+        @Binding var text: String
+        let theme: Theme
+        var body: some View {
+            Color.clear
+                .frame(width: 300, height: 100)
+                .sheet(isPresented: .constant(true)) {
+                    AlasField(text: $text, monospaced: true, focusOnAppear: true, inputFilter: .branchName)
+                        .environment(\.theme, theme)
+                        .frame(width: 260)
+                        .padding()
+                }
+        }
+    }
+
+    @Test func firstKeystrokeAfterAutomaticFocusAppendsRatherThanReplacesPrefilledText() {
+        var text = "nacho/"
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let controller = NSHostingController(rootView: SheetHost(text: binding, theme: currentTheme()))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = controller
+        window.makeKeyAndOrderFront(nil)
+        controller.view.layoutSubtreeIfNeeded()
+        pump(0.3)
+
+        let sheet = try! #require(window.attachedSheet)
+        let field = try! #require(Self.firstTextField(in: sheet.contentView!))
+        let editor = try! #require(field.currentEditor() as? NSTextView)
+
+        for character in "feature" {
+            editor.insertText(String(character), replacementRange: editor.selectedRange())
+            pump()
+        }
+
+        #expect(editor.string == "nacho/feature")
+        #expect(editor.selectedRange() == NSRange(location: (editor.string as NSString).length, length: 0))
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {
