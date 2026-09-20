@@ -20,6 +20,16 @@
 - The proxying Mac is called a "gateway" in prose; "hub" is the #1337 browser client. No UI string in this plan uses either word.
 - Tokens for outbound peers are stored in plaintext in `remote-peers.json` under Application Support, the same posture as the browser's `localStorage`. Never log them.
 - Tests use `import Testing`, never XCTest. Run only the suites named in each task; CI runs the rest.
+- **Any task that creates a new file must run `xcodegen` and commit the
+  regenerated `Alas.xcodeproj` with its sources.** `project.yml` declares
+  `sources: - path: AlasTests`, but xcodegen expands that into explicit file
+  references in `project.pbxproj`. A new file that is not regenerated in is
+  never compiled: a new source file silently drops out of the target, and a
+  new test file makes `-only-testing AlasTests/<NewSuite>` match nothing.
+  xcodebuild then prints `** TEST SUCCEEDED **` over `Executed 0 tests` — a
+  false green. After regenerating, confirm the suite really ran by checking
+  the Swift Testing tail line (`Test run with N tests in M suites passed`)
+  names every suite you selected, not just the pre-existing ones.
 - Commits carry no agent attribution of any kind (see `CLAUDE.md`).
 - Code, comments, log strings, and UI strings are English.
 
