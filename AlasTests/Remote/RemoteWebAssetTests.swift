@@ -1447,4 +1447,22 @@ struct RemoteWebAssetTests {
         #expect(retry.contains("if (pendingFirstPairing) { attemptFirstPairing(pendingFirstPairing); return; }"))
         #expect(js.contains("attemptFirstPairing(fromLink);"))
     }
+
+    // Regression: an already-paired device (adding a second
+    // Mac, or re-scanning a code) that opens a scanned link whose pairing
+    // then fails used to be stranded on that scan's own failure gate —
+    // network failures kept retrying the unusable scan forever, and an
+    // expired/rejected code showed no button at all — even though the
+    // existing, working session was still right there. The fallback must
+    // run before the "net" branch, since a purely transient failure
+    // shouldn't matter when there's already a session to fall back to.
+    @Test func failedScannedPairingFallsBackToTheExistingSessionWhenOneExists() throws {
+        let js = try asset("app.js")
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(attempt.contains("if (hub.activeId) {"))
+        #expect(attempt.contains("switchServer(hub.activeId);"))
+        let activeIdIndex = try #require(attempt.range(of: "if (hub.activeId) {"))
+        let netIndex = try #require(attempt.range(of: #"err.reason === "net""#))
+        #expect(activeIdIndex.lowerBound < netIndex.lowerBound, "the existing-session fallback must be checked before the net-error gate")
+    }
 }

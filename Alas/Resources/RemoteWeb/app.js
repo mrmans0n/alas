@@ -3842,6 +3842,16 @@ function attemptFirstPairing(input) {
     pendingFirstPairing = null;
   }).catch((err) => {
     clearEscalation();
+    // An already-paired device (adding a second Mac, or re-scanning a
+    // code) must never get stranded on this scan's failure gate — the
+    // existing, working session is right there. A genuinely first-time
+    // scan has nothing to fall back to, so it keeps the retry/expired
+    // gates instead.
+    if (hub.activeId) {
+      pendingFirstPairing = null;
+      switchServer(hub.activeId);
+      return;
+    }
     if (err && err.reason === "net") { showUnreachableGate(); return; }
     pendingFirstPairing = null;
     showGate("Pairing link expired", pairingErrorMessage(err), false);
