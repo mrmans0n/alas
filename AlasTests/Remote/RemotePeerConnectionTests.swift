@@ -11,6 +11,11 @@ struct RemotePeerConnectionTests {
         var all: [RemotePeerConnection.Event] = []
         var states: [RemotePeerConnection.State] { all.compactMap { if case .stateChanged(let s) = $0 { return s } else { return nil } } }
         var hellos: [String] { all.compactMap { if case .hello(let id, _, _, _) = $0 { return id } else { return nil } } }
+        var helloNames: [String] { all.compactMap { if case .hello(_, let name, _, _) = $0 { return name } else { return nil } } }
+        var helloVersions: [Int] { all.compactMap { if case .hello(_, _, let v, _) = $0 { return v } else { return nil } } }
+        /// Without this the `federationEnabled` the link forwards is untested,
+        /// so mixing up the `hello` frame's trailing fields stays green.
+        var helloFederation: [Bool] { all.compactMap { if case .hello(_, _, _, let f) = $0 { return f } else { return nil } } }
         var origins: [String] { all.compactMap { if case .originChanged(let o) = $0 { return o } else { return nil } } }
         var messages: [RemoteServerMessage] { all.compactMap { if case .message(let m) = $0 { return m } else { return nil } } }
     }
@@ -67,6 +72,10 @@ struct RemotePeerConnectionTests {
         defer { link.disconnect() }
         try await waitUntil { link.state == .online }
         #expect(events.hellos == ["srv-a"])
+        #expect(events.helloNames == ["Mac A"])
+        #expect(events.helloVersions == [RemoteProtocolVersion.current])
+        // `startServer`'s identity sets federationEnabled: true.
+        #expect(events.helloFederation == [true])
         #expect(events.origins == [origin])
         #expect(link.lastOrigin == origin)
         #expect(events.states.first == .connecting)

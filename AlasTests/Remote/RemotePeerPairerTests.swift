@@ -71,4 +71,17 @@ struct RemotePeerPairerTests {
         // The two rejected origins must never have been dialed at all.
         #expect(recorder.requests.count == 1)
     }
+
+    // The synthesized enum description would print the token verbatim, so any
+    // future interpolation of an outcome would leak a live bearer token.
+    @Test func pairedDescriptionRedactsTheToken() {
+        let outcome = RemotePeerPairer.Outcome.paired(
+            token: "s3cret-token", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765")
+        let text = "\(outcome)"
+        #expect(!text.contains("s3cret-token"))
+        #expect(text.contains("<redacted>"))
+        #expect(text.contains("srv-a"))
+        #expect(text.contains("http://10.0.0.9:8765"))
+        #expect("\(RemotePeerPairer.Outcome.expiredCode)" == "expiredCode")
+    }
 }

@@ -79,3 +79,22 @@ struct RemotePeerPairer {
         return .unreachable
     }
 }
+
+extension RemotePeerPairer.Outcome: CustomStringConvertible {
+    /// Swift's synthesized description of an enum prints its associated
+    /// values, so interpolating a `.paired` outcome anywhere — a log line, an
+    /// error message, a test failure — would put a live bearer token into the
+    /// string. Redact it at the type, so no caller has to remember.
+    var description: String {
+        switch self {
+        case .paired(_, let serverId, let name, let origin):
+            return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), origin: \(origin))"
+        case .expiredCode:
+            return "expiredCode"
+        case .originRejected:
+            return "originRejected"
+        case .unreachable:
+            return "unreachable"
+        }
+    }
+}
