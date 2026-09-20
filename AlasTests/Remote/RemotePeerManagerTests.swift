@@ -136,8 +136,8 @@ struct RemotePeerManagerTests {
         #expect((try? pairing.redeem(code: counterCode, deviceName: "Mac A")) != nil)
     }
 
-    // The core of the Codex fix: A's own /pair reply succeeding only proves
-    // OUR call to A worked, not that A's reciprocal pair-back to US did — our
+    // A's own /pair reply succeeding only proves OUR call to A worked, not
+    // that A's reciprocal pair-back to US did — our
     // own outbound link would come online just fine either way, since its
     // token is already valid regardless of A's leg of the exchange. If A
     // cannot reach any of our origins, A's reciprocal call to us never
@@ -243,7 +243,7 @@ struct RemotePeerManagerTests {
         #expect(requests.seen.count == 1)
     }
 
-    // Codex: A schedules its reciprocal call right after redeeming our code,
+    // A schedules its reciprocal call right after redeeming our code,
     // before A's own HTTP reply to OUR original request has even finished
     // transmitting — so A's reciprocal call can land on our /pair endpoint
     // and reach `handleInboundPeer` before our own `addPeer` has returned
@@ -262,7 +262,7 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.localDeviceId == "dev-a")
     }
 
-    // Codex: an unmatched confirmation buffered by an EARLIER, unrelated
+    // An unmatched confirmation buffered by an EARLIER, unrelated
     // attempt (one whose own addPeer never reached upsert) must not sit
     // around forever and then wrongly satisfy a LATER, different attempt's
     // wait for the same peer. It is isolated by carrying a different
@@ -287,7 +287,7 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
     }
 
-    // Codex: keying the buffer by peer alone let a genuinely CURRENT
+    // Keying the buffer by peer alone let a genuinely CURRENT
     // confirmation from an unrelated attempt for the same peer satisfy this
     // attempt merely by arriving inside the timeout window. Binding to the
     // exact counter-code this attempt minted rules that out regardless of
@@ -360,7 +360,7 @@ struct RemotePeerManagerTests {
         #expect(newLink.connectCalls == 1)
     }
 
-    // Codex: re-pairing preserved the record's OLD localDeviceId, so the
+    // Re-pairing preserved the record's OLD localDeviceId, so the
     // confirmation wait was trivially satisfied by a signal from a PREVIOUS
     // attempt, before this attempt's own reciprocal exchange had any chance
     // to run — meaning `addPeer` could report success and leave the link
@@ -385,7 +385,7 @@ struct RemotePeerManagerTests {
         #expect(peer.localDeviceId == "stale-dev-id")
     }
 
-    // Codex: re-pairing an existing, working peer whose NEW reciprocal
+    // Re-pairing an existing, working peer whose NEW reciprocal
     // exchange fails used to `forget()` unconditionally — destroying a
     // previous relationship that this attempt never touched and that could
     // still be entirely valid, and revoking a device grant that was never
@@ -429,7 +429,7 @@ struct RemotePeerManagerTests {
         #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
     }
 
-    // Codex: `handleInboundPeer`'s "peer already exists" branch used to write
+    // `handleInboundPeer`'s "peer already exists" branch used to write
     // `localDeviceId` directly onto the record, racing `addPeer`'s own
     // `upsert` (called right after the network reply returns), which resets
     // `localDeviceId` to nil — a confirmation landing while that network
@@ -456,11 +456,11 @@ struct RemotePeerManagerTests {
         #expect(try #require(manager.peers.first).localDeviceId == "fresh-dev-id")
     }
 
-    // Codex: our own outbound leg failing does not mean A's reciprocal leg
-    // did — A can still redeem our counter-code and pair back even if OUR
-    // read of A's reply is lost on the wire. That buffers a confirmation
-    // that authorizes a device for A; addPeer's failure path used to just
-    // return without checking it, leaving that device standing with no peer
+    // Our own outbound leg failing does not mean A's reciprocal leg did — A
+    // can still redeem our counter-code and pair back even if OUR read of
+    // A's reply is lost on the wire. That buffers a confirmation that
+    // authorizes a device for A, so addPeer's failure path must check for it
+    // rather than just returning, or that device would stand with no peer
     // row this attempt will ever create to forget it by.
     @Test func addPeerRevokesABufferedReciprocalDeviceWhenOurOwnLegFails() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
@@ -485,7 +485,32 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
-    // Codex: a confirmation that arrives with no addPeer attempt left waiting
+    // The far side's own retries run on their own schedule, independent of
+    // whether this attempt already gave up: its reciprocal call can land
+    // well after addPeer has already returned failure, with nothing left
+    // waiting to claim it. It must be revoked the moment it arrives rather
+    // than buffered on the chance some unrelated later callback sweeps it
+    // out — or left standing forever if none ever does.
+    @Test func aReciprocalCallbackArrivingAfterTheAttemptAlreadyEndedIsRevokedOnArrival() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let requests = Requests()
+        var revoked: [String] = []
+        let manager = makeManager(pairing: pairing, pairer: pairer([:], requests: requests), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .unreachable)
+        let sent = try body(of: try #require(requests.seen.first))
+        let counterCode = try #require((sent["peer"] as? [String: Any])?["counterCode"] as? String)
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil,
+            localDeviceId: inbound.deviceId, redeemedCode: counterCode))
+        #expect(manager.peers.isEmpty)
+        #expect(revoked == [inbound.deviceId])
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
+    // A confirmation that arrives with no addPeer attempt left waiting
     // for its counter-code (the attempt it belonged to already gave up, or
     // never existed) sits buffered until swept by expiry — the device it
     // authorized must be revoked at that point, not just silently dropped.

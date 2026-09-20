@@ -129,7 +129,7 @@ struct RemotePeerConnectionTests {
         try await waitUntil { link.state == .incompatible(remoteVersion: RemoteProtocolVersion.current) }
     }
 
-    // Codex: the version check ran BEFORE the identity check, so a stale
+    // The version check ran BEFORE the identity check, so a stale
     // origin reassigned to an unrelated Alas instance running an
     // incompatible version reported .incompatible — terminal, no reconnect —
     // without ever noticing the identity was ALSO wrong, masking a
