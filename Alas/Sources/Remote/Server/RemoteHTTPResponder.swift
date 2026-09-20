@@ -7,27 +7,65 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     let addresses: [RemoteAdvertisedAddress]
     let usesPlainHTTP: Bool
     let pairedDeviceCount: Int
+    let serverId: String?
+    let name: String?
+
+    init(
+        appName: String,
+        port: UInt16?,
+        addresses: [RemoteAdvertisedAddress],
+        usesPlainHTTP: Bool,
+        pairedDeviceCount: Int,
+        serverId: String? = nil,
+        name: String? = nil
+    ) {
+        self.appName = appName
+        self.port = port
+        self.addresses = addresses
+        self.usesPlainHTTP = usesPlainHTTP
+        self.pairedDeviceCount = pairedDeviceCount
+        self.serverId = serverId
+        self.name = name
+    }
 }
 
 /// Builds HTTP/1.1 responses for non-WebSocket requests: the static web
-/// client bundle, safe diagnostics routes, and the POST /pair endpoint. Pure
-/// given its inputs.
+/// client bundle, safe diagnostics routes, and the pairing endpoint. Pure
+/// given its inputs. `/pair` and `/health` are reachable cross-origin from a
+/// hub served by another Mac, so they carry CORS headers for origins the
+/// `originPolicy` allows; everything else stays same-origin only.
 @MainActor
 struct RemoteHTTPResponder {
     let pairing: RemotePairingService
     let assets: RemoteWebAssets
     let diagnostics: () -> RemoteDiagnosticsSnapshot
+    var originPolicy: RemoteOriginPolicy = .loopback
 
     func response(for req: HTTPRequest, body: Data) -> Data {
+        let cors = corsHeaders(for: req)
+        if req.method == "OPTIONS", req.path == "/pair" {
+            return Self.http(
+                status: "204 No Content", contentType: "text/plain", body: Data(),
+                extraHeaders: cors + [
+                    ("Access-Control-Allow-Methods", "POST, OPTIONS"),
+                    ("Access-Control-Allow-Headers", "content-type"),
+                    ("Access-Control-Max-Age", "600"),
+                ])
+        }
         if req.method == "GET", req.path == "/health" {
-            return Self.json(["ok": true])
+            // serverId lets a hub tell "this is really the paired Mac" apart
+            // from an unrelated Alas instance that happens to answer at the
+            // same address (a DHCP-reused LAN IP, or another server sharing
+            // this Mac's own loopback address) before trusting a 2xx as
+            // proof the paired Mac is still authorized.
+            return Self.json(["ok": true, "serverId": diagnostics().serverId], extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
             let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
             return Self.http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
         }
         if req.method == "POST", req.path == "/pair" {
-            return pairResponse(body: body)
+            return pairResponse(body: body, extraHeaders: cors)
         }
         if req.method == "GET" {
             let path = req.path == "/" ? "/index.html" : req.path
@@ -38,30 +76,47 @@ struct RemoteHTTPResponder {
         return Self.http(status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8))
     }
 
-    private static func json(_ object: [String: Bool]) -> Data {
-        let data = (try? JSONSerialization.data(withJSONObject: object, options: [])) ?? Data(#"{"ok":false}"#.utf8)
-        return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
+    /// `Access-Control-Allow-Origin` echoing the request's Origin when the
+    /// policy allows it; empty for absent or disallowed origins.
+    func corsHeaders(for req: HTTPRequest) -> [(String, String)] {
+        guard let origin = req.headers["origin"], !origin.isEmpty,
+              originPolicy.allows(originHeader: origin) else { return [] }
+        return [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
     }
 
-    private func pairResponse(body: Data) -> Data {
+    private static func json(_ object: [String: Any?], extraHeaders: [(String, String)] = []) -> Data {
+        let compacted = object.compactMapValues { $0 }
+        let data = (try? JSONSerialization.data(withJSONObject: compacted, options: [])) ?? Data(#"{"ok":false}"#.utf8)
+        return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data, extraHeaders: extraHeaders)
+    }
+
+    private func pairResponse(body: Data, extraHeaders: [(String, String)]) -> Data {
         struct PairRequest: Decodable { let code: String
         let deviceName: String }
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body),
               let token = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else {
             return Self.http(status: "401 Unauthorized", contentType: "application/json",
-                             body: Data(#"{"error":"pairing failed"}"#.utf8))
+                             body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
         }
         return Self.http(status: "200 OK", contentType: "application/json",
-                         body: Data(#"{"token":"\#(token)"}"#.utf8))
+                         body: Data(#"{"token":"\#(token)"}"#.utf8), extraHeaders: extraHeaders)
     }
 
     /// Pure response framing — `nonisolated` so the connection state machine can
     /// build error responses from its serial network queue without hopping to
     /// MainActor (it touches no actor state).
-    nonisolated static func http(status: String, contentType: String, body: Data) -> Data {
+    nonisolated static func http(
+        status: String,
+        contentType: String,
+        body: Data,
+        extraHeaders: [(String, String)] = []
+    ) -> Data {
         var head = "HTTP/1.1 \(status)\r\n"
         head += "Content-Type: \(contentType)\r\n"
         head += "Content-Length: \(body.count)\r\n"
+        for (name, value) in extraHeaders {
+            head += "\(name): \(value)\r\n"
+        }
         // Never cache: the web bundle changes between builds and a stale cached
         // page can silently point at a dead server / hide an update.
         head += "Cache-Control: no-store\r\n"

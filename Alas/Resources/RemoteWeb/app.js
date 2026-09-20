@@ -1,10 +1,30 @@
-const tokenKey = "alas.remote.token";
+// Multi-server hub state. The registry (persisted) and links (one socket per
+// paired Mac) are DOM-free modules; app.js owns the UI and drives the ACTIVE
+// link through send()/handle() exactly as the single-server client did.
+const hub = RemoteHubRegistry.load(localStorage, location.origin, location.hostname, Date.now());
+let hubUIEnabled = false;   // aggregate: true once ANY paired server has ever reported hello.hubEnabled
+const links = RemoteHubLinks.createLinks({
+  createSocket: (url, protocols) => new WebSocket(url, protocols),
+  fetch: (url, init) => fetch(url, init),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id),
+}, {
+  onStateChange: (link) => handleLinkStateChange(link),
+  onHello: (link, hello) => handleLinkHello(link, hello),
+  onLegacy: () => refreshHubViews(),
+  onMessage: (link, msg) => handle(msg),
+  onCounts: () => refreshHubViews(),
+  onOriginChange: (link, origin) => {
+    RemoteHubRegistry.setLastOrigin(hub, link.id, origin);
+    RemoteHubRegistry.save(localStorage, hub);
+  },
+});
 const $ = (id) => document.getElementById(id);
 function listen(id, event, handler) {
   const element = $(id);
   if (element && typeof element.addEventListener === "function") element.addEventListener(event, handler);
 }
-let ws, currentSession = null, messages = new Map();   // stableId → wire message
+let currentSession = null, messages = new Map();   // stableId → wire message
 let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
 let olderFetchInFlight = false;
@@ -15,13 +35,6 @@ let sessionTitles = new Map();
 let listedSessions = new Map();
 let expandedWorktrees = new Set();
 let canDrive = false, canDriveKnown = false;
-let reconnectDelay = 1500;
-let reconnectTimer = null;
-let connectAttempt = 0;
-let pairingPromise = null;
-let pairingController = null;
-const initialReconnectDelay = 1500;
-const maxReconnectDelay = 30000;
 let everConnected = false;      // has any onopen fired this page load? separates "loading" from "disconnected"
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
 let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
@@ -37,6 +50,7 @@ let lastSentText = null;        // text of the most recent sendPrompt, kept so a
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
+let composerGeneration = 0;     // bumped by resetServerScopedState(); invalidates in-flight onFilesPicked() reads from a server the user has since left
 let renameTarget = null;
 let deferredCreatePrompt = null;
 let createState = {
@@ -107,6 +121,13 @@ function armEscalation() {
   if (escalationTimer || escalated) return;   // don't re-arm while pending, or after we've already escalated
   escalationTimer = setTimeout(() => {
     escalationTimer = null;
+    if (!everConnected && hubUIEnabled) {
+      // Launch fallback: the remembered server is not answering but another
+      // paired Mac is — drive that one instead of parking on the outage gate.
+      const online = links.all().filter((l) => l.state === "online" && l.id !== hub.activeId).map((l) => l.id);
+      const fallback = online.length ? RemoteHubRegistry.fallbackActiveId(hub, online) : null;
+      if (fallback && fallback !== hub.activeId) { switchServer(fallback); return; }
+    }
     escalated = true;
     showUnreachableGate();
   }, GRACE_MS);
@@ -126,138 +147,229 @@ function closeState(everConnectedFlag) {
   return everConnectedFlag ? "reconnecting" : "loading";
 }
 
-function scheduleReconnect() {
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, reconnectDelay);
-  reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
-}
-
 function retryConnection() {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (pairingController) {
-    pairingController.abort();
-    pairingController = null;
-    pairingPromise = null;
-  }
-  reconnectDelay = initialReconnectDelay;
+  // A first-time scan that fails before any server is ever added has no
+  // link to retry — the scanned input is retained so "Try again" can repeat
+  // the pairing attempt itself, rather than showing a spinner that can
+  // never resolve.
+  if (pendingFirstPairing) { attemptFirstPairing(pendingFirstPairing); return; }
   clearEscalation();               // start a fresh grace budget for the manual retry
   setStatus("Connecting…", "connecting");
   showConnectingGate();
   armEscalation();
-  connect();
+  if (hub.activeId) links.retry(hub.activeId);
 }
 
-async function ensureToken() {
-  // A freshly-scanned QR (?code present) always re-pairs, REPLACING any stored
-  // token — otherwise a phone holding a stale/rejected token could never
-  // recover by scanning a new code (it would keep reusing the dead token).
-  const code = new URLSearchParams(location.search).get("code");
-  if (code) {
-    if (!pairingPromise) {
-      const controller = new AbortController();
-      pairingController = controller;
-      pairingPromise = pairWithCode(code, controller.signal).finally(() => {
-        if (pairingController === controller) pairingController = null;
-        pairingPromise = null;
-      });
-    }
-    return await pairingPromise;
-  }
-  const token = localStorage.getItem(tokenKey);
-  if (token) return token;
-  showGate("Pair this device", "On your Mac, open Alas → Settings → Remote and scan the QR code shown there.");
-  throw new Error("no code");
+// --- active link -------------------------------------------------------------
+// The link manager owns sockets and reconnects; these hooks translate the
+// ACTIVE link's lifecycle into the chip/gate/escalation UI the single-server
+// client already had, so the flag-off experience is unchanged.
+
+function activeServer() { return hub.servers.find((s) => s.id === hub.activeId) || null; }
+
+function connectedLabel() {
+  const server = activeServer();
+  return hubUIEnabled && server ? (server.name || server.lastOrigin) : "Connected";
 }
 
-async function pairWithCode(code, signal) {
-  let res;
-  try {
-    res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }), signal });
-  } catch (err) {
-    if (err && err.name === "AbortError") throw new Error("aborted");
-    showUnreachableGate();
-    throw new Error("net");
-  }
-  if (!res.ok) {
-    localStorage.removeItem(tokenKey);
-    showGate("Pairing link expired", "That code timed out. In Alas, open Settings → Remote, tap “New code”, and scan the fresh QR.");
-    throw new Error("pair failed");
-  }
-  const token = (await res.json()).token;
-  localStorage.setItem(tokenKey, token);
-  history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
-  return token;
+// Aggregate, not per-active-server: once ANY paired Mac has ever reported
+// hubEnabled, the hub UI stays available no matter which server is
+// currently active — switching to view a Mac whose own toggle is off must
+// never strand the user without a way back to the server list.
+function anyServerHasHubEnabled() {
+  return hub.servers.some((s) => s.hubEnabled === true);
 }
 
-async function connect() {
-  const attempt = ++connectAttempt;
-  let token;
-  try {
-    token = await ensureToken();
-  } catch (err) {
-    if (attempt !== connectAttempt) return;
-    if (err && err.message === "net") { scheduleReconnect(); return; }   // keep escalation armed; retrying
-    clearEscalation();   // pairing / no-token is a user-action state, not an outage — cancel the doom timer
-    return;              // status/gate already set by ensureToken — wait for the user
+function handleLinkStateChange(link) {
+  refreshHubViews();
+  if (link.role !== "active") return;
+  switch (link.state) {
+    case "online": onActiveOpen(); break;
+    case "offline": onActiveClose(); break;
+    case "connecting":
+      if (!everConnected && !escalated) { setStatus("Connecting…", "connecting"); showConnectingGate(); }
+      break;
+    case "unauthorized":
+      clearEscalation();
+      setStatus("Not paired", "bad");
+      showPairAgainGate(link);
+      break;
+    case "blocked":
+      clearEscalation();
+      setStatus("Blocked", "bad");
+      showOriginBlockedGate(link);
+      break;
+    default: break;
   }
-  if (attempt !== connectAttempt) return;
-  if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
-  const wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${wsScheme}//${location.host}/ws`, [token]);   // token as subprotocol
-  ws = socket;
-  socket.onopen = () => {
-    if (socket !== ws) return;
-    everConnected = true;
-    clearEscalation();
-    setStatus("Connected", "ok");
-    hideGate();
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    reconnectDelay = initialReconnectDelay;   // reset back-off after a good connection
-    send({ type: "listSessions" });
-    if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
-    replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
-    replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
-    if (createState.open) {
-      createState.error = "";
-      requestCreateLists();
-      reloadNewWorktreeCatalog();
-      renderCreateSheet();
-    }
-  };
-  socket.onclose = () => {
-    if (socket !== ws) return;
-    failCreateOnDisconnect();
-    if (closeState(everConnected) === "loading") {
-      // Initial load still in progress — keep the neutral loading overlay up
-      // instead of flashing the alarming "Can't reach Alas" screen. Once we've
-      // escalated, leave the alarming gate up rather than flapping back to it.
-      if (!escalated) {
-        setStatus("Connecting…", "connecting");
-        showConnectingGate();
-      }
-    } else {
-      // Mid-session drop — keep the transcript visible; only the chip changes.
-      setStatus("Reconnecting…", "bad");
-    }
-    armEscalation();     // no-op if already armed → grace stays a total budget
-    scheduleReconnect();
-  };
-  socket.onmessage = (e) => {
-    if (socket !== ws) return;
-    handle(JSON.parse(e.data));
-  };
 }
 
-function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); }
+function onActiveOpen() {
+  everConnected = true;
+  pendingFirstPairing = null;
+  clearEscalation();
+  setStatus(connectedLabel(), "ok");
+  hideGate();
+  send({ type: "listSessions" });
+  if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+  replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
+  replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
+  if (createState.open) {
+    createState.error = "";
+    requestCreateLists();
+    reloadNewWorktreeCatalog();
+    renderCreateSheet();
+  }
+}
+
+function onActiveClose() {
+  failCreateOnDisconnect();
+  if (closeState(everConnected) === "loading") {
+    // Initial load still in progress — keep the neutral loading overlay up
+    // instead of flashing the alarming "Can't reach Alas" screen. Once we've
+    // escalated, leave the alarming gate up rather than flapping back to it.
+    if (!escalated) { setStatus("Connecting…", "connecting"); showConnectingGate(); }
+  } else {
+    // Mid-session drop — keep the transcript visible; only the chip changes.
+    setStatus("Reconnecting…", "bad");
+  }
+  armEscalation();     // no-op if already armed → grace stays a total budget
+}
+
+function showPairAgainGate(link) {
+  const server = hub.servers.find((s) => s.id === link.id);
+  const name = server ? (server.name || server.lastOrigin) : "This Mac";
+  showGate("Pair again", `${name} no longer recognizes this device. Copy a fresh pairing link from Alas → Settings → Remote and paste it here.`, false);
+  $("gate-pair").classList.remove("hidden");
+}
+
+function showOriginBlockedGate(link) {
+  const server = hub.servers.find((s) => s.id === link.id);
+  const name = server ? (server.name || server.lastOrigin) : "This Mac";
+  showGate("Address not allowed", `${name} is online but doesn't allow this address. Add it to Allowed origins in that Mac's Remote settings, then try again.`, true);
+}
+
+function showPairGate() {
+  clearEscalation();
+  showGate("Pair this device", "On your Mac, open Alas → Settings → Remote and scan the QR code shown there.", false);
+  $("gate-pair").classList.remove("hidden");
+}
+
+function handleLinkHello(link, hello) {
+  const result = RemoteHubRegistry.applyHello(hub, link.id, hello);
+  if (!result) return;
+  RemoteHubRegistry.save(localStorage, hub);
+  // Recompute the aggregate before the merge branch's early return too — the
+  // surviving entry's hubEnabled may have just changed and no other server
+  // is left to authorize the hub UI otherwise.
+  applyHubFlag(anyServerHasHubEnabled());
+  if (result.mergedFromId) {
+    // The Mac we just reached was already paired under another entry. Keep
+    // the older entry (its id is what the UI references), give it the fresh
+    // token and origins, and reconnect it.
+    links.remove(result.mergedFromId);
+    links.update(result.server);
+    if (hub.activeId === result.server.id) switchServer(result.server.id);
+    return;
+  }
+  if (link.role === "active" && link.state === "online") setStatus(connectedLabel(), "ok");
+  refreshHubViews();
+}
+
+// Flag off → single-server client: no idle sockets, no Settings tab, chip as
+// before. Flag on → server list, add sheet, badges, tappable server chip.
+function applyHubFlag(enabled) {
+  hubUIEnabled = enabled;
+  $("tab-settings").disabled = !enabled;
+  $("hub-section").classList.toggle("hidden", !enabled);
+  $("settings-placeholder").classList.toggle("hidden", enabled);
+  $("status").classList.toggle("is-server", enabled);
+  if (!enabled && topLevelTab === "settings") showRepos();
+  if (enabled) links.connectAll(); else links.disableIdle();
+  refreshHubViews();
+}
+
+function refreshHubViews() {
+  renderServerList();
+  renderSettingsBadge();
+}
+
+function send(obj) { links.sendActive(obj); }
+
+// --- pairing & switching -----------------------------------------------------
+
+// `input` is { origins, code } from RemoteHubRegistry.parsePairingLink /
+// parseManualPairing. Resolves the registry entry; rejects with the link
+// manager's { reason } errors.
+async function pairAndAdd(input, options) {
+  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40));
+  const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
+  RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
+  RemoteHubRegistry.save(localStorage, hub);
+  if (rePaired && links.get(server.id)) links.update(server); else links.add(server);
+  if ((options && options.activate) || hub.activeId === server.id) switchServer(server.id);
+  else if (hubUIEnabled) links.connect(server.id);
+  return server;
+}
+
+function pairingErrorMessage(err) {
+  switch (err && err.reason) {
+    case "expired": return "That code expired. Tap New code in Alas and try again.";
+    case "origin": return "That Mac doesn't allow this address. Add this hub's address to Allowed origins in its Remote settings.";
+    case "net": return "Couldn't reach that Mac at any of its addresses.";
+    default: return "Pairing failed.";
+  }
+}
+
+// Everything in app.js that belongs to ONE server. Runs before the active
+// link changes so the unsubscribe goes to the server that owns the session.
+function resetServerScopedState() {
+  if (currentSession) showSessions();
+  hideCreateSheet(true);
+  worktreeCreation.disconnect();
+  createState = { ...createState, open: false, step: "worktree", worktrees: [], agents: [], selectedWorktreeId: null, selectedAgentId: null, filter: "", busy: false, error: "" };
+  listedSessions = new Map(); sessionTitles = new Map(); expandedWorktrees = new Set();
+  repoOverrides = new Map();
+  dismissedQuestion = null; deferredCreatePrompt = null;
+  // An unsent draft (text or staged images) belongs to the server being
+  // left — otherwise it's still sitting in the composer when a session on
+  // the new server opens, where it could be sent to the wrong Mac.
+  $("prompt").value = "";
+  clearAttachments();
+  autoGrowPrompt();
+  lastSentText = null;
+  lastSentAttachments = [];
+  // Invalidates any onFilesPicked() read still awaiting a FileReader from
+  // before this reset — its continuation checks this generation before
+  // appending to pendingAttachments, so a slow read from the old session
+  // can't land in the new one's composer.
+  composerGeneration++;
+  renderSessions([]);
+  showRepos();
+}
+
+function switchServer(id) {
+  const target = hub.servers.find((s) => s.id === id);
+  if (!target) return;
+  if (hub.activeId && hub.activeId !== id) resetServerScopedState();
+  RemoteHubRegistry.setActive(hub, id);
+  RemoteHubRegistry.save(localStorage, hub);
+  if (!links.get(id)) links.add(target);
+  everConnected = false;
+  $("gate-pair").classList.add("hidden");
+  const link = links.setActive(id);
+  applyHubFlag(anyServerHasHubEnabled());
+  if (link.state === "online") return;   // setActive's own notify already ran onActiveOpen() for us
+  if (link.state === "unauthorized") { showPairAgainGate(link); return; }
+  // links.connect() is a no-op while blocked (see hub-links.js's connect()
+  // guard) — falling through to the "Connecting…" gate below would show a
+  // spinner that never resolves.
+  if (link.state === "blocked") { showOriginBlockedGate(link); return; }
+  clearEscalation();
+  setStatus("Connecting…", "connecting");
+  showConnectingGate();
+  armEscalation();
+  links.connect(id);
+}
 
 function handle(msg) {
   switch (msg.type) {
@@ -1226,17 +1338,191 @@ function showRepos() {
 }
 
 function showSettings() {
-  if (currentSession) return;   // tab bar is hidden during session detail; guard anyway
+  if (currentSession || !hubUIEnabled) return;   // tab bar is hidden during session detail; the tab is disabled flag-off
   topLevelTab = "settings";
   $("tab-settings").classList.add("is-active");
   $("tab-repos").classList.remove("is-active");
   $("sessions").classList.add("hidden");
   $("settings").classList.remove("hidden");
+  renderServerList();
 }
 
 $("tab-repos").addEventListener("click", showRepos);
 $("tab-settings").addEventListener("click", showSettings);
 $("fab-new-session").onclick = showCreateSheet;
+$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };
+
+// --- hub settings ------------------------------------------------------------
+
+function serverDotClass(link) {
+  if (!link) return "off";
+  switch (link.state) {
+    case "online": return link.counts.running > 0 ? "run" : "idle";
+    case "connecting": return "connecting";
+    case "unauthorized": return "warn";
+    case "blocked": return "warn";
+    default: return "off";
+  }
+}
+
+function serverSubtitle(server, link) {
+  const where = (link && link.lastOrigin) || server.lastOrigin || server.origins[0];
+  if (!link) return where;
+  switch (link.state) {
+    case "online": return link.legacy ? `${where} · Older Alas` : where;
+    case "connecting": return `${where} · Connecting…`;
+    case "unauthorized": return "Pair again";
+    case "blocked": return "Address not allowed";
+    case "offline": return `${where} · Offline`;
+    default: return where;
+  }
+}
+
+function renderServerList() {
+  if (!hubUIEnabled) return;
+  const box = $("server-list");
+  box.innerHTML = "";
+  for (const server of hub.servers) {
+    const link = links.get(server.id);
+    const row = el("div", "server-row" + (server.id === hub.activeId ? " is-active" : ""));
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.append(el("span", "dot " + serverDotClass(link)));
+    const main = el("div", "server-main");
+    main.append(el("div", "server-name", server.name || server.lastOrigin));
+    main.append(el("div", "server-origin", serverSubtitle(server, link)));
+    row.append(main);
+    if (link && link.counts.attention > 0) row.append(el("span", "tab-count", String(link.counts.attention)));
+    const menu = el("button", "iconbtn server-menu", "⋯");
+    menu.type = "button";
+    menu.setAttribute("aria-label", `Actions for ${server.name || server.lastOrigin}`);
+    menu.onclick = (e) => { e.stopPropagation(); showServerActions(server.id); };
+    row.append(menu);
+    const activate = () => { if (server.id !== hub.activeId) { switchServer(server.id); showRepos(); } };
+    row.onclick = activate;
+    // e.target === row excludes a keydown bubbled up from the menu button —
+    // without it, Enter/Space on a focused "⋯" both switched the server by
+    // mistake and, via preventDefault(), suppressed the button's own
+    // synthesized click, making the Re-pair/Forget menu unreachable by
+    // keyboard entirely.
+    row.onkeydown = (e) => { if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activate(); } };
+    box.append(row);
+  }
+}
+
+function renderSettingsBadge() {
+  const badge = $("tab-settings-badge");
+  const total = hubUIEnabled ? RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId) : 0;
+  badge.textContent = total > 0 ? String(total) : "";
+  badge.classList.toggle("hidden", total === 0);
+}
+
+let addServerTarget = null;   // client id when re-pairing a specific server, else null
+let addServerBusy = false;
+
+function showAddServerSheet(targetId) {
+  addServerTarget = targetId || null;
+  const target = addServerTarget ? hub.servers.find((s) => s.id === addServerTarget) : null;
+  $("add-server-title").textContent = target ? `Re-pair ${target.name || target.lastOrigin}` : "Add server";
+  $("add-server-link").value = "";
+  $("add-server-address").value = target ? (target.lastOrigin || "") : "";
+  $("add-server-code").value = "";
+  $("add-server-manual").open = false;
+  $("add-server-error").classList.add("hidden");
+  $("add-server-submit").disabled = false;
+  $("add-server-sheet").classList.remove("hidden");
+  $("add-server-link").focus();
+}
+
+function hideAddServerSheet() {
+  if (addServerBusy) return;
+  $("add-server-sheet").classList.add("hidden");
+  addServerTarget = null;
+}
+
+function showAddServerError(message) {
+  const box = $("add-server-error");
+  box.textContent = message;
+  box.classList.remove("hidden");
+}
+
+async function submitAddServer() {
+  if (addServerBusy) return;
+  let input = RemoteHubRegistry.parsePairingLink($("add-server-link").value);
+  if (!input) input = RemoteHubRegistry.parseManualPairing($("add-server-address").value, $("add-server-code").value);
+  if (!input) { showAddServerError("That doesn't look like an Alas pairing link."); return; }
+  addServerBusy = true;
+  $("add-server-submit").disabled = true;
+  $("add-server-error").classList.add("hidden");
+  const wasEmpty = !hub.activeId;
+  try {
+    const server = await pairAndAdd(input, { activate: wasEmpty || addServerTarget === hub.activeId, targetId: addServerTarget });
+    addServerBusy = false;
+    hideAddServerSheet();
+    if (wasEmpty) hideGate();
+    if (!wasEmpty && server.id !== hub.activeId) renderServerList();
+  } catch (err) {
+    addServerBusy = false;
+    $("add-server-submit").disabled = false;
+    showAddServerError(pairingErrorMessage(err));
+  }
+}
+
+let serverActionsTarget = null;
+
+function showServerActions(id) {
+  const server = hub.servers.find((s) => s.id === id);
+  if (!server) return;
+  serverActionsTarget = id;
+  $("server-actions-title").textContent = server.name || server.lastOrigin;
+  $("server-actions-sheet").classList.remove("hidden");
+}
+
+function hideServerActions() {
+  $("server-actions-sheet").classList.add("hidden");
+  serverActionsTarget = null;
+}
+
+function forgetServer(id) {
+  const wasActive = hub.activeId === id;
+  if (wasActive) resetServerScopedState();
+  RemoteHubRegistry.forgetServer(hub, id);
+  RemoteHubRegistry.save(localStorage, hub);
+  links.remove(id);
+  if (!wasActive) {
+    // The forgotten server may have been the only one that had ever
+    // reported hubEnabled — recompute the aggregate, not just re-render,
+    // so the hub UI doesn't stay stuck on with no server actually
+    // authorizing it.
+    applyHubFlag(anyServerHasHubEnabled());
+    return;
+  }
+  const online = links.all().filter((l) => l.state === "online").map((l) => l.id);
+  const next = RemoteHubRegistry.fallbackActiveId(hub, online);
+  if (next) { switchServer(next); return; }
+  applyHubFlag(anyServerHasHubEnabled());
+  showPairGate();
+}
+
+$("add-server").onclick = () => showAddServerSheet(null);
+$("add-server-submit").onclick = submitAddServer;
+$("add-server-cancel").onclick = hideAddServerSheet;
+$("add-server-sheet").onclick = (e) => { if (e.target.id === "add-server-sheet") hideAddServerSheet(); };
+listen("add-server-link", "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitAddServer(); } });
+listen("add-server-code", "keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitAddServer(); } });
+$("server-repair").onclick = () => { const id = serverActionsTarget; hideServerActions(); showAddServerSheet(id); };
+$("server-forget").onclick = () => {
+  const id = serverActionsTarget;
+  const server = hub.servers.find((s) => s.id === id);
+  hideServerActions();
+  if (server && confirm(`Forget ${server.name || server.lastOrigin}? You will need a new pairing link to add it again.`)) forgetServer(id);
+};
+$("server-actions-close").onclick = hideServerActions;
+$("server-actions-sheet").onclick = (e) => { if (e.target.id === "server-actions-sheet") hideServerActions(); };
+$("gate-pair").onclick = () => {
+  const active = hub.activeId ? links.get(hub.activeId) : null;
+  showAddServerSheet(active && active.state === "unauthorized" ? hub.activeId : null);
+};
 
 function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
@@ -3429,8 +3715,13 @@ function readAttachment(file) {
 }
 
 async function onFilesPicked(files) {
+  const generation = composerGeneration;
   for (const file of files) {
     const b64 = await readAttachment(file);
+    // The active server changed while this read was in flight — the old
+    // session's image must not land in whichever server's composer is
+    // open now.
+    if (generation !== composerGeneration) return;
     if (attachedBytes() + b64Bytes(b64) > ATTACH_CAP) {
       alert("Attachments can total at most 10 MB.");
       break;
@@ -3561,7 +3852,53 @@ if (vp) {
   });
 }
 
-setStatus("Connecting…", "connecting");
-showConnectingGate();
-armEscalation();
-connect();
+document.addEventListener("visibilitychange", () => links.setVisible(document.visibilityState === "visible"));
+
+// Retained across a transient pairing failure so retryConnection() can
+// repeat the exact same first-time pairing attempt — the URL's own copy of
+// this is already stripped by the time the failure shows a retry button.
+let pendingFirstPairing = null;
+
+function attemptFirstPairing(input) {
+  pendingFirstPairing = input;
+  setStatus("Pairing…", "connecting");
+  showConnectingGate();
+  pairAndAdd(input, { activate: true }).then(() => {
+    pendingFirstPairing = null;
+  }).catch((err) => {
+    clearEscalation();
+    // An already-paired device (adding a second Mac, or re-scanning a
+    // code) must never get stranded on this scan's failure gate — the
+    // existing, working session is right there. A genuinely first-time
+    // scan has nothing to fall back to, so it keeps the retry/expired
+    // gates instead. pendingFirstPairing stays set here rather than being
+    // cleared immediately: if the fallback Mac is *also* unreachable,
+    // onActiveClose()'s own "Try again" must retry the originally scanned
+    // Mac, not silently keep hammering the fallback instead. It's cleared
+    // once onActiveOpen() fires — any successful active connection makes a
+    // stale scan-retry intent moot.
+    if (hub.activeId) {
+      switchServer(hub.activeId);
+      return;
+    }
+    if (err && err.reason === "net") { showUnreachableGate(); return; }
+    pendingFirstPairing = null;
+    showGate("Pairing link expired", pairingErrorMessage(err), false);
+  });
+}
+
+function boot() {
+  for (const server of hub.servers) links.add(server);
+  const fromLink = RemoteHubRegistry.parsePairingLink(location.href);
+  if (fromLink) {
+    // A freshly-scanned QR always (re)pairs, REPLACING any stored token for
+    // that Mac — a phone holding a stale/rejected token recovers by scanning
+    // a new code. Strip the code from the URL (history + referrer) first.
+    history.replaceState({}, "", "/");
+    attemptFirstPairing(fromLink);
+    return;
+  }
+  if (!hub.activeId) { showPairGate(); return; }
+  switchServer(hub.activeId);
+}
+boot();

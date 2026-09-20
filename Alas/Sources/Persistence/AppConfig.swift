@@ -60,21 +60,40 @@ struct AppConfig: Codable, Equatable {
         var port: UInt16 = 0          // 0 = OS-assigned
         var allowedHosts: [String] = []
         var preferredAdvertisedHost: String? = nil
+        /// Browser origins allowed to pair with and connect to this Mac, in
+        /// addition to private-network and Host-allowlisted origins.
+        var allowedOrigins: [String] = []
+        /// Stable identity advertised in the WebSocket `hello`. Empty until
+        /// `ensureServerId()` assigns one.
+        var serverId: String = ""
+        /// Name advertised in `hello`. Empty means "use the computer name".
+        var displayName: String = ""
+        /// Experiment: lets the remote web client pair with several Macs.
+        var hubEnabled: Bool = false
 
         init(
             enabled: Bool = false,
             port: UInt16 = 0,
             allowedHosts: [String] = [],
-            preferredAdvertisedHost: String? = nil
+            preferredAdvertisedHost: String? = nil,
+            allowedOrigins: [String] = [],
+            serverId: String = "",
+            displayName: String = "",
+            hubEnabled: Bool = false
         ) {
             self.enabled = enabled
             self.port = port
             self.allowedHosts = allowedHosts
             self.preferredAdvertisedHost = preferredAdvertisedHost
+            self.allowedOrigins = allowedOrigins
+            self.serverId = serverId
+            self.displayName = displayName
+            self.hubEnabled = hubEnabled
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, port, allowedHosts, preferredAdvertisedHost
+            case allowedOrigins, serverId, displayName, hubEnabled
         }
 
         init(from decoder: Decoder) throws {
@@ -83,6 +102,18 @@ struct AppConfig: Codable, Equatable {
             port = (try? c.decode(UInt16.self, forKey: .port)) ?? 0
             allowedHosts = (try? c.decode([String].self, forKey: .allowedHosts)) ?? []
             preferredAdvertisedHost = try? c.decodeIfPresent(String.self, forKey: .preferredAdvertisedHost)
+            allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
+            serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
+            displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
+            hubEnabled = (try? c.decode(Bool.self, forKey: .hubEnabled)) ?? false
+        }
+
+        /// Assigns a fresh UUID when `serverId` is empty. Returns true when it changed.
+        @discardableResult
+        mutating func ensureServerId() -> Bool {
+            guard serverId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            serverId = UUID().uuidString
+            return true
         }
     }
 

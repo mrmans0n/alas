@@ -517,10 +517,38 @@ final class AppState {
         makeRemoteAccessPolicy(interfaces: makeRemoteInterfaces())
     }
 
+    private func makeRemoteOriginPolicy(interfaces: [RemoteNetworkInterface]) -> RemoteOriginPolicy {
+        RemoteOriginPolicy(
+            hostPolicy: makeRemoteAccessPolicy(interfaces: interfaces),
+            allowedOrigins: config.remote.allowedOrigins
+        )
+    }
+
+    private func makeRemoteOriginPolicy() -> RemoteOriginPolicy {
+        makeRemoteOriginPolicy(interfaces: makeRemoteInterfaces())
+    }
+
+    /// Name advertised to remote clients: the configured display name, else
+    /// the computer name.
+    var remoteDisplayName: String {
+        let configured = config.remote.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty { return configured }
+        return Host.current().localizedName ?? RemoteNetwork.machineHostName() ?? "Alas"
+    }
+
+    func remoteServerIdentity() -> RemoteServerIdentity {
+        RemoteServerIdentity(
+            serverId: config.remote.serverId,
+            name: remoteDisplayName,
+            hubEnabled: config.remote.hubEnabled
+        )
+    }
+
     func refreshRemoteAccessState() {
         let interfaces = makeRemoteInterfaces()
         remoteAdvertisedAddresses = makeRemoteAdvertisedAddresses(port: remotePort, interfaces: interfaces)
         remoteServer?.updateAccessPolicy(makeRemoteAccessPolicy(interfaces: interfaces))
+        remoteServer?.updateOriginPolicy(makeRemoteOriginPolicy(interfaces: interfaces))
     }
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
@@ -541,6 +569,7 @@ final class AppState {
     /// a port is busy.
     func syncRemoteServer() {
         if config.remote.enabled {
+            if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
                 refreshRemoteAccessState()
                 return
@@ -553,14 +582,20 @@ final class AppState {
                 assets: assets,
                 provider: self,
                 accessPolicy: makeRemoteAccessPolicy(),
+                originPolicy: makeRemoteOriginPolicy(),
                 diagnostics: { [weak self] port in
                     RemoteDiagnosticsSnapshot(
                         appName: "Alas",
                         port: port,
                         addresses: self?.remoteAdvertisedAddresses ?? [],
                         usesPlainHTTP: true,
-                        pairedDeviceCount: self?.remotePairing.devices.count ?? 0
+                        pairedDeviceCount: self?.remotePairing.devices.count ?? 0,
+                        serverId: self?.config.remote.serverId,
+                        name: self?.remoteDisplayName
                     )
+                },
+                identity: { [weak self] in
+                    self?.remoteServerIdentity() ?? RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
                 }
             )
             server.onPortChange = { [weak self] p in

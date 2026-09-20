@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Add an experimental "Remote hub" setting to pair the remote web client with several Macs at once, switch between them, and see which ones need attention.
+
 ## [0.18.7] - 2026-09-19
 
 ### 🐛 Fixes

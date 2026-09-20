@@ -706,3 +706,7 @@ jobs:
       - name: Test remote web worktree creation
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-worktree-creation/run.sh
+
+      - name: Test remote web hub
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-hub/run.sh

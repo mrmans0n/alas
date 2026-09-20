@@ -1050,4 +1050,476 @@ struct RemoteWebAssetTests {
             js.range(of: "function updateChangesTabBadge() {").map { js[$0.lowerBound...].prefix(1200) })
         #expect(badgeBody.contains("changesState.loaded && changesState.metricsAvailable && !changesState.failed"))
     }
+
+    @Test func remoteWebLoadsAndPrecachesTheHubModules() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        let registry = try asset("hub-registry.js")
+        let links = try asset("hub-links.js")
+
+        try expectLoadsBeforeApp("/hub-registry.js", in: html)
+        try expectLoadsBeforeApp("/hub-links.js", in: html)
+        try expectReferencedAndPrecached("/hub-registry.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/hub-links.js", html: html, sw: sw)
+        // hub-links derives counts through the registry, so it must load second.
+        let registryAt = try referencePosition(of: "/hub-registry.js", in: html)
+        let linksAt = try referencePosition(of: "/hub-links.js", in: html)
+        #expect(registryAt < linksAt)
+        #expect(registry.contains("globalThis.RemoteHubRegistry ="))
+        #expect(links.contains("globalThis.RemoteHubLinks ="))
+        // Pure modules: no DOM access.
+        #expect(!registry.contains("document."))
+        #expect(!links.contains("document."))
+    }
+
+    @Test func serviceWorkerIgnoresCrossOriginRequests() throws {
+        let sw = try asset("sw.js")
+        let fetchHandler = try #require(sw.range(of: #"self.addEventListener("fetch""#).map { sw[$0.lowerBound...].prefix(600) })
+        #expect(fetchHandler.contains("if (url.origin !== self.location.origin) return;"))
+    }
+
+    @Test func appDrivesTheActiveLinkThroughTheHubModules() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("const hub = RemoteHubRegistry.load(localStorage, location.origin, location.hostname, Date.now());"))
+        #expect(js.contains("const links = RemoteHubLinks.createLinks({"))
+        #expect(js.contains("function send(obj) { links.sendActive(obj); }"))
+        #expect(js.contains("function handleLinkStateChange(link)"))
+        #expect(js.contains("function handleLinkHello(link, hello)"))
+        #expect(js.contains("function onActiveOpen()"))
+        #expect(js.contains("function onActiveClose()"))
+        #expect(js.contains("function pairAndAdd(input, options)"))
+        #expect(js.contains("function resetServerScopedState()"))
+        #expect(js.contains("function switchServer(id)"))
+        #expect(js.contains("function applyHubFlag(enabled)"))
+        #expect(js.contains(#"document.addEventListener("visibilitychange""#))
+        // The single-socket client is gone: the only WebSocket construction
+        // is the factory handed to the link manager; no token key, no
+        // page-level reconnect timer.
+        #expect(js.components(separatedBy: "new WebSocket(").count == 2)
+        #expect(js.contains("createSocket: (url, protocols) => new WebSocket(url, protocols),"))
+        #expect(!js.contains(#"const tokenKey = "alas.remote.token";"#))
+        #expect(!js.contains("function scheduleReconnect()"))
+        #expect(!js.contains("async function ensureToken()"))
+        #expect(!js.contains(#"fetch("/pair""#))
+    }
+
+    // The old ?code= flow must survive: a scanned QR (re)pairs and strips the
+    // code from the URL before anything else happens.
+    @Test func bootStillHonoursAPairingCodeInTheURL() throws {
+        let js = try asset("app.js")
+        let boot = try #require(js.range(of: "function boot() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(boot.contains("RemoteHubRegistry.parsePairingLink(location.href)"))
+        #expect(boot.contains(#"history.replaceState({}, "", "/");"#))
+        #expect(boot.contains("attemptFirstPairing(fromLink);"))
+    }
+
+    @Test func settingsTabRendersTheHubServerList() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let css = try asset("style.css")
+
+        #expect(html.contains(#"<div id="hub-section" class="hidden">"#))
+        #expect(html.contains(#"id="server-list""#))
+        #expect(html.contains(#"id="add-server""#))
+        #expect(html.contains(#"id="settings-placeholder""#))
+        #expect(html.contains(#"id="tab-settings-badge" class="tab-count hidden""#))
+        #expect(html.contains(#"id="add-server-sheet" class="sheet hidden" role="dialog""#))
+        #expect(html.contains(#"id="add-server-link""#))
+        #expect(html.contains(#"id="add-server-address""#))
+        #expect(html.contains(#"id="add-server-code""#))
+        #expect(html.contains(#"id="add-server-error" class="sheet-error hidden""#))
+        #expect(html.contains(#"id="server-actions-sheet" class="sheet hidden" role="dialog""#))
+        #expect(html.contains(#"id="server-repair""#))
+        #expect(html.contains(#"id="server-forget""#))
+        #expect(html.contains(#"id="gate-pair" class="hidden""#))
+
+        #expect(js.contains("function renderServerList()"))
+        #expect(js.contains("function renderSettingsBadge()"))
+        #expect(js.contains("function showAddServerSheet(targetId)"))
+        #expect(js.contains("async function submitAddServer()"))
+        #expect(js.contains("function forgetServer(id)"))
+        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId)"))
+        #expect(js.contains(#"$("tab-settings").disabled = !enabled;"#))
+        #expect(js.contains(#"$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };"#))
+
+        #expect(css.contains(".server-row {"))
+        #expect(css.contains(".server-row.is-active"))
+        #expect(css.contains("#tab-settings-badge"))
+        #expect(css.contains(".dot.off"))
+        #expect(css.contains(".dot.warn"))
+    }
+
+    // Flag off must look exactly like today: the tab stays disabled and no
+    // server row is ever rendered.
+    @Test func hubSurfacesStayHiddenUntilTheFlagIsOn() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings" disabled"#))
+        let body = try #require(js.range(of: "function applyHubFlag(enabled) {").map { js[$0.lowerBound...].prefix(600) })
+        #expect(body.contains(#"$("hub-section").classList.toggle("hidden", !enabled);"#))
+        #expect(body.contains(#"$("settings-placeholder").classList.toggle("hidden", enabled);"#))
+        #expect(body.contains("if (enabled) links.connectAll(); else links.disableIdle();"))
+    }
+
+    // Regression: forgetServer's non-active branch
+    // used to only re-render, never recomputing the aggregate hub flag — so
+    // forgetting the one server that had ever reported hubEnabled, while it
+    // was inactive, left the hub UI stuck on with no server authorizing it.
+    @Test func forgettingAnInactiveServerRecomputesTheAggregateHubFlag() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function forgetServer(id) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("if (!wasActive) {"))
+        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
+        #expect(!body.contains("if (!wasActive) { refreshHubViews(); return; }"))
+    }
+
+    // Regression: a disallowed cross-origin /pair
+    // request answered with a bare 403 — no Access-Control-Allow-Origin —
+    // so the browser surfaced an opaque CORS network error instead of a
+    // readable 403, and hub-links.js's pair() could never distinguish
+    // "this origin isn't allowed" from "unreachable."
+    @Test func originRejectionIsCORSReadableSoPairCanDistinguishItFromUnreachable() throws {
+        // The server-side fix lives in RemoteConnection.swift, outside this
+        // web-asset bundle; RemoteConnectionOriginRejectionTests covers it
+        // directly. This test only pins the client-side contract the fix
+        // exists to satisfy: `pair()` must branch on `res.status === 403`.
+        let js = try asset("hub-links.js")
+        #expect(js.contains(#"res.status === 403"#))
+    }
+
+    // Regression: setVisible() used to reconnect
+    // every idle link on a visibility change regardless of whether the hub
+    // was actually enabled, so backgrounding and foregrounding the page
+    // while the flag was off resurrected the idle sockets disableIdle()
+    // had just suspended.
+    @Test func idleLinksStaySuspendedAcrossAVisibilityCycleWhileTheHubIsOff() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("let idleAllowed = false;"))
+        #expect(js.contains("function disableIdle() {"))
+        let setVisible = try #require(js.range(of: "function setVisible(next) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(setVisible.contains(#"if (link.role !== "active" && !idleAllowed) continue;"#))
+    }
+
+    // Regression: adopt() promoted a fallback
+    // origin only in memory — the registry's own lastOrigin was never
+    // updated, so a page reload retried the dead remembered origin first
+    // again and paid its full handshake timeout before falling through.
+    @Test func adoptingAFallbackOriginPersistsItToTheRegistry() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("onOriginChange(link, origin)"))
+        let adopt = try #require(js.range(of: "function adopt(link, socket, origin) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(adopt.contains("if (link.lastOrigin !== origin && h.onOriginChange) h.onOriginChange(link, origin);"))
+        let appJS = try asset("app.js")
+        #expect(appJS.contains("onOriginChange: (link, origin) => {"))
+        #expect(appJS.contains("RemoteHubRegistry.setLastOrigin(hub, link.id, origin);"))
+    }
+
+    // Regression: when a hello reveals that a link
+    // duplicates an already-paired server, handleLinkHello merged the two
+    // registry entries and returned before recomputing the aggregate hub
+    // flag — so a surviving entry whose fresh hello reported hubEnabled:
+    // false could leave the hub UI stuck on with nothing left authorizing it.
+    @Test func mergingADuplicateLinkRecomputesTheAggregateHubFlag() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function handleLinkHello(link, hello) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
+        let flagIndex = try #require(body.range(of: "applyHubFlag(anyServerHasHubEnabled());"))
+        let mergeIndex = try #require(body.range(of: "if (result.mergedFromId) {"))
+        #expect(flagIndex.lowerBound < mergeIndex.lowerBound, "the aggregate flag must be recomputed before the merge branch's early return")
+    }
+
+    // Regression: every pairing link advertises
+    // "localhost" alongside a server's real addresses, so two different Macs
+    // used to collide on that shared origin and pairing the second silently
+    // overwrote the first's registry entry. See hub-registry.js's
+    // upsertPaired / isLoopbackOrigin and the matching node-executed
+    // coverage in scripts/tests/remote-web-hub/test-hub-registry.js.
+    @Test func pairingDedupIgnoresTheSharedLocalhostOrigin() throws {
+        let js = try asset("hub-registry.js")
+        #expect(js.contains("function isLoopbackOrigin(origin)"))
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains("const matchable = normalized.filter((o) => !isLoopbackOrigin(o));"))
+    }
+
+    // Regression: a non-loopback origin can also be
+    // reused (a DHCP-reassigned LAN address, a shared custom hostname), so
+    // origin overlap must stop being trusted once an entry has confirmed its
+    // identity via hello. See test-hub-registry.js for the node-executed
+    // reconciliation coverage.
+    @Test func pairingDedupOnlyMatchesServersNotYetIdentifiedByHello() throws {
+        let js = try asset("hub-registry.js")
+        let body = try #require(js.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains("doc.servers.find((s) => !s.serverId && s.origins.some((o) => !isLoopbackOrigin(o) && matchable.includes(o)))"))
+    }
+
+    // Regression: probe() collapsed every non-2xx
+    // /health response — including a 403 origin rejection — into
+    // "unreachable," so a Mac that was online but rejecting this address
+    // looked identical to an offline one and retried forever instead of
+    // surfacing the allowlist remediation.
+    @Test func originRejectionDuringHealthProbeSurfacesAsBlockedNotOffline() throws {
+        let links = try asset("hub-links.js")
+        #expect(links.contains(#"state: "idle"|"connecting"|"online"|"offline"|"unauthorized"|"blocked""#))
+        #expect(links.contains("blocked: results.some((r) => r && r.status === 403),"))
+        let onAllFailed = try #require(links.range(of: "function onAllOriginsFailed(link, order, attempt) {").map { links[$0.lowerBound...].prefix(400) })
+        #expect(onAllFailed.contains(#"if (blocked) { setState(link, "blocked"); return; }"#))
+
+        let app = try asset("app.js")
+        #expect(app.contains("function showOriginBlockedGate(link) {"))
+        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(700) })
+        #expect(stateChange.contains(#"case "blocked":"#))
+        #expect(stateChange.contains("showOriginBlockedGate(link);"))
+        let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
+        #expect(switchServer.contains(#"if (link.state === "blocked") { showOriginBlockedGate(link); return; }"#))
+    }
+
+    // Regression: handleLinkHello's duplicate-merge
+    // branch calls links.update() on the surviving idle link right after
+    // disableIdle() may have just suspended it — update() used to reconnect
+    // unconditionally, resurrecting that socket. See the node-executed
+    // "update() respects idleAllowed for non-active links" coverage in
+    // test-hub-links.js.
+    @Test func updateOnlyReconnectsIdleLinksWhenTheHubIsEnabled() throws {
+        let js = try asset("hub-links.js")
+        let update = try #require(js.range(of: "function update(server) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(update.contains(#"if (link.role === "active" || idleAllowed) connect(link.id);"#))
+        #expect(!update.contains("    connect(link.id);\n    return link;"), "update() must not reconnect unconditionally")
+    }
+
+    // Regression: every server advertises
+    // "localhost" alongside its real addresses, so the revocation-detection
+    // health probe could reach a coincidental, unrelated Alas instance on
+    // the browser's own machine instead of the actual paired Mac — falsely
+    // reporting a genuinely offline remote Mac as "unauthorized" (which
+    // permanently stops reconnecting). See the node-executed "health probe
+    // ignores a coincidental local Alas instance" coverage in
+    // test-hub-links.js.
+    @Test func healthProbePrefersRealAddressesOverTheSharedLocalhostOrigin() throws {
+        let registry = try asset("hub-registry.js")
+        #expect(registry.contains("isLoopbackOrigin,"), "isLoopbackOrigin must be exported for hub-links.js to use")
+
+        let links = try asset("hub-links.js")
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(900) })
+        #expect(probeAny.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
+        #expect(probeAny.contains("const candidates = origins.filter((o) => !isLoopback(o));"))
+        #expect(probeAny.contains("const toProbe = candidates.length ? candidates : origins;"))
+    }
+
+    // Regression: even a non-loopback origin can be
+    // reused (DHCP, a reassigned reverse proxy) and answer for a completely
+    // different Mac, so a bare 2xx isn't proof of talking to the paired
+    // server. /health now includes the server's own serverId (see
+    // RemoteHTTPResponderTests.swift's healthIncludesServerIdWhenKnown), and
+    // the probe verifies it once the link knows one. See the node-executed
+    // "health probe verifies identity once it's known" coverage in
+    // test-hub-links.js.
+    @Test func healthProbeVerifiesServerIdWhenBothSidesKnowIt() throws {
+        let links = try asset("hub-links.js")
+        #expect(links.contains("serverId: server.serverId || null,"), "links must track the server's identity once known")
+        #expect(links.contains("function rememberServerId(link, msg) {"))
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(2100) })
+        #expect(probeAny.contains("const confirmsIdentity = (r) => !expectedServerId || r.serverId === expectedServerId;"))
+        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(1300) })
+        #expect(probe.contains("res.json().then("))
+        #expect(probe.contains(#"typeof res.json !== "function""#))
+    }
+
+    // Regression: an identity-free 2xx (no serverId at all in
+    // the response body) used to still count as proof once a link already
+    // knew its expected identity, even though that response could be from a
+    // different — possibly older — Alas instance sitting at a reused
+    // address. Only an explicit serverId match may now make a probe result
+    // terminal once identity is known. See test-hub-links.js's "health
+    // probe verifies identity once it's known" coverage for the runtime
+    // behavior.
+    @Test func identityFreeResponsesCannotConfirmAKnownExpectedServer() throws {
+        let links = try asset("hub-links.js")
+        let probeAny = try #require(links.range(of: "function probeAny(origins, expectedServerId) {").map { links[$0.lowerBound...].prefix(2100) })
+        #expect(!probeAny.contains("return true;"), "reachable must not have an unconditional identity-free fallback")
+    }
+
+    // Regression: a probe whose fetch never resolved left the
+    // underlying request running after the timeout gave up on it —
+    // outstanding requests against a blackholed address accumulated every
+    // retry cycle. probe() now aborts it, the same way pair() already does.
+    @Test func probeAbortsItsFetchOnTimeout() throws {
+        let links = try asset("hub-links.js")
+        let probe = try #require(links.range(of: "function probe(origin) {").map { links[$0.lowerBound...].prefix(1300) })
+        #expect(probe.contains("const controller = new AbortController();"))
+        #expect(probe.contains("controller.abort(); finish(null);"))
+        #expect(probe.contains("signal: controller.signal"))
+    }
+
+    // Regression: opening the "Re-pair" sheet for a specific
+    // unauthorized/blocked server whose address had changed entirely used
+    // to create a second registry row instead of updating the one the user
+    // selected, since the fresh origins no longer overlapped the stale
+    // ones. addServerTarget is now threaded through to upsertPaired so an
+    // explicit re-pair always updates that exact entry.
+    @Test func rePairingASelectedServerAlwaysUpdatesThatExactEntry() throws {
+        let registry = try asset("hub-registry.js")
+        #expect(registry.contains("function upsertPaired(doc, { origins, token, now, targetId }) {"))
+        let upsertPaired = try #require(registry.range(of: "function upsertPaired(doc, { origins, token, now, targetId }) {").map { registry[$0.lowerBound...].prefix(700) })
+        #expect(upsertPaired.contains("const target = targetId ? doc.servers.find((s) => s.id === targetId) : null;"))
+        #expect(upsertPaired.contains("const existing = target ||"))
+
+        let app = try asset("app.js")
+        #expect(app.contains("targetId: options && options.targetId"))
+        #expect(app.contains("targetId: addServerTarget"))
+    }
+
+    // Regression: every pairing link includes "localhost"
+    // alongside the target Mac's real addresses. A 401 from a completely
+    // unrelated local Alas instance that has never heard of this pairing
+    // code used to abandon the whole attempt before the real target's own
+    // address was even tried.
+    @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
+        #expect(pair.contains("const tryAt = (index, bestError) => {"))
+        #expect(pair.contains("return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);"))
+        #expect(pair.contains("return tryAt(0, null);"))
+    }
+
+    // Regression: a normal pairing link advertises the
+    // same Mac's LAN, tailnet, and .local addresses alongside localhost —
+    // the non-loopback ones all come from that one Mac's own
+    // advertisedAddresses(), so continuing to post the same expired or
+    // mistyped code to every one of them on a 401/403 recursively charges
+    // RemotePairingService's 5-failures-per-60s redemption budget once per
+    // advertised address, and can exhaust it in a single submission. Only
+    // a loopback origin (genuinely ambiguous identity) still gets the
+    // benefit of the doubt; the first non-loopback 401/403 is now
+    // terminal. See the node-executed coverage in test-hub-links.js for
+    // the call-count verification.
+    @Test func pairingDoesNotChargeTheSameTargetsRateLimitOncePerAddress() throws {
+        let js = try asset("hub-links.js")
+        #expect(js.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
+        #expect(pair.contains("const err = bestError || pairError(\"expired\");"))
+        #expect(pair.contains("const err = bestError || pairError(\"origin\");"))
+    }
+
+    // Regression: a 2xx from an unrelated responder (a
+    // captive portal, a reverse proxy's own error page) may not even be
+    // JSON, and even valid JSON might carry no usable token. Either used
+    // to abort the whole pairing attempt (an uncaught res.json() rejection)
+    // or accept a garbage, tokenless registry entry as success.
+    @Test func pairFallsThroughAfterAnInvalidOrTokenlessResponse() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
+        #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
+        #expect(pair.contains("return Promise.resolve(res.json()).then("))
+    }
+
+    // Regression: falling through to tryAt(index + 1) from
+    // the tokenless-body branch used to still sit inside a .then().catch()
+    // on the outer chain, so once every remaining origin also failed, that
+    // eventual rejection bubbled back up and got retried a second time —
+    // doubling (or, with more tokenless responders, multiplying) requests
+    // against origins that were never going to succeed. Using the two-
+    // argument then(onFulfilled, onRejected) form instead means the
+    // rejection handler only ever catches res.json() itself failing to
+    // parse, never a later tryAt() call's own rejection.
+    @Test func pairDoesNotDoubleRetryRemainingOriginsAfterATokenlessResponse() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
+        #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
+        #expect(pair.contains("return Promise.resolve(res.json()).then("))
+    }
+
+    // Regression: a first-time scan whose pairing request fails
+    // transiently (a "net" error) showed a "Try again" button wired to
+    // retryConnection(), which only acted when hub.activeId already
+    // existed — but no server is ever added until pairing succeeds, and
+    // the scanned link's own copy in the URL was already stripped. The
+    // button showed a spinner that could never resolve. The scanned input
+    // is now retained so retryConnection() can repeat the same pairing
+    // attempt.
+    @Test func retryAfterAFailedFirstTimeScanRepeatsTheSamePairingAttempt() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingFirstPairing = null;"))
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(600) })
+        #expect(attempt.contains("pendingFirstPairing = input;"))
+        #expect(attempt.contains("pairAndAdd(input, { activate: true })"))
+        let retry = try #require(js.range(of: "function retryConnection() {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(retry.contains("if (pendingFirstPairing) { attemptFirstPairing(pendingFirstPairing); return; }"))
+        #expect(js.contains("attemptFirstPairing(fromLink);"))
+    }
+
+    // Regression: an already-paired device (adding a second
+    // Mac, or re-scanning a code) that opens a scanned link whose pairing
+    // then fails used to be stranded on that scan's own failure gate —
+    // network failures kept retrying the unusable scan forever, and an
+    // expired/rejected code showed no button at all — even though the
+    // existing, working session was still right there. The fallback must
+    // run before the "net" branch, since a purely transient failure
+    // shouldn't matter when there's already a session to fall back to.
+    @Test func failedScannedPairingFallsBackToTheExistingSessionWhenOneExists() throws {
+        let js = try asset("app.js")
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1500) })
+        #expect(attempt.contains("if (hub.activeId) {"))
+        #expect(attempt.contains("switchServer(hub.activeId);"))
+        let activeIdIndex = try #require(attempt.range(of: "if (hub.activeId) {"))
+        let netIndex = try #require(attempt.range(of: #"err.reason === "net""#))
+        #expect(activeIdIndex.lowerBound < netIndex.lowerBound, "the existing-session fallback must be checked before the net-error gate")
+    }
+
+    // Regression: falling back to switchServer(hub.activeId)
+    // used to clear pendingFirstPairing immediately, even though nothing
+    // yet confirmed the fallback Mac was actually reachable. If it was
+    // also offline or unauthorized, its own "Try again" then retried the
+    // fallback instead of the originally scanned (and already
+    // URL-stripped) Mac, leaving no way back to the real target short of
+    // rescanning. pendingFirstPairing now survives until onActiveOpen()
+    // confirms some active connection actually succeeded.
+    @Test func fallbackToExistingSessionPreservesThePendingScanUntilItConnects() throws {
+        let js = try asset("app.js")
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1500) })
+        let activeIdBlock = try #require(attempt.range(of: "if (hub.activeId) {").map { attempt[$0.lowerBound...].prefix(120) })
+        #expect(!activeIdBlock.contains("pendingFirstPairing = null;"), "the pending scan must not be cleared before the fallback is known to work")
+        let onOpen = try #require(js.range(of: "function onActiveOpen() {").map { js[$0.lowerBound...].prefix(120) })
+        #expect(onOpen.contains("pendingFirstPairing = null;"))
+    }
+
+    // Regression: switching between servers reset session
+    // and worktree-creation state, but not an unsent composer draft.
+    // Typing a message meant for server A, then switching to server B,
+    // left A's draft visible in B's composer, where it could be sent to
+    // the wrong Mac by mistake.
+    @Test func switchingServersClearsAnUnsentComposerDraft() throws {
+        let js = try asset("app.js")
+        let reset = try #require(js.range(of: "function resetServerScopedState() {").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(reset.contains(#"$("prompt").value = "";"#))
+        #expect(reset.contains("clearAttachments();"))
+        #expect(reset.contains("lastSentText = null;"))
+        #expect(reset.contains("lastSentAttachments = [];"))
+    }
+
+    // Regression: a server row's keydown handler fired on
+    // any Enter/Space that bubbled up to it, including from the trailing
+    // "⋯" menu button. That both switched the server by mistake and, via
+    // preventDefault(), suppressed the button's own synthesized click —
+    // making the Re-pair/Forget menu unreachable from the keyboard.
+    @Test func serverRowKeydownIgnoresBubbledEventsFromTheMenuButton() throws {
+        let js = try asset("app.js")
+        let list = try #require(js.range(of: "function renderServerList() {").map { js[$0.lowerBound...].prefix(2000) })
+        #expect(list.contains(#"row.onkeydown = (e) => { if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activate(); } };"#))
+    }
+
+    // Regression: switching servers cleared the composer
+    // synchronously, but onFilesPicked() reads a picked image via an
+    // awaited FileReader — a read still in flight from the server just
+    // left could resolve afterward and append the old session's image
+    // into whichever server's composer is open now.
+    @Test func filesPickedFromABeforeSwitchingToBAreDiscarded() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let composerGeneration = 0;"))
+        let reset = try #require(js.range(of: "function resetServerScopedState() {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(reset.contains("composerGeneration++;"))
+        let picked = try #require(js.range(of: "async function onFilesPicked(files) {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(picked.contains("const generation = composerGeneration;"))
+        #expect(picked.contains("if (generation !== composerGeneration) return;"))
+    }
 }

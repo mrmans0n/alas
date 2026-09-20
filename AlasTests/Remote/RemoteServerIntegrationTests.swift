@@ -27,6 +27,17 @@ struct RemoteServerIntegrationTests {
         return (server, try #require(server.port))
     }
 
+    private func receiveServerMessage(_ task: URLSessionWebSocketTask) async throws -> RemoteServerMessage {
+        let received = try await task.receive()
+        let payload: Data
+        switch received {
+        case .data(let d): payload = d
+        case .string(let s): payload = Data(s.utf8)
+        @unknown default: throw TimeoutError.timedOut
+        }
+        return try JSONDecoder().decode(RemoteServerMessage.self, from: payload)
+    }
+
     @Test func teardownCancelsQueuedPredecessorAndSkipsSuccessor() async {
         let gate = CancellableTaskGate()
         let previous = RemoteConnection.MessageProcessingTask(previous: nil)
@@ -132,17 +143,17 @@ struct RemoteServerIntegrationTests {
         task.resume()
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
 
-        // The server emits text frames; URLSession surfaces those as `.string`.
-        let received = try await task.receive()
-        let payload: Data?
-        switch received {
-        case .data(let d): payload = d
-        case .string(let str): payload = Data(str.utf8)
-        @unknown default: payload = nil
+        // `hello` is always the first frame; the snapshot follows it.
+        let first = try await receiveServerMessage(task)
+        guard case .hello = first else {
+            Issue.record("expected hello first, got \(first)")
+            task.cancel(with: .goingAway, reason: nil)
+            server.stop()
+            return
         }
-        guard let data = payload,
-              case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _)? = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
-            Issue.record("expected snapshot frame, got \(received)")
+        let second = try await receiveServerMessage(task)
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _) = second else {
+            Issue.record("expected snapshot frame, got \(second)")
             task.cancel(with: .goingAway, reason: nil)
             server.stop()
             return
@@ -151,6 +162,200 @@ struct RemoteServerIntegrationTests {
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
+    }
+
+    @Test func helloIsTheFirstFrameAfterUpgrade() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: true) }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
+        task.resume()
+        let first = try await receiveServerMessage(task)
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: true))
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
+    // Regression: hubEnabled is only carried in the
+    // hello sent at handshake, so toggling "Remote hub" used to leave every
+    // already-connected browser stuck on the value it saw at connect time —
+    // broadcastHello() must push a fresh hello without dropping the socket.
+    @Test func broadcastHelloPushesUpdatedIdentityToAConnectedSocket() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        var hubEnabled = false
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: hubEnabled) }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
+        task.resume()
+        let first = try await receiveServerMessage(task)
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: false))
+
+        hubEnabled = true
+        server.broadcastHello()
+        let second = try await receiveServerMessage(task)
+        #expect(second == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: true))
+
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
+    // Regression: broadcastHello()'s target connection is
+    // authenticated (added to connectionDevice) well before framesEnabled
+    // is set — completeUpgrade() still has to build the gateway, encode
+    // its own hello, and wait for that send to complete. A refresh
+    // requested inside that window used to be silently dropped by
+    // sendHello()'s framesEnabled guard and never redelivered until the
+    // client reconnected. This is a source-level check (the race itself
+    // isn't practical to force deterministically in an integration test)
+    // verifying the pending-refresh state exists and is flushed once
+    // frames actually enable.
+    @Test func pendingHelloRefreshIsFlushedOnceFramesEnable() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Alas/Sources/Remote/Server/RemoteConnection.swift"),
+            encoding: .utf8
+        )
+        #expect(source.contains("private var pendingHelloRefresh = false"))
+        #expect(source.contains("self.pendingHelloRefresh = true"))
+        let flush = try #require(source.range(of: "private func enableFramesAndFlushPendingHello() {").map { source[$0.lowerBound...].prefix(300) })
+        #expect(flush.contains("framesEnabled = true"))
+        #expect(flush.contains("if pendingHelloRefresh {"))
+        #expect(flush.contains("pendingHelloRefresh = false"))
+        #expect(flush.contains("sendHello()"))
+    }
+
+    @Test func webSocketWithPublicOriginIsRejectedBeforeTokenValidation() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-rejected-origin")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /ws HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Origin: https://evil.example",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.first?.lastSeenAt == nil)
+        try await waitForConnectionClose(from: conn, on: queue)
+    }
+
+    // Regression: the origin-rejected 403 for
+    // `POST /pair` carried no CORS header, so a browser surfaced an opaque
+    // CORS network error instead of a readable 403 — hub-links.js's pair()
+    // could never see `res.status === 403` and tell "not allowed" apart
+    // from "unreachable." Echoing the origin back on the rejection grants
+    // no access (the request is still refused); it only makes the refusal
+    // legible to the calling JS.
+    @Test func pairWithRejectedOriginReturns403WithCORSHeaderAndDoesNotRedeemCode() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.pair-rejected-origin")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let body = #"{"code":"\#(code)","deviceName":"phone"}"#
+        let request = [
+            "POST /pair HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Origin: https://evil.example",
+            "Content-Length: \(body.utf8.count)",
+            "",
+            body
+        ].joined(separator: "\r\n")
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(text.contains("Access-Control-Allow-Origin: https://evil.example\r\n"))
+        #expect(text.contains("Vary: Origin\r\n"))
+
+        let token = try pairing.redeem(code: code, deviceName: "after-rejected-origin")
+        #expect(pairing.validate(token: token) != nil, "the rejected attempt must not have consumed the single-use code")
+    }
+
+    @Test func webSocketWithPrivateOriginUpgrades() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-private-origin")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /ws HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Origin: http://192.168.1.20:8765",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 101 Switching Protocols"))
+    }
+
+    @Test func healthWithPrivateOriginCarriesCORSHeader() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let queue = DispatchQueue(label: "io.alas.tests.remote.health-cors")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        try await send("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://192.168.1.20:8765\r\n\r\n", on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 200 OK"))
+        #expect(text.contains("Access-Control-Allow-Origin: http://192.168.1.20:8765\r\n"))
     }
 
     @Test func stopBypassesBlockedOrderedQueue() async throws {
@@ -665,7 +870,10 @@ struct RemoteServerIntegrationTests {
         )
         #expect((infoResponse as? HTTPURLResponse)?.statusCode == 200)
         let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: infoData)
-        #expect(diagnosticsPorts == [port])
+        // /health now also reads diagnostics() for its serverId (PR #1337's
+        // health-probe identity check), so this request above already added
+        // one call before /remote-info's own.
+        #expect(diagnosticsPorts == [port, port])
         #expect(snapshot.port == port)
         #expect(snapshot.appName == "Alas")
         #expect(snapshot.pairedDeviceCount == 1)
@@ -887,8 +1095,14 @@ struct RemoteServerIntegrationTests {
             }
             if let data, !data.isEmpty {
                 let snapshot = accumulator.append(data)
-                if snapshot.range(of: headerTerminator) != nil {
-                    completion.finish(.success(snapshot), continuation: continuation)
+                if let terminatorRange = snapshot.range(of: headerTerminator) {
+                    // Trim to the header block only. A fast local write can
+                    // coalesce the response headers with whatever the server
+                    // sends immediately after (e.g. a WebSocket upgrade's
+                    // very next binary frame) into this same read; including
+                    // those trailing bytes made `String(data:encoding:.utf8)`
+                    // return nil on an otherwise-successful response.
+                    completion.finish(.success(snapshot.subdata(in: snapshot.startIndex..<terminatorRange.upperBound)), continuation: continuation)
                     return
                 }
             }

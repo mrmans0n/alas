@@ -178,6 +178,24 @@ enum RemoteNetwork {
             .lowercased()
     }
 
+    /// True for hosts a browser on the user's own network would be served
+    /// from: loopback, link-local, RFC 1918, Tailscale CGNAT/ULA, and IPv6
+    /// unique-local. Public addresses and DNS names are false.
+    static func isPrivateOrLocalHost(_ host: String) -> Bool {
+        let normalized = normalizedHost(host)
+        if normalized == "localhost" || normalized == "::1" { return true }
+        if let octets = ipv4Octets(normalized) {
+            if octets[0] == 127 { return true }
+            if octets[0] == 169 && octets[1] == 254 { return true }
+            return isLANIPv4(normalized) || isTailnetIPv4(normalized)
+        }
+        if let bytes = ipv6Bytes(normalized) {
+            if bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 { return true }   // fe80::/10
+            return isLANIPv6(normalized) || isTailnetIPv6(normalized)
+        }
+        return false
+    }
+
     private static func normalizedHosts(_ hosts: [String]) -> [String] {
         hosts.map(normalizedHost).filter { !$0.isEmpty }
     }

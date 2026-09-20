@@ -1,5 +1,19 @@
 import Foundation
 
+/// Wire protocol version advertised in `hello`. Bump only for changes an
+/// older client or server cannot tolerate; additive optional fields do not
+/// count.
+enum RemoteProtocolVersion {
+    static let current = 1
+}
+
+/// What a Mac says about itself in the first frame of every socket.
+struct RemoteServerIdentity: Equatable, Sendable {
+    let serverId: String
+    let name: String
+    let hubEnabled: Bool
+}
+
 struct RemoteModelInfo: Codable, Equatable, Sendable {
     let id: String
     let name: String
@@ -343,6 +357,8 @@ extension RemoteClientMessage {
 
 /// Server → client. `type` discriminates.
 enum RemoteServerMessage: Equatable, Sendable {
+    /// First frame after a successful upgrade, before any reply.
+    case hello(protocolVersion: Int, serverId: String, name: String, hubEnabled: Bool)
     case sessionList(sessions: [RemoteSessionSummary])
     case worktreeList(worktrees: [RemoteWorktreeOption])
     case agentList(agents: [RemoteAgentOption])
@@ -403,11 +419,18 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated
+        case protocolVersion, serverId, name, hubEnabled
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
+        case "hello":
+            self = .hello(
+                protocolVersion: try c.decode(Int.self, forKey: .protocolVersion),
+                serverId: try c.decode(String.self, forKey: .serverId),
+                name: try c.decode(String.self, forKey: .name),
+                hubEnabled: try c.decodeIfPresent(Bool.self, forKey: .hubEnabled) ?? false)
         case "sessionList": self = .sessionList(sessions: try c.decode([RemoteSessionSummary].self, forKey: .sessions))
         case "worktreeList":
             self = .worktreeList(worktrees: try c.decode([RemoteWorktreeOption].self, forKey: .worktrees))
@@ -576,6 +599,12 @@ extension RemoteServerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .hello(let protocolVersion, let serverId, let name, let hubEnabled):
+            try c.encode("hello", forKey: .type)
+            try c.encode(protocolVersion, forKey: .protocolVersion)
+            try c.encode(serverId, forKey: .serverId)
+            try c.encode(name, forKey: .name)
+            try c.encode(hubEnabled, forKey: .hubEnabled)
         case .sessionList(let s): try c.encode("sessionList", forKey: .type)
         try c.encode(s, forKey: .sessions)
         case .worktreeList(let worktrees):
@@ -746,5 +775,15 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(byteSize, forKey: .byteSize)
             try c.encodeIfPresent(message, forKey: .message)
         }
+    }
+}
+
+extension RemoteServerMessage {
+    static func hello(_ identity: RemoteServerIdentity) -> RemoteServerMessage {
+        .hello(
+            protocolVersion: RemoteProtocolVersion.current,
+            serverId: identity.serverId,
+            name: identity.name,
+            hubEnabled: identity.hubEnabled)
     }
 }

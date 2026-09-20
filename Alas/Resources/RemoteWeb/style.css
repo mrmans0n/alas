@@ -432,3 +432,28 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 .detail-path { padding: 8px 4px; color: var(--fg-muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: -0.02em; word-break: break-all; }
 .placeholder-card { margin: 16px 0; padding: 12px 13px; border-radius: 13px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--ring); color: var(--fg-muted); }
 #settings h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.025em; margin: 8px 4px 10px; }
+
+/* --- hub: server list, add sheet, chip ------------------------------------ */
+.server-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; padding: 11px 13px; border-radius: 13px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--ring); cursor: pointer; }
+.server-row.is-active { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 42%, transparent); }
+.server-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.server-main { flex: 1; min-width: 0; }
+.server-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-origin { color: var(--fg-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-menu { flex: 0 0 auto; }
+.dot.off { background: oklch(1 0 0 / 0.18); }
+.dot.connecting { background: var(--mod); }
+.dot.warn { background: var(--del); }
+#status.is-server { cursor: pointer; }
+.bt-tab { position: relative; }
+#tab-settings-badge { position: absolute; top: 5px; left: calc(50% + 6px); color: var(--on-accent); background: var(--del); }
+/* #gate is opaque and sits at z-index 20, above the shared .sheet z-index of
+   10 — without this, #add-server-sheet (opened from #gate-pair) would be
+   invisible whenever a gate is showing, which is exactly when it's needed:
+   first-run pairing and "Pair again" after a revoked token. */
+#add-server-sheet { z-index: 30; }
+#gate-pair { margin-top: 10px; padding: 11px 20px; border: none; border-radius: 12px; background: var(--fill-strong); color: var(--fg-muted); font-size: 15px; font-weight: 600; cursor: pointer; }
+#gate-pair:active { transform: scale(0.97); }
+#add-server-manual summary { cursor: pointer; list-style: none; }
+#add-server-manual summary::-webkit-details-marker { display: none; }
+#add-server-manual[open] summary { margin-bottom: 8px; }

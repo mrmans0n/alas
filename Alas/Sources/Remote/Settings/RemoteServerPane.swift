@@ -91,6 +91,43 @@ struct RemoteServerPane: View {
                                 .font(.system(size: 14))
                                 .foregroundColor(theme.color("fg-dim"))
                         }
+                        SettingsRow(
+                            name: "Server name",
+                            desc: "Shown on paired devices. Leave empty to use this Mac's name."
+                        ) {
+                            AlasField(
+                                text: Binding(
+                                    get: { state.config.remote.displayName },
+                                    set: { value in
+                                        state.config.remote.displayName = value
+                                        state.saveConfig()
+                                        // Clients only learn the name from hello — push a fresh
+                                        // one so connected browsers don't show a stale name until
+                                        // their next reconnect.
+                                        state.remoteServer?.broadcastHello()
+                                    }
+                                ),
+                                placeholder: state.remoteDisplayName
+                            )
+                        }
+                        SettingsRow(
+                            name: "Allowed origins",
+                            desc: "Comma-separated. Add an address here if a hub reports \"doesn't allow this address\" — e.g. a reverse-proxied hostname the automatic checks don't already trust."
+                        ) {
+                            AlasField(
+                                text: Binding(
+                                    get: { state.config.remote.allowedOrigins.joined(separator: ", ") },
+                                    set: { value in
+                                        state.config.remote.allowedOrigins = value.split(separator: ",")
+                                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                                            .filter { !$0.isEmpty }
+                                        state.saveConfig()
+                                        state.refreshRemoteAccessState()
+                                    }
+                                ),
+                                monospaced: true
+                            )
+                        }
                         SettingsRow(name: "Pair a device", desc: "Show a QR code to pair a new phone or tablet.") {
                             AlasButton(
                                 title: pairingCode == nil ? "Show pairing QR" : "New code",
@@ -100,10 +137,15 @@ struct RemoteServerPane: View {
                             }
                         }
                         if let code = pairingCode {
-                            QRView(text: "\(pairingURL(port: port))/?code=\(code)")
+                            let link = pairingLink(code: code, port: port)
+                            QRView(text: link)
                                 .frame(width: 180, height: 180)
                                 .padding(.top, 8)
-                            Text("Refreshes automatically — scan anytime.")
+                            AlasButton(title: "Copy pairing link", style: .subtle) {
+                                copyAddress(link)
+                            }
+                            .padding(.top, 6)
+                            Text("Refreshes automatically — scan it, or paste the copied link into Alas remote on another device to add this Mac.")
                                 .font(.system(size: 11))
                                 .foregroundColor(theme.color("fg-dim"))
                                 .padding(.bottom, 8)
@@ -229,6 +271,14 @@ struct RemoteServerPane: View {
     private func pairingURL(port: UInt16) -> String {
         let selected = selectedAddress()
         return selected?.url ?? "http://localhost:\(port)"
+    }
+
+    private func pairingLink(code: String, port: UInt16) -> String {
+        RemotePairingLink.build(
+            base: pairingURL(port: port),
+            code: code,
+            addresses: state.remoteAdvertisedAddresses
+        )
     }
 
     private func selectedAddress() -> RemoteAdvertisedAddress? {
