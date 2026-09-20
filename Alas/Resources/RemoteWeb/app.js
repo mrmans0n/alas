@@ -204,6 +204,7 @@ function handleLinkStateChange(link) {
 
 function onActiveOpen() {
   everConnected = true;
+  pendingFirstPairing = null;
   clearEscalation();
   setStatus(connectedLabel(), "ok");
   hideGate();
@@ -3846,9 +3847,13 @@ function attemptFirstPairing(input) {
     // code) must never get stranded on this scan's failure gate — the
     // existing, working session is right there. A genuinely first-time
     // scan has nothing to fall back to, so it keeps the retry/expired
-    // gates instead.
+    // gates instead. pendingFirstPairing stays set here rather than being
+    // cleared immediately: if the fallback Mac is *also* unreachable,
+    // onActiveClose()'s own "Try again" must retry the originally scanned
+    // Mac, not silently keep hammering the fallback instead. It's cleared
+    // once onActiveOpen() fires — any successful active connection makes a
+    // stale scan-retry intent moot.
     if (hub.activeId) {
-      pendingFirstPairing = null;
       switchServer(hub.activeId);
       return;
     }

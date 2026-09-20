@@ -1458,11 +1458,28 @@ struct RemoteWebAssetTests {
     // shouldn't matter when there's already a session to fall back to.
     @Test func failedScannedPairingFallsBackToTheExistingSessionWhenOneExists() throws {
         let js = try asset("app.js")
-        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1000) })
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1500) })
         #expect(attempt.contains("if (hub.activeId) {"))
         #expect(attempt.contains("switchServer(hub.activeId);"))
         let activeIdIndex = try #require(attempt.range(of: "if (hub.activeId) {"))
         let netIndex = try #require(attempt.range(of: #"err.reason === "net""#))
         #expect(activeIdIndex.lowerBound < netIndex.lowerBound, "the existing-session fallback must be checked before the net-error gate")
+    }
+
+    // Regression: falling back to switchServer(hub.activeId)
+    // used to clear pendingFirstPairing immediately, even though nothing
+    // yet confirmed the fallback Mac was actually reachable. If it was
+    // also offline or unauthorized, its own "Try again" then retried the
+    // fallback instead of the originally scanned (and already
+    // URL-stripped) Mac, leaving no way back to the real target short of
+    // rescanning. pendingFirstPairing now survives until onActiveOpen()
+    // confirms some active connection actually succeeded.
+    @Test func fallbackToExistingSessionPreservesThePendingScanUntilItConnects() throws {
+        let js = try asset("app.js")
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1500) })
+        let activeIdBlock = try #require(attempt.range(of: "if (hub.activeId) {").map { attempt[$0.lowerBound...].prefix(120) })
+        #expect(!activeIdBlock.contains("pendingFirstPairing = null;"), "the pending scan must not be cleared before the fallback is known to work")
+        let onOpen = try #require(js.range(of: "function onActiveOpen() {").map { js[$0.lowerBound...].prefix(120) })
+        #expect(onOpen.contains("pendingFirstPairing = null;"))
     }
 }
