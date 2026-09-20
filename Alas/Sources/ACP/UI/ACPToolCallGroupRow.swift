@@ -85,13 +85,18 @@ struct ACPToolCallGroupHeaderRow: View {
             currentCount: currentCount,
             reduceMotion: reduceMotion
         ) else { return }
-        absorbHighlight = 1
-        // Committing the lit value and its decay in one run-loop turn would
-        // coalesce into a single update that both starts and ends at 0,
-        // animating nothing. Handing the decay to the next turn makes 1 the
-        // real starting point.
-        Task { @MainActor in
-            withAnimation(.easeOut(duration: 0.55)) { absorbHighlight = 0 }
+        // Both halves are driven by animations, and the decay is started from
+        // the ramp's COMPLETION rather than from a queued main-actor job. A
+        // `Task` only promises another turn on the main actor, not a rendering
+        // boundary, so the decay could land in the same SwiftUI transaction as
+        // the ramp: the two mutations would coalesce into an update that both
+        // starts and ends dark, and nothing would ever pulse. A completion
+        // handler cannot run until the animation it belongs to has finished,
+        // so the lit frame is always committed first.
+        withAnimation(.easeIn(duration: 0.09)) {
+            absorbHighlight = 1
+        } completion: {
+            withAnimation(.easeOut(duration: 0.5)) { absorbHighlight = 0 }
         }
     }
 }
