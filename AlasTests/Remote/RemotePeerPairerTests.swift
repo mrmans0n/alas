@@ -60,4 +60,15 @@ struct RemotePeerPairerTests {
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765"], code: "ABC", deviceName: "Mac B", advertisement: nil)
         #expect(outcome == .unreachable)
     }
+
+    @Test func nonHTTPOriginsAreSkippedWithoutDialing() async {
+        let recorder = Recorder()
+        let p = pairer(["10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
+        let outcome = await p.pair(
+            origins: ["file:///etc/passwd", "ftp://10.0.0.1:21", "http://10.0.0.9:8765"],
+            code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        // The two rejected origins must never have been dialed at all.
+        #expect(recorder.requests.count == 1)
+    }
 }

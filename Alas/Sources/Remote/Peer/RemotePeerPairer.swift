@@ -45,7 +45,13 @@ struct RemotePeerPairer {
         }
         let body = try? JSONEncoder().encode(Body(code: code, deviceName: deviceName, peer: advertisement))
         for origin in origins {
-            guard let url = URL(string: origin + "/pair") else { continue }
+            // Origins reach this type from two directions: a link the user
+            // pasted, and a peer's self-reported advertisement, which is
+            // attacker-controlled. Normalizing here means neither path can
+            // dial a non-http(s) scheme or smuggle a path, query or userinfo
+            // into the request target.
+            guard let normalized = RemotePairingLink.normalizeOrigin(origin),
+                  let url = URL(string: normalized + "/pair") else { continue }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = timeout
@@ -55,7 +61,7 @@ struct RemotePeerPairer {
             switch http.statusCode {
             case 200:
                 guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { continue }
-                return .paired(token: reply.token, serverId: reply.serverId, name: reply.name, origin: origin)
+                return .paired(token: reply.token, serverId: reply.serverId, name: reply.name, origin: normalized)
             case 401:
                 return .expiredCode
             case 403:
