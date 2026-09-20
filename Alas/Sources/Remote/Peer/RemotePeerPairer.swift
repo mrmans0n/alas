@@ -50,6 +50,13 @@ struct RemotePeerPairer {
             let name: String?
         }
         let body = try? JSONEncoder().encode(Body(code: code, deviceName: deviceName, peer: advertisement))
+        // A 401 only proves the code is dead AT THAT origin: a stale advertised
+        // address can have been reassigned to an unrelated Alas instance, which
+        // correctly rejects a code it has never seen while the real target,
+        // reachable at a later origin, may still redeem it. So a 401 is
+        // remembered rather than treated as an immediate, global answer, and
+        // only reported once every origin has had a chance to answer.
+        var sawExpiredCode = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -69,14 +76,15 @@ struct RemotePeerPairer {
                 guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { continue }
                 return .paired(token: reply.token, serverId: reply.serverId, name: reply.name, origin: normalized)
             case 401:
-                return .expiredCode
+                sawExpiredCode = true
+                continue
             case 403:
                 return .originRejected
             default:
                 continue
             }
         }
-        return .unreachable
+        return sawExpiredCode ? .expiredCode : .unreachable
     }
 }
 

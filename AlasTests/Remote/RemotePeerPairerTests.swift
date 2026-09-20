@@ -35,12 +35,35 @@ struct RemotePeerPairerTests {
         #expect(recorder.requests.last?.value(forHTTPHeaderField: "Content-Type") == nil)
     }
 
-    @Test func expiredCodeStopsAtTheFirstAnsweringOrigin() async {
+    // A 401 is only proof the code is dead AT THAT ORIGIN. If a stale advertised
+    // address has been reassigned to an unrelated Alas instance, it correctly
+    // answers 401 (it has never seen this code) — but the real target, reachable
+    // at a later origin, may still redeem it. Stopping on the first 401 would
+    // report "expired" for a code that is actually fine.
+    @Test func a401AtOneOriginDoesNotStopTheRemainingOnesFromBeingTried() async {
         let recorder = Recorder()
-        let p = pairer(["10.0.0.1:8765": (401, #"{"error":"pairing failed"}"#), "10.0.0.9:8765": (200, "{}")], recorder: recorder)
+        let p = pairer(["10.0.0.1:8765": (401, #"{"error":"pairing failed"}"#),
+                        "10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(recorder.requests.count == 2)
+    }
+
+    @Test func expiredCodeIsReportedOnlyAfterEveryOriginRejectsIt() async {
+        let recorder = Recorder()
+        let p = pairer(["10.0.0.1:8765": (401, "{}"), "10.0.0.9:8765": (401, "{}")], recorder: recorder)
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
         #expect(outcome == .expiredCode)
-        #expect(recorder.requests.count == 1)
+        #expect(recorder.requests.count == 2)
+    }
+
+    // A 401 seen along the way must not be forgotten just because a LATER
+    // origin was simply unreachable: "the code is dead at every origin that
+    // answered" is still the more accurate outcome than a bare "unreachable".
+    @Test func a401RemembersOverAUnreachableOriginThatFollowsIt() async {
+        let p = pairer(["10.0.0.1:8765": (401, "{}")], recorder: Recorder())
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .expiredCode)
     }
 
     @Test func forbiddenIsOriginRejected() async {
