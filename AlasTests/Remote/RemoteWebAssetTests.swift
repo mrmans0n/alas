@@ -1482,4 +1482,18 @@ struct RemoteWebAssetTests {
         let onOpen = try #require(js.range(of: "function onActiveOpen() {").map { js[$0.lowerBound...].prefix(120) })
         #expect(onOpen.contains("pendingFirstPairing = null;"))
     }
+
+    // Regression: switching between servers reset session
+    // and worktree-creation state, but not an unsent composer draft.
+    // Typing a message meant for server A, then switching to server B,
+    // left A's draft visible in B's composer, where it could be sent to
+    // the wrong Mac by mistake.
+    @Test func switchingServersClearsAnUnsentComposerDraft() throws {
+        let js = try asset("app.js")
+        let reset = try #require(js.range(of: "function resetServerScopedState() {").map { js[$0.lowerBound...].prefix(1000) })
+        #expect(reset.contains(#"$("prompt").value = "";"#))
+        #expect(reset.contains("clearAttachments();"))
+        #expect(reset.contains("lastSentText = null;"))
+        #expect(reset.contains("lastSentAttachments = [];"))
+    }
 }

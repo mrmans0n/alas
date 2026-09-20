@@ -329,6 +329,14 @@ function resetServerScopedState() {
   listedSessions = new Map(); sessionTitles = new Map(); expandedWorktrees = new Set();
   repoOverrides = new Map();
   dismissedQuestion = null; deferredCreatePrompt = null;
+  // An unsent draft (text or staged images) belongs to the server being
+  // left — otherwise it's still sitting in the composer when a session on
+  // the new server opens, where it could be sent to the wrong Mac.
+  $("prompt").value = "";
+  clearAttachments();
+  autoGrowPrompt();
+  lastSentText = null;
+  lastSentAttachments = [];
   renderSessions([]);
   showRepos();
 }
