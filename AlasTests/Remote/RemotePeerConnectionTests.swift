@@ -208,6 +208,28 @@ struct RemotePeerConnectionTests {
         #expect(!events.states.contains(.unauthorized))
     }
 
+    @Test func helloFromAnotherIdentityIsRefusedAndNeverRetried() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        // The server's `hello` reports "srv-a" (see `startServer`'s identity);
+        // this link was written for a different Mac, so the socket must be
+        // dropped rather than adopted.
+        let (server, origin) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-elsewhere", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
+        // Terminal: no online state, no `hello` event handed to the owner, and
+        // well past two backoff delays no second attempt.
+        try await Task.sleep(nanoseconds: 800_000_000)
+        #expect(!events.states.contains(.online))
+        #expect(events.hellos.isEmpty)
+        #expect(events.states.filter { $0 == .connecting }.count == 1)
+    }
+
     @Test func healthProbeFromTheExpectedServerStillReportsUnauthorized() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, origin) = try await startServer(pairing: pairing, serverId: "srv-a")

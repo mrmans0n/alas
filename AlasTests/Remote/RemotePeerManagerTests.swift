@@ -213,6 +213,26 @@ struct RemotePeerManagerTests {
         #expect(store.saved.first?.lastOrigin == "http://10.0.0.5:8765")
     }
 
+    // A `hello` is whatever answered the origin. Adopting its identity would
+    // let a reassigned address or a squatter re-key the record, and because
+    // `forget` revokes devices by identity the user would then revoke the
+    // wrong peer's access while the impostor kept its own.
+    @Test func helloNeverRewritesTheStoredServerId() throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil, localDeviceId: nil, addedAt: Date())])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+        link.emit(.hello(serverId: "srv-impostor", name: "Mac A", protocolVersion: 1, federationEnabled: true))
+        #expect(manager.peers.first?.serverId == "srv-a")
+        #expect(store.saved.first?.serverId == "srv-a")
+        // The cosmetic fields are still adopted.
+        #expect(manager.peers.first?.name == "Mac A")
+        #expect(manager.peers.first?.protocolVersion == 1)
+    }
+
     @Test func connectAllIsIdempotentAndDisconnectAllTearsDown() {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "A", origins: ["http://10.0.0.1:8765"], lastOrigin: nil,

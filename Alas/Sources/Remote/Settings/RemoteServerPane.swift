@@ -307,6 +307,8 @@ struct RemoteServerPane: View {
         case .offline: return "Offline. Retrying."
         case .unauthorized: return "This Mac's token was revoked there. Forget and pair again."
         case .incompatible(let version): return "Needs a matching Alas version (protocol \(version))."
+        case .identityMismatch:
+            return "A different Mac answered at that address. Forget this peer and pair again."
         case .idle: return "Not connected"
         }
     }

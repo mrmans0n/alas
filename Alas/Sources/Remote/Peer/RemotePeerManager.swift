@@ -181,9 +181,17 @@ final class RemotePeerManager {
         switch event {
         case .stateChanged(let state):
             states[peerId] = state
-        case .hello(let serverId, let name, let protocolVersion, _):
+        case .hello(_, let name, let protocolVersion, _):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
-            peers[index].serverId = serverId
+            // The identity is deliberately NOT adopted from the frame. It is
+            // the key everything else hangs off — the link's expected id, the
+            // `/health` check, and the device records `forget` revokes — so
+            // letting the far side rewrite it would mean whoever answers the
+            // origin decides who this record is. The connection this manager
+            // builds is handed the record's `serverId` and refuses a socket
+            // reporting a different one, so in practice the frame's id
+            // already matches; ignoring it here is the backstop. Name and
+            // protocol version are cosmetic and safe to take from the peer.
             peers[index].name = name
             peers[index].protocolVersion = protocolVersion
             store.save(peers)

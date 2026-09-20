@@ -11,7 +11,8 @@ protocol RemotePeerConnecting: AnyObject {
 /// One outbound WebSocket to a paired Mac. Mirrors `hub-links.js`: try the
 /// last good origin then the rest with a handshake timeout, expect `hello`
 /// first, answer `helloAck`, tell "revoked" from "unreachable" with a
-/// `/health` probe, and back off between attempts.
+/// `/health` probe, and back off between attempts. On top of that it refuses
+/// any socket whose `hello` reports an identity other than `expectedServerId`.
 ///
 /// **The owner must call `disconnect()`.** Dropping the last reference is not
 /// enough: an in-flight `run()` resolves its weak `self` to a strong one for
@@ -28,6 +29,11 @@ final class RemotePeerConnection: RemotePeerConnecting {
         case offline
         case unauthorized
         case incompatible(remoteVersion: Int)
+        /// The socket's `hello` reported an identity other than the one this
+        /// link was created for. Terminal and never retried: the address is
+        /// answering for somebody else, so redialing it can only keep talking
+        /// to the wrong Mac.
+        case identityMismatch(expected: String, actual: String)
     }
 
     enum Event {
@@ -52,7 +58,9 @@ final class RemotePeerConnection: RemotePeerConnecting {
     /// never logged, never part of an error, and never in the URL.
     private let token: String
     /// The `serverId` this peer is expected to report. When set, a `/health`
-    /// probe only counts as proof the paired Mac is up if it reports this id.
+    /// probe only counts as proof the paired Mac is up if it reports this id,
+    /// and a socket whose `hello` reports a different id is refused outright
+    /// rather than adopted.
     private let expectedServerId: String?
     private let config: Config
     private let session: URLSession
@@ -158,6 +166,18 @@ final class RemotePeerConnection: RemotePeerConnecting {
             if version != config.localProtocolVersion {
                 candidate.cancel(with: .goingAway, reason: nil)
                 setState(.incompatible(remoteVersion: version))
+                runner = nil
+                return
+            }
+            // The `hello` on the socket that carries traffic — not only the
+            // `/health` probe — has to prove this is the Mac the record was
+            // written for. Whoever answers the origin would otherwise decide
+            // the link's identity, and the manager would adopt it: a reused
+            // address or a squatter could silently take a peer's place. Not
+            // retried, because backoff against a wrong Mac never converges.
+            if let expectedServerId, serverId != expectedServerId {
+                candidate.cancel(with: .policyViolation, reason: nil)
+                setState(.identityMismatch(expected: expectedServerId, actual: serverId))
                 runner = nil
                 return
             }
