@@ -147,6 +147,11 @@ function closeState(everConnectedFlag) {
 }
 
 function retryConnection() {
+  // A first-time scan that fails before any server is ever added has no
+  // link to retry — the scanned input is retained so "Try again" can repeat
+  // the pairing attempt itself, rather than showing a spinner that can
+  // never resolve.
+  if (pendingFirstPairing) { attemptFirstPairing(pendingFirstPairing); return; }
   clearEscalation();               // start a fresh grace budget for the manual retry
   setStatus("Connecting…", "connecting");
   showConnectingGate();
@@ -3824,6 +3829,25 @@ if (vp) {
 
 document.addEventListener("visibilitychange", () => links.setVisible(document.visibilityState === "visible"));
 
+// Retained across a transient pairing failure so retryConnection() can
+// repeat the exact same first-time pairing attempt — the URL's own copy of
+// this is already stripped by the time the failure shows a retry button.
+let pendingFirstPairing = null;
+
+function attemptFirstPairing(input) {
+  pendingFirstPairing = input;
+  setStatus("Pairing…", "connecting");
+  showConnectingGate();
+  pairAndAdd(input, { activate: true }).then(() => {
+    pendingFirstPairing = null;
+  }).catch((err) => {
+    clearEscalation();
+    if (err && err.reason === "net") { showUnreachableGate(); return; }
+    pendingFirstPairing = null;
+    showGate("Pairing link expired", pairingErrorMessage(err), false);
+  });
+}
+
 function boot() {
   for (const server of hub.servers) links.add(server);
   const fromLink = RemoteHubRegistry.parsePairingLink(location.href);
@@ -3832,13 +3856,7 @@ function boot() {
     // that Mac — a phone holding a stale/rejected token recovers by scanning
     // a new code. Strip the code from the URL (history + referrer) first.
     history.replaceState({}, "", "/");
-    setStatus("Pairing…", "connecting");
-    showConnectingGate();
-    pairAndAdd(fromLink, { activate: true }).catch((err) => {
-      clearEscalation();
-      if (err && err.reason === "net") { showUnreachableGate(); return; }
-      showGate("Pairing link expired", pairingErrorMessage(err), false);
-    });
+    attemptFirstPairing(fromLink);
     return;
   }
   if (!hub.activeId) { showPairGate(); return; }

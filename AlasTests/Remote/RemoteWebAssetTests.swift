@@ -1111,7 +1111,7 @@ struct RemoteWebAssetTests {
         let boot = try #require(js.range(of: "function boot() {").map { js[$0.lowerBound...].prefix(1200) })
         #expect(boot.contains("RemoteHubRegistry.parsePairingLink(location.href)"))
         #expect(boot.contains(#"history.replaceState({}, "", "/");"#))
-        #expect(boot.contains("pairAndAdd(fromLink, { activate: true })"))
+        #expect(boot.contains("attemptFirstPairing(fromLink);"))
     }
 
     @Test func settingsTabRendersTheHubServerList() throws {
@@ -1427,5 +1427,24 @@ struct RemoteWebAssetTests {
         let pair = try #require(js.range(of: "function pair(origins, code, deviceName) {").map { js[$0.lowerBound...].prefix(3200) })
         #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
+    }
+
+    // Regression: a first-time scan whose pairing request fails
+    // transiently (a "net" error) showed a "Try again" button wired to
+    // retryConnection(), which only acted when hub.activeId already
+    // existed — but no server is ever added until pairing succeeds, and
+    // the scanned link's own copy in the URL was already stripped. The
+    // button showed a spinner that could never resolve. The scanned input
+    // is now retained so retryConnection() can repeat the same pairing
+    // attempt.
+    @Test func retryAfterAFailedFirstTimeScanRepeatsTheSamePairingAttempt() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingFirstPairing = null;"))
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(600) })
+        #expect(attempt.contains("pendingFirstPairing = input;"))
+        #expect(attempt.contains("pairAndAdd(input, { activate: true })"))
+        let retry = try #require(js.range(of: "function retryConnection() {").map { js[$0.lowerBound...].prefix(700) })
+        #expect(retry.contains("if (pendingFirstPairing) { attemptFirstPairing(pendingFirstPairing); return; }"))
+        #expect(js.contains("attemptFirstPairing(fromLink);"))
     }
 }
