@@ -22,17 +22,28 @@ struct RightPaneToolbar: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // Priorities, high to low: the accessories keep their intrinsic
+            // width, the leading text then takes everything they leave, and the
+            // drag filler only claims what is left over. Without them the stack
+            // splits the row evenly and the branch name ellipsizes while the
+            // rest of the row sits empty.
             leading
                 .overlay { WindowDragHandle() }
+                .layoutPriority(1)
 
+            // The leading row carries its own drag handle, so this filler can
+            // collapse to nothing when the branch name needs the whole row.
             WindowDragHandle()
-                .frame(minWidth: 6, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             trailing
+                .layoutPriority(2)
             if tab == .run {
                 runControls
+                    .layoutPriority(2)
             }
             if RightPaneToolbarModel.showsOverflowMenu(for: tab) {
                 overflowMenu
+                    .layoutPriority(2)
             }
         }
         .padding(.leading, 10)
