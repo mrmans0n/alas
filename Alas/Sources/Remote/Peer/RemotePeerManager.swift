@@ -144,13 +144,14 @@ final class RemotePeerManager {
         states[peerId] = nil
         // Revoke by the peer's identity rather than by the stored
         // `localDeviceId`. That id is a snapshot taken before an HTTP round
-        // trip, and `RemotePairingService` replaces any existing
-        // `.alasInstance` device for the same `peerServerId` on every peer
-        // redeem — so a peer that re-paired in the meantime is represented by
-        // a device the record has never heard of, and revoking the remembered
-        // id alone would leave it holding a live token. The stored id is still
-        // revoked as a hint, for records written before the peer's device
-        // carried a `peerServerId`.
+        // trip, and a peer redeem adds a device row without removing earlier
+        // ones for the same `peerServerId` — so a peer that re-paired in the
+        // meantime is represented by several devices, at most one of which
+        // the record remembers, and revoking the remembered id alone would
+        // leave live tokens behind. Sweeping the identity is also what makes
+        // that additive redeem safe. The stored id is still revoked as a
+        // hint, for records written before the peer's device carried a
+        // `peerServerId`.
         var deviceIds = pairing.devices
             .filter { $0.kind == .alasInstance && $0.peerServerId == peer.serverId }
             .map(\.id)

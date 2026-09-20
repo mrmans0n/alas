@@ -214,6 +214,32 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    // The safety property that replaces the eviction `redeemPeer` used to do:
+    // a peer redeem no longer invalidates an earlier record for the same
+    // identity, so re-pairing can leave several device rows. Forgetting the
+    // peer must take all of them, or a superseded token would stay valid
+    // after the user revoked the peer.
+    @Test func forgetRevokesEveryDeviceCarryingThePeersIdentity() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let first = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let second = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let other = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac C", peerServerId: "srv-c")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: nil, token: "t", protocolVersion: nil,
+                               localDeviceId: first.deviceId, addedAt: Date())])
+        var revoked: [String] = []
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer([:], requests: Requests()), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.forget(peerId: "p1")
+        #expect(pairing.validate(token: first.token) == nil)
+        #expect(pairing.validate(token: second.token) == nil)
+        #expect(revoked.sorted() == [first.deviceId, second.deviceId].sorted())
+        // A different peer's access is untouched.
+        #expect(pairing.validate(token: other.token) == other.deviceId)
+    }
+
     @Test func linkEventsUpdateStateNameVersionAndOrigin() async throws {
         let store = InMemoryPeerStore()
         store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765", "http://10.0.0.5:8765"],

@@ -57,8 +57,13 @@ final class RemotePairingService {
         try redeemCore(code: code, deviceName: deviceName, kind: .browser, peerServerId: nil).token
     }
 
-    /// Same exchange for another Alas instance. A previous record for the same
-    /// `peerServerId` is replaced so re-pairing never leaves a stale token valid.
+    /// Same exchange for another Alas instance. Existing records for the same
+    /// `peerServerId` are left alone: a redeem only proves the caller holds a
+    /// live pairing code, never that it is the peer whose identity it claims,
+    /// so evicting on that claim would let one code holder cut an established
+    /// peer's access. Re-pairing therefore adds a row rather than replacing
+    /// one; `RemotePeerManager.forget` revokes every device carrying the
+    /// identity, so no token outlives the user forgetting the peer.
     func redeemPeer(code: String, deviceName: String, peerServerId: String) throws -> RemotePeerRedeemResult {
         try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
     }
@@ -79,9 +84,6 @@ final class RemotePairingService {
         }
         pendingCodes.remove(at: idx)   // consume only the matched code
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
-        if let peerServerId {
-            devices.removeAll { $0.kind == .alasInstance && $0.peerServerId == peerServerId }
-        }
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
                                   tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
