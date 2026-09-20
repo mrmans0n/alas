@@ -139,6 +139,20 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 first = message
             case .failed:
                 if Task.isCancelled { return }
+                // A dropped receive here can mean either the upgrade was
+                // refused outright, or that it actually succeeded (a genuine
+                // 101 reply) and the connection then closed before any frame
+                // arrived — a server restart, a transient network blip, or a
+                // proxy interruption mid-handshake. Only the former is
+                // evidence the credential was specifically rejected; a
+                // confirmed 101 means the token was fine, so treat this
+                // exactly like `.noUsableFrame` — an ordinary retryable
+                // disconnect — rather than probing `/health` at all, since a
+                // reachable peer there would otherwise be misread as having
+                // revoked a token it never actually refused.
+                if (candidate.response as? HTTPURLResponse)?.statusCode == 101 {
+                    continue
+                }
                 let peerFederationEnabled = await healthCheck(origin)
                 // A disconnect() during the probe already moved us to .idle;
                 // reporting .unauthorized on top of it would resurrect a link

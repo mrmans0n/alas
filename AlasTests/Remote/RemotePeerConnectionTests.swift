@@ -1,10 +1,79 @@
 import Testing
 import Foundation
+import Network
 @testable import Alas
 
 @MainActor
 struct RemotePeerConnectionTests {
     private enum TimeoutError: Error { case timedOut }
+
+    /// A raw TCP server that completes the WebSocket handshake with a
+    /// genuine 101 reply and then closes immediately, without ever sending a
+    /// `hello` frame — simulating a connection dropping right after an
+    /// accepted upgrade (a restart, a network blip, a proxy interruption),
+    /// as distinct from an upgrade the server actually refused. Answers any
+    /// non-upgrade request (e.g. `/health`) with a plain 200, so a link's
+    /// own health probe reads this Mac as reachable.
+    @MainActor
+    private final class HandshakeThenDropServer {
+        private(set) var port: UInt16?
+        private var listener: NWListener?
+        private let queue = DispatchQueue(label: "io.alas.tests.remote.handshake-then-drop")
+
+        func start() throws {
+            let listener = try NWListener(using: .tcp, on: .any)
+            self.listener = listener
+            listener.stateUpdateHandler = { [weak self] state in
+                guard case .ready = state else { return }
+                let assigned = listener.port?.rawValue
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    self.port = assigned
+                }
+            }
+            listener.newConnectionHandler = { [queue] conn in
+                conn.start(queue: queue)
+                var buffer = Data()
+                func receiveLoop() {
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+                        if let data, !data.isEmpty { buffer.append(data) }
+                        if let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                            let headerText = String(data: buffer[..<range.lowerBound], encoding: .utf8) ?? ""
+                            let lines = headerText.split(separator: "\r\n")
+                            let isUpgrade = lines.contains { $0.lowercased().hasPrefix("upgrade:") && $0.lowercased().contains("websocket") }
+                            if isUpgrade {
+                                let key = lines
+                                    .first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
+                                    .split(separator: ":", maxSplits: 1)
+                                    .last?
+                                    .trimmingCharacters(in: .whitespaces) ?? ""
+                                let accept = RemoteConnection.acceptKey(for: key)
+                                let response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n"
+                                conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+                                    conn.cancel()   // drop immediately — no hello frame ever sent
+                                })
+                            } else {
+                                let body = #"{"ok":true,"federationEnabled":true}"#
+                                let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                                conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+                                    conn.cancel()
+                                })
+                            }
+                        } else if data != nil {
+                            receiveLoop()
+                        }
+                    }
+                }
+                receiveLoop()
+            }
+            listener.start(queue: queue)
+        }
+
+        func stop() {
+            listener?.cancel()
+            listener = nil
+        }
+    }
 
     @MainActor
     private final class Events {
@@ -106,6 +175,29 @@ struct RemotePeerConnectionTests {
         try await waitUntil { link.state == .unauthorized }
         try await Task.sleep(nanoseconds: 600_000_000)
         #expect(events.states.filter { $0 == .connecting }.count == 1)
+    }
+
+    // A connection that drops right after an accepted upgrade — before any
+    // frame, `hello` included, ever arrives — proves nothing about the
+    // token: the peer answering `/health` just proves it's reachable, not
+    // that the earlier upgrade specifically rejected the credential. This
+    // must stay retryable, never the terminal state a genuine rejection
+    // produces.
+    @Test func aConnectionThatDropsAfterTheUpgradeButBeforeHelloStaysRetryable() async throws {
+        let server = HandshakeThenDropServer()
+        try server.start()
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        let origin = "http://127.0.0.1:\(port)"
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: "t", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .offline }
+        #expect(!events.states.contains(.unauthorized))
     }
 
     @Test func deadServerIsOfflineAndRetries() async throws {
