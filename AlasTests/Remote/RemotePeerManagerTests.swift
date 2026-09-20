@@ -573,6 +573,68 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == inbound.deviceId)
     }
 
+    // Forgetting a peer while re-pairing it is still in flight — before the
+    // far side's real identity is even known, so no peer row exists yet for
+    // a missing-record check to catch — must not have the completed network
+    // reply resurrect the row `upsert` would otherwise happily recreate.
+    @Test func forgettingAPeerDuringItsOwnInFlightRePairIsNotUndoneByTheReply() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        // A delayed reply gives a concurrent Forget time to land before
+        // addPeer resumes and would otherwise upsert a fresh record from it.
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return (Data(#"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairer: delayedPairer, links: Links())
+        manager.connectAll()
+        Task {
+            while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+            manager.forget(peerId: "p1")
+        }
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .cancelled)
+        #expect(manager.peers.isEmpty)
+    }
+
+    // The same in-flight-Forget race, but the far side's reciprocal call
+    // also lands — proving it is revoked rather than silently
+    // re-authorizing the peer the user just removed.
+    @Test func aReciprocalConfirmationArrivingAfterAnInFlightRePairWasForgottenIsRevoked() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        var revoked: [String] = []
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return (Data(#"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairing: pairing, pairer: delayedPairer, links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.connectAll()
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        Task {
+            while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+            manager.forget(peerId: "p1")
+        }
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a", localDeviceId: inbound.deviceId)
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .cancelled)
+        #expect(manager.peers.isEmpty)
+        #expect(revoked.contains(inbound.deviceId))
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
     // A confirmation that arrives with no addPeer attempt left waiting
     // for its counter-code (the attempt it belonged to already gave up, or
     // never existed) sits buffered until swept by expiry — the device it

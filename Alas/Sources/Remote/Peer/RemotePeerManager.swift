@@ -36,6 +36,11 @@ final class RemotePeerManager {
         /// back to us — only silence. The half-completed peer has already
         /// been forgotten.
         case reciprocalPairingFailed
+        /// The peer this link was re-pairing was forgotten while the network
+        /// round trip was still in flight. Reporting either success or a
+        /// pairing failure would misrepresent what happened — the user's own
+        /// Forget is why nothing was added, not anything about the exchange.
+        case cancelled
     }
 
     typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -152,6 +157,12 @@ final class RemotePeerManager {
         // moments later on "revoked" would blame the wrong machine, so refuse
         // before minting a code and point the user at their own settings.
         guard !me.origins.isEmpty else { return .noLocalAddress }
+        // Identified by origin overlap, before the far side's real identity
+        // is even known, so a Forget landing during the network round trip
+        // below can still be detected: the far side's `serverId` isn't
+        // available until the reply comes back, by which point a row this
+        // link was re-pairing could already be gone.
+        let priorPeerId = peers.first(where: { !Set($0.origins).isDisjoint(with: Set(parts.origins)) })?.id
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
@@ -166,6 +177,18 @@ final class RemotePeerManager {
             guard let serverId, !serverId.isEmpty else {
                 endAttempt(counterCode: counterCode)
                 return .unreachable
+            }
+            // The row identified above no longer exists: the user forgot it
+            // while this attempt's network round trip was still in flight.
+            // `previousState` below would find nothing and `upsert` would
+            // happily recreate the peer from this now-unwanted reply,
+            // silently undoing that Forget. Bail out before touching `peers`
+            // at all; any reciprocal confirmation that still arrives for
+            // this counter-code is caught by `endAttempt`'s own orphan
+            // check, since no peer row exists for this identity anymore.
+            if let priorPeerId, !peers.contains(where: { $0.id == priorPeerId }) {
+                endAttempt(counterCode: counterCode)
+                return .cancelled
             }
             // Snapshot the record as it stood before this attempt, if one
             // exists. If THIS attempt's own reciprocal exchange fails, the
