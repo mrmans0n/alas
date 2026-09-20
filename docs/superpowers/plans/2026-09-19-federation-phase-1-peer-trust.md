@@ -1668,9 +1668,10 @@ final class RemotePeerConnection: RemotePeerConnecting {
         case unauthorized
         case incompatible(remoteVersion: Int)
         /// The socket's `hello` reported an identity other than the one this
-        /// link was created for. Terminal and never retried: the address is
-        /// answering for somebody else, so redialing it can only keep talking
-        /// to the wrong Mac.
+        /// link was created for. Terminal for the whole link — the remaining
+        /// origins are not tried and no reconnect is armed — because the
+        /// record now describes a Mac that is not there, which only the user
+        /// can resolve by forgetting the peer and pairing again.
         case identityMismatch(expected: String, actual: String)
     }
 
@@ -1811,8 +1812,9 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // `/health` probe — has to prove this is the Mac the record was
             // written for. Whoever answers the origin would otherwise decide
             // the link's identity, and the manager would adopt it: a reused
-            // address or a squatter could silently take a peer's place. Not
-            // retried, because backoff against a wrong Mac never converges.
+            // address or a squatter could silently take a peer's place.
+            // Abandons the remaining origins and arms no reconnect: backoff
+            // against a Mac that is not the peer never converges.
             if let expectedServerId, serverId != expectedServerId {
                 candidate.cancel(with: .policyViolation, reason: nil)
                 setState(.identityMismatch(expected: expectedServerId, actual: serverId))
