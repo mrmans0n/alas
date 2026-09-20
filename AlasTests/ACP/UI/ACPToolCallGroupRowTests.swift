@@ -22,6 +22,27 @@ struct ACPToolCallGroupRowTests {
         #expect(memberHeight(lines: 20, theme: theme) > memberHeight(lines: 1, theme: theme))
     }
 
+    /// The absorb pulse is allowed to recolor the lane and nothing else.
+    /// Anything that changes the row's intrinsic height — a glow's padding, a
+    /// scale, a thicker bar — reaches the scroller through
+    /// `ACPTranscriptRowHostingView.invalidateIntrinsicContentSize`, and the
+    /// reconciler answers a changed height with a full relayout pass. Every
+    /// frame of the pulse would then re-tile the transcript under the reader.
+    @Test("the lane's height does not change while the absorb pulse is lit")
+    func laneHeightIsIndependentOfHighlight() throws {
+        let theme = try ThemeStore().current
+        #expect(laneHeight(highlight: 1, theme: theme) == laneHeight(highlight: 0, theme: theme))
+    }
+
+    private func laneHeight(highlight: Double, theme: Theme) -> CGFloat {
+        measure(
+            ACPToolCallGroupLane(highlight: highlight) {
+                Text("Ran 3 tools")
+            },
+            theme: theme
+        )
+    }
+
     private func headerHeight(expanded: Bool, theme: Theme) -> CGFloat {
         measure(
             ACPToolCallGroupHeaderRow(

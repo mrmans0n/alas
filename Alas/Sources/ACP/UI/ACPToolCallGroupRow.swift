@@ -18,6 +18,18 @@ struct ACPToolCallGroupHeaderRow: View {
     let expanded: Bool
     let onToggle: (Bool) -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Lit to 1 the moment a finished call folds into this bundle, then eased
+    /// back to 0 — the "something just landed here" cue.
+    ///
+    /// View-local `@State` on purpose. It survives the in-place content
+    /// update that carries a new count (the hosting pool swaps `rootView`
+    /// without disturbing SwiftUI state), which is exactly when the pulse
+    /// must fire. And it resets when the mount band releases and remounts the
+    /// row, so scrolling a bundle back into view comes back quiet rather than
+    /// flashing at a reader who absorbed nothing.
+    @State private var absorbHighlight: Double = 0
 
     init(
         summary: ACPToolCallGroupSummary,
@@ -34,22 +46,52 @@ struct ACPToolCallGroupHeaderRow: View {
     }
 
     var body: some View {
-        ACPToolCallGroupLane {
+        ACPToolCallGroupLane(highlight: absorbHighlight) {
             Button {
                 onToggle(!expanded)
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "wrench.and.screwdriver")
                         .font(.system(size: 10))
-                        .foregroundStyle(theme.color("fg-faint"))
+                        .foregroundStyle(
+                            theme.color("fg-faint")
+                                .mix(with: theme.color("accent"), by: absorbHighlight)
+                        )
                     Text(label)
                         .font(.system(size: 11))
                         .foregroundStyle(theme.color("fg-faint"))
+                        // Rolls the digits instead of snapping them. Scoped to
+                        // the count so toggling expanded — which rewrites the
+                        // same label from "Ran" to "Hide" — stays instant.
+                        .contentTransition(.numericText(value: Double(summary.count)))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
+        }
+        .onChange(of: summary.count) { previousCount, currentCount in
+            absorb(previousCount: previousCount, currentCount: currentCount)
+        }
+    }
+
+    /// A count change can only reach an already-mounted header: a fresh mount
+    /// has no previous value to compare against, so `onChange` stays silent
+    /// there and first paint is never a pulse.
+    private func absorb(previousCount: Int, currentCount: Int) {
+        guard ACPToolCallGroupHeaderAnimation.absorbs(
+            previousCount: previousCount,
+            currentCount: currentCount,
+            reduceMotion: reduceMotion
+        ) else { return }
+        absorbHighlight = 1
+        // Committing the lit value and its decay in one run-loop turn would
+        // coalesce into a single update that both starts and ends at 0,
+        // animating nothing. Handing the decay to the next turn makes 1 the
+        // real starting point.
+        Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.55)) { absorbHighlight = 0 }
         }
     }
 }
@@ -75,14 +117,25 @@ struct ACPToolCallGroupMemberRow<Content: View>: View {
 
 /// The shared accent bar + indent that marks a row as part of a tool-call
 /// bundle. Factored out so the header and its members line up exactly.
-private struct ACPToolCallGroupLane<Content: View>: View {
+struct ACPToolCallGroupLane<Content: View>: View {
+    /// 0 for the lane's resting gray, 1 for full accent. Only the bar's FILL
+    /// may depend on this. The transcript is tiled by an AppKit reconciler
+    /// that re-lays out the whole document whenever a row's measured height
+    /// changes, so a highlight that touched geometry would re-tile the
+    /// transcript on every frame of the pulse.
+    let highlight: Double
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
+
+    init(highlight: Double = 0, @ViewBuilder content: @escaping () -> Content) {
+        self.highlight = highlight
+        self.content = content
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Rectangle()
-                .fill(theme.color("bg-4"))
+                .fill(theme.color("bg-4").mix(with: theme.color("accent"), by: highlight))
                 .frame(width: 1.5)
                 .padding(.vertical, 2)
             content()
