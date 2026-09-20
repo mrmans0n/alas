@@ -146,12 +146,20 @@ struct ACPHorizontalScrollWheelRouterTests {
     /// window point, then returns the scroller's scroll position after the
     /// gesture settles.
     private func deliverTrackpadGesture(
-        through router: ACPBlockWheelRoutingView,
-        at cursorInWindow: NSPoint,
+        through routerForFixture: (NSWindow) throws -> ACPBlockWheelRoutingView,
+        at cursorForRouter: (ACPBlockWheelRoutingView, NSWindow) -> NSPoint,
         window: NSWindow
     ) async throws -> CGFloat {
+        // Routing a vertical event scrolls the transcript, which can retire
+        // the row a previously captured router belonged to — re-resolve the
+        // mounted router per event, as the app's real surface would.
         func deliver(_ event: NSEvent) throws {
-            _ = router.handleScrollWheelEvent(event, cursorInWindow: cursorInWindow)
+            let router = try routerForFixture(window)
+            _ = router.handleScrollWheelEvent(
+                event,
+                cursorInWindow: cursorForRouter(router, window),
+                cursorTarget: window.contentView?.hitTest(cursorForRouter(router, window))
+            )
         }
         try deliver(phasedWheelEvent(deltaY: 0, phase: .began))
         try await Task.sleep(for: .milliseconds(20))
@@ -176,28 +184,38 @@ struct ACPHorizontalScrollWheelRouterTests {
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        guard let scroller = router.transcriptScrollerForTesting else {
+        guard let scroller = try routerForFixture(window).transcriptScrollerForTesting else {
             Issue.record("router lost its transcript scroller")
             return 0
         }
         return scroller.scrollY
     }
 
-    /// A point inside the router's own block, in window coordinates. The
-    /// top padding band of the content (vertical cell padding is 6pt) is
-    /// padding, never text.
-    private func routerCursor(in router: ACPBlockWheelRoutingView) -> NSPoint {
-        router.convert(NSPoint(x: router.bounds.midX, y: 20), to: nil)
+    /// A point inside the router's own block, in window coordinates,
+    /// clamped into the router's visible intersection with the window so
+    /// the cursor is guaranteed on-window (a router's frame can be mostly
+    /// clipped while still mounted). 20pt up from the visible bottom lands
+    /// in the content padding band, never text.
+    private func routerCursor(in router: ACPBlockWheelRoutingView, window: NSWindow) -> NSPoint {
+        let windowPoint = router.convert(NSPoint(x: router.bounds.midX, y: 20), to: nil)
+        let visible = router.convert(router.bounds, to: nil).intersection(window.contentView!.frame)
+        guard !visible.isNull, visible.height > 40 else { return windowPoint }
+        return NSPoint(x: max(visible.minX + 8, min(windowPoint.x, visible.maxX - 8)),
+                       y: max(visible.minY + 20, min(windowPoint.y, visible.maxY - 20)))
     }
 
     private func visibleRouter(in fixture: Fixture) throws -> ACPBlockWheelRoutingView {
-        try #require(
+        // Prefer the router with the largest visible intersection with the
+        // viewport: after parking, a boundary router can still be mounted
+        // with only a sliver visible, and its clamped cursor would resolve
+        // through a hit test outside the block.
+        let contentFrame = fixture.window.contentView!.frame
+        return try #require(
             descendants(of: fixture.scroller.flippedDocumentView, matching: ACPBlockWheelRoutingView.self)
-                .first { view in
-                    view.convert(view.bounds, to: fixture.scroller.flippedDocumentView)
-                        .intersects(fixture.scroller.contentView.bounds)
-                },
-            "viewport must contain a mounted block wheel router"
+                .map { ($0, $0.convert($0.bounds, to: nil).intersection(contentFrame)) }
+                .filter { !$0.1.isNull && $0.1.height > 40 }
+                .max { $0.1.height < $1.1.height }?.0,
+            "viewport must contain a substantially visible block wheel router"
         )
     }
 
@@ -220,7 +238,11 @@ struct ACPHorizontalScrollWheelRouterTests {
         try await parkAndSettle(fixture)
         let router = try visibleRouter(in: fixture)
         let before = fixture.scroller.scrollY
-        let after = try await deliverTrackpadGesture(through: router, at: routerCursor(in: router), window: window)
+        let after = try await deliverTrackpadGesture(
+            through: { _ in try visibleRouter(in: fixture) },
+            at: { router, window in routerCursor(in: router, window: window) },
+            window: window
+        )
         #expect(abs(after - before) > 1, "a trackpad gesture over a markdown table must scroll the transcript")
     }
 
@@ -242,10 +264,14 @@ struct ACPHorizontalScrollWheelRouterTests {
         defer { fixture.close() }
         try await parkAndSettle(fixture)
         let router = try visibleRouter(in: fixture)
-        let cursor = routerCursor(in: router)
+        let cursor = routerCursor(in: router, window: window)
         let before = fixture.scroller.scrollY
         for _ in 0..<4 {
-            _ = router.handleScrollWheelEvent(try phasedWheelEvent(deltaY: 40), cursorInWindow: cursor)
+            _ = router.handleScrollWheelEvent(
+                try phasedWheelEvent(deltaY: 40),
+                cursorInWindow: cursor,
+                cursorTarget: window.contentView?.hitTest(cursor)
+            )
             try await Task.sleep(for: .milliseconds(20))
         }
         for _ in 0..<6 {
@@ -281,21 +307,53 @@ struct ACPHorizontalScrollWheelRouterTests {
         // Pure vertical event over the block: consumed (routed), not passed.
         let vertical = try phasedWheelEvent(deltaY: 40)
         let verticalRouter = try visibleRouter(in: fixture)
-        #expect(verticalRouter.handleScrollWheelEvent(vertical, cursorInWindow: routerCursor(in: verticalRouter)) == nil)
+        #expect(verticalRouter.handleScrollWheelEvent(vertical, cursorInWindow: routerCursor(in: verticalRouter, window: window), cursorTarget: nil) == nil)
         // Horizontal-dominant gesture over the block: left untouched for
         // the block's own scrolling (SwiftUI's horizontal scroll view).
         let horizontalStart = try phasedWheelEvent(deltaY: 0, deltaX: 40, phase: .began)
         let horizontalRouter = try visibleRouter(in: fixture)
-        #expect(horizontalRouter.handleScrollWheelEvent(horizontalStart, cursorInWindow: routerCursor(in: horizontalRouter)) === horizontalStart)
+        #expect(horizontalRouter.handleScrollWheelEvent(horizontalStart, cursorInWindow: routerCursor(in: horizontalRouter, window: window), cursorTarget: nil) === horizontalStart)
         let horizontalChange = try phasedWheelEvent(deltaY: 0, deltaX: 40, phase: .changed)
         let changeRouter = try visibleRouter(in: fixture)
-        #expect(changeRouter.handleScrollWheelEvent(horizontalChange, cursorInWindow: routerCursor(in: changeRouter)) === horizontalChange)
+        #expect(changeRouter.handleScrollWheelEvent(horizontalChange, cursorInWindow: routerCursor(in: changeRouter, window: window), cursorTarget: nil) === horizontalChange)
         // Ambiguous (equal-axis) gesture start: held until the axis
         // resolves, so neither scroller sees jitter.
         let ambiguousStart = try phasedWheelEvent(deltaY: 10, deltaX: 10, phase: .began)
         let ambiguousRouter = try visibleRouter(in: fixture)
-        #expect(ambiguousRouter.handleScrollWheelEvent(ambiguousStart, cursorInWindow: routerCursor(in: ambiguousRouter)) == nil,
+        #expect(ambiguousRouter.handleScrollWheelEvent(ambiguousStart, cursorInWindow: routerCursor(in: ambiguousRouter, window: window), cursorTarget: nil) == nil,
                 "an ambiguous gesture start must be buffered, not dispatched")
+        // Buffered ambiguous start resolved horizontally: the buffered
+        // beginning must reach the block's own scroll view alongside the
+        // resolved tick (replay), not be dropped.
+        let horizontalResolve = try phasedWheelEvent(deltaY: 0, deltaX: 40, phase: .changed)
+        let resolveRouter = try visibleRouter(in: fixture)
+        #expect(resolveRouter.handleScrollWheelEvent(horizontalResolve, cursorInWindow: routerCursor(in: resolveRouter, window: window), cursorTarget: nil) === horizontalResolve)
+    }
+
+    @Test("events over an occluding view do not route")
+    func occludedEventsDoNotRoute() async throws {
+        let window = makeWindow()
+        let fixture = try Fixture(
+            markdown: """
+            A **synthetic** transcript row with selectable prose and a table.
+
+            | Name | Result | Detail |
+            | --- | --- | --- |
+            | Alpha | Ready | A deterministic table cell with enough text to wrap. |
+            """,
+            rowCount: 40,
+            window: window
+        )
+        defer { fixture.close() }
+        try await parkAndSettle(fixture)
+        let router = try visibleRouter(in: fixture)
+        let cursor = routerCursor(in: router, window: window)
+        let event = try phasedWheelEvent(deltaY: 40, phase: .began)
+        // A cursor target OUTSIDE this router's subtree (as when the
+        // composer overlays the transcript in the chat ZStack) must not
+        // route, even though the block is geometrically under the point.
+        #expect(router.handleScrollWheelEvent(event, cursorInWindow: cursor, cursorTarget: fixture.scroller) === event,
+                "an occluded block must not consume wheel events")
     }
 
     @Test("events outside the router bounds dispatch normally")
@@ -320,7 +378,7 @@ struct ACPHorizontalScrollWheelRouterTests {
         )
         let event = try phasedWheelEvent(deltaY: 40, phase: .began)
         let outside = NSPoint(x: router.bounds.midX, y: router.bounds.maxY + 50)
-        #expect(router.handleScrollWheelEvent(event, cursorInWindow: outside) === event)
+        #expect(router.handleScrollWheelEvent(event, cursorInWindow: outside, cursorTarget: nil) === event)
     }
 
     @Test("phased trackpad gesture over a code block scrolls the transcript")
@@ -342,7 +400,11 @@ struct ACPHorizontalScrollWheelRouterTests {
         try await parkAndSettle(fixture)
         let router = try visibleRouter(in: fixture)
         let before = fixture.scroller.scrollY
-        let after = try await deliverTrackpadGesture(through: router, at: routerCursor(in: router), window: window)
+        let after = try await deliverTrackpadGesture(
+            through: { _ in try visibleRouter(in: fixture) },
+            at: { router, window in routerCursor(in: router, window: window) },
+            window: window
+        )
         #expect(abs(after - before) > 1, "a trackpad gesture over a code block must scroll the transcript")
     }
 

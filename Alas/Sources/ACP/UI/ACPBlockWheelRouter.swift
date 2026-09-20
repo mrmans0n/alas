@@ -52,9 +52,10 @@ final class ACPBlockWheelRoutingView: NSView {
     /// `cursorInWindow` is the event's cursor position in window
     /// coordinates. Exposed for tests: synthetic events cannot carry a
     /// window-bound location through `NSApp.sendEvent` deterministically.
-    func handleScrollWheelEvent(_ event: NSEvent, cursorInWindow: NSPoint) -> NSEvent? {
-        let viewPoint = convert(cursorInWindow, from: nil)
-        guard bounds.contains(viewPoint), let scroller = transcriptScroller else {
+    func handleScrollWheelEvent(_ event: NSEvent, cursorInWindow: NSPoint, cursorTarget: NSView?) -> NSEvent? {
+        guard isOwnBlock(cursorTarget: cursorTarget, cursorInWindow: cursorInWindow),
+              let scroller = transcriptScroller
+        else {
             return event
         }
         var routingState = scroller.markdownScrollRoutingState
@@ -79,9 +80,72 @@ final class ACPBlockWheelRoutingView: NSView {
         if routingState.forwarding == nil, routingState.hasPendingEvents {
             return nil
         }
-        // Vertical route not taken: leave the event to normal dispatch,
-        // where SwiftUI's horizontal scroll view scrolls the block.
+        // Horizontal route selected after a buffered start: replay the
+        // buffered beginning through normal dispatch, alongside the current
+        // event, so the block's own scroll view receives the whole gesture.
+        // (Over block padding there is no markdown text view downstream to
+        // flush them.) Ambiguous buffers carry no dominant-axis delta, so
+        // replaying them cannot double-scroll.
+        for pendingEvent in routingState.consumePendingEvents() {
+            dispatchBlockEvent(pendingEvent)
+        }
+        dispatchBlockEvent(event)
         return event
+    }
+
+    /// Delivers an event through this block's own scroll machinery: the
+    /// horizontal SwiftUI scroll view hosting the block's content when the
+    /// cursor is over it, else normal responder-chain dispatch (which starts
+    /// at the window's deepest hit-test view).
+    private func dispatchBlockEvent(_ event: NSEvent) {
+        if let innerScroll = innerScroll(containingWindowPoint: event.locationInWindow) {
+            innerScroll.scrollWheel(with: event)
+            return
+        }
+        superview?.scrollWheel(with: event)
+    }
+
+    /// Whether the cursor's window hit-test target belongs to this router's
+    /// own block. Bounds alone cannot tell: the transcript is overlaid by
+    /// the composer in a ZStack, so a block behind the composer must not
+    /// route events the composer should receive. The anchor is the router's
+    /// enclosing row hosting view: the router is a background sibling of the
+    /// block content (never an ancestor of the hit target), but any hit
+    /// target inside this row — and only those — reaches the same row
+    /// hosting view through its responder chain. When the caller has no
+    /// pre-computed target, the window hit-test resolves it.
+    private func isOwnBlock(cursorTarget: NSView?, cursorInWindow: NSPoint) -> Bool {
+        let viewPoint = convert(cursorInWindow, from: nil)
+        guard bounds.contains(viewPoint) else { return false }
+        guard let rowHostingView else { return false }
+        let target = cursorTarget ?? window?.contentView?.hitTest(cursorInWindow)
+        var responder: NSResponder? = target
+        while let current = responder {
+            if current === rowHostingView {
+                return true
+            }
+            responder = current.nextResponder
+        }
+        return false
+    }
+
+    /// The block's own horizontal scroll view — the first NSScrollView above
+    /// the deepest hit-test view that is not the transcript scroller — when
+    /// the cursor actually lands inside this router's frame. The cursor can
+    /// also sit inside this router but over content outside the scroll view
+    /// (inter-row spacing in the hosting stack): those events go to normal
+    /// dispatch.
+    private func innerScroll(containingWindowPoint windowPoint: NSPoint) -> NSScrollView? {
+        guard let window else { return nil }
+        guard let hitView = window.contentView?.hitTest(windowPoint) else { return nil }
+        var responder: NSResponder? = hitView
+        while let current = responder {
+            if let scrollView = current as? NSScrollView {
+                return scrollView === transcriptScroller ? nil : scrollView
+            }
+            responder = current.nextResponder
+        }
+        return nil
     }
 
     /// The transcript scroller above this block in the responder chain, or
@@ -98,6 +162,23 @@ final class ACPBlockWheelRoutingView: NSView {
         return nil
     }
 
+    /// This router's enclosing row hosting view: the `NSHostingView` that
+    /// mounts the transcript row's SwiftUI content. Ownership anchor for the
+    /// occlusion check — the router is a background sibling of the block
+    /// content, so a hit target inside this row reaches this hosting view
+    /// through its responder chain, while a hit target in another surface
+    /// (the composer overlay, another row) never does.
+    private var rowHostingView: NSHostingView<AnyView>? {
+        var responder: NSResponder? = superview
+        while let current = responder {
+            if let hostingView = current as? NSHostingView<AnyView> {
+                return hostingView
+            }
+            responder = current.nextResponder
+        }
+        return nil
+    }
+
     /// Test-only exposure of `transcriptScroller`.
     var transcriptScrollerForTesting: ACPTranscriptScrollerView? {
         transcriptScroller
@@ -107,9 +188,17 @@ final class ACPBlockWheelRoutingView: NSView {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self else { return event }
             // Real input always arrives window-bound with the cursor
-            // position already resolved into window coordinates.
+            // position already resolved into window coordinates. The window
+            // hit-test resolves the deepest view under the cursor, which
+            // owns the occlusion check (the composer overlays the
+            // transcript, so a hit target outside this block must not
+            // route).
             guard let window = self.window, event.window === window else { return event }
-            return self.handleScrollWheelEvent(event, cursorInWindow: event.locationInWindow)
+            return self.handleScrollWheelEvent(
+                event,
+                cursorInWindow: event.locationInWindow,
+                cursorTarget: window.contentView?.hitTest(event.locationInWindow)
+            )
         }
     }
 }
