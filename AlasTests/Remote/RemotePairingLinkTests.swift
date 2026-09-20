@@ -53,4 +53,16 @@ struct RemotePairingLinkTests {
         #expect(RemotePairingLink.normalizeOrigin("http://nacho.local:8765") == "http://nacho.local:8765")
         #expect(RemotePairingLink.normalizeOrigin("mailto:x") == nil)
     }
+
+    @Test func parseDoesNotManufactureAnOriginFromAnEncodedComma() throws {
+        // One `hosts` entry whose text contains a comma arrives as %2C.
+        // Decoding before splitting would yield a second, never-advertised origin.
+        let link = "http://10.0.0.1:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.1%3A8765%2Chttp%3A%2F%2Fevil.example%3A9999"
+        let parts = try #require(RemotePairingLink.parse(link))
+        #expect(!parts.origins.contains("http://evil.example:9999"))
+        // The single "hosts" entry decodes to a comma-bearing string that fails
+        // to parse as one origin, so it is dropped entirely; only the link's
+        // own origin fallback survives.
+        #expect(parts.origins == ["http://10.0.0.1:8765"])
+    }
 }

@@ -43,8 +43,16 @@ enum RemotePairingLink {
               !code.isEmpty
         else { return nil }
         var candidates: [String] = []
-        if let hosts = components.queryItems?.first(where: { $0.name == "hosts" })?.value {
-            candidates.append(contentsOf: hosts.split(separator: ",").map(String.init))
+        // Split the RAW, still-encoded value. `build` percent-encodes each
+        // origin individually before joining on ",", so a comma inside an
+        // origin arrives as %2C. Letting URLComponents decode the whole value
+        // first turns that back into a literal comma, which would both tear
+        // the origin in two and manufacture an origin nobody advertised.
+        if let encodedHosts = components.percentEncodedQueryItems?
+            .first(where: { $0.name == "hosts" })?.value {
+            candidates.append(contentsOf: encodedHosts
+                .split(separator: ",")
+                .compactMap { String($0).removingPercentEncoding })
         }
         candidates.append(trimmed)
         var origins: [String] = []
