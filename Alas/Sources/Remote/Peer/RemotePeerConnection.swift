@@ -118,6 +118,12 @@ final class RemotePeerConnection: RemotePeerConnecting {
         // `runner` already nil, and nothing would ever move the state again.
         if Task.isCancelled { return }
         setState(.connecting)
+        // An origin whose `hello` proves it is not the peer is skipped, not
+        // fatal: a stale advertised address can have been reassigned while a
+        // later origin still reaches the real peer. Remembered so that, if no
+        // origin ultimately works, the reported state is the more actionable
+        // "wrong Mac answered" rather than a bare "offline".
+        var lastMismatch: (expected: String, actual: String)?
         var ordered: [String] = []
         for origin in [lastOrigin].compactMap({ $0 }) + origins where !ordered.contains(origin) {
             ordered.append(origin)
@@ -175,14 +181,21 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // written for. Whoever answers the origin would otherwise decide
             // the link's identity, and the manager would adopt it: a reused
             // address or a squatter could silently take a peer's place.
-            // Abandons the remaining origins and arms no reconnect: backoff
-            // against a Mac that is not the peer never converges.
+            // Only THIS origin is disqualified: a reassigned address does not
+            // mean every address is bad, and giving up on the whole list
+            // would strand a link whose real peer is still reachable
+            // elsewhere in it.
             if let expectedServerId, serverId != expectedServerId {
                 candidate.cancel(with: .policyViolation, reason: nil)
-                setState(.identityMismatch(expected: expectedServerId, actual: serverId))
-                runner = nil
-                return
+                lastMismatch = (expected: expectedServerId, actual: serverId)
+                continue
             }
+            // This origin's identity checked out, so any mismatch seen at an
+            // EARLIER origin in this same attempt no longer describes what's
+            // wrong: it would misreport a normal disconnect later in this
+            // block as an identity problem with the Mac we are, in fact,
+            // correctly talking to.
+            lastMismatch = nil
             socket = candidate
             if origin != lastOrigin {
                 lastOrigin = origin
@@ -200,11 +213,11 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // this attempt owns — never whatever happens to be current.
             closeSocket(.goingAway, ifCurrent: candidate)
             if Task.isCancelled { return }
-            scheduleReconnect()
+            scheduleReconnect(reportedState: lastMismatch.map { State.identityMismatch(expected: $0.expected, actual: $0.actual) } ?? .offline)
             return
         }
         if Task.isCancelled { return }
-        scheduleReconnect()
+        scheduleReconnect(reportedState: lastMismatch.map { State.identityMismatch(expected: $0.expected, actual: $0.actual) } ?? .offline)
     }
 
     private func pump(_ socket: URLSessionWebSocketTask) async {
@@ -288,8 +301,8 @@ final class RemotePeerConnection: RemotePeerConnecting {
         return health.serverId == expectedServerId
     }
 
-    private func scheduleReconnect() {
-        setState(.offline)
+    private func scheduleReconnect(reportedState: State = .offline) {
+        setState(reportedState)
         runner = nil
         let delay = backoff
         backoff = min(backoff * 2, config.maxBackoff)

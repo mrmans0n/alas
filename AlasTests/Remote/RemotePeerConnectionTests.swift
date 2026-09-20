@@ -25,7 +25,8 @@ struct RemotePeerConnectionTests {
     /// do not care; the health-identity tests set it.
     private func startServer(pairing: RemotePairingService,
                              provider: RemoteSessionsProvider = FakeSessionsProvider(),
-                             serverId: String? = nil) async throws -> (RemoteServer, String) {
+                             serverId: String? = nil,
+                             helloServerId: String = "srv-a") async throws -> (RemoteServer, String) {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
@@ -34,7 +35,7 @@ struct RemotePeerConnectionTests {
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
                                           usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
             },
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", hubEnabled: false, federationEnabled: true) }
         )
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
@@ -217,12 +218,14 @@ struct RemotePeerConnectionTests {
         #expect(!events.states.contains(.unauthorized))
     }
 
-    @Test func helloFromAnotherIdentityIsRefusedAndNeverRetried() async throws {
+    @Test func helloFromAnotherIdentityIsRefusedButRetriesLater() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
         // The server's `hello` reports "srv-a" (see `startServer`'s identity);
         // this link was written for a different Mac, so the socket must be
-        // dropped rather than adopted.
+        // dropped rather than adopted. With only this one origin the mismatch
+        // recurs every attempt, but it must still retry rather than dead-end:
+        // the same address could later be reassigned back to the real peer.
         let (server, origin) = try await startServer(pairing: pairing)
         defer { server.stop() }
         let events = Events()
@@ -231,12 +234,35 @@ struct RemotePeerConnectionTests {
         link.connect()
         defer { link.disconnect() }
         try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
-        // Terminal: no online state, no `hello` event handed to the owner, and
-        // well past two backoff delays no second attempt.
-        try await Task.sleep(nanoseconds: 800_000_000)
+        try await waitUntil { events.states.filter { $0 == .connecting }.count >= 2 }
+        // The second attempt just started (that's what the wait above proved);
+        // give it a moment to run the same handshake and settle again.
+        try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
         #expect(!events.states.contains(.online))
         #expect(events.hellos.isEmpty)
-        #expect(events.states.filter { $0 == .connecting }.count == 1)
+    }
+
+    // The core of the fix: a stale address reassigned to an unrelated Alas
+    // instance must not stop the link from finding the real peer at a later
+    // advertised origin. One shared pairing service so the SAME token is
+    // valid at both origins — the fallback is proven by identity, not by one
+    // server simply refusing an unrecognized token.
+    @Test func aMismatchedOriginDoesNotStopTheRemainingOnesFromBeingTried() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (wrongServer, wrongOrigin) = try await startServer(pairing: pairing, helloServerId: "srv-impostor")
+        defer { wrongServer.stop() }
+        let (rightServer, rightOrigin) = try await startServer(pairing: pairing, helloServerId: "srv-a")
+        defer { rightServer.stop() }
+
+        let events = Events()
+        let link = RemotePeerConnection(origins: [wrongOrigin, rightOrigin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .online }
+        #expect(link.lastOrigin == rightOrigin)
+        #expect(events.origins == [rightOrigin])
     }
 
     @Test func healthProbeFromTheExpectedServerStillReportsUnauthorized() async throws {
