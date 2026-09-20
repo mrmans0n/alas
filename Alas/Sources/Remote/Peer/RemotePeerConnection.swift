@@ -177,21 +177,20 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 candidate.cancel(with: .protocolError, reason: nil)
                 continue
             }
-            if version != config.localProtocolVersion {
-                candidate.cancel(with: .goingAway, reason: nil)
-                setState(.incompatible(remoteVersion: version))
-                runner = nil
-                return
-            }
             // The `hello` on the socket that carries traffic — not only the
             // `/health` probe — has to prove this is the Mac the record was
             // written for. Whoever answers the origin would otherwise decide
             // the link's identity, and the manager would adopt it: a reused
             // address or a squatter could silently take a peer's place.
-            // Only THIS origin is disqualified: a reassigned address does not
-            // mean every address is bad, and giving up on the whole list
-            // would strand a link whose real peer is still reachable
-            // elsewhere in it.
+            // Checked BEFORE the protocol-version check below: a stale
+            // origin reassigned to an unrelated Alas instance running an
+            // incompatible version must not make the WHOLE attempt terminal
+            // on the strength of a version mismatch alone — only an
+            // instance CONFIRMED to be our actual peer can be genuinely
+            // incompatible. Only THIS origin is disqualified here: a
+            // reassigned address does not mean every address is bad, and
+            // giving up on the whole list would strand a link whose real
+            // peer is still reachable elsewhere in it.
             if let expectedServerId, serverId != expectedServerId {
                 candidate.cancel(with: .policyViolation, reason: nil)
                 lastMismatch = (expected: expectedServerId, actual: serverId)
@@ -203,6 +202,16 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // block as an identity problem with the Mac we are, in fact,
             // correctly talking to.
             lastMismatch = nil
+            // Identity is confirmed at this point, so an incompatible
+            // version genuinely means THIS peer cannot be talked to yet —
+            // unlike the identity check above, this is fatal for the whole
+            // attempt rather than just this origin.
+            if version != config.localProtocolVersion {
+                candidate.cancel(with: .goingAway, reason: nil)
+                setState(.incompatible(remoteVersion: version))
+                runner = nil
+                return
+            }
             socket = candidate
             if origin != lastOrigin {
                 lastOrigin = origin

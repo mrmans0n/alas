@@ -129,6 +129,28 @@ struct RemotePeerConnectionTests {
         try await waitUntil { link.state == .incompatible(remoteVersion: RemoteProtocolVersion.current) }
     }
 
+    // Codex: the version check ran BEFORE the identity check, so a stale
+    // origin reassigned to an unrelated Alas instance running an
+    // incompatible version reported .incompatible — terminal, no reconnect —
+    // without ever noticing the identity was ALSO wrong, masking a
+    // recoverable "wrong Mac" situation as an unrecoverable "wrong version"
+    // one. Both conditions are made true for the SAME origin here: if the
+    // version check still ran first, this would settle on `.incompatible`
+    // instead.
+    @Test func anOriginWithBothTheWrongIdentityAndAnIncompatibleVersionReportsIdentityMismatch() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing)   // hello reports "srv-a"
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-elsewhere", config: fastConfig(localVersion: 99)) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
+        #expect(!events.states.contains { if case .incompatible = $0 { return true } else { return false } })
+    }
+
     @Test func forwardsServerMessagesAfterHello() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
