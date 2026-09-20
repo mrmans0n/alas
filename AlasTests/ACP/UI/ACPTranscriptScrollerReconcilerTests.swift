@@ -1004,6 +1004,46 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(scroller.scrollY - (row.minY + 240)) < 1)
     }
 
+    /// The case the reader actually hits on a live turn: a tall finished
+    /// tool card, scrolled INTO, folds into the COLLAPSED "Ran N tools"
+    /// header above it. Unlike the test above, the header does not grow —
+    /// a collapsed bundle is one line no matter how many calls it holds —
+    /// so the resolver must not report head growth, and the reconciler
+    /// restores top-relative, capped at the header's own height, exactly as
+    /// it does for any row that shrank in place.
+    ///
+    /// The removal straddles the viewport top, so the diff's own
+    /// compensation shifts by tc-b's full height first; the restore then
+    /// overwrites that with the aligned position. The cap is what keeps the
+    /// viewport from being placed 300pt past a 20pt header.
+    @Test("a card absorbed into a collapsed bundle aligns to the header's top, capped at its height")
+    func removalIntoCollapsedBundleAlignsTopRelative() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let old = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", height: 20), spec("tc-b", height: 400)]
+            + [spec("__composer_spacer__", height: 800)]
+        reconciler.apply(specs: old, contentWidth: 600, followsTail: false)
+        // 300pt into tc-b's own 400pt card.
+        scroller.setScrollY(tiling.row(withId: "tc-b")!.minY + 300)
+        #expect(tiling.topVisibleRowId(viewportMinY: scroller.scrollY) == "tc-b")
+
+        reconciler.resolveStaleRowId = { $0 == "tc-b" ? (rowId: "tcg-tc-a", assumeHeadGrowth: false) : nil }
+
+        // tc-b finished and was absorbed; the header's count changed (new
+        // token) but its height did not.
+        let new = [spec("__top_pagination__", height: 14), spec("m0"), spec("tcg-tc-a", token: 1, height: 20)]
+            + [spec("__composer_spacer__", height: 800)]
+        #expect(
+            ACPTranscriptScrollerReconciler.diff(oldIds: old.map(\.id), newIds: new.map(\.id))
+            == .removed(index: 3, count: 1)
+        )
+        reconciler.apply(specs: new, contentWidth: 600, followsTail: false)
+
+        let header = tiling.row(withId: "tcg-tc-a")!
+        // Top-relative, capped: minY + min(300, 20) == the header's bottom
+        // edge, so the first thing on screen is what followed the bundle.
+        #expect(abs(scroller.scrollY - header.maxY) < 1)
+    }
+
     @Test("the reset anchor skips the synthetic row that the reset itself deletes")
     func resetAnchorSkipsSyntheticRows() {
         // The head pagination spinner occupies row 0 (minY 24, maxY 38), so

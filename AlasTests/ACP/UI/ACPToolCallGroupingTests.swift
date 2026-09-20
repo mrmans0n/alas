@@ -275,17 +275,30 @@ struct ACPTranscriptVisibleRowLookupGroupTests {
         #expect(lookup.transcriptIndex(for: "missing") == nil)
     }
 
-    @Test("a stale plain id bundled as the group's last member resolves as head growth")
+    @Test("a stale plain id absorbed as the collapsed group's last member does not assume head growth")
     func staleResolutionForBundledPlainIdAsLastMember() {
-        // "tc-b" is the bundle's last member: every other member sits above
-        // it, so the old card's bottom edge is the bundle's bottom edge and
-        // bottom-relative restoration is exact.
+        // "tc-b" just finished at the live tail and folded into the bundle
+        // above it as its newest member. Its row is gone; the bundle's row
+        // is the same one-line "Ran N tools" header it was before, because a
+        // COLLAPSED bundle's height never depends on how many calls it
+        // holds. (An expanded bundle never gets here at all: its members
+        // keep their own row ids.)
+        //
+        // Head growth means "the replacement row grew at its top to contain
+        // my content, so measure from its bottom". Nothing here grew. Bottom-
+        // relative restoration with the OLD card's height, clamped to the
+        // NEW header's height, pins the viewport to within one line of the
+        // header's bottom — i.e. jumps the reader up to wherever the bundle
+        // began, which for a long run of tools is far above the tail. That
+        // was the reported "transcript scrolls up when a tool call
+        // collapses" bug. Tops must be aligned, exactly like any other row
+        // that shrank in place.
         let lookup = ACPTranscriptVisibleRowLookup(rows: rows)
         let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
             "tc-b", lookup: lookup, groupingEnabled: true
         )
         #expect(resolution?.rowId == "tcg-tc-a")
-        #expect(resolution?.assumeHeadGrowth == true)
+        #expect(resolution?.assumeHeadGrowth == false)
     }
 
     @Test("a stale plain id bundled as the group's first member does not assume head growth")
