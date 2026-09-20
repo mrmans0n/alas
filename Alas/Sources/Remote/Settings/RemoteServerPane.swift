@@ -7,6 +7,9 @@ struct RemoteServerPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @State private var pairingCode: String?
+    @State private var peerLink = ""
+    @State private var peerError: String?
+    @State private var isAddingPeer = false
     /// Rotates the displayed pairing code well within its 120s TTL so the QR on
     /// screen is never stale. Prior codes stay valid until they expire, so a
     /// device that scanned just before a rotation still pairs.
@@ -164,9 +167,10 @@ struct RemoteServerPane: View {
                             let liveCount = connected[device.id] ?? 0
                             let seen = device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
                             let desc = liveCount > 0 ? "Connected now (\(liveCount)); \(seen)" : seen
+                            let prefix = device.kind == .alasInstance ? "Alas peer. " : ""
                             SettingsRow(
                                 name: device.name,
-                                desc: desc
+                                desc: prefix + desc
                             ) {
                                 Button {
                                     state.revokeRemoteDevice(device.id)
@@ -203,6 +207,40 @@ struct RemoteServerPane: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if state.config.remote.enabled, state.config.remote.federationEnabled {
+                    SettingsGroup(title: "Peers") {
+                        if state.remotePeers.peers.isEmpty {
+                            SettingsRow(name: "No peers", desc: "Paste another Mac's pairing link below. Both Macs end up paired with each other.") {
+                                EmptyView()
+                            }
+                        }
+                        ForEach(state.remotePeers.peers) { peer in
+                            SettingsRow(name: peer.name, desc: peerStatus(peer)) {
+                                AlasButton(title: "Forget", style: .subtle) {
+                                    state.remotePeers.forget(peerId: peer.id)
+                                }
+                            }
+                        }
+                        SettingsRow(name: "Add peer", desc: "Copy the pairing link from the other Mac's Remote settings and paste it here.") {
+                            HStack(spacing: 8) {
+                                AlasField(text: $peerLink, placeholder: "http://…/?code=…&hosts=…")
+                                    .frame(minWidth: 260)
+                                AlasButton(title: isAddingPeer ? "Adding…" : "Add", style: .subtle) {
+                                    addPeer()
+                                }
+                                .disabled(isAddingPeer || peerLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                        }
+                        if let peerError {
+                            Text(peerError)
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("warn"))
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
                         }
                     }
                 }
@@ -260,6 +298,39 @@ struct RemoteServerPane: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(url, forType: .string)
+    }
+
+    private func peerStatus(_ peer: RemotePeer) -> String {
+        switch state.remotePeers.states[peer.id] ?? .idle {
+        case .online: return "Online via \(peer.lastOrigin ?? peer.origins.first ?? "")"
+        case .connecting: return "Connecting…"
+        case .offline: return "Offline. Retrying."
+        case .unauthorized: return "This Mac's token was revoked there. Forget and pair again."
+        case .incompatible(let version): return "Needs a matching Alas version (protocol \(version))."
+        case .idle: return "Not connected"
+        }
+    }
+
+    private func addPeer() {
+        isAddingPeer = true
+        peerError = nil
+        let link = peerLink
+        Task { @MainActor in
+            let error = await state.remotePeers.addPeer(link: link)
+            isAddingPeer = false
+            switch error {
+            case nil:
+                peerLink = ""
+            case .invalidLink?:
+                peerError = "That doesn't look like an Alas pairing link."
+            case .expiredCode?:
+                peerError = "That code expired. Tap Pair a device on the other Mac and copy a fresh link."
+            case .originRejected?:
+                peerError = "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+            case .unreachable?:
+                peerError = "Couldn't reach that Mac at any of its addresses."
+            }
+        }
     }
 
     private func chooseAddress(_ address: RemoteAdvertisedAddress) {
