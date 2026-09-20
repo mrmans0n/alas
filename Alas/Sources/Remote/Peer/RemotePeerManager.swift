@@ -157,12 +157,14 @@ final class RemotePeerManager {
         // moments later on "revoked" would blame the wrong machine, so refuse
         // before minting a code and point the user at their own settings.
         guard !me.origins.isEmpty else { return .noLocalAddress }
-        // Identified by origin overlap, before the far side's real identity
-        // is even known, so a Forget landing during the network round trip
-        // below can still be detected: the far side's `serverId` isn't
-        // available until the reply comes back, by which point a row this
-        // link was re-pairing could already be gone.
-        let priorPeerId = peers.first(where: { !Set($0.origins).isDisjoint(with: Set(parts.origins)) })?.id
+        // Every peer identity known before the network round trip below, so
+        // a Forget landing while it's in flight can still be detected once
+        // the far side's real `serverId` comes back — matched by identity,
+        // not by origin: a link's own `hosts` param includes every address
+        // this Mac advertises, localhost among them, so unrelated peers
+        // commonly share an origin and a match on that alone could name the
+        // wrong one.
+        let priorServerIds = Set(peers.map(\.serverId))
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
@@ -178,15 +180,16 @@ final class RemotePeerManager {
                 endAttempt(counterCode: counterCode)
                 return .unreachable
             }
-            // The row identified above no longer exists: the user forgot it
-            // while this attempt's network round trip was still in flight.
-            // `previousState` below would find nothing and `upsert` would
-            // happily recreate the peer from this now-unwanted reply,
-            // silently undoing that Forget. Bail out before touching `peers`
-            // at all; any reciprocal confirmation that still arrives for
-            // this counter-code is caught by `endAttempt`'s own orphan
-            // check, since no peer row exists for this identity anymore.
-            if let priorPeerId, !peers.contains(where: { $0.id == priorPeerId }) {
+            // This identity existed before the round trip started but is
+            // gone now: the user forgot it while this attempt's network
+            // round trip was still in flight. `previousState` below would
+            // find nothing and `upsert` would happily recreate the peer
+            // from this now-unwanted reply, silently undoing that Forget.
+            // Bail out before touching `peers` at all; any reciprocal
+            // confirmation that still arrives for this counter-code is
+            // caught by `endAttempt`'s own orphan check, since no peer row
+            // exists for this identity anymore.
+            if priorServerIds.contains(serverId), !peers.contains(where: { $0.serverId == serverId }) {
                 endAttempt(counterCode: counterCode)
                 return .cancelled
             }

@@ -635,6 +635,43 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    // Multiple stored peers can share an origin — a link's own `hosts`
+    // param includes every address this Mac advertises, localhost among
+    // them — so identifying the row being re-paired by origin overlap
+    // could name the wrong one. This re-pairs "srv-b" specifically, while
+    // "srv-a" (untouched, but sharing the localhost origin) is still
+    // present, proving the forgotten-during-flight check is keyed to the
+    // returned identity rather than any shared address.
+    @Test func forgettingTheRightPeerDuringARePairIsDetectedEvenWhenAnotherPeerSharesAnOrigin() async throws {
+        let store = InMemoryPeerStore()
+        store.save([
+            RemotePeer(id: "p1", serverId: "srv-a", name: "A", origins: ["http://localhost:8765", "http://10.0.0.1:8765"],
+                       lastOrigin: "http://10.0.0.1:8765", token: "old-token-a", protocolVersion: 1,
+                       localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1)),
+            RemotePeer(id: "p2", serverId: "srv-b", name: "B", origins: ["http://localhost:8765", "http://10.0.0.2:8765"],
+                       lastOrigin: "http://10.0.0.2:8765", token: "old-token-b", protocolVersion: 1,
+                       localDeviceId: "dev-b", addedAt: Date(timeIntervalSince1970: 2)),
+        ])
+        let requests = Requests()
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return (Data(#"{"token":"tokB","serverId":"srv-b","name":"Mac B"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairer: delayedPairer, links: Links())
+        manager.connectAll()
+        Task {
+            while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+            manager.forget(peerId: "p2")   // forgets "srv-b", the peer actually being re-paired
+        }
+        let link = "http://localhost:8765/?code=ABC123&hosts=http%3A%2F%2Flocalhost%3A8765%2Chttp%3A%2F%2F10.0.0.2%3A8765"
+        let error = await manager.addPeer(link: link)
+        #expect(error == .cancelled)
+        #expect(manager.peers.count == 1)
+        #expect(manager.peers.first?.serverId == "srv-a")
+    }
+
     // A confirmation that arrives with no addPeer attempt left waiting
     // for its counter-code (the attempt it belonged to already gave up, or
     // never existed) sits buffered until swept by expiry — the device it
