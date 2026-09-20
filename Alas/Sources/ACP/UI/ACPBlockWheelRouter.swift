@@ -70,16 +70,20 @@ final class ACPBlockWheelRoutingView: NSView {
 
         if shouldForward {
             let pendingEvents = routingState.consumePendingEvents()
-            // The vertical route's first event carries `.began`; the
-            // scroller's own `scrollWheel` reset rewrites the shared state
-            // mid-delivery. Consume, forward, run the terminal reset, and
-            // only then publish the finalized local state — otherwise the
-            // premature write-back loses buffered events and later ticks
-            // re-classify instead of staying latched to this gesture.
-            scroller.scrollMarkdownWheel(with: event)
+            // Replay buffered ambiguous starts BEFORE the current tick so
+            // the scroller sees the gesture's natural `.began → .changed`
+            // order (matching ACPMarkdownInlineNSTextView
+            // .routeScrollWheel). The vertical route's first event carries
+            // `.began`; the scroller's own `scrollWheel` reset rewrites the
+            // shared state mid-delivery, so consume, forward, run the
+            // terminal reset, and only then publish the finalized local
+            // state — otherwise the premature write-back loses buffered
+            // events and later ticks re-classify instead of staying
+            // latched to this gesture.
             for pendingEvent in pendingEvents {
                 scroller.scrollMarkdownWheel(with: pendingEvent)
             }
+            scroller.scrollMarkdownWheel(with: event)
             routingState.completeCurrentEventRouting()
             scroller.markdownScrollRoutingState = routingState
             return nil
