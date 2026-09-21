@@ -21,6 +21,29 @@ extension AppState {
         }
     }
 
+    /// Starts the scheduler only while its preview flag is on. Called once
+    /// the worktree topology is loaded, because schedules resolve their
+    /// targets against it.
+    func startRunSchedulerIfEnabled() {
+        guard config.schedulesEnabled else { return }
+        runScheduler.start()
+    }
+
+    /// Turning the flag off stops the clock outright: no evaluation, no
+    /// firing, and no pane left showing a gated tab. Saved schedules are kept
+    /// so switching it back on restores them.
+    func setSchedulesEnabled(_ enabled: Bool) {
+        guard config.schedulesEnabled != enabled else { return }
+        config.schedulesEnabled = enabled
+        saveConfig()
+        if enabled {
+            runScheduler.start()
+        } else {
+            runScheduler.stop()
+            rightPaneStore.retreatFromTab(.schedules)
+        }
+    }
+
     // MARK: - Execution
 
     /// Runs a schedule once. Every step reuses the manual path: worktree

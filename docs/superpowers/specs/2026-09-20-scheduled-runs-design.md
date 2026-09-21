@@ -172,6 +172,15 @@ Owns the file, the timer, and the wake observer. Injected: store, file URL,
 (no UI) and the existing `launchScript` wrapper that shows the error. Nothing
 else about the launch path changes.
 
+## Preview flag
+
+The whole feature sits behind `AppConfig.schedulesEnabled`, off by default,
+toggled under Settings → Debug → Experimental beside the other preview gates.
+While it is off the scheduler's clock never starts, so nothing fires; the
+rail does not offer the tab, its shortcut stays inert, and its menu item is
+absent. Turning it off stops the clock and moves any pane showing Schedules
+back to Changes. Saved schedules persist across a toggle.
+
 ## UI
 
 Schedules get their own right-rail tab (`RightPaneTab.schedules`, icon

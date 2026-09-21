@@ -234,6 +234,27 @@ struct AppStateRunScheduleTests {
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
     }
 
+    /// The preview flag owns the clock: with it off nothing is evaluated, so
+    /// no schedule can fire however many are saved.
+    @Test func theClockRunsOnlyWhileThePreviewFlagIsOn() throws {
+        let fixture = try makeFixture()
+        defer {
+            fixture.state.runScheduler.stop()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        fixture.state.config.schedulesEnabled = false
+
+        fixture.state.startRunSchedulerIfEnabled()
+        #expect(!fixture.state.runScheduler.isRunning)
+
+        fixture.state.setSchedulesEnabled(true)
+        #expect(fixture.state.config.schedulesEnabled)
+        #expect(fixture.state.runScheduler.isRunning)
+
+        fixture.state.setSchedulesEnabled(false)
+        #expect(!fixture.state.runScheduler.isRunning)
+    }
+
     /// Deleting the worktree under an in-flight scheduled run discards its
     /// record without ever finishing it. The run must still settle, otherwise
     /// the schedule would wait forever and never fire again.

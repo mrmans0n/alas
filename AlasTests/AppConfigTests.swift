@@ -31,6 +31,18 @@ struct AppConfigTests {
         #expect(cfg.worktrees.branchPrefix == "feature/")
         #expect(cfg.workspacesEnabled == false)
         #expect(cfg.needsAttentionEnabled == false)
+        #expect(cfg.schedulesEnabled == false)
+    }
+
+    @Test func decodeOldConfigDefaultsSchedulesDisabled() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "schedulesEnabled")
+
+        let oldConfig = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
+
+        #expect(decoded.schedulesEnabled == false)
     }
 
     @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {

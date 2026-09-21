@@ -33,7 +33,7 @@ struct RightPaneRailReducerTests {
     /// non-active tab while collapsed, then applying it, must land on the
     /// tapped tab — not fall back to Changes.
     @Test func tappingACollapsedRailTabReopensOnThatTab() {
-        for tapped in [RightPaneTab.changes, .files, .agent, .run, .schedules] {
+        for tapped in RightPaneTab.available(schedulesEnabled: true) {
             let action = RightPaneRailAction.resolve(tapped: tapped, active: .changes, collapsed: true)
             let outcome = RightPaneRailModel.apply(action, currentTab: .changes, currentVisible: false)
             #expect(outcome.tab == tapped)
