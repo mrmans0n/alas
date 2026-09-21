@@ -580,10 +580,16 @@ struct ACPSessionManagerTests {
         )
     }
 
-    @Test("attach clears a stale authStatus left over from a previous connection")
-    func attachClearsStaleAuthStatus() async throws {
+    @Test("attach preserves a previously known authStatus when no fresh notification arrives")
+    func attachPreservesAuthStatusWithoutFreshNotification() async throws {
+        // Regression: a broker-adopted reattach to an already-running agent
+        // serves `initialize` from a cached snapshot instead of re-running
+        // it against the live process, so the agent never re-emits
+        // `_auth/status_update` for this attach. Clearing the status
+        // unconditionally would blank out an otherwise still-accurate
+        // status; it must survive an attach that yields no new update.
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mgr-auth-status-reset-\(UUID()).sqlite")
+            .appendingPathComponent("mgr-auth-status-preserved-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let client = ACPMockClient()
         scriptInitialize(client)
@@ -596,11 +602,11 @@ struct ACPSessionManagerTests {
             connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
         let session = mgr.createSession(id: "session", agentId: "claude")
-        session.authStatus = .init(kind: .account, label: "Stale status from a prior agent")
+        session.authStatus = .init(kind: .account, label: "Known-good status from a prior attach")
 
         await mgr.attach(to: session.id, freshlyCreated: true)
 
-        #expect(session.authStatus == nil)
+        #expect(session.authStatus?.label == "Known-good status from a prior attach")
     }
 
     @Test("a live authStatus update reaches the session after attach")

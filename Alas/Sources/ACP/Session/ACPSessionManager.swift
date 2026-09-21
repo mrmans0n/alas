@@ -3590,10 +3590,16 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
-            // Re-learned on every attach: an adapter that doesn't advertise
-            // the marker never repopulates this, and a stale status from a
-            // previous connection (or agent) must not linger across attach.
-            session.authStatus = nil
+            // Deliberately not reset here (unlike promptCapabilities/authMethods,
+            // which are re-derived from every `initialize` response): a broker-
+            // adopted reattach to an already-running agent serves `initialize`
+            // from a cached snapshot without re-running it against the live
+            // process, so the agent never re-emits `_auth/status_update` for
+            // this attach. Clearing unconditionally would blank out an
+            // otherwise still-accurate status until the agent's auth state
+            // actually changes again. A genuinely fresh process (local stdio,
+            // or a brand-new broker session) sends its own first notification
+            // moments later and overwrites this immediately.
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
