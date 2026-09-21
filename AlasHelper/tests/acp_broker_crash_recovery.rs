@@ -165,6 +165,52 @@ fn open_list_and_close_broker_without_persisting_env_values() {
     assert_eq!(close["ok"], true);
 }
 
+/// Two different alas-helper processes can both reach `acp_open` for the
+/// same broker id while nothing is running yet — this is exactly how the
+/// loser of a legacy-broker restart race (rejected by `broker_close`,
+/// falling through to reopen) and the winner (which just removed the old
+/// broker's directory before spawning its own replacement) both end up
+/// here. Without cross-process coordination around "nothing is running,
+/// spawn one", both would independently spawn a supervisor and each would
+/// only be aware of its own.
+///
+/// The assertions hold regardless of how the two requests actually
+/// interleave — they would already hold if one simply finished before the
+/// other started — so this cannot prove the coordination is exercised on
+/// every run. It is, however, the regression case: without it, true
+/// concurrent execution of these two opens can (non-deterministically)
+/// produce two different generations.
+#[test]
+fn concurrent_opens_of_a_not_yet_running_broker_spawn_only_one_supervisor() {
+    let fixture = Fixture::new("concurrent-open-spawn");
+    let mut helper_a = Helper::start(&fixture.home);
+    let mut helper_b = Helper::start(&fixture.home);
+    let params_a = fixture.open_params("broker-concurrent-open", 0);
+    let params_b = params_a.clone();
+
+    let a = std::thread::spawn(move || helper_a.request("acp/open", params_a));
+    let b = std::thread::spawn(move || helper_b.request("acp/open", params_b));
+    let open_a = a.join().expect("closer a");
+    let open_b = b.join().expect("closer b");
+
+    assert_eq!(
+        open_a["snapshot"]["metadata"]["generation"],
+        open_b["snapshot"]["metadata"]["generation"],
+        "both opens must observe the same broker generation — a mismatch \
+         means two separate supervisors were spawned for the same broker \
+         id: a={open_a} b={open_b}"
+    );
+    let spawners = [&open_a, &open_b]
+        .into_iter()
+        .filter(|value| value["adopted"] == false)
+        .count();
+    assert_eq!(
+        spawners, 1,
+        "exactly one caller must have spawned the supervisor and the other \
+         adopted it: a={open_a} b={open_b}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {
