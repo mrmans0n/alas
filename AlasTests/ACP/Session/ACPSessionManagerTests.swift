@@ -580,6 +580,18 @@ struct ACPSessionManagerTests {
         )
     }
 
+    private func scriptInitializeAdvertisingAuthStatus(_ client: ACPMockClient) {
+        client.script(method: "initialize") { _ in
+            """
+            {
+              "protocolVersion": 1,
+              "agentCapabilities": { "_meta": { "authStatus": {} } },
+              "authMethods": []
+            }
+            """.data(using: .utf8)!
+        }
+    }
+
     @Test("attach preserves a previously known authStatus when no fresh notification arrives")
     func attachPreservesAuthStatusWithoutFreshNotification() async throws {
         // Regression: a broker-adopted reattach to an already-running agent
@@ -587,12 +599,13 @@ struct ACPSessionManagerTests {
         // it against the live process, so the agent never re-emits
         // `_auth/status_update` for this attach. Clearing the status
         // unconditionally would blank out an otherwise still-accurate
-        // status; it must survive an attach that yields no new update.
+        // status; it must survive an attach that yields no new update, as
+        // long as this attach's agent still advertises the extension.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-auth-status-preserved-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let client = ACPMockClient()
-        scriptInitialize(client)
+        scriptInitializeAdvertisingAuthStatus(client)
         scriptSessionResult(client, method: "session/new", sessionId: "remote")
         let mgr = ACPSessionManager(
             worktreeId: "wt",
@@ -607,6 +620,82 @@ struct ACPSessionManagerTests {
         await mgr.attach(to: session.id, freshlyCreated: true)
 
         #expect(session.authStatus?.label == "Known-good status from a prior attach")
+    }
+
+    @Test("attach clears a stale authStatus when the adapter no longer advertises the extension")
+    func attachClearsAuthStatusWhenAdapterLacksExtension() async throws {
+        // A session that previously had a signed-in status must not keep
+        // showing it forever if it later attaches to an adapter/version
+        // whose `initialize` response omits `_meta.authStatus` — that
+        // adapter will never send an update to replace it.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-unsupported-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .account, label: "Stale status from an extension-capable agent")
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+
+        #expect(session.authStatus == nil)
+    }
+
+    @Test("authStatus survives an app restart and is restored before any attach")
+    func authStatusSurvivesAppRestart() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-restart-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let firstClient = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(firstClient)
+        scriptSessionResult(firstClient, method: "session/new", sessionId: "remote")
+        let firstManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: firstClient) }
+        )
+        let firstSession = firstManager.createSession(id: "session", agentId: "claude")
+        await firstManager.attach(to: firstSession.id, freshlyCreated: true)
+        firstClient.emitAuthStatus(.init(kind: .account, label: "Claude Max"))
+        for _ in 0 ..< 100 where firstSession.authStatus == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(firstSession.authStatus?.label == "Claude Max")
+        await firstManager.flushAllPersistence()
+
+        // Simulate an app restart: a brand-new manager instance reading the
+        // same on-disk store, adopting an agent that (like a broker-served
+        // cached `initialize`) sends no fresh notification this time.
+        let secondClient = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(secondClient)
+        scriptSessionResult(secondClient, method: "session/new", sessionId: "remote")
+        let secondManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: secondClient) }
+        )
+        guard let secondSession = secondManager.placeholderSession(id: "session") else {
+            Issue.record("expected a placeholder session to hydrate from the persisted row")
+            return
+        }
+        await secondManager.hydrateIfNeeded(id: secondSession.id)
+        #expect(secondSession.authStatus?.label == "Claude Max")
+
+        await secondManager.attach(to: secondSession.id, freshlyCreated: false)
+
+        #expect(secondSession.authStatus?.label == "Claude Max")
     }
 
     @Test("a live authStatus update reaches the session after attach")

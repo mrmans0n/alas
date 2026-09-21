@@ -26,6 +26,31 @@ struct ACPSessionStoreCRUDTests {
         #expect(got == row)
     }
 
+    @Test("setAuthStatus round-trips through JSON and clears back to nil")
+    func setAuthStatusRoundTrips() throws {
+        let store = try tmp()
+        let row = ACPSessionRow(
+            id: "s1", agentId: "claude", title: "hello",
+            titleSource: .manual,
+            currentModel: nil, currentMode: nil,
+            autoRun: false,
+            createdAt: 100, updatedAt: 100, lastOpenedAt: 100, archived: false)
+        try store.upsertSession(row)
+        #expect(try store.loadSession(id: "s1")?.authStatus == nil)
+
+        let status = ACPAuthStatus(
+            kind: .account,
+            label: "Claude Max",
+            detail: "Renews monthly",
+            account: .init(email: "person@example.com", organization: "Acme", plan: "Pro")
+        )
+        try store.setAuthStatus(sessionId: "s1", status: status)
+        #expect(try store.loadSession(id: "s1")?.authStatus == status)
+
+        try store.setAuthStatus(sessionId: "s1", status: nil)
+        #expect(try store.loadSession(id: "s1")?.authStatus == nil)
+    }
+
     @Test("session row persists remote ACP session id")
     func sessionRowPersistsRemoteSessionId() throws {
         let store = try tmp()

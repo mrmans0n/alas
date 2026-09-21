@@ -545,6 +545,13 @@ final class ACPSessionRunner {
         } else if case .needsAuth = session.setupState {
             session.setupState = .ready
         }
+        // Persisted so an app restart can restore it before any attach
+        // happens: a broker-adopted reattach serves a cached `initialize`
+        // and never re-emits this notification for that attach.
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            try await persistence.setAuthStatus(sessionId: sessionId, status: status)
+        }
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {

@@ -1101,6 +1101,7 @@ final class ACPSessionManager: ObservableObject {
         }
         session.pendingMCPPreamble = result.row.mcpPreamblePending
         session.mcpPreambleSent = result.row.mcpPreambleSent
+        session.authStatus = result.row.authStatus
         session.autoRunEnabled = result.row.autoRun
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
@@ -3600,6 +3601,18 @@ extension ACPSessionManager {
             // actually changes again. A genuinely fresh process (local stdio,
             // or a brand-new broker session) sends its own first notification
             // moments later and overwrites this immediately.
+            //
+            // The one case that preservation alone gets wrong: this attach's
+            // agent doesn't advertise the extension at all, so nothing will
+            // ever replace a status left over from a previous agent/version
+            // that did. Clear it then — that adapter behaves exactly like
+            // any other agent that never supported this extension.
+            if !initialized.advertisesAuthStatus, session.authStatus != nil {
+                session.authStatus = nil
+                enqueuePersistence { persistence in
+                    try await persistence.setAuthStatus(sessionId: sessionId, status: nil)
+                }
+            }
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])

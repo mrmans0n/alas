@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 15
+    static let targetSchemaVersion = 16
     let path: String
     let db: SQLiteDatabase
 
@@ -42,6 +42,7 @@ final class ACPSessionStore {
         if current < 13 { try migrate_to_v13() }
         if current < 14 { try migrate_to_v14() }
         if current < 15 { try migrate_to_v15() }
+        if current < 16 { try migrate_to_v16() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -252,6 +253,19 @@ final class ACPSessionStore {
         )
         """)
     }
+
+    private func migrate_to_v16() throws {
+        // JSON-encoded ACPAuthStatus, so a restart can restore the last
+        // known auth status before any attach happens: a broker-adopted
+        // reattach serves a cached `initialize` and never re-emits
+        // `_auth/status_update` for that attach, and the in-memory-only
+        // value would otherwise be lost across an app restart.
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        let names = Set(columns.compactMap { $0["name"] as? String })
+        if !names.contains("auth_status") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN auth_status TEXT")
+        }
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -285,6 +299,7 @@ struct ACPSessionRow: Equatable, Sendable {
     var contextRecoveryPending: Bool = false
     var mcpPreamblePending: String? = nil
     var mcpPreambleSent: Bool = false
+    var authStatus: ACPAuthStatus? = nil
     var currentModel: String?
     var currentMode: String?
     var autoRun: Bool
@@ -544,6 +559,17 @@ extension ACPSessionStore {
         try db.exec(
             "UPDATE sessions SET mcp_preamble_pending = ?, mcp_preamble_sent = ? WHERE id = ?",
             bindings: [pendingText, sent ? 1 : 0, sessionId]
+        )
+    }
+
+    /// Persists the latest `_auth/status_update`, so an app restart can
+    /// restore it before any attach happens (see `migrate_to_v16`).
+    func setAuthStatus(sessionId: String, status: ACPAuthStatus?) throws {
+        let payload = try status.map { try JSONEncoder().encode($0) }
+        let json = payload.map { String(decoding: $0, as: UTF8.self) }
+        try db.exec(
+            "UPDATE sessions SET auth_status = ? WHERE id = ?",
+            bindings: [json, sessionId]
         )
     }
 
@@ -947,6 +973,9 @@ extension ACPSessionStore {
             contextRecoveryPending: ((r["context_recovery_pending"] as? Int64) ?? 0) != 0,
             mcpPreamblePending: r["mcp_preamble_pending"] as? String,
             mcpPreambleSent: ((r["mcp_preamble_sent"] as? Int64) ?? 0) != 0,
+            authStatus: (r["auth_status"] as? String).flatMap {
+                try? JSONDecoder().decode(ACPAuthStatus.self, from: Data($0.utf8))
+            },
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,

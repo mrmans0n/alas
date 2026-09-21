@@ -174,6 +174,10 @@ actor ACPSessionPersistence {
         try openedStore().setMCPPreamble(sessionId: sessionId, pendingText: pendingText, sent: sent)
     }
 
+    func setAuthStatus(sessionId: String, status: ACPAuthStatus?) throws {
+        try openedStore().setAuthStatus(sessionId: sessionId, status: status)
+    }
+
     @discardableResult
     func updateHelperProcOffsets(
         sessionId: String,
