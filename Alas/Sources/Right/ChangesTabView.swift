@@ -571,6 +571,7 @@ struct ChangesTabView: View {
             let isLoading = rps.loadingCheckpointManifestIDs.contains(checkpoint.id)
             let manifest = rps.checkpointManifests[checkpoint.id]
             let error = rps.checkpointManifestErrors[checkpoint.id]
+            let showAllFiles = rps.expandedCheckpointFileListIDs.contains(checkpoint.id)
             rows.append(appKitRow(
                 id: CheckpointPresentation.rowID(checkpointID: checkpoint.id),
                 token: Self.checkpointSummaryRowToken(
@@ -580,14 +581,16 @@ struct ChangesTabView: View {
                     manifestError: error,
                     mutationsDisabled: rps.checkpointMutationsDisabled,
                     manifest: isExpanded ? manifest : nil,
-                    blockedReason: blockedReason
+                    blockedReason: blockedReason,
+                    showAllFiles: showAllFiles
                 ),
                 estimatedHeight: Self.checkpointCardHeight(
                     summary: checkpoint,
                     expanded: isExpanded,
                     manifest: manifest,
                     pendingManifest: isLoading || error != nil || manifest == nil,
-                    showsBlockedReason: rps.checkpointMutationsDisabled && blockedReason != nil
+                    showsBlockedReason: rps.checkpointMutationsDisabled && blockedReason != nil,
+                    showAllFiles: showAllFiles
                 )
             ) {
                 CheckpointCard(
@@ -598,7 +601,9 @@ struct ChangesTabView: View {
                     manifestError: error,
                     mutationsDisabled: rps.checkpointMutationsDisabled,
                     blockedReason: blockedReason,
+                    showAllFiles: showAllFiles,
                     onToggle: { rps.toggleCheckpointExpanded(checkpoint.id) },
+                    onToggleShowAllFiles: { rps.toggleCheckpointFileListExpanded(checkpoint.id) },
                     onRestore: { Task { await rps.previewCheckpointRestore(id: checkpoint.id) } },
                     onDelete: { rps.pendingCheckpointDeletion = checkpoint },
                     onInspect: { group in
@@ -819,7 +824,8 @@ struct ChangesTabView: View {
         manifestError: String?,
         mutationsDisabled: Bool,
         manifest: WorktreeCheckpointManifest?,
-        blockedReason: String?
+        blockedReason: String?,
+        showAllFiles: Bool
     ) -> String {
         String(reflecting: summary)
             + String(expanded)
@@ -831,17 +837,19 @@ struct ChangesTabView: View {
             + String(reflecting: manifest?.groups.map(\.id))
             + String(reflecting: manifest?.exclusions.count)
             + String(reflecting: blockedReason)
+            + String(showAllFiles)
     }
 
     /// Estimated height for a checkpoint card. Collapsed: outer padding (4+4),
     /// card padding (10+10) and the chip line (18). Expanded adds the detail
-    /// line, the manifest, and the action bar.
+    /// line, the manifest (capped unless `showAllFiles`), and the action bar.
     static func checkpointCardHeight(
         summary: WorktreeCheckpointSummary,
         expanded: Bool,
         manifest: WorktreeCheckpointManifest?,
         pendingManifest: Bool,
-        showsBlockedReason: Bool
+        showsBlockedReason: Bool,
+        showAllFiles: Bool
     ) -> CGFloat {
         var height: CGFloat = 46
         if summary.unavailableReason != nil { return height + 20 }
@@ -850,7 +858,8 @@ struct ChangesTabView: View {
         if pendingManifest {
             height += 22
         } else if let manifest {
-            let visibleGroups = min(manifest.groups.count, CheckpointPresentation.maxInlineFileGroups)
+            let cap = CheckpointPresentation.maxInlineFileGroups
+            let visibleGroups = showAllFiles ? manifest.groups.count : min(manifest.groups.count, cap)
             height += CGFloat(visibleGroups) * 21
             if manifest.groups.count > visibleGroups { height += 18 }
             if !manifest.exclusions.isEmpty { height += 22 }

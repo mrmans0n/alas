@@ -135,7 +135,11 @@ struct CheckpointCard: View {
     let manifestError: String?
     let mutationsDisabled: Bool
     let blockedReason: String?
+    /// Whether an already-expanded card is showing every manifest group
+    /// instead of `CheckpointPresentation.maxInlineFileGroups`.
+    let showAllFiles: Bool
     let onToggle: () -> Void
+    let onToggleShowAllFiles: () -> Void
     let onRestore: () -> Void
     let onDelete: () -> Void
     let onInspect: (CheckpointFileGroup) -> Void
@@ -275,7 +279,9 @@ struct CheckpointCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
             let pathIndex = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
-            let visibleGroups = manifest.groups.prefix(CheckpointPresentation.maxInlineFileGroups)
+            let visibleGroups = showAllFiles
+                ? manifest.groups[...]
+                : manifest.groups.prefix(CheckpointPresentation.maxInlineFileGroups)
             ForEach(Array(visibleGroups)) { group in
                 CheckpointFileGroupRow(
                     group: group,
@@ -285,9 +291,10 @@ struct CheckpointCard: View {
             }
             let overflow = manifest.groups.count - visibleGroups.count
             if overflow > 0 {
-                Text("+\(overflow) more changed file\(overflow == 1 ? "" : "s") not shown")
-                    .font(.system(size: 10))
-                    .foregroundColor(theme.color("fg-faint"))
+                Button("Show \(overflow) more file\(overflow == 1 ? "" : "s")", action: onToggleShowAllFiles)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.color("accent"))
                     .padding(.vertical, 2)
             }
             if !manifest.exclusions.isEmpty {
