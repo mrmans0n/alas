@@ -481,7 +481,6 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         )
     }
 
-
     private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
         guard let body = try? JSONEncoder().encode(response) else { return }
         Task { [weak self] in
