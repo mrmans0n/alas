@@ -125,12 +125,19 @@ final class RemotePeerManager {
     /// before/after existence check alone would ever catch one of them
     /// resurrecting a peer the OTHER sibling's success let the user forget.
     @ObservationIgnored private var forgetGenerationByServerId: [String: Int] = [:]
-    /// The forget-generation for a given `serverId`, captured synchronously
-    /// by `notePeerPairingArrived` at the moment a `/pair` redemption for it
-    /// fires — before the `onPeerPaired` → `Task { @MainActor in ... }` hop
-    /// that schedules `handleInboundPeer` introduces an arbitrary delay.
-    /// Consumed (and removed) the first time `handleInboundPeer` runs for
-    /// that identity.
+    /// The forget-generation for a redemption's identity, captured
+    /// synchronously by `notePeerPairingArrived` at the moment a `/pair`
+    /// redemption fires — before the `onPeerPaired` →
+    /// `Task { @MainActor in ... }` hop that schedules `handleInboundPeer`
+    /// introduces an arbitrary delay. Keyed by the device THIS redemption
+    /// just minted — unique per attempt — rather than by `serverId`: two
+    /// concurrent redemptions for the SAME identity would otherwise share
+    /// one slot, and the later one's snapshot would silently overwrite the
+    /// earlier one's, so a handler consuming an entry someone else wrote
+    /// would compare against the wrong baseline and could miss its OWN
+    /// exchange's peer having been forgotten out from under it. Consumed
+    /// (and removed) the first time `handleInboundPeer` runs for that
+    /// device.
     @ObservationIgnored private var startGenerationAtRedeem: [String: Int] = [:]
 
     private func forgetGeneration(for serverId: String) -> Int {
@@ -315,17 +322,17 @@ final class RemotePeerManager {
     }
 
     /// Records, synchronously, the current forget-generation for `serverId`
-    /// at the moment a `/pair` redemption for it fires — the earliest point
-    /// this can be observed, on the same call stack as the redeem itself,
-    /// before the `onPeerPaired` → `Task { @MainActor in ... }` hop that
-    /// schedules `handleInboundPeer`'s own body introduces an arbitrary
-    /// delay. A Forget (or a concurrent sibling exchange for this same
-    /// identity completing first) landing in exactly that gap would
-    /// otherwise go unnoticed by `handleInboundPeer`'s own in-body snapshot,
-    /// which only sees the world as of whenever it happens to actually
-    /// start running.
-    func notePeerPairingArrived(serverId: String) {
-        startGenerationAtRedeem[serverId] = forgetGeneration(for: serverId)
+    /// at the moment a `/pair` redemption fires — the earliest point this
+    /// can be observed, on the same call stack as the redeem itself, before
+    /// the `onPeerPaired` → `Task { @MainActor in ... }` hop that schedules
+    /// `handleInboundPeer`'s own body introduces an arbitrary delay. A
+    /// Forget (or a concurrent sibling exchange for this same identity
+    /// completing first) landing in exactly that gap would otherwise go
+    /// unnoticed by `handleInboundPeer`'s own in-body snapshot, which only
+    /// sees the world as of whenever it happens to actually start running.
+    /// Keyed by `localDeviceId`, not `serverId`: see `startGenerationAtRedeem`.
+    func notePeerPairingArrived(serverId: String, localDeviceId: String) {
+        startGenerationAtRedeem[localDeviceId] = forgetGeneration(for: serverId)
     }
 
     /// The server saw another Mac redeem a code here. With a counter-code we
@@ -340,7 +347,7 @@ final class RemotePeerManager {
             // this function's own body started; capturing it here too is
             // only a fallback for callers (direct test invocations) that
             // skip that earlier hook.
-            let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.peerServerId)
+            let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
                 ?? forgetGeneration(for: request.peerServerId)
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(

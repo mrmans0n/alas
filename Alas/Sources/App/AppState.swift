@@ -635,7 +635,7 @@ final class AppState {
                 // redeem that produced this request — before Task-spawning
                 // below introduces a delay a concurrent Forget could land
                 // in unnoticed by handleInboundPeer's own, later snapshot.
-                self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId)
+                self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
             do {

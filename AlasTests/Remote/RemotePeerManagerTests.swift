@@ -733,13 +733,48 @@ struct RemotePeerManagerTests {
         // Simulates the exact moment redemption fires, synchronously —
         // followed immediately by a Forget landing in the scheduling gap
         // before handleInboundPeer's own body ever starts.
-        manager.notePeerPairingArrived(serverId: "srv-b")
+        manager.notePeerPairingArrived(serverId: "srv-b", localDeviceId: inbound.deviceId)
         manager.forget(peerId: "p1")
         await manager.handleInboundPeer(RemotePeerPairingRequest(
             peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CC",
             localDeviceId: inbound.deviceId, redeemedCode: "ABC123"))
         #expect(manager.peers.isEmpty)
         #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
+    // startGenerationAtRedeem must be keyed per-redemption, not per-identity:
+    // two redemptions for the SAME identity landing close together would
+    // otherwise share one slot, and the later one overwriting the earlier
+    // one's snapshot would make the earlier redemption's handler compare
+    // against the WRONG baseline once it finally runs.
+    @Test func concurrentRedemptionsForTheSameIdentityDoNotClobberEachOthersGenerationSnapshot() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-b", name: "old", origins: ["http://10.0.0.2:8765"],
+                               lastOrigin: "http://10.0.0.2:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-old", addedAt: Date(timeIntervalSince1970: 1))])
+        let deviceA = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer(["10.0.0.2:8765": (200, #"{"token":"tokB","serverId":"srv-b","name":"Mac B"}"#)], requests: Requests()),
+                                  links: Links())
+        manager.connectAll()
+        // Redemption A arrives first and captures the current generation (0).
+        manager.notePeerPairingArrived(serverId: "srv-b", localDeviceId: deviceA.deviceId)
+        // The user forgets the existing peer, bumping the generation to 1.
+        manager.forget(peerId: "p1")
+        // A second, unrelated redemption for the SAME identity captures its
+        // OWN (now-current) generation (1) — this must not clobber A's
+        // earlier snapshot.
+        let deviceB = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        manager.notePeerPairingArrived(serverId: "srv-b", localDeviceId: deviceB.deviceId)
+        // A's handler finally runs — it must still see its OWN true
+        // starting generation (0), not B's (1), and therefore detect the
+        // change and reject rather than resurrect the forgotten peer.
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CCA",
+            localDeviceId: deviceA.deviceId, redeemedCode: "CODE-A"))
+        #expect(manager.peers.isEmpty)
+        #expect(pairing.validate(token: deviceA.token) == nil)
     }
 
     // Two concurrent reciprocal exchanges for the SAME, previously-unknown
