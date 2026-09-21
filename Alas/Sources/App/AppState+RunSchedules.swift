@@ -544,6 +544,11 @@ extension AppState {
         } catch {
             return
         }
+        // Asked again rather than relying on the sleep having thrown:
+        // cancellation can land after the deadline passed but before this
+        // hops back onto the main actor, which bypasses the catch above and
+        // would submit for a schedule that is already gone.
+        guard !Task.isCancelled else { return }
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
