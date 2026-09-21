@@ -235,9 +235,12 @@ struct ACPSubagentSessionTests {
             ],
             createdAts: [Date(), Date(), Date()])
 
-        // `session/load` replays both prompts chronologically, oldest
-        // first — the SAME resend semantics as any other row.
+        // `session/load` replays the FULL history chronologically — the
+        // reply included, since a real replay never skips a row (the
+        // reused-id candidate lookup is now cursor-gated and treats a
+        // skipped row as evidence of a missing one).
         run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first"))))
+        run.applyReplayed(.agentMessageChunk(.text("reply")))
         run.applyReplayed(.userMessageChunk(.init(messageId: "p2", content: .text("second"))))
 
         #expect(run.messages.count == 3)
@@ -481,6 +484,38 @@ struct ACPSubagentSessionTests {
         }
         #expect(firstText == "first task")
         #expect(secondText == "second task")
+    }
+
+    @Test("replay recovers a missing reused-id prompt before a later occurrence that persisted")
+    func replayRecoversMissingReusedIdPromptBeforeLaterOne() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Only the SECOND turn's prompt made it to SQLite — the first
+        // turn's, reusing the same id, never persisted.
+        run.restore(
+            messages: [
+                .agent(id: UUID(), StreamingText("reply")),
+                .user(id: UUID(), messageId: "p1", text: "second task", attachments: [])
+            ],
+            createdAts: [Date(), Date()])
+
+        // `session/load` resends the full chronological history: the
+        // missing first prompt, the first turn's reply, then the prompt
+        // that DID persist.
+        let firstDirty = run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
+        run.applyReplayed(.agentMessageChunk(.text("reply")))
+        let secondDirty = run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
+
+        #expect(firstDirty == [0])
+        #expect(secondDirty == [2])
+        #expect(run.messages.count == 3)
+        guard case .user(_, _, let recoveredText, _, _) = run.messages[0],
+              case .agent = run.messages[1],
+              case .user(_, _, let persistedText, _, _) = run.messages[2] else {
+            Issue.record("expected the recovered prompt before the reply and the persisted prompt after it")
+            return
+        }
+        #expect(recoveredText == "first task")
+        #expect(persistedText == "second task")
     }
 
     @Test("a data-only inline image is preserved in a child prompt")

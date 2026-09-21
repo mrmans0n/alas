@@ -655,8 +655,14 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             // for id-less rows, mirrored here for a reused id.
             let candidates = identifiedUserCandidates(withId: messageId)
             let ordinal = replayIdentifiedUserOrdinal[messageId, default: 0]
-            replayIdentifiedUserOrdinal[messageId] = ordinal + 1
-            if ordinal < candidates.count {
+            // See the matching comment in `applyReplayedTextChunk`: a
+            // candidate strictly ahead of the cursor belongs to a LATER
+            // occurrence of this reused id than the one being reconciled
+            // now — only consume one at or behind the cursor, and leave
+            // the ordinal alone otherwise so it stays available for the
+            // touch it actually belongs to, chronologically.
+            if ordinal < candidates.count, candidates[ordinal] <= replayCursor {
+                replayIdentifiedUserOrdinal[messageId] = ordinal + 1
                 let index = candidates[ordinal]
                 if case .user(let id, _, _, _, let source) = messages[index] {
                     messages[index] = .user(
@@ -719,6 +725,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// that id picks its target from. See `openIdentifiedUserRun`.
     private func identifiedUserCandidates(withId messageId: String) -> [Int] {
         messages.indices.filter { index in
+            guard !legacyRecoveredIndices.contains(index) else { return false }
             if case .user(_, let id, _, _, _) = messages[index] { return id == messageId }
             return false
         }
