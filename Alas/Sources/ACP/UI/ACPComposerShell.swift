@@ -197,13 +197,16 @@ struct ACPComposer: View {
     var body: some View {
         switch placement {
         case .inFlow:
-            composerRow
-                .padding(.top, 28)
-                .padding(
-                    .bottom,
-                    ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 0)
-                )
-                .frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                noticeBanner
+                composerRow
+                    .padding(.top, 28)
+                    .padding(
+                        .bottom,
+                        ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 0)
+                    )
+            }
+            .frame(maxWidth: .infinity)
         case .bottom:
             GeometryReader { proxy in
                 composerLayout(
@@ -213,6 +216,30 @@ struct ACPComposer: View {
                     )
                 )
             }
+        }
+    }
+
+    /// Live ACP session-notice banner. Inserted as a sibling immediately
+    /// above `composerRow` in each placement's own layout — rather than
+    /// wrapped around `ACPComposer` from the outside — because `.bottom`
+    /// fills its full available height and self-anchors the pill to the
+    /// bottom via an internal `Spacer`; an externally-wrapping VStack would
+    /// hand that `Spacer` most of the height and strand the banner at the
+    /// top of the chat surface instead of above the composer.
+    @ViewBuilder
+    private var noticeBanner: some View {
+        if let notice = session.activeNotice {
+            HStack {
+                Spacer(minLength: 0)
+                ACPSessionNoticeBanner(notice: notice) {
+                    session.dismissActiveNotice()
+                }
+                .frame(maxWidth: contentMaxWidth)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 24)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .animation(.easeOut(duration: 0.15), value: session.activeNotice)
         }
     }
 
@@ -228,6 +255,7 @@ struct ACPComposer: View {
     private func composerLayout(bottomInset: CGFloat) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
+            noticeBanner
             composerRow
                 .padding(.top, 28)
                 .padding(.bottom, bottomInset)

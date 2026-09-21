@@ -3102,12 +3102,35 @@ extension ACPSessionManager {
         await task.value
     }
 
+    /// `runMirrorRefresh` reads through the hydrator, which opens its own
+    /// SQLite connection to the same file this Mac's own writer connection
+    /// uses — a transient busy/lock error under concurrent access is
+    /// expected occasionally, not a sign the data is actually unreadable,
+    /// so it's worth a couple of quick retries before giving up rather than
+    /// leaving the mirror silently unrefreshed until the next trigger.
+    private func retryingTransientPersistenceFailure<T>(
+        attempts: Int = 3, _ operation: () async throws -> T
+    ) async throws -> T {
+        for attempt in 1..<attempts {
+            do {
+                return try await operation()
+            } catch {
+                try? await Task.sleep(nanoseconds: 20_000_000 * UInt64(attempt))
+            }
+        }
+        return try await operation()
+    }
+
     private func runMirrorRefresh(sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
         let result: HydrationResult
         do {
-            result = try await persistence.mirrorSnapshot(sessionId: sessionId)
-            observedLeases[sessionId] = try await persistence.loadLease(sessionId: sessionId)
+            result = try await retryingTransientPersistenceFailure {
+                try await self.persistence.mirrorSnapshot(sessionId: sessionId)
+            }
+            observedLeases[sessionId] = try await retryingTransientPersistenceFailure {
+                try await self.persistence.loadLease(sessionId: sessionId)
+            }
         } catch {
             return
         }

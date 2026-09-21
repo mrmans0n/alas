@@ -105,19 +105,29 @@ struct ACPClientCapabilities: Codable, Equatable {
 struct ACPSessionCapabilities: Codable, Equatable {
     static let booleanConfigOptions = ACPSessionCapabilities(
         configOptions: .init(boolean: .init()),
-        compaction: .init())
+        compaction: .init(),
+        notices: .init())
 
     let configOptions: ConfigOptions
     /// Experimental ACP context-compaction updates. `{}` advertises support.
     let compaction: EmptyObject?
+    /// Experimental ACP session notices (fire-and-forget `notice` updates).
+    /// `{}` advertises support. Without it, agents fall back to stuffing
+    /// out-of-band events into `agent_message_chunk`, polluting the transcript.
+    let notices: EmptyObject?
 
-    init(configOptions: ConfigOptions = .init(boolean: nil), compaction: EmptyObject? = nil) {
+    init(
+        configOptions: ConfigOptions = .init(boolean: nil),
+        compaction: EmptyObject? = nil,
+        notices: EmptyObject? = nil
+    ) {
         self.configOptions = configOptions
         self.compaction = compaction
+        self.notices = notices
     }
 
     enum CodingKeys: String, CodingKey {
-        case configOptions, compaction
+        case configOptions, compaction, notices
     }
 
     init(from decoder: Decoder) throws {
@@ -125,6 +135,7 @@ struct ACPSessionCapabilities: Codable, Equatable {
         configOptions = try c.decodeIfPresent(ConfigOptions.self, forKey: .configOptions)
             ?? .init(boolean: nil)
         compaction = try? c.decodeIfPresent(EmptyObject.self, forKey: .compaction)
+        notices = try? c.decodeIfPresent(EmptyObject.self, forKey: .notices)
     }
 
     struct ConfigOptions: Codable, Equatable {

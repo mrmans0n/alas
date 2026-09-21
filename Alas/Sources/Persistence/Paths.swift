@@ -92,6 +92,12 @@ extension Paths {
 }
 
 extension Paths {
+    static var remotePeersFile: URL {
+        appSupportRoot.appendingPathComponent("remote-peers.json")
+    }
+}
+
+extension Paths {
     static var reviewDraftCommentsFile: URL {
         appSupportRoot.appendingPathComponent("review-draft-comments.json")
     }

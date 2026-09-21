@@ -62,7 +62,6 @@ AlasTests/GitInvocationTests	subprocess	Conservative subprocess isolation baseli
 AlasTests/GitLabCLIProviderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/GitLabCLIProviderVerdictTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/GitNameValidatorTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitRefNameInputFilterTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/GitServiceBehindStatusTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/GitServiceCommitEditingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/GitServiceDiscardTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23

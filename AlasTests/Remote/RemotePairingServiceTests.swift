@@ -146,4 +146,46 @@ struct RemotePairingServiceTests {
         let t = try svc.redeem(code: second, deviceName: "Y")   // the fresh code still works
         #expect(svc.validate(token: t) != nil)
     }
+
+    @Test func redeemPeerStoresKindAndServerId() throws {
+        let svc = make()
+        let result = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
+        #expect(svc.validate(token: result.token) == result.deviceId)
+        let device = try #require(svc.devices.first { $0.id == result.deviceId })
+        #expect(device.kind == .alasInstance)
+        #expect(device.peerServerId == "srv-b")
+        #expect(device.name == "Studio")
+    }
+
+    // This used to assert the opposite — that a peer redeem evicted any
+    // earlier record for the same `peerServerId`, invalidating its token.
+    // A redeem only proves the caller holds a live pairing code; the
+    // `peerServerId` beside it is an unverified claim. So the eviction was a
+    // free way for one code holder to cut an established peer's access, and
+    // the DoS was worth more to an attacker than the stale-token window was
+    // to us. The property it protected — "no token issued to a peer outlives
+    // the user forgetting that peer" — is now carried by
+    // `RemotePeerManager.forget`, which revokes EVERY device matching the
+    // identity, not just a remembered id
+    // (`forgetRevokesEveryDeviceCarryingThePeersIdentity`). What is genuinely
+    // weaker: between a re-pair and a forget, the superseded token stays
+    // valid instead of dying at the moment of the re-pair. That token was
+    // only ever issued to the real peer over an authenticated exchange, and
+    // it is visible and individually revocable in Paired devices.
+    @Test func redeemPeerKeepsEarlierRecordsForTheSameServer() throws {
+        let svc = make()
+        let first = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
+        let second = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio (renamed)", peerServerId: "srv-b")
+        #expect(svc.devices.filter { $0.peerServerId == "srv-b" }.count == 2)
+        #expect(svc.validate(token: first.token) == first.deviceId)
+        #expect(svc.validate(token: second.token) == second.deviceId)
+    }
+
+    @Test func redeemPeerDoesNotTouchBrowserDevices() throws {
+        let svc = make()
+        let phone = try svc.redeem(code: svc.beginPairing(), deviceName: "iPhone")
+        _ = try svc.redeemPeer(code: svc.beginPairing(), deviceName: "Studio", peerServerId: "srv-b")
+        #expect(svc.validate(token: phone) != nil)
+        #expect(svc.devices.count == 2)
+    }
 }

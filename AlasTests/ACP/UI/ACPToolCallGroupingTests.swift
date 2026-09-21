@@ -4,8 +4,8 @@ import Testing
 
 @Suite("ACP tool-call grouping")
 struct ACPToolCallGroupingTests {
-    private func tool(_ id: String, status: String = "completed") -> ACPMessage {
-        .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status))
+    private func tool(_ id: String, status: String = "completed", name: String? = nil) -> ACPMessage {
+        .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status, name: name))
     }
 
     private func compaction(_ id: String) -> ACPMessage {
@@ -53,6 +53,31 @@ struct ACPToolCallGroupingTests {
         }
         #expect(group.members.map(\.stableId) == ["tc-a", "tc-b", "tc-c"])
         #expect(group.members.map(\.index) == [0, 1, 2])
+    }
+
+    @Test("consecutive tool calls sharing the same name still fold, even when retitled")
+    func sameNameFoldsDespiteDifferentTitles() throws {
+        let folded = fold([tool("a", name: "Bash"), tool("b", name: "Bash"), tool("c", name: "Bash")])
+        #expect(ids(folded) == ["tcg-tc-a"])
+        guard case .toolCallGroup(let group) = try #require(folded.first) else {
+            Issue.record("expected a tool-call group")
+            return
+        }
+        #expect(group.members.map(\.stableId) == ["tc-a", "tc-b", "tc-c"])
+    }
+
+    @Test("consecutive tool calls with different names do not fold together")
+    func differentNamesBreakTheRun() {
+        let folded = fold([tool("a", name: "Bash"), tool("b", name: "Read"), tool("c", name: "Bash")])
+        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-b", "tcg-tc-c"])
+    }
+
+    @Test("a nil name on either side never breaks the run, matching adapters that omit name")
+    func missingNameNeverBreaksTheRun() {
+        // One side (or both) lacking a name must behave exactly like today:
+        // any consecutive finished calls fold, regardless of identity.
+        let folded = fold([tool("a", name: "Bash"), tool("b"), tool("c", name: "Read")])
+        #expect(ids(folded) == ["tcg-tc-a"])
     }
 
     @Test("a single finished tool call still folds into a one-member group")

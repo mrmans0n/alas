@@ -48,6 +48,40 @@ struct ACPSessionTests {
         #expect(compaction.durationMs == 300)
     }
 
+    @Test("tool_call name is stored, and a later update without name leaves it untouched")
+    func toolCallNamePersistsAcrossUpdateWithoutName() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Bash", kind: "execute", status: "in_progress",
+            name: "Bash")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "Bash")
+        #expect(toolCall.status == "completed")
+    }
+
+    @Test("tool_call_update name replaces the stored name when present")
+    func toolCallUpdateReplacesName() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "in_progress")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed", name: "exec_command")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "exec_command")
+    }
+
     @Test("compaction summary chunks append to the normalized row")
     func compactionSummaryChunksAppend() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -82,6 +116,118 @@ struct ACPSessionTests {
         session.apply(.usageUpdate(.init(used: 3_000, size: 8_000, cost: nil)))
         #expect(session.contextUsage == .init(used: 3_000, size: 8_000, cost: nil))
     }
+
+    @Test("notices are live-only: no transcript row, no persistence, no streaming state change")
+    func noticesAreLiveStateOnly() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.streamingState = .idle
+
+        let dirty = session.apply(.notice(.init(severity: .warning, title: "MCP server unavailable")))
+
+        #expect(dirty.isEmpty)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(session.activeNotice?.title == "MCP server unavailable")
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("an identical consecutive notice coalesces instead of restarting")
+    func identicalConsecutiveNoticesCoalesce() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let notice = ACPSessionNotice(severity: .info, title: "Model fallback", description: "Using backup model.")
+
+        session.apply(.notice(notice))
+        session.apply(.notice(notice))
+
+        #expect(session.activeNotice == notice)
+    }
+
+    @Test("notices that only differ by _meta still coalesce as visually identical")
+    func noticesDifferingOnlyByMetadataCoalesce() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let first = ACPSessionNotice(
+            severity: .info, title: "Model fallback", description: "Using backup model.",
+            metadata: AnyCodable(["traceId": "a"]))
+        let second = ACPSessionNotice(
+            severity: .info, title: "Model fallback", description: "Using backup model.",
+            metadata: AnyCodable(["traceId": "b"]))
+
+        session.apply(.notice(first))
+        session.apply(.notice(second))
+
+        // Coalescing keeps the original instance in place rather than
+        // adopting the later metadata, so a chatty repeat doesn't restart
+        // the auto-dismiss timer or flash the banner.
+        #expect(session.activeNotice == first)
+    }
+
+    @Test("an unrecognized severity auto-dismisses like info")
+    func unrecognizedSeverityBehavesAsInfo() async {
+        #expect(ACPSessionNotice.Severity.other("_debug").behavesAsInfo)
+        #expect(ACPSessionNotice.Severity.other("future-severity").behavesAsInfo)
+        #expect(ACPSessionNotice.Severity.info.behavesAsInfo)
+        #expect(!ACPSessionNotice.Severity.warning.behavesAsInfo)
+        #expect(!ACPSessionNotice.Severity.error.behavesAsInfo)
+    }
+
+    @Test("dismissing the active notice clears it")
+    func dismissActiveNoticeClears() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.notice(.init(severity: .error, title: "Rate limited")))
+        #expect(session.activeNotice != nil)
+
+        session.dismissActiveNotice()
+
+        #expect(session.activeNotice == nil)
+    }
+
+    @Test("a different notice arriving while a pinned notice is active queues instead of replacing it")
+    func differentNoticeQueuesBehindPinnedNotice() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let warning = ACPSessionNotice(severity: .warning, title: "MCP server unavailable")
+        let info = ACPSessionNotice(severity: .info, title: "Model fallback")
+
+        session.apply(.notice(warning))
+        session.apply(.notice(info))
+
+        // The pinned warning must stay visible until dismissed, not get
+        // silently replaced (and then vanish when info auto-dismisses).
+        #expect(session.activeNotice == warning)
+
+        session.dismissActiveNotice()
+
+        // Dismissing the pinned notice promotes the one that queued up.
+        #expect(session.activeNotice == info)
+    }
+
+    @Test("a queued notice replaces an older queued one instead of stacking")
+    func queuedNoticeIsLatestWins() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let warning = ACPSessionNotice(severity: .warning, title: "MCP server unavailable")
+        let firstQueued = ACPSessionNotice(severity: .info, title: "First")
+        let secondQueued = ACPSessionNotice(severity: .info, title: "Second")
+
+        session.apply(.notice(warning))
+        session.apply(.notice(firstQueued))
+        session.apply(.notice(secondQueued))
+        #expect(session.activeNotice == warning)
+
+        session.dismissActiveNotice()
+
+        #expect(session.activeNotice == secondQueued)
+    }
+
+    @Test("notices arriving during load-replay suppression are ignored")
+    func noticesIgnoredDuringLoadReplay() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.beginSuppressedReplaySideEffects()
+
+        let touched = session.applySuppressedReplaySideEffects(
+            .notice(.init(severity: .warning, title: "Should not surface")))
+
+        #expect(touched.isEmpty)
+        #expect(session.activeNotice == nil)
+    }
+
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -2314,6 +2460,66 @@ struct ACPSessionTests {
             #expect(metadata["terminal_output_delta"] != nil)
             #expect(tc.rawOutput == nil)
             #expect(tc.assets == [])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("suppressed initial tool replay applies a newly available name even onto a completed snapshot")
+    func suppressedInitialToolReplayAppliesNameOntoCompletedSnapshot() async {
+        // Regression: a call persisted by an older build (no stored `name`)
+        // is loaded, then session/load replay resends its initial tool_call
+        // — now carrying `name` because the adapter/build was upgraded.
+        // Content fields stay locked by canReplaceSnapshot (see the
+        // "does not downgrade completed output" tests above), but `name`
+        // is pure presentation metadata and must still apply.
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Initial command",
+            kind: "execute",
+            status: "in_progress",
+            name: "Bash")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "Bash")
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("suppressed tool update replay applies a newly available name even onto a completed snapshot")
+    func suppressedToolUpdateReplayAppliesNameOntoCompletedSnapshot() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-update-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc-update-replay-name",
+            status: "in_progress",
+            name: "exec_command")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "exec_command")
         } else {
             Issue.record("expected toolCall message")
         }

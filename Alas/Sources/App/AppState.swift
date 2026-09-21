@@ -220,6 +220,14 @@ final class AppState {
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
         await RunScriptStore.discoverScripts(worktreeRoot: $0, remoteHost: $1)
     }
+    /// Whether the destination a scheduled composition is about to claim is
+    /// already taken. A remote project's worktree lives on its host's
+    /// filesystem, which `FileManager` cannot see, so the question has to go
+    /// to the host that will actually run `git worktree add`. Injectable so
+    /// tests can stand in for that host.
+    @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
+        await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
+    }
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
@@ -472,6 +480,29 @@ final class AppState {
     /// file isn't touched unless the remote feature is actually exercised.
     @ObservationIgnored
     private(set) lazy var remotePairing = RemotePairingService(store: FileDeviceStore())
+    /// Outbound peers (other Macs running Alas). Lazy like `remotePairing`.
+    @ObservationIgnored
+    private(set) lazy var remotePeers: RemotePeerManager = {
+        let manager = RemotePeerManager(
+            store: FilePeerStore(),
+            pairing: remotePairing,
+            localIdentity: { [weak self] in
+                RemotePeerManager.LocalIdentity(
+                    serverId: self?.config.remote.serverId ?? "",
+                    name: self?.remoteDisplayName ?? "Alas",
+                    // Loopback is meaningless to another Mac; everything else is
+                    // in rank order, best first. Capped to the same bound the
+                    // receiving Mac enforces on any advertisement — sending
+                    // more than that would have it reject a genuine peer with
+                    // `originRejected`, since it can never tell "too many
+                    // legitimate addresses" apart from a hostile advertisement.
+                    origins: Array(self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url).prefix(RemotePairingLink.maxOrigins) ?? []))
+            })
+        manager.onRevokeDevice = { [weak self] deviceId in
+            self?.remoteServer?.disconnectDevice(deviceId)
+        }
+        return manager
+    }()
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -553,7 +584,8 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            hubEnabled: config.remote.hubEnabled
+            hubEnabled: config.remote.hubEnabled,
+            federationEnabled: config.remote.federationEnabled
         )
     }
 
@@ -585,6 +617,7 @@ final class AppState {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
                 refreshRemoteAccessState()
+                syncRemotePeers()
                 return
             }
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
@@ -618,6 +651,14 @@ final class AppState {
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
             }
+            server.onPeerPaired = { [weak self] request in
+                // Recorded synchronously, on the same call stack as the
+                // redeem that produced this request — before Task-spawning
+                // below introduces a delay a concurrent Forget could land
+                // in unnoticed by handleInboundPeer's own, later snapshot.
+                self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
+                Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
+            }
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
@@ -625,6 +666,7 @@ final class AppState {
                 try server.start(port: boundPort)
                 remoteServer = server
                 lastRemoteError = nil
+                syncRemotePeers()
             } catch {
                 remoteServer = nil
                 remotePort = nil
@@ -633,12 +675,39 @@ final class AppState {
                 lastRemoteError = error.localizedDescription
             }
         } else {
+            // Only touch `remotePeers` when a server actually ran: the lazy
+            // property builds the manager, which builds `remotePairing` too,
+            // so an unconditional call would read `remote-peers.json` and
+            // `remote-devices.json` on every launch with both flags off.
+            // Links only exist while the server is up, so there is nothing to
+            // tear down otherwise. Safe here because the nil-out is below.
+            if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
+        }
+    }
+
+    /// Keeps peer links alive only while the server is up and the experiment
+    /// is on; peers stay stored either way.
+    func syncRemotePeers() {
+        if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
+            remotePeers.connectAll()
+        } else if remoteServer != nil {
+            // Same reason as `syncRemoteServer`'s disabled branch: without a
+            // server no link was ever opened, and reaching for `remotePeers`
+            // would force the lazy manager and its stores into existence.
+            remotePeers.disconnectAll()
+            // Cuts an already-open peer socket immediately: `disconnectAll()`
+            // above only stops OUR outbound links, it does nothing to a
+            // connection another Mac holds INTO this one. The `authorize`
+            // closure in `RemoteServer.accept` refuses a peer's token going
+            // forward; this closes the sockets that opened before the toggle
+            // flipped.
+            remoteServer?.disconnectAllPeerDevices()
         }
     }
 
@@ -8870,11 +8939,28 @@ final class AppState {
         openFile(relativePath: relativePath, worktreeId: worktreeId)
     }
 
-    /// Route a clicked markdown link from an ACP transcript. Local file links
-    /// inside the session worktree open in Alas editor tabs; everything else
-    /// returns false so SwiftUI can continue with the default URL action.
-    func routeTranscriptOpenURL(_ url: URL, worktreeId: String) -> Bool {
-        guard let worktree = worktree(withId: worktreeId) else { return false }
+    /// Where a clicked ACP transcript link ends up.
+    enum TranscriptLinkRoute: Equatable {
+        /// Opened inside Alas, possibly after switching worktrees.
+        case opened
+        /// An existing file or directory outside every open worktree. The
+        /// caller hands this `file:` URL to the system: the raw markdown
+        /// destination is schemeless (`/Users/me/notes.md` parses as a
+        /// relative URL), and `NSWorkspace` rejects that form with paramErr
+        /// (-50) instead of opening the file.
+        case systemOpen(URL)
+        /// Not a local path we can resolve; let the default URL action run.
+        case unhandled
+    }
+
+    /// Route a clicked markdown link from an ACP transcript. Paths inside
+    /// the session worktree open as editor tabs; absolute paths inside any
+    /// other open worktree — what an agent writes when it reports a file in
+    /// a sibling worktree of the same repo — open there, switching the
+    /// selected worktree. Anything else that exists on disk comes back as a
+    /// `file:` URL for the system to open.
+    func transcriptLinkRoute(_ url: URL, worktreeId: String) -> TranscriptLinkRoute {
+        guard let worktree = worktree(withId: worktreeId) else { return .unhandled }
 
         let rawPath: String
         if url.isFileURL {
@@ -8884,27 +8970,59 @@ final class AppState {
         } else if !url.absoluteString.contains("://") {
             rawPath = url.absoluteString.removingPercentEncoding ?? url.absoluteString
         } else {
-            return false
+            return .unhandled
         }
-        guard !rawPath.isEmpty else { return false }
+        guard !rawPath.isEmpty else { return .unhandled }
 
-        if attemptOpenLocalFilePath(rawPath, worktree: worktree, baseDirectory: worktree.path) {
-            NSApp.activate(ignoringOtherApps: true)
-            return true
-        }
-
+        var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
         // punctuation in a markdown link destination.
-        if rawPath.hasSuffix(".") {
-            let trimmed = String(rawPath.dropLast())
-            if !trimmed.isEmpty,
-               attemptOpenLocalFilePath(trimmed, worktree: worktree, baseDirectory: worktree.path) {
+        if rawPath.hasSuffix("."), rawPath.count > 1 {
+            candidates.append(String(rawPath.dropLast()))
+        }
+
+        for candidate in candidates {
+            switch transcriptRoute(forLocalPath: candidate, worktree: worktree) {
+            case .opened:
                 NSApp.activate(ignoringOtherApps: true)
-                return true
+                return .opened
+            case .systemOpen(let fileURL):
+                return .systemOpen(fileURL)
+            case .unhandled:
+                continue
             }
         }
 
-        return false
+        return .unhandled
+    }
+
+    private func transcriptRoute(forLocalPath candidatePath: String, worktree: Worktree) -> TranscriptLinkRoute {
+        guard let target = localFileOpenTarget(
+            candidatePath,
+            worktree: worktree,
+            baseDirectory: worktree.path
+        ) else { return .unhandled }
+        guard !target.isDirectory else { return .systemOpen(target.url) }
+
+        if let relativePath = Self.containedRelativePath(for: target.url, in: worktree.path) {
+            openFile(
+                relativePath: relativePath,
+                worktreeId: worktree.id,
+                revealLine: target.revealLine,
+                revealCharacter: target.revealCharacter
+            )
+            return .opened
+        }
+        if let match = deepestVisibleWorktree(containing: target.url) {
+            openFile(
+                relativePath: match.relativePath,
+                worktreeId: match.worktree.id,
+                revealLine: target.revealLine,
+                revealCharacter: target.revealCharacter
+            )
+            return .opened
+        }
+        return .systemOpen(target.url)
     }
 
     /// Route a cmd-clicked URL from a Ghostty terminal surface. Mirrors `alas
@@ -8950,6 +9068,30 @@ final class AppState {
         worktree: Worktree,
         baseDirectory: URL?
     ) -> Bool {
+        guard let target = localFileOpenTarget(
+            candidatePath,
+            worktree: worktree,
+            baseDirectory: baseDirectory
+        ), !target.isDirectory,
+            let relativePath = Self.containedRelativePath(for: target.url, in: worktree.path)
+        else { return false }
+
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktree.id,
+            revealLine: target.revealLine,
+            revealCharacter: target.revealCharacter
+        )
+        return true
+    }
+
+    /// Resolve a clicked path — plain, or suffixed with `:line[:column]` —
+    /// to something that actually exists on disk, or nil.
+    private func localFileOpenTarget(
+        _ candidatePath: String,
+        worktree: Worktree,
+        baseDirectory: URL?
+    ) -> LocalFileOpenTarget? {
         let target: LocalFileOpenTarget
         let resolved = resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
         if FileManager.default.fileExists(atPath: resolved.path) {
@@ -8962,34 +9104,48 @@ final class AppState {
                 revealCharacter: (parsed.column ?? 1) - 1
             )
         } else {
-            return false
+            return nil
         }
 
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else { return false }
+        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+        var existing = target
+        existing.isDirectory = isDirectory.boolValue
+        return existing
+    }
 
-        // Resolve symlinks on both sides before the containment check so that
-        // an in-tree symlink pointing outside the worktree (e.g.
-        // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
-        let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
-        let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
+    /// The deepest open worktree that contains `url`, with the matching
+    /// worktree-relative path. Deepest wins so a file inside a worktree
+    /// nested under another worktree's root opens in the nested one.
+    private func deepestVisibleWorktree(containing url: URL) -> (worktree: Worktree, relativePath: String)? {
+        var best: (worktree: Worktree, relativePath: String, depth: Int)?
+        for project in projects {
+            for candidate in projectsManager.visibleWorktrees(projectId: project.id) {
+                guard let relativePath = Self.containedRelativePath(for: url, in: candidate.path) else { continue }
+                let depth = candidate.path.resolvingSymlinksInPath().standardizedFileURL.pathComponents.count
+                if let current = best, depth <= current.depth { continue }
+                best = (candidate, relativePath, depth)
+            }
+        }
+        guard let best else { return nil }
+        return (best.worktree, best.relativePath)
+    }
+
+    /// Worktree-relative path for `url` when it sits strictly inside
+    /// `root`. Symlinks are resolved on both sides first so an in-tree
+    /// symlink pointing outside the worktree (e.g.
+    /// `worktree/escape -> /elsewhere`) isn't mistaken for worktree content.
+    nonisolated private static func containedRelativePath(for url: URL, in root: URL) -> String? {
+        let resolvedTarget = url.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
         let rootComponents = resolvedRoot.pathComponents
         let targetComponents = resolvedTarget.pathComponents
         guard targetComponents.count > rootComponents.count,
-              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
-            return false
-        }
+              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else { return nil }
         let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
-        guard !relativePath.isEmpty else { return false }
-
-        openFile(
-            relativePath: relativePath,
-            worktreeId: worktree.id,
-            revealLine: target.revealLine,
-            revealCharacter: target.revealCharacter
-        )
-        return true
+        return relativePath.isEmpty ? nil : relativePath
     }
 
     private func resolveLocalFilePath(
@@ -9017,6 +9173,7 @@ final class AppState {
         var url: URL
         var revealLine: Int?
         var revealCharacter: Int?
+        var isDirectory: Bool = false
     }
 
     private struct LocalPathPosition {

@@ -206,6 +206,11 @@ enum ACPMessage: Equatable {
         var title: String
         var kind: String?
         var status: String
+        /// Stable, opaque tool identifier (ACP 1.22+) — e.g. `Bash`,
+        /// `Read`, `exec_command` — distinct from `title` and `kind`.
+        /// Presentation metadata only; grants no capability. Adapters that
+        /// predate the field never send it, so this stays nil for them.
+        var name: String?
         /// Full text body of the tool call as the agent last reported it.
         /// Rendered inside the expanded card. Updated in place when the
         /// agent sends `tool_call_update` with new content.
@@ -246,6 +251,14 @@ enum ACPMessage: Equatable {
         var executionDuration: TimeInterval? {
             guard let executionStartedAt, let executionFinishedAt else { return nil }
             return max(0, executionFinishedAt.timeIntervalSince(executionStartedAt))
+        }
+
+        /// `name`, treating a blank string the same as absent. Adapters
+        /// that predate the field, or send an empty string, should fall
+        /// back to the existing kind/title heuristics exactly as before.
+        var nonEmptyName: String? {
+            guard let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return name
         }
 
         /// Set when `content` has been truncated to save memory. The full
@@ -347,7 +360,8 @@ enum ACPMessage: Equatable {
              rawOutput: String? = nil, metadata: AnyCodable? = nil,
              assets: [ToolCallAsset] = [],
              locations: [String]? = nil, terminalIds: [String] = [],
-             executionStartedAt: Date? = nil, executionFinishedAt: Date? = nil)
+             executionStartedAt: Date? = nil, executionFinishedAt: Date? = nil,
+             name: String? = nil)
         {
             self.toolCallId = toolCallId
             self.title = title
@@ -364,6 +378,7 @@ enum ACPMessage: Equatable {
             self.terminalIds = terminalIds
             self.executionStartedAt = executionStartedAt
             self.executionFinishedAt = executionFinishedAt
+            self.name = name
         }
 
         // Backwards-compatible decoder: older messages persisted only a
@@ -372,7 +387,8 @@ enum ACPMessage: Equatable {
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
                  contentSummary, contentLanguage, rawInput, rawOutput, metadata,
-                 assets, locations, terminalIds, executionStartedAt, executionFinishedAt
+                 assets, locations, terminalIds, executionStartedAt, executionFinishedAt,
+                 name
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -392,6 +408,7 @@ enum ACPMessage: Equatable {
             terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
             executionStartedAt = try? c.decode(Date.self, forKey: .executionStartedAt)
             executionFinishedAt = try? c.decode(Date.self, forKey: .executionFinishedAt)
+            name = try? c.decode(String.self, forKey: .name)
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -410,6 +427,7 @@ enum ACPMessage: Equatable {
             try c.encode(terminalIds, forKey: .terminalIds)
             try c.encodeIfPresent(executionStartedAt, forKey: .executionStartedAt)
             try c.encodeIfPresent(executionFinishedAt, forKey: .executionFinishedAt)
+            try c.encodeIfPresent(name, forKey: .name)
         }
 
         // Manual Equatable/Hashable: `isContentTruncated` is an in-memory-only
@@ -432,6 +450,7 @@ enum ACPMessage: Equatable {
                 && lhs.terminalIds == rhs.terminalIds
                 && lhs.executionStartedAt == rhs.executionStartedAt
                 && lhs.executionFinishedAt == rhs.executionFinishedAt
+                && lhs.name == rhs.name
         }
 
         func hash(into hasher: inout Hasher) {
@@ -450,6 +469,7 @@ enum ACPMessage: Equatable {
             hasher.combine(terminalIds)
             hasher.combine(executionStartedAt)
             hasher.combine(executionFinishedAt)
+            hasher.combine(name)
         }
 
         mutating func replaceContent(_ newContent: String) {

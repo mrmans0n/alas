@@ -80,6 +80,12 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var retryStatus: ACPRetryStatus?
     @Published var contextRestoreWarning: ContextRestoreWarning?
     @Published var contextRecoveryStatus: ContextRecoveryStatus?
+    /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
+    /// event (MCP server dropped, rate limit, model fallback…). Live state
+    /// only: never written into the persisted transcript, never restored
+    /// from `session/load` replay, and does not affect `streamingState`.
+    /// Surfaced as a transient banner above the composer.
+    @Published private(set) var activeNotice: ACPSessionNotice?
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
@@ -144,6 +150,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
+    private var noticeAutoDismissTask: Task<Void, Never>?
+    /// Single-slot queue for a notice that arrived while a pinned
+    /// `warning`/`error` notice was active and undismissed. See
+    /// `applyNotice`/`advanceNoticeQueue`.
+    private var pendingNotice: ACPSessionNotice?
 
     /// When false, `appendStreaming` discards chunks that would cross a
     /// completed-output boundary (i.e. create a duplicate agent message bubble).
@@ -342,6 +353,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     deinit {
         contextRecoveryExpiryTask?.cancel()
+        noticeAutoDismissTask?.cancel()
         // Foundation cannot await main-actor methods from deinit; dispatch.
         let host = terminalHost
         Task { @MainActor in host.killAll() }
@@ -558,7 +570,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: terminalIds,
-                executionStartedAt: payload.status == "in_progress" ? timestamp : nil)),
+                executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
+                name: payload.name)),
                 createdAt: timestamp)
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -586,6 +599,9 @@ final class ACPSession: ObservableObject, Identifiable {
         case .compactionSummaryChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             return appendContextCompactionSummary(chunk)
+        case .notice(let notice):
+            applyNotice(notice)
+            return []
         case .sessionInfoUpdate(let info):
             applySessionInfoUpdate(info, tracksRetryStatus: tracksRetryStatus)
             return []
@@ -693,6 +709,57 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         }
         return [index]
+    }
+
+    /// Applies a live ACP `notice`. Coalesces a visually identical
+    /// consecutive notice (same severity/title/description — `_meta` is
+    /// excluded, since it carries no displayed content) into a no-op so a
+    /// chatty agent re-sending the same event with a bumped timestamp
+    /// doesn't restart its auto-dismiss timer or flash the banner.
+    ///
+    /// A pinned `warning`/`error` notice stays visible until the user
+    /// dismisses it, so a different notice arriving in the meantime queues
+    /// behind it (latest arrival wins the single slot) instead of silently
+    /// clobbering something the user hasn't acknowledged — there's no id/ack
+    /// to recover a dropped notice with. The queued notice takes over once
+    /// the pinned one clears, either by dismissal or its own auto-dismiss.
+    private func applyNotice(_ notice: ACPSessionNotice) {
+        if let active = activeNotice, active.isVisuallyIdentical(to: notice) { return }
+        if let active = activeNotice, !active.severity.behavesAsInfo {
+            pendingNotice = notice
+            return
+        }
+        pendingNotice = nil
+        showNotice(notice)
+    }
+
+    private func showNotice(_ notice: ACPSessionNotice) {
+        noticeAutoDismissTask?.cancel()
+        activeNotice = notice
+        guard notice.severity.behavesAsInfo else { return }
+        noticeAutoDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, self?.activeNotice == notice else { return }
+            self?.advanceNoticeQueue()
+        }
+    }
+
+    /// Clears the active notice and, if one queued up behind it, promotes
+    /// it through the normal `showNotice` path (so it gets its own
+    /// auto-dismiss timer if it's info-like).
+    private func advanceNoticeQueue() {
+        activeNotice = nil
+        guard let queued = pendingNotice else { return }
+        pendingNotice = nil
+        showNotice(queued)
+    }
+
+    /// User-initiated dismissal of the active notice (the composer banner's
+    /// close button). Also cancels any pending auto-dismiss for it.
+    func dismissActiveNotice() {
+        noticeAutoDismissTask?.cancel()
+        noticeAutoDismissTask = nil
+        advanceNoticeQueue()
     }
 
     static func contextCompactionToolCallId(_ id: String) -> String {
@@ -819,6 +886,13 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.title = payload.title
             tc.kind = payload.kind
         }
+        // Unlike title/kind/status, `name` is presentation metadata only —
+        // stable across a call's lifetime per spec — so apply it whenever
+        // present even onto an already-finalized snapshot. Otherwise a
+        // session/load replay of a call persisted by an older build (no
+        // stored name) would silently drop the name the adapter now
+        // supplies, matching how `metadata` below is already unconditional.
+        if let name = payload.name { tc.name = name }
         if canReplaceSnapshot {
             tc.status = payload.status
         }
@@ -1303,6 +1377,10 @@ final class ACPSession: ObservableObject, Identifiable {
         let canReplaceSnapshot = allowFinalSnapshotReplacement || !Self.isFinalStatus(tc.status)
         var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
         if canReplaceSnapshot, let title = update.title { tc.title = title }
+        // See the matching comment in `applyToolCallPayloadFields`: `name`
+        // is stable presentation metadata, so a present value applies even
+        // onto an already-finalized snapshot during suppressed replay.
+        if let name = update.name { tc.name = name }
         if canReplaceSnapshot, let status = update.status { tc.status = status }
         if canReplaceSnapshot, let locations = update.locations { tc.locations = locations.map(\.path) }
         if canReplaceSnapshot, let rawInput = update.rawInput { tc.rawInput = Self.metadataString(rawInput) }

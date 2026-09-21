@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -398,7 +399,20 @@ private struct ACPSessionView: View {
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             },
             onOpenTranscriptLink: { url in
-                state.routeTranscriptOpenURL(url, worktreeId: worktree.id)
+                switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
+                case .opened:
+                    return true
+                case .systemOpen(let fileURL):
+                    // Claimed either way: the destination this came from is
+                    // a schemeless path (`/Users/me/notes.md` parses as a
+                    // relative URL), and handing that to the default action
+                    // only ever yields paramErr -50. The resolved `file:`
+                    // URL is the sole form the system can act on.
+                    _ = NSWorkspace.shared.open(fileURL)
+                    return true
+                case .unhandled:
+                    return false
+                }
             },
             // Use the runner's policy (where the agent's continuation
             // lives) so the user's click can resolve the pending permission

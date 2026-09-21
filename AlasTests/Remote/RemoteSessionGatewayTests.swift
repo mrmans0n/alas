@@ -431,6 +431,16 @@ struct RemoteSessionGatewayTests {
         #expect(sent == [.sessionList(sessions: provider.summaries)])
     }
 
+    @Test func helloAckIsAcceptedAndSendsNothing() async {
+        let provider = FakeSessionsProvider()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.helloAck(protocolVersion: 1))
+        await Task.yield()
+        #expect(sent.isEmpty)
+        #expect(provider.sessionSummariesCallCount == 0)
+    }
+
     @Test func listSessionsPreservesIsActiveFlag() async {
         let provider = FakeSessionsProvider()
         let active = RemoteSessionSummary(id: "active", title: "Active", agentId: "claude", status: "idle", canDrive: true, isActive: true)

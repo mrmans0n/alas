@@ -74,6 +74,8 @@ struct AppConfig: Codable, Equatable {
         var displayName: String = ""
         /// Experiment: lets the remote web client pair with several Macs.
         var hubEnabled: Bool = false
+        /// Experiment: lets this Mac pair with other Macs running Alas.
+        var federationEnabled: Bool = false
 
         init(
             enabled: Bool = false,
@@ -83,7 +85,8 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            hubEnabled: Bool = false
+            hubEnabled: Bool = false,
+            federationEnabled: Bool = false
         ) {
             self.enabled = enabled
             self.port = port
@@ -93,11 +96,12 @@ struct AppConfig: Codable, Equatable {
             self.serverId = serverId
             self.displayName = displayName
             self.hubEnabled = hubEnabled
+            self.federationEnabled = federationEnabled
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, hubEnabled
+            case allowedOrigins, serverId, displayName, hubEnabled, federationEnabled
         }
 
         init(from decoder: Decoder) throws {
@@ -110,6 +114,7 @@ struct AppConfig: Codable, Equatable {
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
             hubEnabled = (try? c.decode(Bool.self, forKey: .hubEnabled)) ?? false
+            federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
         }
 
         /// Assigns a fresh UUID when `serverId` is empty. Returns true when it changed.

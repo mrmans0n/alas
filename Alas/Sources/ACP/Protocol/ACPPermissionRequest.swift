@@ -23,6 +23,30 @@ struct ACPPermissionToolCall: Codable, Equatable {
     let locations: [ACPToolLocation]?
     let rawInput: AnyCodable?
     let rawOutput: AnyCodable?
+    /// Stable tool identifier (ACP 1.22+). See `ACPToolCallPayload.name`.
+    let name: String?
+
+    init(
+        toolCallId: String,
+        title: String? = nil,
+        kind: String? = nil,
+        status: String? = nil,
+        content: [ACPContentBlock]? = nil,
+        locations: [ACPToolLocation]? = nil,
+        rawInput: AnyCodable? = nil,
+        rawOutput: AnyCodable? = nil,
+        name: String? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.content = content
+        self.locations = locations
+        self.rawInput = rawInput
+        self.rawOutput = rawOutput
+        self.name = name
+    }
 }
 
 struct ACPPermissionOption: Codable, Equatable, Identifiable, Hashable {

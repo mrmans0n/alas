@@ -26,6 +26,17 @@ struct RemoteProtocolTests {
         #expect(object["agentId"] as? String == "codex")
     }
 
+    @Test func helloAckRoundTripsAndEncodesType() throws {
+        let ack = RemoteClientMessage.helloAck(protocolVersion: 1)
+        #expect(try roundTrip(ack) == ack)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
+        #expect(object["type"] as? String == "helloAck")
+        #expect(object["protocolVersion"] as? Int == 1)
+        #expect(ack.isControl == false)
+        #expect(ack.fileRequestDedupKey == nil)
+        #expect(ack.isDriveOrdering == false)
+    }
+
     @Test func worktreeCreationServerMessagesRoundTripAndEncodeRequiredFields() throws {
         let projects = [RemoteProjectOption(id: "project-1", name: "alas")]
         #expect(try roundTrip(RemoteServerMessage.projectList(projects: projects)) == .projectList(projects: projects))
@@ -819,5 +830,15 @@ struct RemoteProtocolTests {
         let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: data)
         #expect(snapshot.serverId == nil)
         #expect(snapshot.name == nil)
+    }
+
+    @Test func helloEncodesFederationEnabledAndDefaultsItOff() throws {
+        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(on)) as? [String: Any])
+        #expect(object["federationEnabled"] as? Bool == true)
+
+        let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n","hubEnabled":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
     }
 }

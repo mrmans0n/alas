@@ -96,11 +96,71 @@ struct ACPSessionUpdateTests {
             #expect(tc.title == "read_file")
             #expect(tc.status == "in_progress")
             #expect(tc.metadata == nil)
+            #expect(tc.name == nil)
             #expect(tc.content?.count == 1)
             if case .content(.text(let s)) = tc.content?.first {
                 #expect(s == "reading…")
             } else { Issue.record("expected wrapped text content") }
         } else { Issue.record("expected toolCall") }
+    }
+
+    @Test("decodes the stable tool-call name field")
+    func toolCallName() throws {
+        let json = """
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "s1",
+            "update": {
+              "sessionUpdate": "tool_call",
+              "toolCallId": "tc-name",
+              "title": "Reading file",
+              "kind": "read",
+              "status": "in_progress",
+              "name": "Read"
+            }
+          }
+        }
+        """
+        let env = try JSONDecoder().decode(
+            JSONRPCEnvelope<ACPSessionUpdateParams>.self,
+            from: Data(json.utf8))
+        if case .toolCall(let tc) = env.params!.update {
+            #expect(tc.name == "Read")
+        } else { Issue.record("expected toolCall") }
+    }
+
+    @Test("tool_call_update name replaces when present and stays nil when absent or null")
+    func toolCallUpdateName() throws {
+        func decodeUpdate(_ nameField: String) throws -> ACPToolCallUpdate {
+            let json = """
+            {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "s1",
+                "update": {
+                  "sessionUpdate": "tool_call_update",
+                  "toolCallId": "tc-name",
+                  "status": "completed"\(nameField)
+                }
+              }
+            }
+            """
+            let env = try JSONDecoder().decode(
+                JSONRPCEnvelope<ACPSessionUpdateParams>.self,
+                from: Data(json.utf8))
+            guard case .toolCallUpdate(let update) = env.params!.update else {
+                Issue.record("expected toolCallUpdate")
+                throw CocoaError(.coderInvalidValue)
+            }
+            return update
+        }
+
+        #expect(try decodeUpdate(", \"name\": \"exec_command\"").name == "exec_command")
+        #expect(try decodeUpdate(", \"name\": null").name == nil)
+        #expect(try decodeUpdate("").name == nil)
     }
 
     @Test("decodes session_info_update with metadata")
@@ -187,6 +247,7 @@ struct ACPSessionUpdateTests {
         #expect(update.rawInput != nil)
         #expect(update.rawOutput != nil)
         #expect(update.metadata == nil)
+        #expect(update.name == nil)
     }
 
     @Test("decodes plan update")
@@ -414,6 +475,77 @@ struct ACPSessionUpdateTests {
         let capabilities = try #require(json["clientCapabilities"] as? [String: Any])
         let session = try #require(capabilities["session"] as? [String: Any])
         #expect(session["compaction"] as? [String: Any] != nil)
+    }
+
+    @Test("initialize advertises session notices support")
+    func noticesCapability() throws {
+        let data = try JSONEncoder().encode(ACPInitializeParams(
+            protocolVersion: 1,
+            clientCapabilities: .init(
+                fs: .init(readTextFile: true, writeTextFile: true), terminal: true)))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let capabilities = try #require(json["clientCapabilities"] as? [String: Any])
+        let session = try #require(capabilities["session"] as? [String: Any])
+        #expect(session["notices"] as? [String: Any] != nil)
+    }
+
+    @Test("decodes a notice update with only the required fields")
+    func noticeRequiredFieldsOnly() throws {
+        let params = try JSONDecoder().decode(ACPSessionUpdateParams.self, from: Data("""
+        { "sessionId": "s", "update": { "sessionUpdate": "notice", "severity": "warning", "title": "MCP server unavailable" } }
+        """.utf8))
+        guard case .notice(let notice) = params.update else {
+            Issue.record("expected notice")
+            return
+        }
+        #expect(notice.severity == .warning)
+        #expect(notice.title == "MCP server unavailable")
+        #expect(notice.description == nil)
+    }
+
+    @Test("decodes a notice update with an explicit null description")
+    func noticeNullDescription() throws {
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: Data("""
+        { "sessionUpdate": "notice", "severity": "error", "title": "Rate limited", "description": null }
+        """.utf8))
+        guard case .notice(let notice) = update else {
+            Issue.record("expected notice")
+            return
+        }
+        #expect(notice.severity == .error)
+        #expect(notice.description == nil)
+    }
+
+    @Test("an underscore-prefixed notice severity decodes as an open enum value")
+    func noticeUnderscorePrefixedSeverity() throws {
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: Data("""
+        { "sessionUpdate": "notice", "severity": "_debug", "title": "Adapter trace", "description": "Verbose logging enabled." }
+        """.utf8))
+        guard case .notice(let notice) = update else {
+            Issue.record("expected notice")
+            return
+        }
+        #expect(notice.severity == .other("_debug"))
+        #expect(notice.description == "Verbose logging enabled.")
+
+        // `ACPSessionUpdate` is receive-only for `.notice` (no id/ack/removal
+        // to send back), so only the severity's own raw-string round-trip is
+        // meaningful here.
+        let encoded = try JSONEncoder().encode(notice.severity)
+        let decoded = try JSONDecoder().decode(ACPSessionNotice.Severity.self, from: encoded)
+        #expect(decoded == notice.severity)
+    }
+
+    @Test("a reserved unknown notice severity decodes as an open enum value")
+    func noticeReservedUnknownSeverity() throws {
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: Data("""
+        { "sessionUpdate": "notice", "severity": "future-severity", "title": "New event kind" }
+        """.utf8))
+        guard case .notice(let notice) = update else {
+            Issue.record("expected notice")
+            return
+        }
+        #expect(notice.severity == .other("future-severity"))
     }
 
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {

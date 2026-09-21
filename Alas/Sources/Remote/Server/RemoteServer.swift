@@ -40,6 +40,8 @@ final class RemoteServer {
     /// Invoked on the main actor whenever authenticated remote socket counts
     /// change. AppState snapshots this so Settings observes live disconnects.
     var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
+    /// Fired on the main actor after another Alas instance paired here.
+    var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
 
     /// Callers with app state should pass a diagnostics closure; the default is
     /// a safe empty fallback for contexts that do not have app state available.
@@ -142,6 +144,19 @@ final class RemoteServer {
         }
     }
 
+    /// Closes every live connection authenticated as an `.alasInstance`
+    /// device, leaving browser/phone devices untouched. Called when
+    /// federation is turned off while remote control stays on, so an
+    /// already-open peer socket does not outlive the flag that gated it: the
+    /// `authorize` closure in `accept(_:)` only stops a NEW upgrade from a
+    /// peer device, it does nothing to one that opened before the toggle
+    /// flipped.
+    func disconnectAllPeerDevices() {
+        for device in pairing.devices where device.kind == .alasInstance {
+            disconnectDevice(device.id)
+        }
+    }
+
     /// Pushes a fresh `hello` to every authenticated connection — e.g. after
     /// the "Remote hub" toggle changes, so already-connected browsers pick up
     /// the new `hubEnabled` without waiting for a reconnect.
@@ -178,20 +193,34 @@ final class RemoteServer {
     private func accept(_ nwConn: NWConnection) {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
-        let responder = RemoteHTTPResponder(
+        let identity = self.identityProvider
+        var configured = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
             diagnostics: { self.diagnosticsProvider(self.port) },
             originPolicy: originPolicy
         )
+        configured.acceptsPeers = { identity().federationEnabled }
+        configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.identity = identity
+        let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
-        let identity = self.identityProvider
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
             responder: { req, body in responder.response(for: req, body: body) },
             authorize: { [weak self] token in
                 guard let self, let id = self.pairing.validate(token: token) else { return nil }
+                // A valid token alone is not enough for an Alas peer while
+                // federation is off: without this, an already-issued
+                // `.alasInstance` token keeps working across the toggle, and
+                // `disconnectAllPeerDevices()` at the moment of disabling
+                // would only be a one-time sweep a reconnect could undo.
+                // Browser/phone devices are unaffected by the flag either way.
+                if !identity().federationEnabled,
+                   self.pairing.devices.first(where: { $0.id == id })?.kind == .alasInstance {
+                    return nil
+                }
                 self.pairing.touch(deviceId: id)
                 return id
             },
@@ -206,6 +235,21 @@ final class RemoteServer {
                     guard let self else { return }
                     self.connectionDevice[ObjectIdentifier(conn)] = did
                     self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
+                    // `authorize` can pass while the device is still valid
+                    // and federation is on, but this registration lands via
+                    // a LATER queue → MainActor hop. If the device is
+                    // revoked in that window (the user clicked Forget),
+                    // `disconnectDevice` cannot find this socket yet — it
+                    // isn't in `connectionDevice` — and misses it. If
+                    // federation turns off in that same window for an
+                    // `.alasInstance` device, `disconnectAllPeerDevices()`
+                    // misses it for the same reason. Recheck both now that
+                    // registration has actually happened, closing the gap
+                    // regardless of how the hops interleaved.
+                    let device = self.pairing.devices.first(where: { $0.id == did })
+                    if device == nil || (!identity().federationEnabled && device?.kind == .alasInstance) {
+                        conn.cancel()
+                    }
                 }
             },
             onClose: { [weak self] conn in
