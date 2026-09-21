@@ -1007,6 +1007,12 @@ enum ACPToolCallContent: Codable, Equatable {
                 newText: try c.decode(String.self, forKey: .newText))
         case "terminal":
             self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
+        case "text", "resource_link", "image", "resource":
+            // Some adapters (and real permission-request payloads) send a
+            // bare ACPContentBlock here instead of wrapping it in the
+            // spec's tagged union. Decode it directly rather than losing it
+            // to `.unknown` — that silently drops the block's text.
+            self = .content(try ACPContentBlock(from: decoder))
         default:
             self = .unknown
         }
