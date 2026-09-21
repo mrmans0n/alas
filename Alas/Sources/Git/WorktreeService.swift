@@ -1074,28 +1074,38 @@ struct WorktreeService {
 
         if !force {
             // Once the directory has been renamed under the common git dir,
-            // every submodule's relative `gitdir:` pointer is dangling, so any
-            // status that descends into them exits 128. The authoritative
-            // submodule audit already ran above, on the live path; this pass
-            // only has to catch outer-tree writes that landed during the
-            // rename, so it stays out of the submodules.
+            // every submodule's relative `gitdir:` pointer is dangling, so the
+            // outer `git status` call below has to stay out of them
+            // (`ignoresSubmodules: true`) or it exits 128. That doesn't mean
+            // submodules go unaudited post-stage: `stagedInitializedSubmodulesAreClean`
+            // below resolves each one's gitdir explicitly and re-checks it,
+            // closing the window between the pre-stage check above (on the
+            // live path) and this point where something could have written
+            // into a submodule mid-stage.
             let stagedIsClean: Bool
             do {
+                let outerIsClean: Bool
                 if auditedMissingLFS {
-                    stagedIsClean = try await canForceRemoveAfterMissingLFS(
+                    outerIsClean = try await canForceRemoveAfterMissingLFS(
                         ticket.stagedPath,
                         gitDirectory: expectedRegistration.gitDirectory,
                         ignoresSubmodules: true,
                         usesRemoteHostRegistry: false
                     )
                 } else {
-                    stagedIsClean = try await isWorktreeClean(
+                    outerIsClean = try await isWorktreeClean(
                         ticket.stagedPath,
                         gitDirectory: expectedRegistration.gitDirectory,
                         ignoresSubmodules: true,
                         usesRemoteHostRegistry: false
                     )
                 }
+                stagedIsClean = outerIsClean
+                    ? try await stagedInitializedSubmodulesAreClean(
+                        ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory
+                    )
+                    : false
             } catch {
                 try failAfterRollingBack(error.localizedDescription)
             }
@@ -1447,7 +1457,7 @@ struct WorktreeService {
     /// Git's structural refusal to touch a worktree holding initialized
     /// submodules. Wording varies across versions, so match loosely; a miss
     /// only means the caller surfaces git's own stderr instead.
-    private static func looksLikeSubmoduleRemoveRefusal(_ stderr: String) -> Bool {
+    static func looksLikeSubmoduleRemoveRefusal(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
         return lower.contains("containing submodules")
             && lower.contains("cannot be moved or removed")
@@ -1523,6 +1533,101 @@ struct WorktreeService {
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submodulePathsFromGitmodules(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> [String] {
+        let result = try await Process.git(
+            ["config", "--file", ".gitmodules", "--get-regexp", "path"],
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
+        if result.exitCode != 0 {
+            return []
+        }
+        return result.stdout
+            .split(separator: "\n")
+            .compactMap { line in
+                line.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init)
+            }
+    }
+
+    private static func submoduleGitDirectory(
+        for submodulePath: URL,
+        relativePath: String,
+        parentGitDirectory: URL
+    ) -> URL? {
+        let dotGit = submodulePath.appendingPathComponent(".git")
+        if (try? dotGit.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            return dotGit
+        }
+        guard let rawGitFile = try? String(contentsOf: dotGit, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawGitFile.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = rawGitFile.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        let recordedGitDirectory = (rawPath as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: rawPath)
+            : submodulePath.appendingPathComponent(rawPath)
+        if FileManager.default.fileExists(atPath: recordedGitDirectory.path) {
+            return recordedGitDirectory.standardizedFileURL
+        }
+        // Staging renames the worktree out from under every submodule's
+        // relative `gitdir:` pointer, so it no longer resolves. A linked
+        // worktree's submodule gitdir always lives at a fixed, computable
+        // spot relative to the worktree's own git directory — reconstruct it
+        // there instead of trusting the now-dangling relative path.
+        let fallback = parentGitDirectory
+            .appendingPathComponent("modules", isDirectory: true)
+            .appendingPathComponent(relativePath, isDirectory: true)
+            .standardizedFileURL
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
+    }
+
+    /// Recursively checks every initialized submodule for uncommitted or
+    /// untracked content once the worktree has been staged under the trash
+    /// directory. Closes the TOCTOU window between the pre-stage clean check
+    /// (on the live path) and the actual `git worktree remove`: something
+    /// could write into a submodule during that window, and skipping
+    /// submodules post-stage entirely would silently delete it unaudited.
+    ///
+    /// This only checks cleanliness (`git status`) with each submodule's
+    /// gitdir resolved explicitly, since the normal relative `gitdir:`
+    /// pointer is dangling post-stage. It deliberately does not re-run the
+    /// old ref-reachability/`ls-remote` local-state audit — that network
+    /// walk is what made "has a submodule" a de facto force-delete
+    /// requirement, which is exactly what this change removes.
+    private func stagedInitializedSubmodulesAreClean(
+        _ path: URL,
+        gitDirectory: URL
+    ) async throws -> Bool {
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            path,
+            usesRemoteHostRegistry: false
+        )
+        for relativePath in submodulePaths {
+            let submodulePath = path.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(
+                atPath: submodulePath.appendingPathComponent(".git").path
+            ) else { continue }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else { return false }
+            guard try await isWorktreeClean(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory,
+                usesRemoteHostRegistry: false
+            ) else { return false }
+            guard try await stagedInitializedSubmodulesAreClean(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory
+            ) else { return false }
+        }
+        return true
     }
 
     private func canForceRemoveAfterMissingLFS(

@@ -1032,15 +1032,16 @@ struct AppStateCleanupTests {
 
     // MARK: - Dirty-worktree force-delete state
 
-    @Test func dirtyWorktreeErrorMatchesKnownPatternsButNotSubmoduleRefusal() {
-        #expect(AppState.requiresForceForDirtyWorktree("Cannot delete a dirty worktree"))
-        #expect(AppState.requiresForceForDirtyWorktree("fatal: 'foo' contains modified or untracked files"))
-        #expect(AppState.requiresForceForDirtyWorktree("worktree is dirty and cannot be removed"))
+    @Test func removalRefusalMatchesDirtyAndLockedButNotSubmodules() {
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "Cannot delete a dirty worktree"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "fatal: 'foo' contains modified or untracked files"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "worktree is dirty and cannot be removed"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first"))
         // Git's submodule refusal is answered inside WorktreeService, never by
         // asking the user to force.
-        #expect(!AppState.requiresForceForDirtyWorktree("fatal: working trees containing submodules cannot be moved or removed"))
-        #expect(!AppState.requiresForceForDirtyWorktree("fatal: not a git repository"))
-        #expect(!AppState.requiresForceForDirtyWorktree(""))
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: "fatal: working trees containing submodules cannot be moved or removed"))
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: "fatal: not a git repository"))
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: ""))
     }
 
     @Test func resolveDeleteBranchIfMergedRespectsKeepBranchOverride() {
@@ -1092,6 +1093,35 @@ struct AppStateCleanupTests {
         )
 
         #expect(pending == nil)
+    }
+
+    /// Regression: a locked worktree used to have no path back to the force
+    /// confirmation — the row failed with git's raw refusal and every retry
+    /// failed identically, since only dirty/submodule stderr was recognized.
+    @Test func lockedRemoveErrorBuildsPendingForceDeleteFallback() {
+        let repoPath = URL(fileURLWithPath: "/tmp/repo")
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo-worktree-locked")
+        let worktree = Worktree(
+            id: "wt-locked",
+            projectId: "project",
+            name: "feature/locked",
+            branch: "feature/locked",
+            path: worktreePath,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+
+        let pending = AppState.pendingForceDelete(
+            for: worktree,
+            repoPath: repoPath,
+            deleteBranchIfMerged: true,
+            removedIndex: 3,
+            stderr: "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first"
+        )
+
+        #expect(pending?.id == worktree.id)
+        #expect(pending?.worktreePath == worktreePath)
+        #expect(pending?.removedIndex == 3)
     }
 
     @Test func dirtyRemoveErrorBuildsPendingForceDeleteFallback() {

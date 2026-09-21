@@ -1756,6 +1756,47 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1)
     }
 
+    /// Regression: a write landing in a submodule during the narrow window
+    /// between the pre-stage clean check (on the live path) and staging used
+    /// to go unaudited, since the post-stage recheck skipped submodules
+    /// entirely (their relative `gitdir:` pointer dangles once staged).
+    /// `stagedInitializedSubmodulesAreClean` resolves each submodule's gitdir
+    /// explicitly and closes that window.
+    @Test func fastLocalRemoveRollsBackWhenSubmoduleIsDirtiedDuringStaging() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-dirtied-during-staging")
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    try FileManager.default.moveItem(at: source, to: destination)
+                    if source.standardizedFileURL == fixture.worktree.path.standardizedFileURL {
+                        try "late-write".write(
+                            to: destination.appendingPathComponent("Deps/Submodule/untracked.txt"),
+                            atomically: true,
+                            encoding: .utf8
+                        )
+                    }
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(FileManager.default.fileExists(
+            atPath: fixture.worktree.path.appendingPathComponent("Deps/Submodule/untracked.txt").path
+        ))
+    }
+
     @Test func removeDoesNotForceDeleteIgnoredDirtySubmodule() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

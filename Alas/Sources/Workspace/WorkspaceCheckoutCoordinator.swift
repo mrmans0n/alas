@@ -2563,7 +2563,28 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         case .ssh(let host):
             let forceFlag = force ? " -f -f" : ""
             let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove\(forceFlag) -- \(SSHCommand.shellQuote(plan.worktreePath))"
-            let result = try await remote.run(host: host, command: command)
+            var result = try await remote.run(host: host, command: command)
+            if result.exitCode != 0,
+               !force,
+               WorktreeService.looksLikeSubmoduleRemoveRefusal(result.stderr) {
+                // Same policy as the local removal path: git refuses any
+                // worktree holding an initialized submodule without
+                // --force, purely on structure. Re-verify the tree is
+                // actually clean before supplying that force ourselves,
+                // rather than making "has a submodule" a user-facing
+                // force-delete prompt.
+                let statusCheck = try await remote.run(
+                    host: host,
+                    command: "git -C \(SSHCommand.shellQuote(plan.worktreePath)) status --porcelain=v1 --untracked-files=normal"
+                )
+                guard statusCheck.exitCode == 0,
+                      statusCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    throw WorktreeService.WorktreeError.gitFailed(result.stderr)
+                }
+                let retryCommand = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove -f -- \(SSHCommand.shellQuote(plan.worktreePath))"
+                result = try await remote.run(host: host, command: retryCommand)
+            }
             guard result.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(result.stderr) }
         }
     }

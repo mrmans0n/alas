@@ -1043,8 +1043,8 @@ final class AppState {
         installerHost = .detect()
     }
 
-    static let forceDeleteAlertTitleSuffix = "has uncommitted changes."
-    static let forceDeleteAlertMessage = "Force delete? Any uncommitted work in this worktree will be lost."
+    static let forceDeleteAlertTitleSuffix = "requires force delete."
+    static let forceDeleteAlertMessage = "Git refused to remove this worktree — it may have uncommitted changes or be locked. Force delete will remove it and discard any uncommitted work."
 
     private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
     static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
@@ -10267,7 +10267,7 @@ final class AppState {
                 return .needsForce
             } else if !force,
                       !promptsForForce,
-                      Self.requiresForceForDirtyWorktree(stderr) {
+                      Self.requiresForceRetry(forRemovalRefusal: stderr) {
                 // Batches never force implicitly and must not hijack the app
                 // with a modal mid-run: record the state and report it back so
                 // the sheet can tell the user to handle this one individually.
@@ -10450,7 +10450,7 @@ final class AppState {
         removedIndex: Int,
         stderr: String
     ) -> PendingForceDeleteWorktree? {
-        guard requiresForceForDirtyWorktree(stderr) else { return nil }
+        guard requiresForceRetry(forRemovalRefusal: stderr) else { return nil }
         return PendingForceDeleteWorktree(
             id: worktree.id,
             branch: worktree.branch,
@@ -10462,19 +10462,27 @@ final class AppState {
         )
     }
 
-    /// Permissive substring check: git's exact wording around dirty worktrees
-    /// varies by version. If the match misses, the caller surfaces the raw
-    /// stderr instead, which is acceptable degradation.
+    /// Permissive substring check: git's exact wording around dirty or locked
+    /// worktrees varies by version. If the match misses, the caller surfaces
+    /// the raw stderr instead, which is acceptable degradation.
+    ///
+    /// A locked worktree needs `--force --force`, which `removeFastLocal`
+    /// already supplies once `force: true` comes back through
+    /// `confirmForceDeletePendingWorktree` and it re-reads the registration's
+    /// own locked bit — this only has to recognize that a retry is worth
+    /// offering at all.
     ///
     /// Git's separate refusal for worktrees holding initialized submodules is
     /// deliberately absent: `WorktreeService` answers that one itself once the
     /// tree is verified clean, so it never reaches a user prompt.
-    nonisolated static func requiresForceForDirtyWorktree(_ stderr: String) -> Bool {
+    nonisolated static func requiresForceRetry(forRemovalRefusal stderr: String) -> Bool {
         let s = stderr.lowercased()
         return s.contains("is dirty")
             || s.contains("dirty worktree")
             || s.contains("contains modified or untracked files")
             || s.contains("modified or untracked")
+            || s.contains("locked working tree")
+            || (s.contains("locked") && s.contains("remove -f -f"))
     }
 
     private func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
