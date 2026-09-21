@@ -178,6 +178,38 @@ struct AlasFieldTests {
         #expect(editor.selectedRange() == NSRange(location: 7, length: 0))
     }
 
+    @Test func markedTextDoesNotUpdateFilteredBindingUntilCommit() throws {
+        var text = "nacho/"
+        let view = AlasField(
+            text: Binding(get: { text }, set: { text = $0 }),
+            monospaced: true,
+            focusOnAppear: true,
+            onSubmit: {},
+            inputFilter: .branchName
+        )
+        .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: controller)
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+        let field = try #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+
+        editor.setMarkedText("^", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.hasMarkedText())
+        #expect(editor.string == "nacho/^")
+        #expect(text == "nacho/")
+
+        editor.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
+        pump()
+        #expect(!editor.hasMarkedText())
+        #expect(editor.string == "nacho/ê")
+        #expect(text == "nacho/ê")
+    }
+
     @Test func rejectingCharacterInMiddleKeepsNextInsertionAtCaret() throws {
         let controller = NSHostingController(rootView: TypingHost().body.environment(\.theme, currentTheme()))
         let window = NSWindow(contentViewController: controller)

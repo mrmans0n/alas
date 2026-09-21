@@ -159,6 +159,9 @@ private struct AlasNSTextField: NSViewRepresentable {
             guard let field = obj.object as? NSTextField else { return }
             isEditing = true
             let editor = field.currentEditor() as? NSTextView
+            if editor?.hasMarkedText() == true {
+                return
+            }
             let value = editor?.string ?? field.stringValue
             self.editingValue = value
             if value != parent.text {
