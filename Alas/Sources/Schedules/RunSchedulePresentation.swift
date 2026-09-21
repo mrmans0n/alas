@@ -107,6 +107,11 @@ enum RunSchedulePresentation {
         storedNextFireAt: Date?,
         computedNextFireAt: Date?
     ) -> Date? {
+        // A draft with no computable occurrence has nothing to preview, even
+        // when its trigger still equals the saved one. Deselecting every
+        // weekday is exactly that case: an empty set is how a daily schedule
+        // is stored, so the two compare equal while the draft is invalid.
+        guard computedNextFireAt != nil else { return nil }
         guard let existingTrigger, existingTrigger == draftTrigger else { return computedNextFireAt }
         return storedNextFireAt
     }

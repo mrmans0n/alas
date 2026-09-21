@@ -298,6 +298,16 @@ struct RunSchedulePresentationTests {
             existingTrigger: nil, draftTrigger: trigger,
             storedNextFireAt: nil, computedNextFireAt: computed
         ) == computed)
+
+        // Deselecting every weekday leaves an invalid draft whose trigger
+        // still compares equal to a saved daily one, because both store the
+        // empty set. The preview must go blank rather than show the stored
+        // date beside "Pick at least one weekday".
+        let daily = RunScheduleTrigger.timeOfDay(hour: 9, minute: 0, weekdays: [])
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: daily, draftTrigger: daily,
+            storedNextFireAt: stored, computedNextFireAt: nil
+        ) == nil)
     }
 
     /// A remote terminal runs `ssh` on this Mac, so the harness detector

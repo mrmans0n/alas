@@ -450,7 +450,8 @@ extension AppState {
                 sessionID: terminal.root.firstLeaf().sessionId,
                 schedule: schedule,
                 worktree: worktree,
-                host: project.host
+                host: project.host,
+                agentID: agentId
             )
         }
         return .succeeded
@@ -480,7 +481,8 @@ extension AppState {
         sessionID: String,
         schedule: RunSchedule,
         worktree: Worktree,
-        host: String?
+        host: String?,
+        agentID: String
     ) async {
         let text = RunScheduleComposition.terminalText(for: prompt)
         guard !text.isEmpty else { return }
@@ -498,9 +500,13 @@ extension AppState {
             )
             return
         }
-        guard await waitForScheduledAgent(sessionID: sessionID) else {
+        guard await waitForScheduledAgent(sessionID: sessionID, expecting: agentID) else {
+            // A cancelled delivery is not a failed one. The schedule was
+            // deleted or torn down, and reporting that its agent never got
+            // ready would be noise about work the user called off.
+            guard !Task.isCancelled else { return }
             inAppNotifications.post(
-                "\(schedule.name): the agent did not become ready in \(worktree.branch), so the prompt was not sent.",
+                "\(schedule.name): could not confirm the agent was ready in \(worktree.branch), so the prompt was not sent.",
                 severity: .error,
                 worktreeID: worktree.id
             )
@@ -527,11 +533,19 @@ extension AppState {
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
-    /// Ready means the detector currently sees a known agent as the
-    /// session's foreground process. A changed foreground pid alone is not
-    /// enough — the user's startup script spawns processes too — so an agent
-    /// the detector does not know never gets its prompt, which is the safe
-    /// side to fail on.
+    /// Ready means the detector currently sees *this schedule's* agent as
+    /// the session's foreground process.
+    ///
+    /// The identity check matters because the user's session-open script
+    /// runs ahead of the agent command in the same shell. A script that
+    /// launches some other recognised harness and stays running would
+    /// otherwise collect the prompt, and with auto-send have it submitted,
+    /// while the scheduled agent had not started yet.
+    ///
+    /// An agent outside `AgentKind` cannot be identified this way, so it is
+    /// refused rather than accepting whatever else the detector happens to
+    /// see. Nothing is lost: the detector only ever recognises those same
+    /// binaries, so such an agent could never have been confirmed anyway.
     ///
     /// `activeHarnessBySession` rather than `harnessBySession`: the latter is
     /// never cleared when the process exits, so it answers "did an agent ever
@@ -541,12 +555,13 @@ extension AppState {
     /// Cancellation ends the wait instead of being swallowed. A cancelled
     /// sleep returns immediately, so ignoring it would spin this loop on the
     /// main actor until the deadline and freeze the app.
-    private func waitForScheduledAgent(sessionID: String) async -> Bool {
+    private func waitForScheduledAgent(sessionID: String, expecting agentID: String) async -> Bool {
         if let scheduledAgentReadiness {
             return await scheduledAgentReadiness(sessionID)
         }
+        guard let expected = AgentKind(rawValue: agentID)?.asHarnessKind else { return false }
         let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
-        while harness.activeHarnessBySession[sessionID] == nil {
+        while harness.activeHarnessBySession[sessionID] != expected {
             guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }
             do {
                 try await Task.sleep(for: .milliseconds(500))
@@ -563,7 +578,7 @@ extension AppState {
         } catch {
             return false
         }
-        return harness.activeHarnessBySession[sessionID] != nil
+        return harness.activeHarnessBySession[sessionID] == expected
     }
 
     private func typeIntoTerminal(_ text: String, sessionID: String) -> Bool {
