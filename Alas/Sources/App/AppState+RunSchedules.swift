@@ -297,15 +297,41 @@ extension AppState {
         // A template need not vary per occurrence — "nightly" is a reasonable
         // thing to type, and `{name}-{date}` repeats all day on an interval
         // schedule. Without a free suffix the first run would take the name
-        // and every later one would fail on the existing destination.
-        guard let free = firstFreeScheduledBranch(rendered, project: project) else {
+        // and every later one would collide with what it left behind: the
+        // destination it still occupies, or the branch it kept after the
+        // worktree went away.
+        let repoPath = URL(fileURLWithPath: project.path)
+        let git = GitService()
+        // Local branches only: `WorktreeService.add` decides whether to reuse
+        // a branch from `refs/heads/<branch>`, and a remote-tracking
+        // `origin/nightly` with no local branch is still cut from the base.
+        let existingBranches = Set((try? await git.localBranches(at: repoPath)) ?? [])
+        let probe = scheduledDestinationExistence
+        let host = project.host
+        let free = await ScheduledWorktreeDestination.firstFree(
+            rendered: rendered,
+            pathTemplate: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            existingBranches: existingBranches,
+            pathState: { await probe($0, host) }
+        )
+        let branch: String
+        let destination: URL
+        switch free {
+        case let .free(freeBranch, freeDestination):
+            branch = freeBranch
+            destination = freeDestination
+        case .exhausted:
             return .failure(.init(
-                message: "Could not find a free worktree path for \(rendered); clean up old scheduled worktrees."
+                message: "Could not find a free branch and worktree path for \(rendered); clean up old scheduled worktrees."
+            ))
+        case .undeterminable(let path):
+            return .failure(.init(
+                message: "Could not check whether \(path.path) already exists on \(host ?? "this Mac")."
             ))
         }
-        let branch = free.branch
-        let destination = free.destination
-        let availableBranches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+        let availableBranches = (try? await git.branches(at: repoPath)) ?? []
         let base = NewWorktreeDialog.preferredBaseBranch(
             availableBranches: availableBranches,
             configuredDefault: config.worktrees.baseBranch
@@ -317,30 +343,6 @@ extension AppState {
             destination: destination,
             runStartup: true
         )
-    }
-
-    /// The rendered branch if its destination is free, else the same name
-    /// with the smallest numeric suffix that is. Nil when the whole run is
-    /// taken, which means the user has scheduled worktrees to clean up.
-    private func firstFreeScheduledBranch(
-        _ rendered: String,
-        project: ProjectConfig,
-        limit: Int = 50
-    ) -> (branch: String, destination: URL)? {
-        for attempt in 0..<limit {
-            let branch = attempt == 0 ? rendered : "\(rendered)-\(attempt + 1)"
-            guard case .valid = GitNameValidator.validateBranchName(branch) else { continue }
-            let destination = WorktreePathTemplateRenderer.render(
-                template: config.worktrees.pathTemplate,
-                worktreeRoot: config.worktrees.rootPath,
-                repoName: project.name,
-                branch: branch
-            )
-            if !FileManager.default.fileExists(atPath: destination.path) {
-                return (branch, destination)
-            }
-        }
-        return nil
     }
 
     private func runScheduledScript(

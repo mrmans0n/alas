@@ -689,6 +689,111 @@ struct AppStateRunScheduleTests {
         #expect(created == ["nightly", "nightly-2"])
     }
 
+    /// Occupancy comes from the host that will run `git worktree add`, not
+    /// from this Mac's filesystem. For an SSH project the destination lives
+    /// on the remote host, where a local check sees nothing — so every run
+    /// after the first would pick the name the previous one took and fail.
+    @Test func aTakenDestinationIsSkippedEvenWhenNothingIsOnThisMac() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        // The host holds the first run's worktree while this Mac holds
+        // nothing, which is what a local check gets wrong.
+        let asked = ProbeBox()
+        state.scheduledDestinationExistence = { destination, host in
+            asked.append((name: destination.lastPathComponent, host: host))
+            return destination.lastPathComponent == "nightly" ? .occupied : .free
+        }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+        )).outcome
+
+        #expect(outcome == .succeeded)
+        let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        #expect(created.branch == "nightly-2")
+        #expect(asked.values.map(\.name) == ["nightly", "nightly-2"])
+        // Whoever owns the destination is who gets asked about it.
+        #expect(asked.values.allSatisfy { $0.host == project.host })
+    }
+
+    /// A host that cannot be reached answers neither "free" nor "taken".
+    /// Treating that silence as free would claim a path that may already hold
+    /// a worktree, so the run stops and says which path it could not check.
+    @Test func anUndeterminableDestinationFailsTheRunRatherThanGuessing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        state.scheduledDestinationExistence = { _, _ in .unknown }
+        let posted = NotificationBox()
+        state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+        )).outcome
+
+        guard case .launchFailed(let message) = outcome else {
+            Issue.record("Expected an undeterminable destination to fail the run, got \(outcome)")
+            return
+        }
+        #expect(message.contains("nightly"))
+        #expect(state.projectsManager.worktrees(projectId: project.id).allSatisfy { $0.id == main.id })
+        // Unattended failures have to reach Notification Center, not just the
+        // in-app toast list nobody is looking at.
+        #expect(posted.values.map(\.content.title).contains { $0.contains("Nightly") })
+    }
+
+    /// Removing a scheduled worktree while keeping its branch — what an
+    /// unmerged branch left behind by a failed `git branch -d` looks like —
+    /// frees the destination path but not the name. `WorktreeService.add`
+    /// checks an existing branch out at its own tip instead of branching from
+    /// the base, so reusing it would run the schedule against stale code.
+    @Test func aRetainedBranchIsNotReusedByTheNextRun() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let composed = schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+        )
+
+        #expect(await state.runSchedule(composed).outcome == .succeeded)
+        let first = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        #expect(first.branch == "nightly")
+        // A run leaves commits behind; the branch keeps them after its
+        // worktree goes away.
+        _ = try await Process.git(
+            ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "stale"],
+            cwd: first.path
+        )
+        let stale = try await Process.git(["rev-parse", "HEAD"], cwd: first.path).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["worktree", "remove", "--force", first.path.path], cwd: repo)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        #expect(try await Process.git(["show-ref", "--verify", "--quiet", "refs/heads/nightly"], cwd: repo).exitCode == 0)
+
+        #expect(await state.runSchedule(composed).outcome == .succeeded)
+
+        let second = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id && $0.id != first.id }
+        )
+        #expect(second.branch == "nightly-2")
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: second.path).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(head != stale)
+    }
+
     @Test func compositionWithoutAScriptJustLaunchesTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -779,6 +884,25 @@ struct AppStateRunScheduleTests {
 
 private final class LocationBox: @unchecked Sendable {
     var locations: [RunScriptCaptureLocation] = []
+}
+
+/// Records every destination the scheduler asked about, and which host it
+/// asked.
+private final class ProbeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(name: String, host: String?)] = []
+
+    var values: [(name: String, host: String?)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ value: (name: String, host: String?)) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
 }
 
 private final class ErrorBox: @unchecked Sendable {
