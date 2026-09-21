@@ -680,7 +680,8 @@ final class ACPSessionRunner {
             flushStreamingPersist()
             preAppliedSessionInfoDirty = session.apply(
                 params.update,
-                tracksRetryStatus: !suppressingLoadReplay
+                tracksRetryStatus: !suppressingLoadReplay,
+                worktreeRoot: worktreePath
             )
             applySessionInfoTitle(info)
         } else {
@@ -730,7 +731,7 @@ final class ACPSessionRunner {
                     freezeStreamingPersistSnapshots()
                     streamingLeaseLost = true
                 }
-                let dirty = session.apply(params.update)
+                let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 if !streamingLeaseLost {
                     scheduleStreamingPersist(
                         dirty,
@@ -745,7 +746,7 @@ final class ACPSessionRunner {
                 } else {
                     hadConfigBackedModel = false
                 }
-                let dirty = session.apply(params.update)
+                let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
                 let hasConfigBackedModel: Bool
                 if case .configOption = session.chipState.models?.source {
@@ -2191,8 +2192,9 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
+                let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
                 await MainActor.run {
+                    self.session.recordPromptQuota(promptOutcome.quota)
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {

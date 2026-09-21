@@ -457,7 +457,8 @@ final class ACPSession: ObservableObject, Identifiable {
     func apply(
         _ update: ACPSessionUpdate,
         tracksRetryStatus: Bool = true,
-        at timestamp: Date = Date()
+        at timestamp: Date = Date(),
+        worktreeRoot: String? = nil
     ) -> Set<Int> {
         if tracksRetryStatus {
             switch update {
@@ -591,7 +592,8 @@ final class ACPSession: ObservableObject, Identifiable {
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
-            return applyDiffStatsFromToolCallContent(items).union([transcript.messages.count - 1])
+            return applyDiffStatsFromToolCallContent(items, worktreeRoot: worktreeRoot)
+                .union([transcript.messages.count - 1])
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
@@ -607,7 +609,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
             }
-            let diffTouched = applyDiffStatsFromToolCallContent(u.content ?? [])
+            let diffTouched = applyDiffStatsFromToolCallContent(u.content ?? [], worktreeRoot: worktreeRoot)
             return touched.map { diffTouched.union([$0]) } ?? diffTouched
         case .compactionUpdate(let update):
             clearRestoredContextRecoveryStatus()
@@ -1854,13 +1856,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// unrelated edit to the same file — from clobbering an earlier row's
     /// counts; a diff item without stats, or with no matching file edit,
     /// is a no-op and the heuristic count stands.
-    private func applyDiffStatsFromToolCallContent(_ items: [ACPToolCallContent]) -> Set<Int> {
+    ///
+    /// `worktreeRoot`, when supplied, normalizes an absolute diff path to
+    /// worktree-relative before matching — `.fileEdit.path` is always
+    /// stored relative (see `ACPSessionRunner.appendAndPersistFileEdit`),
+    /// but the diff block's own path is whatever the adapter reported.
+    private func applyDiffStatsFromToolCallContent(
+        _ items: [ACPToolCallContent],
+        worktreeRoot: String?
+    ) -> Set<Int> {
         var touched: Set<Int> = []
         for item in items {
             guard case .diff(let path, let oldText, let newText, _, let diffStats?) = item else { continue }
+            let relativePath = Self.relativeToWorktreeRoot(path, worktreeRoot: worktreeRoot)
             guard let index = transcript.messages.lastIndex(where: {
                 if case .fileEdit(_, let edit) = $0 {
-                    return edit.path == path && edit.oldText == oldText && edit.newText == newText
+                    return edit.path == relativePath && edit.oldText == oldText && edit.newText == newText
                 }
                 return false
             }), case .fileEdit(let id, var edit) = transcript.messages[index] else { continue }
@@ -1871,6 +1882,19 @@ final class ACPSession: ObservableObject, Identifiable {
             touched.insert(index)
         }
         return touched
+    }
+
+    /// Mirrors `ACPSessionRunner.relativeToWorktree`: converts an absolute
+    /// path under `worktreeRoot` to worktree-relative. Returns `path`
+    /// unchanged when `worktreeRoot` is nil or `path` isn't under it (it
+    /// may already be relative).
+    private static func relativeToWorktreeRoot(_ path: String, worktreeRoot: String?) -> String {
+        guard let worktreeRoot else { return path }
+        let root = URL(fileURLWithPath: worktreeRoot).standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let target = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard target.hasPrefix(prefix) else { return path }
+        return String(target.dropFirst(prefix.count))
     }
 
     /// Split a diff hunk into lines while preserving blank lines inside

@@ -1011,6 +1011,33 @@ struct ACPSessionTests {
         #expect(edit.removed == 2)
     }
 
+    @Test("diffStats correlate when the diff block reports an absolute path and a worktree root is supplied")
+    func diffStatsCorrelateWithAbsolutePathAndWorktreeRoot() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // `appendAndPersistFileEdit` stores the worktree-relative path
+        // (ACPSessionRunner.swift ~450-456); the diff block's path can
+        // still arrive absolute.
+        session.appendFileEdit(.init(
+            path: "src/x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "/repo/src/x.swift", oldText: "a\n", newText: "a\nb\n",
+                kind: "update", diffStats: .init(added: 4, removed: 2))])),
+            worktreeRoot: "/repo")
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 4)
+        #expect(edit.removed == 2)
+    }
+
     @Test("a diff block without diffStats leaves the file edit's heuristic counts unchanged")
     func diffWithoutStatsLeavesFileEditUnchanged() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
