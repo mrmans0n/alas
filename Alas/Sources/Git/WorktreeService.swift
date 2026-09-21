@@ -779,15 +779,28 @@ struct WorktreeService {
             if !force,
                result.exitCode != 0,
                Self.looksLikeSubmoduleRemoveRefusal(result.stderr) {
-                let clean = try? await isRemovalClean(
+                var clean = try? await isRemovalClean(
                     worktree.path,
                     usesRemoteHostRegistry: usesRemoteHostRegistry
                 )
+                if clean == nil {
+                    // The plain status check can fail the exact same way
+                    // `git worktree remove` itself just did — a missing or
+                    // broken LFS smudge/clean filter, not dirty content —
+                    // which would otherwise get misreported as "not clean"
+                    // by the `try?` above. Reuse the same LFS-tolerant audit
+                    // the missing-LFS fallback below uses before concluding
+                    // the tree can't be verified.
+                    clean = try? await canForceRemoveAfterMissingLFS(
+                        worktree.path,
+                        usesRemoteHostRegistry: usesRemoteHostRegistry
+                    )
+                }
                 guard clean == true else {
                     throw WorktreeError.gitFailed(Self.dirtyWorktreeMessage)
                 }
                 result = try await Process.git(
-                    args + ["--force"],
+                    Self.lfsFilterOverride + args + ["--force"],
                     cwd: repoPath,
                     usesRemoteHostRegistry: usesRemoteHostRegistry,
                     timeout: 90

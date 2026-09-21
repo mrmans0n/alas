@@ -9885,6 +9885,15 @@ final class AppState {
         if projectsManager.operationState(for: worktree.id) == .deleting {
             return .ok
         }
+        // The CLI is authoritative over any pending UI decision for this
+        // worktree: release a leftover `.preparingDelete` claim from an
+        // in-app dialog the user hasn't answered yet (its
+        // `pendingForceDeleteWorktree` was just discarded above), so this
+        // call's own outcome decides admission blocking instead of a stale
+        // claim that nothing else would ever clear.
+        if projectsManager.operationState(for: worktree.id) == .preparingDelete {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
+        }
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }

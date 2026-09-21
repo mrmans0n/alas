@@ -1696,6 +1696,46 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
+    /// Regression: the plain cleanliness check inside the submodule-refusal
+    /// auto-force branch can fail for a reason that has nothing to do with
+    /// dirty content — a missing or broken git-lfs smudge/clean filter
+    /// causes `git status` itself to error, and `try?` swallowing that into
+    /// `nil` used to get reported as "not clean," wrongly requiring an
+    /// explicit force for a worktree that is otherwise clean.
+    @Test func removeWithoutForceToleratesMissingLFSFilterWhileAuditingCleanSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-missing-lfs")
+        defer { fixture.removeFiles() }
+        try "* filter=lfs -text\n".write(
+            to: fixture.worktree.path.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", ".gitattributes"], cwd: fixture.worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "attrs"], cwd: fixture.worktree.path)
+        // Point the LFS filters at a binary that does not exist, the same
+        // failure shape a real missing git-lfs install produces.
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: fixture.worktree.path
+            )
+        }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: fixture.worktree.path
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: fixture.worktree.path)
+
+        try await fixture.service.remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
     @Test func removeWithForceDeletesCleanInitializedSubmodule() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-force")
         defer {

@@ -1155,6 +1155,45 @@ struct AppStateCLIRoutingTests {
         #expect(state.projectsManager.operationState(for: target.id) == .deleting)
     }
 
+    /// Regression: a CLI delete that dismisses a leftover `.preparingDelete`
+    /// claim from an unanswered in-app dialog must actually release it, not
+    /// just discard `pendingForceDeleteWorktree`. Otherwise the row stays
+    /// blocked from new session admission forever — nothing else clears a
+    /// bare `.preparingDelete` claim.
+    @Test func cliWorktreeDeleteReleasesStalePreparingDeleteClaim() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete-stale-claim")
+        let worktreePath = main.path.deletingLastPathComponent().appendingPathComponent("delete-stale-claim-target")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: worktreePath)
+        }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "delete-stale-claim-target", worktreePath.path, "main"], cwd: main.path)
+        try "dirty".write(to: worktreePath.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-stale-claim-target" })
+
+        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: target.id,
+            branch: target.branch,
+            projectId: target.projectId,
+            repoPath: main.path,
+            worktreePath: target.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 1
+        )
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-stale-claim-target", force: false, keepBranch: true))))
+
+        guard case .error = response else {
+            Issue.record("Expected an error response for an unforced dirty delete")
+            return
+        }
+        #expect(state.pendingForceDeleteWorktree == nil)
+        #expect(state.projectsManager.operationState(for: target.id) == nil)
+    }
+
     /// Regression test for the review palette ignoring a per-worktree
     /// base-branch override: a worktree whose right pane is already loaded
     /// (e.g. because the ReviewChanges tab that's opening the palette is
