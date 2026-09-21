@@ -11671,6 +11671,15 @@ final class AppState {
            command != spec.command {
             launchSpec = launchSpec.overridingCommandAndSetupCheck(command)
         }
+        if spec.agentID == "copilot",
+           let extra = configuredAgent?.extraTerminalArgs, !extra.isEmpty {
+            // Copilot 1.0.85 removed the `model`/`reasoning_effort` runtime
+            // config options (github/copilot-cli#4880) — the only way left to
+            // pick them is at spawn time. Reuses the existing per-agent
+            // "extra args" field (already wired into the terminal-harness
+            // launch path) instead of adding Copilot-specific persisted state.
+            launchSpec = launchSpec.prependingArguments(extra)
+        }
         if useBypassPermissions,
            let flag = configuredAgent?.bypassPermissionsFlag,
            launchSpec.arguments.contains(flag) == false {

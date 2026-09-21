@@ -19,7 +19,7 @@ struct ACPPermissionToolCall: Codable, Equatable {
     let title: String?
     let kind: String?
     let status: String?
-    let content: [ACPContentBlock]?
+    let content: [ACPToolCallContent]?
     let locations: [ACPToolLocation]?
     let rawInput: AnyCodable?
     let rawOutput: AnyCodable?
@@ -31,7 +31,7 @@ struct ACPPermissionToolCall: Codable, Equatable {
         title: String? = nil,
         kind: String? = nil,
         status: String? = nil,
-        content: [ACPContentBlock]? = nil,
+        content: [ACPToolCallContent]? = nil,
         locations: [ACPToolLocation]? = nil,
         rawInput: AnyCodable? = nil,
         rawOutput: AnyCodable? = nil,

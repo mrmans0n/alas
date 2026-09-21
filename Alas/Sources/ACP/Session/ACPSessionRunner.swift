@@ -60,8 +60,13 @@ final class ACPSessionRunner {
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
+    private var cancelRequestsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    /// The real JSON-RPC id of the `session/request_permission` currently
+    /// parked awaiting a user decision, if any. Used to match an inbound
+    /// `$/cancel_request` (OpenCode v2) against the request it targets.
+    private var pendingPermissionRequestID: JSONRPCID?
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -297,9 +302,19 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
                 self.flushPendingIncomingUpdates()
+                self.pendingPermissionRequestID = id
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
+                self.pendingPermissionRequestID = nil
                 self.connection.client.respondToPermission(id: id, response: response)
+            }
+        }
+
+        cancelRequestsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await id in self.connection.client.cancelRequests {
+                guard id == self.pendingPermissionRequestID else { continue }
+                self.policy.userCancelled()
             }
         }
 
@@ -743,6 +758,7 @@ final class ACPSessionRunner {
         incomingUpdateFlushTask = nil
         updatesTask?.cancel()
         permissionsTask?.cancel()
+        cancelRequestsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
         // A detach/takeover can land while a permission prompt is parked.

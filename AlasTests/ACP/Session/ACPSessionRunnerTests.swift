@@ -462,6 +462,35 @@ struct ACPSessionRunnerTests {
         #expect(mock.sent.contains { $0.method == "session/cancel" })
     }
 
+    @Test("user cancel completion does not depend on the prompt response's stopReason")
+    func userCancelCompletionIgnoresStopReason() async throws {
+        // Copilot 1.0.85+ returns stopReason "end_turn" instead of
+        // "cancelled" on a user-initiated stop (github/copilot-cli#4561).
+        // ACPConnection.prompt(...) never decodes stopReason at all — the
+        // completion callback and transcript state must settle the same
+        // way no matter what the field says.
+        let (runner, mock) = try makeRunner()
+        let promptStarted = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            return try JSONEncoder().encode(["stopReason": "end_turn"])
+        }
+
+        var completion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            completion = succeeded
+        }
+        await promptStarted.wait()
+        await runner.userCancel()
+
+        for _ in 0..<20 where completion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(completion == true)
+        #expect(runner.session.lastError == nil)
+        #expect(runner.session.transcript.streamingState == .idle)
+    }
+
     @Test("user cancel invokes the pending input cancellation hook")
     func userCancelInvokesInputCancellation() async throws {
         var didCancelInput = false
@@ -2106,6 +2135,60 @@ struct ACPSessionRunnerTests {
 
         let response = await decision
         #expect(response.outcome == .cancelled)
+    }
+
+    @Test("inbound $/cancel_request dismisses the pending permission as cancelled")
+    func cancelRequestDismissesPendingPermission() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        mock.emitCancelRequest(id: requestId)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
+        #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("$/cancel_request for an id that isn't the pending permission is a no-op")
+    func cancelRequestIgnoresUnrelatedId() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        mock.emitCancelRequest(id: .number(999))
+
+        // Give the (no-op) dispatch a beat, then confirm the permission is
+        // still parked, not resolved.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(mock.permissionResponses[requestId] == nil)
+        #expect(runner.session.transcript.pendingPermission != nil)
     }
 
     @Test("takeover flush excludes chunks received after lease loss")

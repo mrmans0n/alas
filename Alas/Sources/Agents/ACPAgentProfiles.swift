@@ -54,6 +54,13 @@ enum ACPAgentProfiles {
             return .init(modeSource: .none,
                          thinkingSource: .mode,
                          autoRun: .ignored)
+        case "copilot":
+            // Copilot 1.0.82-1.0.86 stopped sending session/request_permission
+            // in ACP mode (github/copilot-cli#4537) — the toggle has nothing to
+            // gate, so mark it ignored rather than implying it works.
+            return .init(modeSource: .mode,
+                         thinkingSource: .heuristic,
+                         autoRun: .ignored)
         default:
             return .init(modeSource: .mode,
                          thinkingSource: .heuristic,

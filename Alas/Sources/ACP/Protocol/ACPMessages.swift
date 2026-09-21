@@ -815,6 +815,14 @@ struct ACPSessionCancelParams: Codable, Equatable {
     let sessionId: String
 }
 
+// MARK: - $/cancel_request (inbound notification)
+
+/// OpenCode v2 sends this to cancel a pending `session/request_permission`
+/// (or `fs/write_text_file`) when the turn itself is cancelled.
+struct ACPCancelRequestParams: Codable, Equatable {
+    let id: JSONRPCID
+}
+
 // MARK: - session/setMode + setModel
 
 struct ACPSessionSetModeParams: Codable, Equatable {
