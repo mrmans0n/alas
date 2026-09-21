@@ -160,11 +160,9 @@ struct ACPStdioQuestionDispatchTests {
         #expect(taskOutcome["durationMs"] as? Int == 42)
 
         let imageResponse = try #require(responses.first { $0["id"] as? Int == 3 })
-        let image = try #require(imageResponse["result"] as? [String: Any])
-        let imageOutcome = try #require(image["outcome"] as? [String: Any])
-        #expect(imageOutcome["outcome"] as? String == "generated")
-        #expect(imageOutcome["filePath"] as? String == "/tmp/logo.png")
-        #expect(imageOutcome["imageData"] as? String == "")
+        let imageError = try #require(imageResponse["error"] as? [String: Any])
+        #expect(imageError["code"] as? Int == -32000)
+        #expect(imageError["message"] as? String == "cursor/generate_image is not supported")
     }
 
     @Test("Cursor create plan is dispatched and responds with the selected outcome")

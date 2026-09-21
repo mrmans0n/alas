@@ -793,13 +793,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 outcome: .init(agentId: decoded.agentId, durationMs: decoded.durationMs)
             ))
         case "cursor/generate_image":
-            guard let decoded = try? JSONDecoder().decode(ACPCursorGenerateImageParams.self, from: params.data) else {
-                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
-                return
-            }
-            respond(id: id, value: ACPCursorGenerateImageResponse(
-                outcome: .init(filePath: decoded.filePath, imageData: "")
-            ))
+            respond(
+                id: id,
+                error: .init(
+                    code: -32000,
+                    message: "cursor/generate_image is not supported",
+                    data: nil
+                )
+            )
         default:
             respond(id: id, error: .init(code: -32601, message: "Method not found", data: nil))
         }

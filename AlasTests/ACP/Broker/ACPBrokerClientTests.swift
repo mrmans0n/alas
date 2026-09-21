@@ -479,13 +479,12 @@ struct ACPBrokerClientTests {
             ])
         ]))
         let image = try #require(responses.first { $0.requestId == .string("image-1") })
-        #expect(image.result == .object([
-            "outcome": .object([
-                "outcome": .string("generated"),
-                "filePath": .string("/tmp/image.png"),
-                "imageData": .string("")
-            ])
-        ]))
+        #expect(image.result == nil)
+        #expect(image.error == .init(
+            code: -32000,
+            message: "cursor/generate_image is not supported",
+            data: nil
+        ))
     }
 
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {

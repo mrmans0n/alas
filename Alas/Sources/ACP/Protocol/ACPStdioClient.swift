@@ -297,6 +297,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 plansCont.yield(.init(id: id, params: params))
             } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
             }
         case "cursor/update_todos":
@@ -322,15 +324,17 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
             }
         case "cursor/generate_image":
-            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorGenerateImageParams>.self, from: data),
-               let id = env.id, let params = env.params {
+            if let id = head.id {
                 acknowledgeAfterDispatch = false
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
-                respondToCursorGenerateImage(id: id, params: params)
-            } else if let id = head.id {
-                acknowledgeAfterDispatch = false
-                deferInboundConsumption(id: id, acknowledgement: onConsumed)
-                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+                respondFile(
+                    id: id,
+                    result: .failure(.init(
+                        code: -32000,
+                        message: "cursor/generate_image is not supported",
+                        data: nil
+                    ))
+                )
             }
         default:
             if let id = head.id {
@@ -477,14 +481,6 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         )
     }
 
-    private func respondToCursorGenerateImage(id: JSONRPCID, params: ACPCursorGenerateImageParams) {
-        respondCursorExtension(
-            id: id,
-            response: ACPCursorGenerateImageResponse(
-                outcome: .init(filePath: params.filePath, imageData: "")
-            )
-        )
-    }
 
     private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
         guard let body = try? JSONEncoder().encode(response) else { return }
