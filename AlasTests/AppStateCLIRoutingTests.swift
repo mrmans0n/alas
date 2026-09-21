@@ -1144,8 +1144,7 @@ struct AppStateCLIRoutingTests {
             repoPath: main.path,
             worktreePath: target.path,
             deleteBranchIfMerged: false,
-            removedIndex: 1,
-            reason: .dirty
+            removedIndex: 1
         )
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })

@@ -1043,34 +1043,15 @@ final class AppState {
         installerHost = .detect()
     }
 
-    enum ForceDeleteReason: Equatable {
-        case dirty
-        case containsSubmodules
-
-        var alertTitleSuffix: String {
-            switch self {
-            case .dirty:
-                "has uncommitted changes."
-            case .containsSubmodules:
-                "contains submodules."
-            }
-        }
-
-        var alertMessage: String {
-            switch self {
-            case .dirty:
-                "Force delete? Any uncommitted work in this worktree will be lost."
-            case .containsSubmodules:
-                "Git requires force delete for worktrees containing initialized submodules. Any uncommitted work in this worktree will be lost."
-            }
-        }
-    }
+    static let forceDeleteAlertTitleSuffix = "has uncommitted changes."
+    static let forceDeleteAlertMessage = "Force delete? Any uncommitted work in this worktree will be lost."
 
     private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
     static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
 
-    /// Set when a worktree deletion fails because Git requires `--force`.
-    /// The UI presents a confirmation dialog; confirming retries with force.
+    /// Set when a worktree deletion stops because the tree is dirty and Git
+    /// needs `--force`. The UI presents a confirmation dialog; confirming
+    /// retries with force.
     struct PendingForceDeleteWorktree: Identifiable, Equatable {
         let id: String           // worktree id
         let branch: String
@@ -1079,21 +1060,12 @@ final class AppState {
         let worktreePath: URL    // actual worktree path
         let deleteBranchIfMerged: Bool
         let removedIndex: Int
-        let reason: ForceDeleteReason
     }
     var pendingForceDeleteWorktree: PendingForceDeleteWorktree?
 
     struct WorktreeDeleteConfirmation: Equatable {
         let title: String
         let message: String
-        let buttonTitle: String
-        let force: Bool
-    }
-
-    struct WorktreeDeleteDecision: Equatable {
-        let confirmation: WorktreeDeleteConfirmation
-        let force: Bool
-        let allowsSubmoduleLocalState: Bool
     }
 
     @ObservationIgnored
@@ -1829,7 +1801,7 @@ final class AppState {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .launchFailed, .deleteFailed:
+                case nil, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
                     else { continue }
                     targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
@@ -1873,7 +1845,7 @@ final class AppState {
             switch self.projectsManager.operationState(for: worktree.id) {
             case .creating, .deleting, .createFailed:
                 return
-            case nil, .preparingDelete, .launchFailed, .deleteFailed:
+            case nil, .launchFailed, .deleteFailed:
                 break
             }
             guard let snapshot = await self.remoteWorktreeStatus(worktree: worktree),
@@ -2203,7 +2175,7 @@ final class AppState {
                     switch self.projectsManager.operationState(for: $0.id) {
                     case .creating, .deleting, .createFailed:
                         return false
-                    case nil, .preparingDelete, .launchFailed, .deleteFailed:
+                    case nil, .launchFailed, .deleteFailed:
                         return true
                     }
                 }
@@ -5656,18 +5628,6 @@ final class AppState {
     ) -> Bool {
         current.allSatisfy { tabId, generation in
             acknowledgedAtConfirmation[tabId] == generation
-        }
-    }
-
-    nonisolated static func submoduleRiskDidNotIncrease(
-        current: SubmoduleLocalState,
-        acknowledged: SubmoduleLocalState
-    ) -> Bool {
-        switch (acknowledged, current) {
-        case (.unknown, _), (.present, .present), (.present, .none), (.none, .none):
-            true
-        case (.none, .present), (.none, .unknown), (.present, .unknown):
-            false
         }
     }
 
@@ -9293,7 +9253,6 @@ final class AppState {
             }
 
             let force: Bool
-            let allowsSubmoduleLocalState: Bool
             if let authorization {
                 do {
                     let preflight = try await Task.detached {
@@ -9301,10 +9260,6 @@ final class AppState {
                     }.value
                     guard let acknowledgedPreflight = authorization.preflightByWorktree[worktree.id],
                           preflight.reasons.isSubset(of: acknowledgedPreflight.reasons),
-                          Self.submoduleRiskDidNotIncrease(
-                              current: preflight.submoduleLocalState,
-                              acknowledged: acknowledgedPreflight.submoduleLocalState
-                          ),
                           !preflight.requiresForce
                               || authorization.forceWorktreeIDs.contains(worktree.id)
                     else {
@@ -9354,10 +9309,6 @@ final class AppState {
                         continue
                     }
                     force = preflight.requiresForce
-                    allowsSubmoduleLocalState = Self.allowsSubmoduleLocalStateForForcedDeletion(
-                        force: force,
-                        preflight: preflight
-                    )
                 } catch {
                     results.append(WorktreeBatchResult(
                         worktreeId: worktree.id,
@@ -9368,7 +9319,6 @@ final class AppState {
                 }
             } else {
                 force = false
-                allowsSubmoduleLocalState = false
             }
 
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -9383,7 +9333,6 @@ final class AppState {
                     keepBranch: keepBranch
                 ),
                 force: force,
-                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 removedIndex: removedIndex,
                 // One refresh at the end, not one per item.
                 refreshAfter: false,
@@ -9572,7 +9521,7 @@ final class AppState {
     }
     nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
         switch state {
-        case .creating, .preparingDelete, .deleting:
+        case .creating, .deleting:
             return true
         case .createFailed, .launchFailed, .deleteFailed, nil:
             return false
@@ -9682,17 +9631,6 @@ final class AppState {
                 }
                 if preflight.reasons.contains(.locked) {
                     reasons.append("Git will force-remove this locked worktree")
-                }
-                if preflight.reasons.contains(.containsInitializedSubmodules) {
-                    reasons.append("Git requires force to remove initialized submodules")
-                    switch preflight.submoduleLocalState {
-                    case .none:
-                        break
-                    case .present:
-                        reasons.append("Submodules contain local-only state")
-                    case .unknown:
-                        reasons.append("Alas could not verify submodule local state")
-                    }
                 }
                 forceReasons[worktree.id] = reasons
             }
@@ -9888,6 +9826,11 @@ final class AppState {
         }
     }
 
+    /// Ask first, inspect later. The confirmation names the worktree and what
+    /// deleting it costs; nothing about it depends on shelling out to git, so
+    /// it goes up immediately instead of stranding the row in a "preparing
+    /// deletion" spinner while a preflight walks submodules. Anything Git
+    /// genuinely needs force for surfaces afterwards as the force prompt.
     private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
@@ -9899,37 +9842,20 @@ final class AppState {
             keepBranch: keepBranch
         )
 
+        guard confirmDeleteWorktree(
+            Self.deleteConfirmation(branch: worktree.branch, keepBranch: keepBranch)
+        ) else { return }
+
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
+        projectsManager.setOperationState(id: worktree.id, state: .deleting)
 
         Task { @MainActor in
-            let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
-            guard projectsManager.operationState(for: worktree.id) == .preparingDelete else { return }
-            let confirmation = Self.deleteConfirmation(
-                branch: worktree.branch,
-                keepBranch: keepBranch,
-                preflight: preflight
-            )
-            guard let decision = Self.resolveDeleteDecision(
-                branch: worktree.branch,
-                keepBranch: keepBranch,
-                preflight: preflight,
-                userConfirmed: confirmDeleteWorktree(confirmation)
-            ) else {
-                if projectsManager.operationState(for: worktree.id) == .preparingDelete {
-                    projectsManager.setOperationState(id: worktree.id, state: nil)
-                }
-                return
-            }
-
-            projectsManager.setOperationState(id: worktree.id, state: .deleting)
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
                 deleteBranchIfMerged: deleteBranch,
-                force: decision.force,
-                allowsSubmoduleLocalState: decision.allowsSubmoduleLocalState,
+                force: false,
                 removedIndex: removedIndex
             )
         }
@@ -9954,18 +9880,12 @@ final class AppState {
             return .error("Could not find the project for this worktree.")
         }
         let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
-        if !force {
-            if preflight.requiresForce {
-                if preflight.reasons.contains(.dirty) {
-                    return .error("worktree has local changes; rerun with --force to delete")
-                }
-                if preflight.reasons.contains(.containsInitializedSubmodules) {
-                    return .error("worktree contains initialized submodules; rerun with --force to delete")
-                }
-                return .error("worktree requires force delete; rerun with --force to delete")
+        if !force, preflight.requiresForce {
+            if preflight.reasons.contains(.dirty) {
+                return .error("worktree has local changes; rerun with --force to delete")
             }
+            return .error("worktree requires force delete; rerun with --force to delete")
         }
-        let allowsSubmoduleLocalState = force && preflight.submoduleLocalState == .present
 
         let repoPath = URL(fileURLWithPath: project.path)
         let deleteBranch = Self.resolveDeleteBranchIfMerged(
@@ -9981,7 +9901,6 @@ final class AppState {
                 repoPath: repoPath,
                 deleteBranchIfMerged: deleteBranch,
                 force: force,
-                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 removedIndex: removedIndex
             )
             if pendingForceDeleteWorktree?.id == worktree.id {
@@ -10281,7 +10200,6 @@ final class AppState {
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         force: Bool,
-        allowsSubmoduleLocalState: Bool = false,
         removedIndex: Int,
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
@@ -10323,7 +10241,6 @@ final class AppState {
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
-                allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                 authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
             )
@@ -10350,7 +10267,7 @@ final class AppState {
                 return .needsForce
             } else if !force,
                       !promptsForForce,
-                      Self.forceDeleteReason(for: stderr) != nil {
+                      Self.requiresForceForDirtyWorktree(stderr) {
                 // Batches never force implicitly and must not hijack the app
                 // with a modal mid-run: record the state and report it back so
                 // the sheet can tell the user to handle this one individually.
@@ -10428,7 +10345,6 @@ final class AppState {
                 repoPath: pending.repoPath,
                 deleteBranchIfMerged: pending.deleteBranchIfMerged,
                 force: true,
-                allowsSubmoduleLocalState: pending.reason == .containsSubmodules,
                 removedIndex: pending.removedIndex
             )
         }
@@ -10444,7 +10360,6 @@ final class AppState {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool,
-        allowsSubmoduleLocalState: Bool = false,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
@@ -10474,7 +10389,6 @@ final class AppState {
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
-                    allowsSubmoduleLocalState: allowsSubmoduleLocalState,
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                     authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
                 )
@@ -10488,7 +10402,7 @@ final class AppState {
                 try await WorktreeService().deletePreflight(worktreePath: worktreePath)
             }.value
         } catch {
-            return WorktreeDeletePreflight(reasons: [], submoduleLocalState: .unknown)
+            return WorktreeDeletePreflight(reasons: [])
         }
     }
 
@@ -10504,58 +10418,13 @@ final class AppState {
 
     nonisolated static func deleteConfirmation(
         branch: String,
-        keepBranch: Bool,
-        preflight: WorktreeDeletePreflight
+        keepBranch: Bool
     ) -> WorktreeDeleteConfirmation {
-        var messageParts = [
-            keepBranch
+        WorktreeDeleteConfirmation(
+            title: "Delete worktree '\(branch)'?",
+            message: keepBranch
                 ? "This removes its files from disk. The local branch will be kept."
                 : "This removes its files from disk. The local branch will be deleted if merged."
-        ]
-
-        if preflight.reasons.contains(.dirty) {
-            messageParts.append("This worktree has modified or untracked files. Force delete will permanently remove them from disk.")
-        }
-        let containsInitializedSubmodules = preflight.reasons.contains(.containsInitializedSubmodules)
-        if containsInitializedSubmodules {
-            messageParts.append("This worktree contains initialized submodules. Git requires force delete to remove it.")
-        }
-
-        if containsInitializedSubmodules {
-            switch preflight.submoduleLocalState {
-            case .none:
-                break
-            case .present:
-                messageParts.append("Preflight found local-only submodule state that may only exist inside this worktree.")
-            case .unknown:
-                messageParts.append("Alas could not verify whether the initialized submodules contain local-only state.")
-            }
-        }
-
-        return WorktreeDeleteConfirmation(
-            title: "Delete worktree '\(branch)'?",
-            message: messageParts.joined(separator: " "),
-            buttonTitle: preflight.requiresForce ? "Force Delete" : "Delete",
-            force: preflight.requiresForce
-        )
-    }
-
-    nonisolated static func resolveDeleteDecision(
-        branch: String,
-        keepBranch: Bool,
-        preflight: WorktreeDeletePreflight,
-        userConfirmed: Bool
-    ) -> WorktreeDeleteDecision? {
-        guard userConfirmed else { return nil }
-        let confirmation = deleteConfirmation(
-            branch: branch,
-            keepBranch: keepBranch,
-            preflight: preflight
-        )
-        return WorktreeDeleteDecision(
-            confirmation: confirmation,
-            force: confirmation.force,
-            allowsSubmoduleLocalState: preflight.submoduleLocalState == .present
         )
     }
 
@@ -10574,13 +10443,6 @@ final class AppState {
         !workspacesEnabled || workspacesCanMutate
     }
 
-    nonisolated static func allowsSubmoduleLocalStateForForcedDeletion(
-        force: Bool,
-        preflight: WorktreeDeletePreflight
-    ) -> Bool {
-        force && preflight.submoduleLocalState == .present
-    }
-
     nonisolated static func pendingForceDelete(
         for worktree: Worktree,
         repoPath: URL,
@@ -10588,7 +10450,7 @@ final class AppState {
         removedIndex: Int,
         stderr: String
     ) -> PendingForceDeleteWorktree? {
-        guard let reason = forceDeleteReason(for: stderr) else { return nil }
+        guard requiresForceForDirtyWorktree(stderr) else { return nil }
         return PendingForceDeleteWorktree(
             id: worktree.id,
             branch: worktree.branch,
@@ -10596,29 +10458,23 @@ final class AppState {
             repoPath: repoPath,
             worktreePath: worktree.path,
             deleteBranchIfMerged: deleteBranchIfMerged,
-            removedIndex: removedIndex,
-            reason: reason
+            removedIndex: removedIndex
         )
     }
 
-    /// Permissive substring check: git's exact wording around dirty/submodule
-    /// worktrees varies by version. If the match misses, the caller surfaces
-    /// the raw stderr instead, which is acceptable degradation.
-    nonisolated static func forceDeleteReason(for stderr: String) -> ForceDeleteReason? {
+    /// Permissive substring check: git's exact wording around dirty worktrees
+    /// varies by version. If the match misses, the caller surfaces the raw
+    /// stderr instead, which is acceptable degradation.
+    ///
+    /// Git's separate refusal for worktrees holding initialized submodules is
+    /// deliberately absent: `WorktreeService` answers that one itself once the
+    /// tree is verified clean, so it never reaches a user prompt.
+    nonisolated static func requiresForceForDirtyWorktree(_ stderr: String) -> Bool {
         let s = stderr.lowercased()
-        if s.contains("working trees containing submodules")
-            || (s.contains("containing submodules") && s.contains("cannot be moved or removed")) {
-            return .containsSubmodules
-        }
-
-        if s.contains("is dirty")
+        return s.contains("is dirty")
             || s.contains("dirty worktree")
             || s.contains("contains modified or untracked files")
-            || s.contains("modified or untracked") {
-            return .dirty
-        }
-
-        return nil
+            || s.contains("modified or untracked")
     }
 
     private func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
@@ -10626,7 +10482,7 @@ final class AppState {
         alert.messageText = confirmation.title
         alert.informativeText = confirmation.message
         alert.alertStyle = .warning
-        let deleteButton = alert.addButton(withTitle: confirmation.buttonTitle)
+        let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         deleteButton.hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
@@ -13099,7 +12955,7 @@ extension AppState: RemoteSessionsProvider {
                 switch projectsManager.operationState(for: worktree.id) {
                 case .creating, .deleting, .createFailed:
                     continue
-                case nil, .preparingDelete, .launchFailed, .deleteFailed:
+                case nil, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
                 }
             }
@@ -13149,7 +13005,7 @@ extension AppState: RemoteSessionsProvider {
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:
             return .failure("Worktree is no longer available.")
-        case nil, .preparingDelete, .launchFailed, .deleteFailed:
+        case nil, .launchFailed, .deleteFailed:
             break
         }
 

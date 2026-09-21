@@ -5,19 +5,11 @@ import Foundation
 struct WorktreeDeletePreflight: Equatable {
     var requiresForce: Bool { reasons.isEmpty == false }
     var reasons: Set<WorktreeDeletePreflightReason>
-    var submoduleLocalState: SubmoduleLocalState
 }
 
 enum WorktreeDeletePreflightReason: Equatable, Hashable {
     case dirty
-    case containsInitializedSubmodules
     case locked
-}
-
-enum SubmoduleLocalState: Equatable {
-    case none
-    case present
-    case unknown
 }
 
 struct WorktreeService {
@@ -756,6 +748,14 @@ struct WorktreeService {
     /// substitutes `/` (e.g. branch `feat/x` lives at dir basename `feat-x`).
     /// `force` adds `--force`, required when the worktree has uncommitted
     /// changes or untracked files.
+    ///
+    /// Git also refuses to remove *any* worktree containing an initialized
+    /// submodule without `--force`, however pristine that worktree is. That
+    /// refusal is structural, not a data-loss warning, so it is answered
+    /// here the same way `wt remove` answers it: re-verify the worktree is
+    /// clean, then hand git the force it insists on. A genuinely dirty tree
+    /// still stops and reports itself as dirty, so the caller can ask the
+    /// user for a real force.
     func remove(
         repoPath: URL,
         worktree: Worktree,
@@ -775,6 +775,23 @@ struct WorktreeService {
         if result.exitCode != 0 {
             if Self.looksLikeMissingLFS(result.stderr) {
                 result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
+            }
+            if !force,
+               result.exitCode != 0,
+               Self.looksLikeSubmoduleRemoveRefusal(result.stderr) {
+                let clean = try? await isRemovalClean(
+                    worktree.path,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                )
+                guard clean == true else {
+                    throw WorktreeError.gitFailed(Self.dirtyWorktreeMessage)
+                }
+                result = try await Process.git(
+                    args + ["--force"],
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    timeout: 90
+                )
             }
             if !force,
                result.exitCode != 0,
@@ -846,7 +863,6 @@ struct WorktreeService {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool = false,
-        allowsSubmoduleLocalState: Bool = false,
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
@@ -900,11 +916,11 @@ struct WorktreeService {
         var auditedMissingLFS = false
         if !force {
             do {
-                guard try await isWorktreeClean(
+                guard try await isRemovalClean(
                     worktree.path,
                     usesRemoteHostRegistry: false
                 ) else {
-                    throw WorktreeError.gitFailed("Worktree contains modified or untracked files.")
+                    throw WorktreeError.gitFailed(Self.dirtyWorktreeMessage)
                 }
             } catch let error as WorktreeError {
                 guard case .gitFailed(let message) = error,
@@ -1056,35 +1072,27 @@ struct WorktreeService {
             try failAfterRollingBack("Worktree changed while it was being staged.")
         }
 
-        let stagedSubmodulesHaveNoLocalState: Bool
-        do {
-            stagedSubmodulesHaveNoLocalState = try await stagedInitializedSubmodulesHaveNoLocalState(
-                ticket.stagedPath,
-                gitDirectory: expectedRegistration.gitDirectory
-            )
-        } catch {
-            try failAfterRollingBack(error.localizedDescription)
-        }
-        guard stagedSubmodulesHaveNoLocalState || allowsSubmoduleLocalState else {
-            try failAfterRollingBack("Worktree contains initialized submodule local state.")
-        }
-        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
-            try failAfterRollingBack("Worktree changed while its submodules were audited.")
-        }
-
         if !force {
+            // Once the directory has been renamed under the common git dir,
+            // every submodule's relative `gitdir:` pointer is dangling, so any
+            // status that descends into them exits 128. The authoritative
+            // submodule audit already ran above, on the live path; this pass
+            // only has to catch outer-tree writes that landed during the
+            // rename, so it stays out of the submodules.
             let stagedIsClean: Bool
             do {
                 if auditedMissingLFS {
                     stagedIsClean = try await canForceRemoveAfterMissingLFS(
                         ticket.stagedPath,
                         gitDirectory: expectedRegistration.gitDirectory,
+                        ignoresSubmodules: true,
                         usesRemoteHostRegistry: false
                     )
                 } else {
                     stagedIsClean = try await isWorktreeClean(
                         ticket.stagedPath,
                         gitDirectory: expectedRegistration.gitDirectory,
+                        ignoresSubmodules: true,
                         usesRemoteHostRegistry: false
                     )
                 }
@@ -1092,7 +1100,7 @@ struct WorktreeService {
                 try failAfterRollingBack(error.localizedDescription)
             }
             guard stagedIsClean else {
-                try failAfterRollingBack("Worktree contains modified or untracked files.")
+                try failAfterRollingBack(Self.dirtyWorktreeMessage)
             }
             guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
                 try failAfterRollingBack("Worktree changed while its contents were audited.")
@@ -1255,6 +1263,14 @@ struct WorktreeService {
             .joined()
     }
 
+    /// Cheap, two-command audit of the risks a *user* has to approve before a
+    /// worktree is deleted: uncommitted work, and a lock they set themselves.
+    ///
+    /// Initialized submodules are deliberately not a reason. Git refuses to
+    /// remove such a worktree without `--force`, but that refusal is
+    /// structural — the removal paths answer it themselves once the tree is
+    /// verified clean — so surfacing it as a force prompt only asked the user
+    /// to approve a risk that does not exist.
     func deletePreflight(
         worktreePath: URL,
         usesRemoteHostRegistry: Bool = true
@@ -1271,56 +1287,14 @@ struct WorktreeService {
             reasons.insert(.locked)
         }
 
-        let hasInitializedSubmodules = try await containsInitializedSubmodules(
+        if try await !isRemovalClean(
             worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
-        )
-        if hasInitializedSubmodules {
-            reasons.insert(.containsInitializedSubmodules)
-        }
-
-        let worktreeClean: Bool?
-        do {
-            worktreeClean = try await isWorktreeClean(
-                worktreePath,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
-            )
-        } catch {
-            guard hasInitializedSubmodules else { throw error }
-            worktreeClean = nil
-        }
-
-        if worktreeClean == false {
+        ) {
             reasons.insert(.dirty)
         }
 
-        let submoduleLocalState: SubmoduleLocalState
-        if hasInitializedSubmodules {
-            do {
-                if worktreeClean == nil {
-                    submoduleLocalState = .unknown
-                } else if try await areInitializedSubmodulesClean(
-                    worktreePath,
-                    usesRemoteHostRegistry: usesRemoteHostRegistry
-                ) {
-                    submoduleLocalState = try await initializedSubmodulesHaveNoLocalState(
-                        worktreePath,
-                        timeout: 10,
-                        usesRemoteHostRegistry: usesRemoteHostRegistry
-                    )
-                        ? .none
-                        : .present
-                } else {
-                    submoduleLocalState = .present
-                }
-            } catch {
-                submoduleLocalState = .unknown
-            }
-        } else {
-            submoduleLocalState = .none
-        }
-
-        return WorktreeDeletePreflight(reasons: reasons, submoduleLocalState: submoduleLocalState)
+        return WorktreeDeletePreflight(reasons: reasons)
     }
 
     static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {
@@ -1470,114 +1444,16 @@ struct WorktreeService {
             || lower.contains("dirty worktree")
     }
 
-    private func containsInitializedSubmodules(
-        _ path: URL,
-        gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
-    ) async throws -> Bool {
-        let result = try await Process.git(
-            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
-                + ["submodule", "status", "--recursive"],
-            cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
-        )
-        guard result.exitCode == 0 else {
-            let paths = try await submodulePathsFromGitmodules(
-                path,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
-            )
-            return paths.contains { relativePath in
-                FileManager.default.fileExists(
-                    atPath: path.appendingPathComponent(relativePath).appendingPathComponent(".git").path
-                )
-            }
-        }
-        return result.stdout.split(separator: "\n").contains { line in
-            guard let first = line.first else { return false }
-            return first != "-"
-        }
+    /// Git's structural refusal to touch a worktree holding initialized
+    /// submodules. Wording varies across versions, so match loosely; a miss
+    /// only means the caller surfaces git's own stderr instead.
+    private static func looksLikeSubmoduleRemoveRefusal(_ stderr: String) -> Bool {
+        let lower = stderr.lowercased()
+        return lower.contains("containing submodules")
+            && lower.contains("cannot be moved or removed")
     }
 
-    private func submodulePathsFromGitmodules(
-        _ path: URL,
-        usesRemoteHostRegistry: Bool = true
-    ) async throws -> [String] {
-        let result = try await Process.git(
-            ["config", "--file", ".gitmodules", "--get-regexp", "path"],
-            cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
-        )
-        if result.exitCode != 0 {
-            return []
-        }
-        return result.stdout
-            .split(separator: "\n")
-            .compactMap { line in
-                line.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init)
-            }
-    }
-
-    private func stagedInitializedSubmodulesHaveNoLocalState(
-        _ path: URL,
-        gitDirectory: URL
-    ) async throws -> Bool {
-        let submodulePaths = try await submodulePathsFromGitmodules(
-            path,
-            usesRemoteHostRegistry: false
-        )
-        for relativePath in submodulePaths {
-            let submodulePath = path.appendingPathComponent(relativePath)
-            guard FileManager.default.fileExists(
-                atPath: submodulePath.appendingPathComponent(".git").path
-            ) else { continue }
-            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
-                for: submodulePath,
-                relativePath: relativePath,
-                parentGitDirectory: gitDirectory
-            ) else { return false }
-            guard try await isWorktreeClean(
-                submodulePath,
-                gitDirectory: submoduleGitDirectory,
-                usesRemoteHostRegistry: false
-            ) else { return false }
-            guard try await repositoryHasNoLocalState(
-                submodulePath,
-                gitDirectory: submoduleGitDirectory
-            ) else { return false }
-            guard try await stagedInitializedSubmodulesHaveNoLocalState(
-                submodulePath,
-                gitDirectory: submoduleGitDirectory
-            ) else { return false }
-        }
-        return true
-    }
-
-    private static func submoduleGitDirectory(
-        for submodulePath: URL,
-        relativePath: String,
-        parentGitDirectory: URL
-    ) -> URL? {
-        let dotGit = submodulePath.appendingPathComponent(".git")
-        if (try? dotGit.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-            return dotGit
-        }
-        guard let rawGitFile = try? String(contentsOf: dotGit, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              rawGitFile.hasPrefix("gitdir:")
-        else { return nil }
-        let rawPath = rawGitFile.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-        let recordedGitDirectory = (rawPath as NSString).isAbsolutePath
-            ? URL(fileURLWithPath: rawPath)
-            : submodulePath.appendingPathComponent(rawPath)
-        if FileManager.default.fileExists(atPath: recordedGitDirectory.path) {
-            return recordedGitDirectory.standardizedFileURL
-        }
-        let fallback = parentGitDirectory
-            .appendingPathComponent("modules", isDirectory: true)
-            .appendingPathComponent(relativePath, isDirectory: true)
-            .standardizedFileURL
-        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
-    }
+    static let dirtyWorktreeMessage = "Worktree contains modified or untracked files."
 
     private static func gitContextArguments(
         worktreePath: URL,
@@ -1587,14 +1463,44 @@ struct WorktreeService {
         return ["--git-dir", gitDirectory.path, "--work-tree", worktreePath.path]
     }
 
-    private func isWorktreeClean(
+    /// The cleanliness bar a removal has to clear: nothing modified or
+    /// untracked in the worktree *or* in any initialized submodule.
+    ///
+    /// The submodule pass is not redundant. A submodule that sets, say,
+    /// `status.showUntrackedFiles = no` in its own config hides its untracked
+    /// files from the superproject's status; only a `submodule foreach` with
+    /// explicit flags sees them. Without it a force-remove would silently
+    /// delete files the user never saw reported.
+    private func isRemovalClean(
         _ path: URL,
         gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
+        guard try await isWorktreeClean(
+            path,
+            gitDirectory: gitDirectory,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        ) else { return false }
+        return try await areInitializedSubmodulesClean(
+            path,
+            gitDirectory: gitDirectory,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
+    }
+
+    private func isWorktreeClean(
+        _ path: URL,
+        gitDirectory: URL? = nil,
+        ignoresSubmodules: Bool = false,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
         let result = try await Process.git(
-            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
-                + ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
+                "status",
+                "--porcelain",
+                ignoresSubmodules ? "--ignore-submodules=all" : "--ignore-submodules=none",
+                "--untracked-files=all"
+            ],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1619,183 +1525,20 @@ struct WorktreeService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func initializedSubmodulesHaveNoLocalState(
-        _ path: URL,
-        timeout: TimeInterval = 120,
-        gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
-    ) async throws -> Bool {
-        // Reachability set arithmetic for reflog and notes/stash (the
-        // perf-critical fix — replaces an O(reflog × remotes) shell loop
-        // that timed out on submodules with non-trivial reflogs).
-        //
-        // Branches and tags get explicit name+oid comparisons via single
-        // `ls-remote` calls: rev-list reachability misses the case where
-        // a local ref's NAME or annotation differs from the remote while
-        // its target commit is already reachable from a remote branch
-        // (`my-fix` at origin/main; a retargeted/retagged release tag).
-        // Losing that local ref on a force-remove would surprise the user.
-        let localStateScript = """
-        if test -n "$(git rev-list --max-count=1 --reflog --not --remotes 2>/dev/null)"; then
-          echo local-reflog
-          exit 0
-        fi
-        extra=$(git for-each-ref --format='%(refname)' refs/notes refs/stash)
-        if test -n "$extra" && test -n "$(git rev-list --max-count=1 $extra --not --remotes 2>/dev/null)"; then
-          echo notes-stash
-          exit 0
-        fi
-        # Branches: compare against local remote-tracking refs. No
-        # network: refs/remotes/<remote>/<branch> already encodes what
-        # the user has fetched. Translate to refs/heads/<branch>=<oid>
-        # so a direct join against for-each-ref refs/heads is exact.
-        remote_heads=$(git for-each-ref --format='%(refname)=%(objectname)' refs/remotes 2>/dev/null \\
-          | awk '/^refs\\/remotes\\/[^\\/]+\\/HEAD=/ { next }
-                 { sub(/^refs\\/remotes\\/[^\\/]+\\//, "refs/heads/", $0); print }')
-        branch_diff=$(git for-each-ref --format='%(refname)=%(objectname)' refs/heads \\
-          | awk -v rt="$remote_heads" '
-              BEGIN { n = split(rt, arr, "\\n"); for (i = 1; i <= n; i++) seen[arr[i]] = 1 }
-              !seen[$0] { print; exit }
-          ')
-        if test -n "$branch_diff"; then
-          echo "branch-mismatch $branch_diff"
-          exit 0
-        fi
-        # Tags: one network call per submodule. `protocol.file.allow=always`
-        # lets the file-protocol test fixtures work; harmless on real
-        # remotes. If `ls-remote` fails (offline, dead remote, etc.) any
-        # local tag is treated as a mismatch — the safer default: don't
-        # force-remove when we can't verify the tag state.
-        remote_tags=$(git -c protocol.file.allow=always ls-remote --tags --refs origin 2>/dev/null \\
-          | awk '{print $2"="$1}')
-        tag_diff=$(git for-each-ref --format='%(refname)=%(objectname)' refs/tags \\
-          | awk -v rt="$remote_tags" '
-              BEGIN { n = split(rt, arr, "\\n"); for (i = 1; i <= n; i++) seen[arr[i]] = 1 }
-              !seen[$0] { print; exit }
-          ')
-        if test -n "$tag_diff"; then
-          echo "tag-mismatch $tag_diff"
-        fi
-        """
-        let result = try await Process.git(
-            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
-                + ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
-            cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry,
-            timeout: timeout
-        )
-        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func repositoryHasNoLocalState(
-        _ path: URL,
-        gitDirectory: URL
-    ) async throws -> Bool {
-        let context = Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
-        let reflog = try await Process.git(
-            context + ["rev-list", "--max-count=1", "--reflog", "--not", "--remotes"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard reflog.exitCode == 0 else { throw WorktreeError.gitFailed(reflog.stderr) }
-        guard reflog.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-
-        let extraRefs = try await Process.git(
-            context + ["for-each-ref", "--format=%(refname)", "refs/notes", "refs/stash"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard extraRefs.exitCode == 0 else { throw WorktreeError.gitFailed(extraRefs.stderr) }
-        let extraRefNames = extraRefs.stdout
-            .split(separator: "\n")
-            .map(String.init)
-        if !extraRefNames.isEmpty {
-            let extraReachability = try await Process.git(
-                context + ["rev-list", "--max-count=1"] + extraRefNames + ["--not", "--remotes"],
-                cwd: path,
-                usesRemoteHostRegistry: false
-            )
-            guard extraReachability.exitCode == 0 else {
-                throw WorktreeError.gitFailed(extraReachability.stderr)
-            }
-            guard extraReachability.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return false
-            }
-        }
-
-        let localBranches = try await Process.git(
-            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/heads"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard localBranches.exitCode == 0 else { throw WorktreeError.gitFailed(localBranches.stderr) }
-        let remoteBranches = try await Process.git(
-            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/remotes"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard remoteBranches.exitCode == 0 else { throw WorktreeError.gitFailed(remoteBranches.stderr) }
-        let remoteHeadLines = Set(remoteBranches.stdout
-            .split(separator: "\n")
-            .compactMap { line -> String? in
-                let value = String(line)
-                guard !value.contains("/HEAD=") else { return nil }
-                guard let refsRange = value.range(of: "refs/remotes/") else { return nil }
-                let suffix = value[refsRange.upperBound...]
-                guard let slash = suffix.firstIndex(of: "/") else { return nil }
-                return "refs/heads/" + suffix[suffix.index(after: slash)...]
-            })
-        for branch in localBranches.stdout.split(separator: "\n").map(String.init) {
-            guard remoteHeadLines.contains(branch) else { return false }
-        }
-
-        let localTags = try await Process.git(
-            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/tags"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard localTags.exitCode == 0 else { throw WorktreeError.gitFailed(localTags.stderr) }
-        let remoteTags = try await Process.git(
-            ["-c", "protocol.file.allow=always"] + context + ["ls-remote", "--tags", "--refs", "origin"],
-            cwd: path,
-            usesRemoteHostRegistry: false
-        )
-        guard remoteTags.exitCode == 0 else {
-            return localTags.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        let remoteTagLines = Set(remoteTags.stdout
-            .split(separator: "\n")
-            .compactMap { line -> String? in
-                let parts = line.split(separator: "\t", maxSplits: 1)
-                guard parts.count == 2 else { return nil }
-                return "\(parts[1])=\(parts[0])"
-            })
-        for tag in localTags.stdout.split(separator: "\n").map(String.init) {
-            guard remoteTagLines.contains(tag) else { return false }
-        }
-        return true
-    }
-
     private func canForceRemoveAfterMissingLFS(
         _ path: URL,
         gitDirectory: URL? = nil,
+        ignoresSubmodules: Bool = false,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         guard try await isWorktreeCleanAllowingSmudgedLFS(
             path,
             gitDirectory: gitDirectory,
+            ignoresSubmodules: ignoresSubmodules,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         ) else { return false }
-        let subsClean = try await areInitializedSubmodulesClean(
-            path,
-            gitDirectory: gitDirectory,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
-        )
-        guard subsClean else { return false }
-        return try await initializedSubmodulesHaveNoLocalState(
+        if ignoresSubmodules { return true }
+        return try await areInitializedSubmodulesClean(
             path,
             gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
@@ -1805,13 +1548,15 @@ struct WorktreeService {
     private func isWorktreeCleanAllowingSmudgedLFS(
         _ path: URL,
         gitDirectory: URL? = nil,
+        ignoresSubmodules: Bool = false,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
             Self.lfsFilterOverride
                 + Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
                 "status", "--porcelain=v2", "-z",
-                "--ignore-submodules=none", "--untracked-files=all"
+                ignoresSubmodules ? "--ignore-submodules=all" : "--ignore-submodules=none",
+                "--untracked-files=all"
             ],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry

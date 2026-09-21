@@ -300,7 +300,7 @@ struct WorkspaceCheckoutLifecycleTests {
             state.checkouts[0].members[0].availability = .missing
         }
         let lifecycle = FixtureLifecycle(
-            preflight: .init(reasons: [.dirty], submoduleLocalState: .none),
+            preflight: .init(reasons: [.dirty]),
             clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
         )
         let coordinator = WorkspaceCheckoutCoordinator(
@@ -325,7 +325,7 @@ struct WorkspaceCheckoutLifecycleTests {
         }
         let lifecycle = FixtureLifecycle(
             verification: .missing,
-            preflight: .init(reasons: [], submoduleLocalState: .none),
+            preflight: .init(reasons: []),
             clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
         )
         let coordinator = WorkspaceCheckoutCoordinator(
@@ -350,7 +350,7 @@ struct WorkspaceCheckoutLifecycleTests {
         }
         let lifecycle = FixtureLifecycle(
             verification: .missing,
-            preflight: .init(reasons: [.dirty], submoduleLocalState: .none)
+            preflight: .init(reasons: [.dirty])
         )
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
@@ -690,7 +690,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func riskyWorktreeRequiresAnExplicitCleanupConfirmationWithoutAForcePath() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
@@ -701,7 +701,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedRiskPassesForceToWorktreeRemoval() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
@@ -713,7 +713,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedLockedWorktreePassesDoubleForceToWorktreeRemoval() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
@@ -725,7 +725,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func wholeDeletionRequiresRiskConfirmationBeforeRemovingAnyMember() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
@@ -736,7 +736,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedWholeDeletionPassesRiskConfirmationToEveryMember() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id, confirmingRisks: true)
@@ -860,7 +860,6 @@ struct WorkspaceCheckoutLifecycleTests {
     @Test func concreteLifecycleUsesSSHTransportForCleanup() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: " M file.txt\n", stderr: ""),
-            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -900,22 +899,6 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("rev-parse --verify"))
         #expect(commands.contains("branch -d") == false)
         #expect(commands.contains("m=$(cd") == false)
-    }
-
-    @Test func concreteRemotePreflightTreatsFailedSubmoduleProbeAsUnknown() async throws {
-        let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: "", stderr: ""),
-            .init(exitCode: 128, stdout: "", stderr: "ssh failed"),
-            .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
-        ])
-        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
-            try await runner.run(executable: executable, args: args, timeout: timeout)
-        })
-
-        let preflight = try await lifecycle.deletePreflight(Self.sshCleanupPlan())
-
-        #expect(preflight.reasons.isEmpty)
-        #expect(preflight.submoduleLocalState == .unknown)
     }
 
     @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
@@ -1822,7 +1805,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let branchRemoved: Bool
     let clearError: (any Error)?
     let pendingStaleRegistrationCleanup: Bool
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: []), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
     self.preflight = preflight
     self.leftovers = leftovers
     self.failingMember = failingMember
@@ -1867,7 +1850,7 @@ private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
@@ -1896,7 +1879,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     private(set) var sawPersistedCleanupPlan = false
     init(store: WorkspaceStore, checkoutID: UUID) { self.store = store
     self.checkoutID = checkoutID }
-    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: []) }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
@@ -1916,7 +1899,7 @@ private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {

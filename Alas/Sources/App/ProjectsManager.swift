@@ -37,7 +37,6 @@ struct ProjectUpdate: Equatable {
 
 enum WorktreeOperationState: Equatable {
     case creating
-    case preparingDelete
     case deleting
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
@@ -519,7 +518,7 @@ final class ProjectsManager {
                         reconciled.append(optimistic)
                     }
                 }
-            case .preparingDelete, .deleting:
+            case .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)
@@ -662,7 +661,7 @@ final class ProjectsManager {
             if let op = worktreeOperationStates[worktree.id] {
                 switch op {
                 case .creating, .createFailed: return false
-                case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true
+                case .deleting, .launchFailed, .deleteFailed: return true
                 }
             }
             return true

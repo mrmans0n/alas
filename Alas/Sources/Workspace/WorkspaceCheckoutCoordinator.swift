@@ -277,7 +277,7 @@ actor WorkspaceCheckoutCoordinator {
             return WorkspaceMemberDeletionPreview(
                 member: member,
                 plan: plan,
-                preflight: .init(reasons: [], submoduleLocalState: .none),
+                preflight: .init(reasons: []),
                 rootObservation: root
             )
         default:
@@ -2714,23 +2714,12 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         if !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             reasons.insert(.dirty)
         }
-        let submodules = try await remote.run(host: host, command: "git -C \(quotedPath) submodule status --recursive")
-        let submoduleLocalState: SubmoduleLocalState
-        let hasSubmodules = submodules.exitCode == 0 && !submodules.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasSubmodules {
-            reasons.insert(.containsInitializedSubmodules)
-        }
-        if submodules.exitCode == 0 {
-            submoduleLocalState = hasSubmodules ? .unknown : .none
-        } else {
-            submoduleLocalState = .unknown
-        }
         let registrations = try await remote.run(host: host, command: "git -C \(quotedPath) worktree list --porcelain")
         guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
         if WorktreeService.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: URL(fileURLWithPath: plan.worktreePath)) {
             reasons.insert(.locked)
         }
-        return .init(reasons: reasons, submoduleLocalState: submoduleLocalState)
+        return .init(reasons: reasons)
     }
 
     private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {

@@ -34,8 +34,6 @@ struct CenterSelectionStateResolver {
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }
         if let op = projectsManager.operationState(for: id) {
             switch op {
-            case .preparingDelete:
-                break
             case .deleting:
                 if let wt = findWorktree(by: id) { return .deleting(wt) }
                 return .empty
@@ -76,7 +74,7 @@ struct CenterSelectionStateResolver {
                     switch op {
                     case .creating, .deleting, .createFailed:
                         return nil
-                    case .preparingDelete, .launchFailed, .deleteFailed:
+                    case .launchFailed, .deleteFailed:
                         break
                     }
                 }
