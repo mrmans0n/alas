@@ -3618,13 +3618,21 @@ extension ACPSessionManager {
             // ever replace a status left over from a previous agent/version
             // that did. Clear it then — that adapter behaves exactly like
             // any other agent that never supported this extension.
-            if !initialized.advertisesAuthStatus, session.authStatus != nil {
-                session.authStatus = nil
+            if !initialized.advertisesAuthStatus, session.authStatus != nil,
+               let fence = leaseFence(sessionId: sessionId) {
                 // Fenced like the runner's own auth-status writes: a
                 // cross-window takeover landing while this attach is still
                 // in flight must not let this queued clear overwrite a
                 // newer status the replacement owner already persisted.
-                let fence = leaseFence(sessionId: sessionId)
+                //
+                // `leaseFence` returning nil here is not "no fencing
+                // needed" — the persistence overload would treat that as
+                // permission to write unconditionally. It means a takeover
+                // was detected while this attach awaited `initialize` and
+                // `standDown` already dropped this instance's ownership, so
+                // skip the clear entirely rather than let a losing attach
+                // still blank out whatever the new owner just persisted.
+                session.authStatus = nil
                 enqueuePersistence { persistence in
                     _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
                 }

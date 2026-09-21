@@ -649,6 +649,53 @@ struct ACPSessionManagerTests {
         #expect(session.authStatus == nil)
     }
 
+    @Test("a losing attach does not clear authStatus after standing down mid-flight")
+    func losingAttachDoesNotClearAuthStatusAfterStandDown() async throws {
+        // Regression: `leaseFence(sessionId:)` returning nil is not "no
+        // fencing needed" (the persistence overload treats that as
+        // permission to write unconditionally) — it means this attach lost
+        // ownership while awaiting `initialize`. The clear must be skipped
+        // entirely then, not performed unfenced.
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-standdown-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .account, label: "Persisted by the new owner")
+
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        // Simulate a takeover landing while `initialize` is in flight:
+        // `standDown` would remove this instance's ownership before the
+        // attach resumes and reaches the clear.
+        #expect(mgr._ownedLeases.contains(session.id))
+        mgr._ownedLeases.remove(session.id)
+        await gate.release()
+        await attachTask.value
+
+        #expect(session.authStatus?.label == "Persisted by the new owner")
+    }
+
     @Test("authStatus survives an app restart and is restored before any attach")
     func authStatusSurvivesAppRestart() async throws {
         let url = FileManager.default.temporaryDirectory
