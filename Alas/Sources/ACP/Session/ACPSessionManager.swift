@@ -4462,6 +4462,20 @@ extension ACPSessionManager {
             } else if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
+                // The preserved-status path above assumes a fresh process's
+                // own first notification will arrive and correct a stale
+                // value in moments — true once the runner starts, but that
+                // notification is buffered until then, and this failure
+                // means it never will. Drop the stale value now: an
+                // explicit auth failure is definitive proof it's wrong, and
+                // leaving it would show a contradictory signed-in pill
+                // right next to this very banner.
+                if session.authStatus != nil, let fence = leaseFence(sessionId: sessionId) {
+                    session.authStatus = nil
+                    enqueuePersistence { persistence in
+                        _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
+                    }
+                }
             } else {
                 session.agentState = .failed(full)
             }

@@ -696,6 +696,42 @@ struct ACPSessionManagerTests {
         #expect(session.authStatus?.label == "Persisted by the new owner")
     }
 
+    @Test("a failed session creation clears a stale preserved authStatus")
+    func failedSessionCreationClearsStaleAuthStatus() async throws {
+        // Regression: preservation assumes a fresh process's own first
+        // notification will arrive and correct a stale value moments
+        // later — true only once the runner starts. If session creation
+        // fails first (e.g. because the fresh process is actually signed
+        // out), that notification is still buffered and never applied,
+        // and the stale signed-in pill would otherwise sit right next to
+        // the auth-required banner this same failure correctly triggers.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-failed-new-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(client)
+        client.script(method: "session/new") { _ in
+            throw JSONRPCError(code: -32000, message: "Internal error: auth_required", data: nil)
+        }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .account, label: "Stale, from before the agent lost auth")
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+
+        guard case .needsAuth = session.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
+            return
+        }
+        #expect(session.authStatus == nil)
+    }
+
     @Test("authStatus survives an app restart and is restored before any attach")
     func authStatusSurvivesAppRestart() async throws {
         let url = FileManager.default.temporaryDirectory
