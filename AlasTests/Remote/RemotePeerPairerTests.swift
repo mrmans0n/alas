@@ -207,7 +207,7 @@ struct RemotePeerPairerTests {
         request.httpMethod = "POST"
         request.timeoutInterval = 2
         await #expect(throws: (any Error).self) {
-            _ = try await RemotePeerPairer.boundedFetch(request)
+            _ = try await boundedFetch(request, maxBytes: RemotePeerPairer.maxReplyBytes)
         }
     }
 }

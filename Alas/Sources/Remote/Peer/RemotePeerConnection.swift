@@ -341,8 +341,12 @@ final class RemotePeerConnection: RemotePeerConnecting {
               let url = URL(string: normalized + "/health") else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = config.handshakeTimeout
-        guard let (data, response) = try? await session.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        // A legitimate reply is a bool and a short id string — well under
+        // 1 KB — so this is a generous but strict ceiling against a stored
+        // origin that has gone malicious or been reassigned, the same
+        // concern `RemotePeerPairer.maxReplyBytes` addresses for `/pair`.
+        guard let (data, response) = try? await boundedFetch(request, session: session, maxBytes: 64 * 1024),
+              response.statusCode == 200 else { return nil }
         guard let expectedServerId else { return true }
         guard let health = try? JSONDecoder().decode(Health.self, from: data),
               health.serverId == expectedServerId else { return nil }

@@ -26,7 +26,7 @@ struct RemotePeerPairer {
     }
 
     static var live: RemotePeerPairer {
-        RemotePeerPairer(fetch: boundedFetch)
+        RemotePeerPairer(fetch: { try await boundedFetch($0, maxBytes: maxReplyBytes) })
     }
 
     /// Upper bound on a `/pair` reply's body. A legitimate one is a token
@@ -40,17 +40,6 @@ struct RemotePeerPairer {
     /// catch this — it only bounds a stalled connection, not one that
     /// keeps a trickle of bytes coming.
     static let maxReplyBytes = 64 * 1024
-
-    static func boundedFetch(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (stream, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        var data = Data()
-        for try await byte in stream {
-            data.append(byte)
-            if data.count > maxReplyBytes { throw URLError(.dataLengthExceedsMaximum) }
-        }
-        return (data, http)
-    }
 
     /// Runs on the caller's executor: this type holds a non-Sendable `fetch`,
     /// so a main-actor owner calling a `@concurrent` `pair` would have to send
