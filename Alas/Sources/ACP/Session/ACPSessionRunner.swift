@@ -307,7 +307,13 @@ final class ACPSessionRunner {
             for await (id, params) in self.connection.client.permissionRequests {
                 self.flushPendingIncomingUpdates()
                 if self.pendingCancelledRequestIDs.remove(id) != nil {
-                    self.connection.client.respondToPermission(id: id, response: .init(outcome: .cancelled))
+                    let response = ACPPermissionResponse(outcome: .cancelled)
+                    self.connection.client.respondToPermission(id: id, response: response)
+                    // Matches the below: a metadata-bearing request cancelled
+                    // before evaluate() even starts must still get the same
+                    // treatment as one cancelled afterward, or its
+                    // presentation is silently lost.
+                    self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
@@ -591,7 +597,16 @@ final class ACPSessionRunner {
     /// title/reason/chosen-option context. Materializes the row from the
     /// permission request's own toolCall snapshot when it hasn't landed
     /// yet. A no-op only when there is nothing worth persisting at all.
+    ///
+    /// Gated on `holdsLeaseForWrite()`, matching `applyAuthStatus` and every
+    /// other runner-owned mutation: `stop()` cancelling a parked
+    /// `policy.evaluate` (via `userCancelled()`) resumes this same loop
+    /// iteration, which keeps running past the cancellation to reach this
+    /// call — without the guard, a detached/superseded runner could still
+    /// mutate (and even materialize a new row into) the shared session
+    /// transcript after losing write ownership during a takeover.
     private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) {
+        guard holdsLeaseForWrite() else { return }
         let chosenOption: ACPPermissionOption?
         let wasCancelled: Bool
         switch response.outcome {

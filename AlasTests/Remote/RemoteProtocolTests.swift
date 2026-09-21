@@ -360,6 +360,25 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(req) == req)
     }
 
+    @Test func permissionRequestDecodesLegacyPayloadWithoutDefaultToNo() throws {
+        // An older peer/protocol-v1 Alas instance that predates defaultToNo
+        // entirely (RemotePeerConnection can bridge mixed versions) omits
+        // the key rather than sending it false. Missing must not throw.
+        let json = """
+        {"type":"permissionRequest","sessionId":"s1","payload":{
+            "requestId":9,"toolName":"bash",
+            "options":[{"optionId":"allow_once","name":"Allow","kind":"allow_once"}]
+        }}
+        """.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteServerMessage.self, from: json)
+        guard case .permissionRequest(_, let payload) = msg else {
+            Issue.record("expected a permissionRequest message")
+            return
+        }
+        #expect(payload.defaultToNo == false)
+        #expect(payload.title == nil)
+    }
+
     @Test func permissionResolvedRoundTrips() throws {
         let resolved = RemoteServerMessage.permissionResolved(sessionId: "s1", requestId: 9)
         #expect(try roundTrip(resolved) == resolved)

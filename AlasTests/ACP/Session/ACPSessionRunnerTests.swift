@@ -2416,6 +2416,50 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission == nil)
     }
 
+    @Test("a $/cancel_request that lands before dequeue still materializes a canceled row with its facts")
+    func earlyCancelStillPersistsPermissionFacts() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(42)
+
+        // Same early-cancel ordering as the test above — the cancel lands in
+        // pendingCancelledRequestIDs before permissionsTask ever dequeues
+        // the matching request, taking the `continue`-before-evaluate()
+        // branch rather than the normal evaluate()-returns-.cancelled path.
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
+        let permission = toolCalls.first?.metadata?.value as? [String: AnyCodable]
+        let facts = permission?["permission"]?.value as? [String: AnyCodable]
+        #expect(facts?["title"]?.value as? String == "Run command?")
+    }
+
     @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
     func cancelRequestCancelsPendingFileWrite() async throws {
         let (runner, mock) = try makeRunner()
@@ -3536,6 +3580,59 @@ struct ACPSessionRunnerTests {
 
         runner.stop()
         #expect(posts >= 1)
+    }
+
+    @Test("a permission decision is not merged into the transcript when the runner has lost the write lease")
+    func permissionDecisionSkippedWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-perm-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId —
+        // this runner is a stale/superseded owner (e.g. after a cross-window takeover).
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: sid,
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(7)
+        mock.emitPermission(id: requestId, params: params)
+
+        // auto-run still answers the agent — that part is unaffected by lease
+        // ownership — but the shared session transcript must stay untouched.
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .selected(optionId: "allow"))
+        #expect(session.transcript.messages.isEmpty)
     }
 
     @Test("runner does not persist when it has lost the session lease")

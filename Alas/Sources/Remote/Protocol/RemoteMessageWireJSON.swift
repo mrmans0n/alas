@@ -194,6 +194,27 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
         self.defaultToNo = defaultToNo
         self.mcpServerName = mcpServerName
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName
+    }
+
+    // `RemotePeerConnection` decodes this from other Alas instances, which
+    // can run an older protocol version that predates defaultToNo entirely
+    // — RemoteProtocolVersion treats additive fields like this one as
+    // version-compatible, so a missing key must decode to `false`, not
+    // fail the whole payload the way synthesized Decodable would for a
+    // non-optional Bool.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.decode(Int.self, forKey: .requestId)
+        toolName = try c.decode(String.self, forKey: .toolName)
+        options = try c.decode([RemotePermissionOption].self, forKey: .options)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        defaultToNo = try c.decodeIfPresent(Bool.self, forKey: .defaultToNo) ?? false
+        mcpServerName = try c.decodeIfPresent(String.self, forKey: .mcpServerName)
+    }
 }
 
 struct RemotePermissionOption: Codable, Equatable, Sendable {
