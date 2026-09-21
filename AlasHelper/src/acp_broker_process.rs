@@ -190,6 +190,15 @@ struct BrokerIpcResponse {
     ok: bool,
     result: Option<Value>,
     error: Option<String>,
+    /// The originating `AcpBrokerProcessError::code`, so a caller like
+    /// `send_ipc_within` can recognize a specific failure (e.g. `-32075`,
+    /// "broker generation mismatch") instead of every broker-reported
+    /// failure collapsing into that call's own generic `-32072`.
+    /// `#[serde(default)]` matters here for the same reason it does on
+    /// `ACPBrokerSnapshot::cursor_todos_by_tool_call_id`: a broker
+    /// supervisor from an older build never wrote this key at all.
+    #[serde(default)]
+    code: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -1256,17 +1265,20 @@ fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Re
                 ok: true,
                 result: Some(result),
                 error: None,
+                code: None,
             },
             Err(error) => BrokerIpcResponse {
                 ok: false,
                 result: None,
                 error: Some(error.message),
+                code: Some(error.code),
             },
         },
         Err(error) => BrokerIpcResponse {
             ok: false,
             result: None,
             error: Some(format!("invalid IPC request: {error}")),
+            code: None,
         },
     };
     // Replies are never framed, whichever encoding the request used.
@@ -2030,8 +2042,16 @@ fn send_ipc_within(
         if response.ok {
             Ok(response.result.unwrap_or(Value::Null))
         } else {
+            // Preserve the broker's own error code when the supervisor sent
+            // one (a legacy supervisor's response has no `code` key, so this
+            // still falls back to the generic transport code for those).
+            // Without this, every broker-reported failure collapsed into
+            // this call's own `-32072`, indistinguishable from an IPC
+            // transport failure — losing e.g. `-32075` ("broker generation
+            // mismatch"), which callers need to recognize specifically.
+            let code = response.code.unwrap_or(-32072);
             Err(broker_error(
-                -32072,
+                code,
                 response
                     .error
                     .unwrap_or_else(|| "broker request failed".to_string()),

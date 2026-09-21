@@ -215,6 +215,16 @@ fn close_rejects_stale_generation_without_removing_broker() {
             .is_some_and(|message| message.contains("broker generation mismatch")),
         "stale close response: {stale}"
     );
+    // Regression: the broker supervisor's own error code must survive the
+    // IPC hop back through `acp_open`'s helper process — it used to
+    // collapse into that call's generic transport code (-32072),
+    // indistinguishable from a connect/read/write failure and unusable by a
+    // caller (e.g. `ACPBrokerClient.start()`) that needs to recognize this
+    // specific failure to recover from a legacy-broker restart race.
+    assert_eq!(
+        stale["error"]["code"], -32075,
+        "stale close response: {stale}"
+    );
 
     let list = helper.request("acp/list", json!({}));
     assert_eq!(list["brokers"].as_array().unwrap().len(), 1);
