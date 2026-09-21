@@ -899,6 +899,18 @@ final class ACPSession: ObservableObject, Identifiable {
         let raw = Self.flatten(items)
         let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")
         let full = Self.stripWrappingFence(raw, isFinal: Self.isFinalStatus(status))
+        // Merge the snapshot's own `_meta` (terminal info, is_mcp_tool_call,
+        // etc. — whatever the adapter actually sent on this toolCall) with
+        // the synthesized permission facts, matching the normal `.toolCall`
+        // creation path rather than discarding it: a later update that
+        // omits metadata (common — adapters usually send it once) would
+        // otherwise have nothing to restore those fields from.
+        let metadata: AnyCodable?
+        if let raw = toolCall.metadata, let facts {
+            metadata = Self.mergeMetadata(raw, facts)
+        } else {
+            metadata = facts ?? toolCall.metadata
+        }
         transcript.appendMessage(.toolCall(.init(
             toolCallId: toolCall.toolCallId,
             title: toolCall.title ?? toolCall.toolCallId,
@@ -909,7 +921,7 @@ final class ACPSession: ObservableObject, Identifiable {
             contentLanguage: Self.wrappingFenceLanguage(raw),
             rawInput: Self.metadataString(toolCall.rawInput),
             rawOutput: Self.metadataString(toolCall.rawOutput),
-            metadata: facts,
+            metadata: metadata,
             assets: Self.mergeAssets(Self.extractAssets(items), Self.extractRawOutputAssets(toolCall.rawOutput)),
             locations: toolCall.locations?.map(\.path) ?? [],
             // Matches the .toolCall creation path: without this, an
@@ -922,6 +934,7 @@ final class ACPSession: ObservableObject, Identifiable {
             name: toolCall.name)))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
+        applyToolCallMetadata(toolCall.metadata)
         return transcript.messages.count - 1
     }
 

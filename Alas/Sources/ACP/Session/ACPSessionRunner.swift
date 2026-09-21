@@ -614,13 +614,27 @@ final class ACPSessionRunner {
         // other stream hasn't been dequeued by updatesTask yet —
         // flushPendingIncomingUpdates() only drains what updatesTask has
         // already dequeued into its own buffer, so it can't see that
-        // update either. Give updatesTask a few scheduler turns to catch
-        // up so a materialized/merged tool-call row doesn't jump ahead of
-        // a preceding agent/thought message in the persisted transcript.
-        for _ in 0..<4 {
+        // update either. Drain to the exact watermark already yielded
+        // (yieldedUpdateCount/appliedUpdateCount, the same pair
+        // deferCompletedOutputBoundaryUntilUpdatesDrain() uses) rather
+        // than guessing an attempt count, so a materialized/merged tool
+        // call row never jumps ahead of a preceding agent/thought message
+        // regardless of how many updates are queued. Bounded only by
+        // cancellation (stop() cancels updatesTask too, so nothing more
+        // would ever apply past that point).
+        let updateWatermark = connection.client.yieldedUpdateCount
+        while appliedUpdateCount < updateWatermark, !Task.isCancelled {
             await Task.yield()
             flushPendingIncomingUpdates()
         }
+        guard !Task.isCancelled else { return }
+        // Re-check: holdsLeaseForWrite() above can no longer speak for
+        // "now" after the suspensions just above — a cross-window takeover
+        // could have seized the lease in the interim. persistIndices below
+        // still gates the actual disk write, but mergePermissionDecision
+        // itself mutates the shared in-memory transcript synchronously, so
+        // that mutation needs its own fresh check.
+        guard holdsLeaseForWrite() else { return }
         let chosenOption: ACPPermissionOption?
         let wasCancelled: Bool
         switch response.outcome {

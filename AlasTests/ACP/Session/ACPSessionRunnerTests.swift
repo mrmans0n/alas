@@ -2566,6 +2566,81 @@ struct ACPSessionRunnerTests {
         #expect(kinds == ["agent", "tool_call"])
     }
 
+    @Test("draining before materializing waits for the exact watermark, not a fixed attempt count")
+    func materializedRowDrainsAnyNumberOfQueuedUpdates() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // More updates than a small fixed-attempt-count heuristic (the
+        // previous fix's bounded loop) could reliably drain — proving this
+        // waits for connection.client.yieldedUpdateCount specifically
+        // rather than guessing a scheduler-turn count.
+        for i in 0..<8 {
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("chunk-\(i)"))))
+        }
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        mock.emitPermission(id: .number(9), params: params)
+
+        try await waitUntil { mock.permissionResponses[.number(9)] != nil }
+        try await waitUntil {
+            runner.session.transcript.messages.contains {
+                if case .toolCall = $0 { return true }
+                return false
+            }
+        }
+
+        let kinds = runner.session.transcript.messages.map(\.kind)
+        #expect(kinds.last == "tool_call")
+        #expect(kinds.dropLast().allSatisfy { $0 == "agent" })
+    }
+
+    @Test("materializing preserves the permission snapshot's own tool-call metadata, not just the synthesized facts")
+    func materializedRowPreservesToolCallMetadata() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil,
+            metadata: AnyCodable(["is_mcp_tool_call": AnyCodable(true)] as [String: AnyCodable])
+        )
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(9)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        let metadata = toolCalls.first?.metadata?.value as? [String: AnyCodable]
+        #expect(metadata?["is_mcp_tool_call"]?.value as? Bool == true)
+        let permission = metadata?["permission"]?.value as? [String: AnyCodable]
+        #expect(permission?["title"]?.value as? String == "Run command?")
+    }
+
     @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
     func cancelRequestCancelsPendingFileWrite() async throws {
         let (runner, mock) = try makeRunner()
