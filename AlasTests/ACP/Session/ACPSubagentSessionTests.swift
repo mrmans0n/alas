@@ -135,6 +135,25 @@ struct ACPSubagentSessionTests {
         #expect(b.value == "b1")
     }
 
+    @Test("a child prompt's blocks reassemble into one bubble with its attachments")
+    func childPromptBlocksReassemble() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("Review "))))
+        run.apply(.userMessageChunk(.init(
+            messageId: "p1",
+            content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift"))))
+        run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("this file"))))
+
+        #expect(run.messages.count == 1)
+        guard case .user(_, "p1", let text, let attachments, _) = run.messages[0] else {
+            Issue.record("expected one prompt bubble")
+            return
+        }
+        #expect(text == "Review this file")
+        #expect(attachments.count == 1)
+        #expect(attachments.first?.uri == "file:///tmp/a.swift")
+    }
+
     @Test("an id-less chunk still extends only the trailing row of its kind")
     func idLessChunkExtendsTrailingRow() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")

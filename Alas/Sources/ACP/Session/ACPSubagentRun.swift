@@ -118,13 +118,32 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         case .userMessageChunk(let chunk):
             // The task handed to the child. Rendered so the reader can see
             // what it was actually asked, not just the spawn's summary.
+            //
+            // A prompt arrives as one update per content block, so blocks
+            // sharing a `messageId` extend one bubble rather than opening
+            // a new one each time, and an image or resource block carries
+            // its attachment instead of vanishing as empty text.
             let text = Self.text(of: chunk.content)
-            guard !text.isEmpty else { return [] }
+            let attachments = ACPSessionRunner.attachments(of: [chunk.content])
+            guard !text.isEmpty || !attachments.isEmpty else { return [] }
+            if let messageId = chunk.messageId,
+               let index = userIndex(messageId: messageId),
+               case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] {
+                messages[index] = .user(
+                    id: id,
+                    messageId: messageId,
+                    text: existingText + text,
+                    attachments: existingAttachments + attachments.filter {
+                        !existingAttachments.contains($0)
+                    },
+                    delegatedSource: source)
+                return [index]
+            }
             return [append(.user(
                 id: UUID(),
                 messageId: chunk.messageId,
                 text: text,
-                attachments: []), at: timestamp)]
+                attachments: attachments), at: timestamp)]
         case .toolCall(let payload):
             return [append(
                 .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)),
@@ -227,6 +246,17 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             default:
                 continue
             }
+        }
+        return nil
+    }
+
+    /// The child's prompt bubble carrying `messageId`, if it is still the
+    /// open one. Bounded by the newest row so a later prompt reusing an id
+    /// cannot reopen an older bubble.
+    private func userIndex(messageId: String) -> Int? {
+        for index in stride(from: messages.count - 1, through: 0, by: -1) {
+            guard case .user(_, let id, _, _, _) = messages[index] else { continue }
+            return id == messageId ? index : nil
         }
         return nil
     }

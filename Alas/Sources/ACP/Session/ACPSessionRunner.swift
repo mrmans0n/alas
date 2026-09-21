@@ -794,8 +794,24 @@ final class ACPSessionRunner {
             // must NOT acknowledge the durable update, or the child's output
             // is dropped instead of being replayed to the new writer.
             try await persistence.persistSubagentMessages(subagentRows, fence: fence)
-        }, completion: { persisted in
-            completion?(persisted == true)
+        }, completion: { [weak self] persisted in
+            guard persisted == true else {
+                completion?(false)
+                return
+            }
+            // Mirrors learn about new rows through this notifier. A child
+            // that streams without touching its synthetic parent row would
+            // otherwise stay invisible to another instance until the next
+            // parent-row write (its terminal state, at the earliest).
+            //
+            // Deliberately NOT `onMessageActivity`: that moves the recents
+            // ordering by bumping `updatedAt` in memory, while
+            // `upsertSubagentMessages` — unlike `upsertMessages` — does not
+            // bump it in SQLite, so the two would disagree. The spawn and
+            // the terminal state both write parent rows, so a subagent run
+            // still registers as activity at both ends.
+            self?.onPersist?()
+            completion?(true)
         })
         return true
     }
