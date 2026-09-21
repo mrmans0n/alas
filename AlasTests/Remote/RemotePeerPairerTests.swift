@@ -1,10 +1,61 @@
 import Testing
 import Foundation
+import Network
 @testable import Alas
 
 struct RemotePeerPairerTests {
     private final class Recorder {
         var requests: [URLRequest] = []
+    }
+
+    /// A raw TCP server that answers any request with a reply far larger
+    /// than `RemotePeerPairer.maxReplyBytes`, closing the connection to
+    /// mark end-of-body rather than declaring a `Content-Length` — the
+    /// scenario the byte-counting cap has to catch regardless of what any
+    /// header claims.
+    @MainActor
+    private final class OversizedReplyServer {
+        private(set) var port: UInt16?
+        private var listener: NWListener?
+        private let queue = DispatchQueue(label: "io.alas.tests.remote.oversized-reply")
+
+        func start() throws {
+            let listener = try NWListener(using: .tcp, on: .any)
+            self.listener = listener
+            listener.stateUpdateHandler = { [weak self] state in
+                guard case .ready = state else { return }
+                let assigned = listener.port?.rawValue
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    self.port = assigned
+                }
+            }
+            listener.newConnectionHandler = { [queue] conn in
+                conn.start(queue: queue)
+                var buffer = Data()
+                func receiveLoop() {
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+                        if let data, !data.isEmpty { buffer.append(data) }
+                        if buffer.range(of: Data("\r\n\r\n".utf8)) != nil {
+                            let oversized = String(repeating: "x", count: RemotePeerPairer.maxReplyBytes * 2)
+                            let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n\(oversized)"
+                            conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+                                conn.cancel()
+                            })
+                        } else if data != nil {
+                            receiveLoop()
+                        }
+                    }
+                }
+                receiveLoop()
+            }
+            listener.start(queue: queue)
+        }
+
+        func stop() {
+            listener?.cancel()
+            listener = nil
+        }
     }
 
     private func pairer(_ script: [String: (Int, String)], recorder: Recorder) -> RemotePeerPairer {
@@ -135,5 +186,28 @@ struct RemotePeerPairerTests {
         #expect(text.contains("srv-a"))
         #expect(text.contains("http://10.0.0.9:8765"))
         #expect("\(RemotePeerPairer.Outcome.expiredCode)" == "expiredCode")
+    }
+
+    // `request.origins` is attacker-controlled — it travels with a peer's
+    // own advertisement and is redialed automatically for a reciprocal
+    // pair-back — so a malicious or compromised origin returning a reply
+    // far larger than any legitimate one must not have its full body
+    // materialized in memory. The per-request timeout alone would not
+    // catch a connection that keeps a steady trickle of bytes coming.
+    @MainActor
+    @Test func liveFetchRejectsAnOversizedReply() async throws {
+        let server = OversizedReplyServer()
+        try server.start()
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 2
+        await #expect(throws: (any Error).self) {
+            _ = try await RemotePeerPairer.boundedFetch(request)
+        }
     }
 }
