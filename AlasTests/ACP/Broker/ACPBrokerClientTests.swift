@@ -130,14 +130,45 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
-    /// A `close()` failure unrelated to the generation-mismatch race (e.g. a
-    /// genuine transport error) must still fail `start()` — only -32075 is
-    /// treated as "someone else already replaced it".
-    @Test func adoptedLegacyBrokerRestartPropagatesUnrelatedCloseFailure() async throws {
+    /// A raced close on a legacy broker can fail in more shapes than a clean
+    /// -32075: the loser's connection might never even be accepted before
+    /// the old supervisor's listener drops, surfacing as a generic
+    /// transport error with no recognizable code at all. `start()` treats
+    /// closing the legacy broker as best-effort — any close failure, not
+    /// just a recognized one, still falls through to reopen and adopt
+    /// whatever is running now, the same way `shutdown()` already treats
+    /// its own close as advisory.
+    @Test func adoptedLegacyBrokerRestartToleratesAnyCloseFailure() async throws {
         let service = MockBrokerService()
         await service.setOpenAdopted(true)
         await service.setOpenSnapshotCursorTodosByToolCallId(nil)
         await service.setCloseShouldThrow(MockBrokerServiceError.injected)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        // The mock's thrown close (unlike the generation-mismatch case
+        // above) leaves the broker's adopted/legacy state untouched, so the
+        // reopen below sees the same still-legacy snapshot. That's fine:
+        // start() makes one recovery attempt, not a loop, and the point
+        // under test is that the close failure alone doesn't fail start().
+        let opened = try await client.start()
+
+        #expect(opened.adopted == true)
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+    }
+
+    /// The best-effort close above must not paper over a genuinely broken
+    /// helper: if the *reopen* itself fails, `start()` still throws.
+    @Test func adoptedLegacyBrokerRestartStillFailsWhenReopenFails() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrow(MockBrokerServiceError.injected)
+        await service.setOpenShouldThrowAfter(callCount: 1, error: MockBrokerServiceError.injected)
         let client = makeClient(service: service)
 
         await #expect(throws: MockBrokerServiceError.self) {
@@ -1915,6 +1946,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     private var respondFailuresRemaining = 0
     private var closeShouldThrowGenerationMismatch = false
     private var closeShouldThrowError: (any Error)?
+    private var openShouldThrowAfter: (callCount: Int, error: any Error)?
 
     func enqueueAttach(
         events: [ACPBrokerEvent],
@@ -1958,6 +1990,14 @@ private actor MockBrokerService: ACPBrokerServicing {
         closeShouldThrowError = error
     }
 
+    /// Makes `open()` throw once its call count exceeds `callCount` — e.g.
+    /// `callCount: 1` lets the first `open()` succeed and every one after
+    /// it fail, modeling a reopen-after-close that hits a genuinely broken
+    /// helper rather than a race.
+    func setOpenShouldThrowAfter(callCount: Int, error: any Error) {
+        openShouldThrowAfter = (callCount, error)
+    }
+
     func setSnapshotResults(
         initializeResult: ACPBrokerJSONValue?,
         remoteSessionResult: ACPBrokerJSONValue?
@@ -1968,6 +2008,9 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
+        if let openShouldThrowAfter, opened.count > openShouldThrowAfter.callCount {
+            throw openShouldThrowAfter.error
+        }
         return ACPBrokerOpenResult(
             snapshot: snapshot(journalTail: 0, cursorTodosByToolCallId: openSnapshotCursorTodosByToolCallId),
             adopted: openAdopted
