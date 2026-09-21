@@ -2,6 +2,11 @@ import Foundation
 import CryptoKit
 import Observation
 
+struct RemotePeerRedeemResult: Equatable, Sendable {
+    let token: String
+    let deviceId: String
+}
+
 @MainActor
 @Observable
 final class RemotePairingService {
@@ -15,7 +20,10 @@ final class RemotePairingService {
     private var pendingCodes: [PendingCode] = []
     private(set) var devices: [RemoteDevice]
 
-    private static let codeTTL: TimeInterval = 120
+    /// How long a minted code stays redeemable. Not private: `RemotePeerManager`
+    /// aligns how long it remembers an ended attempt's counter-code to this,
+    /// since the far side could still redeem it anytime up to this TTL.
+    static let codeTTL: TimeInterval = 120
 
     // Throttle brute-force code guessing: at most `maxFailedRedeems` failed
     // /pair attempts within `rateWindow` seconds before we reject outright.
@@ -49,6 +57,22 @@ final class RemotePairingService {
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
     func redeem(code: String, deviceName: String) throws -> String {
+        try redeemCore(code: code, deviceName: deviceName, kind: .browser, peerServerId: nil).token
+    }
+
+    /// Same exchange for another Alas instance. Existing records for the same
+    /// `peerServerId` are left alone: a redeem only proves the caller holds a
+    /// live pairing code, never that it is the peer whose identity it claims,
+    /// so evicting on that claim would let one code holder cut an established
+    /// peer's access. Re-pairing therefore adds a row rather than replacing
+    /// one; `RemotePeerManager.forget` revokes every device carrying the
+    /// identity, so no token outlives the user forgetting the peer.
+    func redeemPeer(code: String, deviceName: String, peerServerId: String) throws -> RemotePeerRedeemResult {
+        try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
+    }
+
+    private func redeemCore(code: String, deviceName: String, kind: RemoteDeviceKind,
+                            peerServerId: String?) throws -> RemotePeerRedeemResult {
         // Drop failures outside the window, then throttle if too many remain.
         recentFailedRedeems = recentFailedRedeems.filter { now().timeIntervalSince($0) < Self.rateWindow }
         guard recentFailedRedeems.count < Self.maxFailedRedeems else {
@@ -65,10 +89,11 @@ final class RemotePairingService {
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
-                                  tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil)
+                                  tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
+                                  kind: kind, peerServerId: peerServerId)
         devices.append(device)
         store.save(devices)
-        return token
+        return RemotePeerRedeemResult(token: token, deviceId: device.id)
     }
 
     /// Returns the matching device id for a valid token (constant-time compare), else nil.

@@ -50,6 +50,9 @@ final class RemoteSessionGateway {
 
     func handle(_ message: RemoteClientMessage) async {
         switch message {
+        case .helloAck:
+            // Version acknowledgement from an Alas peer; nothing to do server-side.
+            break
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:

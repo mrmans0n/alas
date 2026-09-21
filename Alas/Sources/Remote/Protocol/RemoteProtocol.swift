@@ -12,6 +12,14 @@ struct RemoteServerIdentity: Equatable, Sendable {
     let serverId: String
     let name: String
     let hubEnabled: Bool
+    let federationEnabled: Bool
+
+    init(serverId: String, name: String, hubEnabled: Bool, federationEnabled: Bool = false) {
+        self.serverId = serverId
+        self.name = name
+        self.hubEnabled = hubEnabled
+        self.federationEnabled = federationEnabled
+    }
 }
 
 struct RemoteModelInfo: Codable, Equatable, Sendable {
@@ -37,6 +45,9 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
 
 /// Client → server. `type` discriminates.
 enum RemoteClientMessage: Equatable, Sendable {
+    /// Sent by Alas peer connections after the server's `hello`. Browsers
+    /// never send it and servers never wait for it.
+    case helloAck(protocolVersion: Int)
     case listSessions
     case listWorktrees
     case listAgents
@@ -74,11 +85,12 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, protocolVersion }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
+        case "helloAck": self = .helloAck(protocolVersion: try c.decode(Int.self, forKey: .protocolVersion))
         case "listSessions": self = .listSessions
         case "listWorktrees": self = .listWorktrees
         case "listAgents": self = .listAgents
@@ -183,6 +195,9 @@ extension RemoteClientMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .helloAck(let protocolVersion):
+            try c.encode("helloAck", forKey: .type)
+            try c.encode(protocolVersion, forKey: .protocolVersion)
         case .listSessions: try c.encode("listSessions", forKey: .type)
         case .listWorktrees:
             try c.encode("listWorktrees", forKey: .type)
@@ -358,7 +373,7 @@ extension RemoteClientMessage {
 /// Server → client. `type` discriminates.
 enum RemoteServerMessage: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
-    case hello(protocolVersion: Int, serverId: String, name: String, hubEnabled: Bool)
+    case hello(protocolVersion: Int, serverId: String, name: String, hubEnabled: Bool, federationEnabled: Bool = false)
     case sessionList(sessions: [RemoteSessionSummary])
     case worktreeList(worktrees: [RemoteWorktreeOption])
     case agentList(agents: [RemoteAgentOption])
@@ -419,7 +434,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated
-        case protocolVersion, serverId, name, hubEnabled
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -430,7 +445,8 @@ extension RemoteServerMessage: Codable {
                 protocolVersion: try c.decode(Int.self, forKey: .protocolVersion),
                 serverId: try c.decode(String.self, forKey: .serverId),
                 name: try c.decode(String.self, forKey: .name),
-                hubEnabled: try c.decodeIfPresent(Bool.self, forKey: .hubEnabled) ?? false)
+                hubEnabled: try c.decodeIfPresent(Bool.self, forKey: .hubEnabled) ?? false,
+                federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false)
         case "sessionList": self = .sessionList(sessions: try c.decode([RemoteSessionSummary].self, forKey: .sessions))
         case "worktreeList":
             self = .worktreeList(worktrees: try c.decode([RemoteWorktreeOption].self, forKey: .worktrees))
@@ -599,12 +615,13 @@ extension RemoteServerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .hello(let protocolVersion, let serverId, let name, let hubEnabled):
+        case .hello(let protocolVersion, let serverId, let name, let hubEnabled, let federationEnabled):
             try c.encode("hello", forKey: .type)
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(serverId, forKey: .serverId)
             try c.encode(name, forKey: .name)
             try c.encode(hubEnabled, forKey: .hubEnabled)
+            try c.encode(federationEnabled, forKey: .federationEnabled)
         case .sessionList(let s): try c.encode("sessionList", forKey: .type)
         try c.encode(s, forKey: .sessions)
         case .worktreeList(let worktrees):
@@ -784,6 +801,7 @@ extension RemoteServerMessage {
             protocolVersion: RemoteProtocolVersion.current,
             serverId: identity.serverId,
             name: identity.name,
-            hubEnabled: identity.hubEnabled)
+            hubEnabled: identity.hubEnabled,
+            federationEnabled: identity.federationEnabled)
     }
 }

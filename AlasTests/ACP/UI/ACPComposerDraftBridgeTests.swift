@@ -577,7 +577,13 @@ struct ACPComposerDraftBridgeTests {
 
         let textCenter = (font.ascender + font.descender) / 2
         #expect(abs(frame.midY - textCenter) < 0.001)
-        #expect(frame.minY < -4)
+        // The chip's fixed 18pt height is taller than a 13pt line's own
+        // ascender+descender span, so centering on the text always pushes
+        // the frame below the baseline — checked as `< 0` rather than a
+        // fixed magic offset, which was only ~0.4pt from this font's own
+        // actual value and could flip on a font-metric difference between
+        // OS builds or CI runner images unrelated to any real regression.
+        #expect(frame.minY < 0)
     }
 
     @Test("slash panel closes when filtering has no command matches")

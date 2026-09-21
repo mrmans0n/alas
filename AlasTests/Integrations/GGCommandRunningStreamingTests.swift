@@ -312,8 +312,23 @@ struct GGCommandRunningStreamingTests {
         )
 
         _ = try? await collectWithTimeout(stream)
-        let childPID = try #require(pid_t(try String(contentsOf: childPIDFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)))
+        // The detached grandchild writes this file itself, on its own fork
+        // chain, well after `collectWithTimeout` returns — its 5s ceiling
+        // races the production termination sequence's own worst case
+        // (~5s: SIGTERM grace + SIGKILL sweep + stdout/stderr EOF wait), so
+        // under CI contention the file can still be a few milliseconds from
+        // existing the instant this reads it. Poll rather than read once.
+        var discoveredChildPID: pid_t?
+        for _ in 0 ..< 50 {
+            if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+                discoveredChildPID = pid
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let childPID = try #require(discoveredChildPID)
         defer { kill(childPID, SIGKILL) }
         for _ in 0 ..< 50 where kill(childPID, 0) == 0 {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -373,8 +388,22 @@ struct GGCommandRunningStreamingTests {
         )
 
         _ = try? await collectWithTimeout(stream)
-        let childPID = try #require(pid_t(try String(contentsOf: childPIDFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)))
+        // Same race as watchdogKillsDetachedChildSpawnedByTerminationHandler
+        // above: the grandchild writes this file itself, on its own delayed
+        // fork chain, and `collectWithTimeout`'s 5s ceiling can race the
+        // production termination sequence's own comparable worst case under
+        // CI contention. Poll rather than read once.
+        var discoveredChildPID: pid_t?
+        for _ in 0 ..< 50 {
+            if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+                discoveredChildPID = pid
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let childPID = try #require(discoveredChildPID)
         defer { kill(childPID, SIGKILL) }
         #expect(FileManager.default.fileExists(atPath: termMarker.path))
         #expect(kill(childPID, 0) == -1 && errno == ESRCH)

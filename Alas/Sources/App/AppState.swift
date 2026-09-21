@@ -480,6 +480,29 @@ final class AppState {
     /// file isn't touched unless the remote feature is actually exercised.
     @ObservationIgnored
     private(set) lazy var remotePairing = RemotePairingService(store: FileDeviceStore())
+    /// Outbound peers (other Macs running Alas). Lazy like `remotePairing`.
+    @ObservationIgnored
+    private(set) lazy var remotePeers: RemotePeerManager = {
+        let manager = RemotePeerManager(
+            store: FilePeerStore(),
+            pairing: remotePairing,
+            localIdentity: { [weak self] in
+                RemotePeerManager.LocalIdentity(
+                    serverId: self?.config.remote.serverId ?? "",
+                    name: self?.remoteDisplayName ?? "Alas",
+                    // Loopback is meaningless to another Mac; everything else is
+                    // in rank order, best first. Capped to the same bound the
+                    // receiving Mac enforces on any advertisement — sending
+                    // more than that would have it reject a genuine peer with
+                    // `originRejected`, since it can never tell "too many
+                    // legitimate addresses" apart from a hostile advertisement.
+                    origins: Array(self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url).prefix(RemotePairingLink.maxOrigins) ?? []))
+            })
+        manager.onRevokeDevice = { [weak self] deviceId in
+            self?.remoteServer?.disconnectDevice(deviceId)
+        }
+        return manager
+    }()
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -561,7 +584,8 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            hubEnabled: config.remote.hubEnabled
+            hubEnabled: config.remote.hubEnabled,
+            federationEnabled: config.remote.federationEnabled
         )
     }
 
@@ -593,6 +617,7 @@ final class AppState {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
                 refreshRemoteAccessState()
+                syncRemotePeers()
                 return
             }
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
@@ -626,6 +651,14 @@ final class AppState {
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
             }
+            server.onPeerPaired = { [weak self] request in
+                // Recorded synchronously, on the same call stack as the
+                // redeem that produced this request — before Task-spawning
+                // below introduces a delay a concurrent Forget could land
+                // in unnoticed by handleInboundPeer's own, later snapshot.
+                self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
+                Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
+            }
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
@@ -633,6 +666,7 @@ final class AppState {
                 try server.start(port: boundPort)
                 remoteServer = server
                 lastRemoteError = nil
+                syncRemotePeers()
             } catch {
                 remoteServer = nil
                 remotePort = nil
@@ -641,12 +675,39 @@ final class AppState {
                 lastRemoteError = error.localizedDescription
             }
         } else {
+            // Only touch `remotePeers` when a server actually ran: the lazy
+            // property builds the manager, which builds `remotePairing` too,
+            // so an unconditional call would read `remote-peers.json` and
+            // `remote-devices.json` on every launch with both flags off.
+            // Links only exist while the server is up, so there is nothing to
+            // tear down otherwise. Safe here because the nil-out is below.
+            if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
+        }
+    }
+
+    /// Keeps peer links alive only while the server is up and the experiment
+    /// is on; peers stay stored either way.
+    func syncRemotePeers() {
+        if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
+            remotePeers.connectAll()
+        } else if remoteServer != nil {
+            // Same reason as `syncRemoteServer`'s disabled branch: without a
+            // server no link was ever opened, and reaching for `remotePeers`
+            // would force the lazy manager and its stores into existence.
+            remotePeers.disconnectAll()
+            // Cuts an already-open peer socket immediately: `disconnectAll()`
+            // above only stops OUR outbound links, it does nothing to a
+            // connection another Mac holds INTO this one. The `authorize`
+            // closure in `RemoteServer.accept` refuses a peer's token going
+            // forward; this closes the sockets that opened before the toggle
+            // flipped.
+            remoteServer?.disconnectAllPeerDevices()
         }
     }
 

@@ -99,4 +99,157 @@ struct RemoteHTTPResponderTests {
         #expect(headerBlock.contains("X-Test: 1"))
         #expect(out.hasSuffix("\r\n\r\nx"))
     }
+
+    private final class PeerSink {
+        var requests: [RemotePeerPairingRequest] = []
+    }
+
+    private func makePeerResponder(pairing: RemotePairingService, accepts: Bool, sink: PeerSink) -> RemoteHTTPResponder {
+        var responder = RemoteHTTPResponder(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            diagnostics: {
+                RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true, pairedDeviceCount: 0)
+            },
+            originPolicy: RemoteOriginPolicy(hostPolicy: .loopback, allowedOrigins: [])
+        )
+        responder.acceptsPeers = { accepts }
+        responder.onPeerPaired = { sink.requests.append($0) }
+        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) }
+        return responder
+    }
+
+    @Test func pairReplyCarriesServerIdentity() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"phone"}"#.utf8)
+        let out = makePeerResponder(pairing: pairing, accepts: false, sink: PeerSink())
+            .response(for: request("POST", "/pair"), body: body)
+        let json = try #require(String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n").last)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect((object["token"] as? String)?.isEmpty == false)
+        #expect(object["serverId"] as? String == "srv-a")
+        #expect(object["name"] as? String == "Mac A")
+    }
+
+    @Test func pairWithPeerCreatesAnInstanceDeviceAndNotifies() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"""
+        {"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://100.64.1.9:8765"],"counterCode":"C0DE"}}
+        """#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 200 OK"))
+        let device = try #require(pairing.devices.first)
+        #expect(device.kind == .alasInstance)
+        #expect(device.peerServerId == "srv-b")
+        #expect(sink.requests == [RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://100.64.1.9:8765"],
+            counterCode: "C0DE", localDeviceId: device.id, redeemedCode: code)])
+    }
+
+    @Test func pairWithPeerIsForbiddenWhenFederationIsOff() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":[]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: false, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect(sink.requests.isEmpty)
+        // The code was not consumed: a plain browser pair with it still works.
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    // One valid code must not buy a sequential probe of arbitrary host:port
+    // pairs from inside this network: the pair-back walks every advertised
+    // origin with a POST, so the list is bounded before the code is redeemed.
+    @Test func pairWithTooManyOriginsIsRejectedAndLeavesTheCodeRedeemable() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let origins = (1...9).map { #""http://10.0.0.\#($0):8765""# }.joined(separator: ",")
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":[\#(origins)]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect(sink.requests.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    // An empty identity would collapse every peer onto one record. The
+    // initiator path already refuses it; the responder path must too.
+    @Test func pairWithEmptyPeerServerIdIsRejectedAndLeavesTheCodeRedeemable() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"","name":"Mac B","origins":["http://10.0.0.1:8765"]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect(sink.requests.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    @Test func pairWithAnOverlongPeerNameIsRejected() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let name = String(repeating: "a", count: 201)
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"\#(name)","origins":[]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    // Pasting this same Mac's own pairing link back at itself over a
+    // reachable LAN or tailnet address would otherwise pass every other
+    // check — the advertised serverId legitimately equals the local
+    // identity's own — and persist an "online" peer that is actually just
+    // this Mac.
+    @Test func pairWithAPeerAdvertisingThisSameMacsOwnIdentityIsRejected() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac A","peer":{"serverId":"srv-a","name":"Mac A","origins":["http://10.0.0.1:8765"]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect(sink.requests.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    @Test func pairWithAnOverlongDeviceNameIsRejected() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let deviceName = String(repeating: "b", count: 201)
+        let body = Data(#"{"code":"\#(code)","deviceName":"\#(deviceName)","peer":{"serverId":"srv-b","name":"Mac B","origins":[]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    // The generous bound still admits a realistic Mac.
+    @Test func pairWithAHandfulOfOriginsStillPairs() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let origins = (1...8).map { #""http://10.0.0.\#($0):8765""# }.joined(separator: ",")
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":[\#(origins)]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 200 OK"))
+        #expect(sink.requests.first?.origins.count == 8)
+    }
 }
