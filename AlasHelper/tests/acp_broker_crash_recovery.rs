@@ -331,6 +331,85 @@ fn concurrent_close_then_reopen_pairs_do_not_corrupt_the_broker_directory() {
     assert_eq!(adopted["adopted"], true, "the survivor must be adoptable: {adopted}");
 }
 
+/// The two tests above reproduce real corruption, but not reliably enough
+/// to catch a lock that's acquired too late: `acp_close` needs to hold the
+/// open lock *before* it tells the supervisor to close, not just around
+/// `remove_broker_dir`, or a losing legacy-restart client can fully spawn
+/// and stand up a replacement — in the gap between this call's own close
+/// IPC succeeding and it reaching the lock — only for this call to then
+/// delete that replacement once it finally acquires the (by-then free)
+/// lock. That gap is far too narrow to hit by chance (0/60 in manual
+/// testing); this test controls the ordering directly instead of hoping
+/// for it.
+///
+/// Holds the lock itself, from the test process, then confirms a
+/// concurrent `acp/close` neither completes nor tells the supervisor
+/// anything — proven by the supervisor still answering normally over its
+/// own socket — until the lock is released.
+#[cfg(unix)]
+#[test]
+fn acp_close_holds_the_open_lock_before_telling_the_supervisor_to_close() {
+    use std::os::unix::io::AsRawFd;
+
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+
+    let fixture = Fixture::new("close-lock-ordering");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request(
+        "acp/open",
+        fixture.open_params("broker-close-lock-order", 0),
+    );
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    let lock_path = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-lock-order.open.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .expect("open lock file");
+    assert_eq!(
+        unsafe { flock(lock_file.as_raw_fd(), LOCK_EX) },
+        0,
+        "test must be able to take the same open lock acp_open/acp_close use"
+    );
+
+    let mut helper_close = Helper::start(&fixture.home);
+    let broker_id = "broker-close-lock-order".to_string();
+    let closer = std::thread::spawn(move || {
+        helper_close.request(
+            "acp/close",
+            json!({ "brokerId": broker_id, "generation": generation }),
+        )
+    });
+
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !closer.is_finished(),
+        "acp/close must block on the open lock this test holds, not \
+         complete while it's still held"
+    );
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-lock-order/broker.sock");
+    let (reply, _) = broker_roundtrip(&socket, r#"{"method":"snapshot","params":{}}"#, false);
+    let snapshot: Value = serde_json::from_str(reply.trim()).expect("snapshot reply JSON");
+    assert_eq!(
+        snapshot["ok"], true,
+        "the supervisor must not have been told to close yet — acp/close \
+         must acquire the open lock (which this test holds) before its \
+         close IPC, not after: {snapshot}"
+    );
+
+    drop(lock_file);
+    let close_result = closer.join().expect("closer thread");
+    assert_eq!(close_result["ok"], true);
+}
+
 #[cfg(unix)]
 #[test]
 fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {

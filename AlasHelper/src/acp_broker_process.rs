@@ -607,6 +607,20 @@ fn acp_detach(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpCloseParams = decode(params)?;
     let dir = broker_dir(params.broker_id.as_str())?;
+    // Coordinate with acp_open's own use of this same lock (see there),
+    // across the *whole* close decision — not just remove_broker_dir. A
+    // narrower lock here left a gap between this call's own send_ipc
+    // "close" below succeeding and it reaching the lock: a losing
+    // legacy-restart client, rejected by broker_close and racing this
+    // call's open() back, could acquire the lock first, fully spawn and
+    // stand up a replacement, and return success to its own caller — only
+    // for this call to then acquire the (now-free) lock and delete that
+    // replacement's directory, since remove_broker_dir has no way to tell
+    // "the old generation I meant to close" from "a brand-new one that
+    // happens to be sitting in the same directory". The loser would end up
+    // with a "successful" open for a broker whose directory is already
+    // gone, and its own supervisor orphaned.
+    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
     if broker_is_running(&dir) {
         send_ipc(
             &dir,
@@ -614,15 +628,6 @@ fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
             serde_json::to_value(&params).expect("close params serialize"),
         )?;
     }
-    // Coordinate with acp_open's own use of this same lock (see there): a
-    // concurrent opener that already holds it — writing launch.json, about
-    // to spawn — must finish and either see this removal on its next
-    // attempt or be the one this call waits behind, not have its own
-    // half-written directory deleted out from under it. Held only around
-    // the removal itself, not the close IPC above, so this call isn't
-    // blocked waiting on a slow supervisor round trip that never touches
-    // the directory's files.
-    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
     remove_broker_dir(&dir)?;
     Ok(json!({ "ok": true }))
 }
