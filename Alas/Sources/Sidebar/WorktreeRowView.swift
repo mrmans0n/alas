@@ -260,7 +260,7 @@ struct WorktreeRowView: View {
 
     nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
-        case .creating, .deleting: return true
+        case .creating, .preparingDelete, .deleting: return true
         default: return false
         }
     }
@@ -268,6 +268,7 @@ struct WorktreeRowView: View {
     nonisolated static func statusText(for operationState: WorktreeOperationState?) -> String {
         switch operationState {
         case .creating: return "Creating…"
+        case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
         case .createFailed(_, let msg, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
         case .launchFailed(_, let msg, _): return "Launch failed: \(msg.trimmedForDisplay)"
@@ -278,7 +279,7 @@ struct WorktreeRowView: View {
 
     nonisolated static func showsProgress(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
-        case .deleting: return true
+        case .preparingDelete, .deleting: return true
         case .creating, .createFailed, .launchFailed, .deleteFailed, .none: return false
         }
     }
@@ -291,7 +292,7 @@ struct WorktreeRowView: View {
         switch operationState {
         case .createFailed(_, let message, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
             return message
-        case .creating, .deleting, .none:
+        case .creating, .preparingDelete, .deleting, .none:
             return nil
         }
     }

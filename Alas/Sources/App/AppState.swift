@@ -1799,7 +1799,7 @@ final class AppState {
             guard !isOfflineHost else { return }
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(for: worktree.id) {
-                case .creating, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
@@ -1843,7 +1843,7 @@ final class AppState {
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
             switch self.projectsManager.operationState(for: worktree.id) {
-            case .creating, .deleting, .createFailed:
+            case .creating, .preparingDelete, .deleting, .createFailed:
                 return
             case nil, .launchFailed, .deleteFailed:
                 break
@@ -2175,7 +2175,7 @@ final class AppState {
                     switch self.projectsManager.operationState(for: $0.id) {
                     case .creating, .deleting, .createFailed:
                         return false
-                    case nil, .launchFailed, .deleteFailed:
+                    case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
                     }
                 }
@@ -9521,7 +9521,7 @@ final class AppState {
     }
     nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
         switch state {
-        case .creating, .deleting:
+        case .creating, .preparingDelete, .deleting:
             return true
         case .createFailed, .launchFailed, .deleteFailed, nil:
             return false
@@ -9828,9 +9828,19 @@ final class AppState {
 
     /// Ask first, inspect later. The confirmation names the worktree and what
     /// deleting it costs; nothing about it depends on shelling out to git, so
-    /// it goes up immediately instead of stranding the row in a "preparing
-    /// deletion" spinner while a preflight walks submodules. Anything Git
-    /// genuinely needs force for surfaces afterwards as the force prompt.
+    /// it goes up immediately instead of waiting on a preflight that walks
+    /// submodules. Anything git genuinely needs force for surfaces
+    /// afterwards as the force prompt.
+    ///
+    /// The worktree is still claimed via `.preparingDelete` before the
+    /// dialog appears (hence the row's "Preparing deletion…" state for as
+    /// long as it's up) — that claim is synchronous, not tied to any async
+    /// preflight I/O. It exists because `NSAlert.runModal()` blocks this
+    /// call stack but its nested run loop keeps pumping other main-actor
+    /// work: a scheduled run or issue-triggered session could otherwise be
+    /// admitted into this worktree while the user is still deciding, then
+    /// keep writing straight through the confirmed delete's staging/audit
+    /// window.
     private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
@@ -9842,9 +9852,15 @@ final class AppState {
             keepBranch: keepBranch
         )
 
+        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
         guard confirmDeleteWorktree(
             Self.deleteConfirmation(branch: worktree.branch, keepBranch: keepBranch)
-        ) else { return }
+        ) else {
+            if projectsManager.operationState(for: worktree.id) == .preparingDelete {
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+            }
+            return
+        }
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
@@ -12961,7 +12977,7 @@ extension AppState: RemoteSessionsProvider {
         for project in projects {
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(for: worktree.id) {
-                case .creating, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
@@ -13011,7 +13027,7 @@ extension AppState: RemoteSessionsProvider {
             return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(for: worktreeId) {
-        case .creating, .deleting, .createFailed:
+        case .creating, .preparingDelete, .deleting, .createFailed:
             return .failure("Worktree is no longer available.")
         case nil, .launchFailed, .deleteFailed:
             break

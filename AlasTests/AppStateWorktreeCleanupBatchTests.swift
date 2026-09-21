@@ -266,4 +266,18 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(!AppState.harnessActivityIsBusy(.idle))
         #expect(AppState.harnessActivityIsBusy(.busy))
     }
+
+    /// Regression: the instant delete-confirmation dialog blocks the main
+    /// thread via `NSAlert.runModal()`, but that call's nested run loop
+    /// still pumps other main-actor work — a scheduled run or
+    /// issue-triggered session could be admitted into the worktree while
+    /// the user is still deciding unless `.preparingDelete` blocks it the
+    /// same way `.creating`/`.deleting` already do.
+    @Test func preparingDeleteBlocksWorktreeSessionAdmission() {
+        #expect(AppState.blocksWorktreeSessionAdmission(.preparingDelete))
+        #expect(AppState.blocksWorktreeSessionAdmission(.creating))
+        #expect(AppState.blocksWorktreeSessionAdmission(.deleting))
+        #expect(!AppState.blocksWorktreeSessionAdmission(nil))
+        #expect(!AppState.blocksWorktreeSessionAdmission(.deleteFailed(message: "x")))
+    }
 }

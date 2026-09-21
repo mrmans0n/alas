@@ -74,7 +74,7 @@ struct CenterSelectionStateResolver {
                     switch op {
                     case .creating, .deleting, .createFailed:
                         return nil
-                    case .launchFailed, .deleteFailed:
+                    case .preparingDelete, .launchFailed, .deleteFailed:
                         break
                     }
                 }

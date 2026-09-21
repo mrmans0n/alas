@@ -37,6 +37,14 @@ struct ProjectUpdate: Equatable {
 
 enum WorktreeOperationState: Equatable {
     case creating
+    /// Claimed the moment the delete confirmation goes up, before the user
+    /// has answered it — not tied to any async preflight work. `NSAlert`'s
+    /// `runModal()` blocks the call stack but its nested run loop still
+    /// pumps other main-actor work, so without this claim a scheduled run
+    /// or issue-triggered session could be admitted into the worktree while
+    /// the user is still deciding, then keep writing straight through the
+    /// staging/audit window that follows a confirmed delete.
+    case preparingDelete
     case deleting
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
@@ -518,6 +526,8 @@ final class ProjectsManager {
                         reconciled.append(optimistic)
                     }
                 }
+            case .preparingDelete:
+                break
             case .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
@@ -661,7 +671,7 @@ final class ProjectsManager {
             if let op = worktreeOperationStates[worktree.id] {
                 switch op {
                 case .creating, .createFailed: return false
-                case .deleting, .launchFailed, .deleteFailed: return true
+                case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true
                 }
             }
             return true
