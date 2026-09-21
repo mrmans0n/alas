@@ -2353,6 +2353,66 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("suppressed initial tool replay applies a newly available name even onto a completed snapshot")
+    func suppressedInitialToolReplayAppliesNameOntoCompletedSnapshot() async {
+        // Regression: a call persisted by an older build (no stored `name`)
+        // is loaded, then session/load replay resends its initial tool_call
+        // — now carrying `name` because the adapter/build was upgraded.
+        // Content fields stay locked by canReplaceSnapshot (see the
+        // "does not downgrade completed output" tests above), but `name`
+        // is pure presentation metadata and must still apply.
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Initial command",
+            kind: "execute",
+            status: "in_progress",
+            name: "Bash")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "Bash")
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("suppressed tool update replay applies a newly available name even onto a completed snapshot")
+    func suppressedToolUpdateReplayAppliesNameOntoCompletedSnapshot() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-update-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc-update-replay-name",
+            status: "in_progress",
+            name: "exec_command")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "exec_command")
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("suppressed final tool replay preserves terminal ids from content")
     func suppressedFinalToolReplayPreservesTerminalIdsFromContent() async {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")

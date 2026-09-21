@@ -816,7 +816,13 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.title = payload.title
             tc.kind = payload.kind
         }
-        if canReplaceSnapshot, let name = payload.name { tc.name = name }
+        // Unlike title/kind/status, `name` is presentation metadata only —
+        // stable across a call's lifetime per spec — so apply it whenever
+        // present even onto an already-finalized snapshot. Otherwise a
+        // session/load replay of a call persisted by an older build (no
+        // stored name) would silently drop the name the adapter now
+        // supplies, matching how `metadata` below is already unconditional.
+        if let name = payload.name { tc.name = name }
         if canReplaceSnapshot {
             tc.status = payload.status
         }
@@ -1301,7 +1307,10 @@ final class ACPSession: ObservableObject, Identifiable {
         let canReplaceSnapshot = allowFinalSnapshotReplacement || !Self.isFinalStatus(tc.status)
         var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
         if canReplaceSnapshot, let title = update.title { tc.title = title }
-        if canReplaceSnapshot, let name = update.name { tc.name = name }
+        // See the matching comment in `applyToolCallPayloadFields`: `name`
+        // is stable presentation metadata, so a present value applies even
+        // onto an already-finalized snapshot during suppressed replay.
+        if let name = update.name { tc.name = name }
         if canReplaceSnapshot, let status = update.status { tc.status = status }
         if canReplaceSnapshot, let locations = update.locations { tc.locations = locations.map(\.path) }
         if canReplaceSnapshot, let rawInput = update.rawInput { tc.rawInput = Self.metadataString(rawInput) }
