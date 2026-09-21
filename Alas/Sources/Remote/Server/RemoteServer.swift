@@ -235,16 +235,19 @@ final class RemoteServer {
                     guard let self else { return }
                     self.connectionDevice[ObjectIdentifier(conn)] = did
                     self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
-                    // `authorize` can pass while federation is still on, but
-                    // this registration lands via a LATER queue → MainActor
-                    // hop. If federation turns off in that window,
-                    // `disconnectAllPeerDevices()` cannot find this socket
-                    // yet — it isn't in `connectionDevice` — and misses it,
-                    // leaving it authorized indefinitely. Recheck now that
+                    // `authorize` can pass while the device is still valid
+                    // and federation is on, but this registration lands via
+                    // a LATER queue → MainActor hop. If the device is
+                    // revoked in that window (the user clicked Forget),
+                    // `disconnectDevice` cannot find this socket yet — it
+                    // isn't in `connectionDevice` — and misses it. If
+                    // federation turns off in that same window for an
+                    // `.alasInstance` device, `disconnectAllPeerDevices()`
+                    // misses it for the same reason. Recheck both now that
                     // registration has actually happened, closing the gap
                     // regardless of how the hops interleaved.
-                    if !identity().federationEnabled,
-                       self.pairing.devices.first(where: { $0.id == did })?.kind == .alasInstance {
+                    let device = self.pairing.devices.first(where: { $0.id == did })
+                    if device == nil || (!identity().federationEnabled && device?.kind == .alasInstance) {
                         conn.cancel()
                     }
                 }

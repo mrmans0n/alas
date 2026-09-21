@@ -797,6 +797,54 @@ struct RemoteServerIntegrationTests {
         #expect(!usable, "a peer authorized just before federation turned off must never end up with a usable connection")
     }
 
+    // `authorize` can pass while the device is still valid, but registration
+    // into `connectionDevice` lands via a LATER queue → MainActor hop. If
+    // the user clicks Forget in that window — with federation staying ON
+    // throughout — `disconnectDevice` cannot find the socket yet and misses
+    // it. The identity closure's own first call doubles as the moment
+    // authorize's validation has just succeeded (it's the very next thing
+    // authorize does), so revoking the device there deterministically lands
+    // in that exact window regardless of real scheduling timing.
+    @Test func aDeviceRevokedJustAfterAuthorizeIsStillClosed() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let peerResult = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        var identityCalls = 0
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: {
+                identityCalls += 1
+                if identityCalls == 1 {
+                    pairing.revoke(deviceId: peerResult.deviceId)
+                }
+                return RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true)
+            }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let peerTask = URLSession.shared.webSocketTask(with: wsURL, protocols: [peerResult.token])
+        peerTask.resume()
+
+        var usable = false
+        do {
+            _ = try await peerTask.receive()
+            try await peerTask.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))
+            _ = try await peerTask.receive()
+            usable = true
+        } catch {
+            // Refused outright, or closed before/at the first real exchange
+            // — both are the desired outcome.
+        }
+        #expect(!usable, "a device revoked just after authorize validated it must never end up with a usable connection")
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()
