@@ -328,6 +328,45 @@ struct RemotePeerManagerTests {
         #expect(peer.localDeviceId == "early-confirmed-device")
     }
 
+    // Two overlapping outbound adds for the same, already-paired identity,
+    // where NEITHER attempt's own reciprocal call is ever confirmed. LATE's
+    // own `previousState` must not be EARLY's own dead provisional row —
+    // itself just as unconfirmed as LATE's — or LATE's rollback would
+    // persist a peer holding a token nobody ever validated. It must reach
+    // all the way back to the last genuinely durable relationship instead.
+    @Test func addPeerDoubleFailureRestoresTheLastDurableStateNotADeadSiblingSnapshot() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "old-device", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        let pairer = RemotePeerPairer(fetch: { req in
+            let token = requests.seen.isEmpty ? "tokEarly" : "tokLate"
+            requests.seen.append(req)
+            return (Data(#"{"token":"\#(token)","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 0.05)
+        manager.connectAll()
+
+        async let early: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
+        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+        while manager.peers.first?.token != "tokEarly" { try? await Task.sleep(nanoseconds: 1_000_000) }
+
+        async let late: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
+        while manager.peers.first?.token != "tokLate" { try? await Task.sleep(nanoseconds: 1_000_000) }
+
+        // Neither attempt's own counter-code is ever confirmed — both time out.
+        let earlyResult = await early
+        let lateResult = await late
+        #expect(earlyResult == .reciprocalPairingFailed)
+        #expect(lateResult == .reciprocalPairingFailed)
+
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "old-token")
+        #expect(peer.localDeviceId == "old-device")
+    }
+
     // The happy path resolves fast rather than by exhausting the wait
     // window — proven by timing, since the return value alone (`nil`) is
     // identical whether confirmation genuinely landed or the wait just

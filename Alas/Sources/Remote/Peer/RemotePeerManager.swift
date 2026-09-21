@@ -163,6 +163,19 @@ final class RemotePeerManager {
     /// itself cannot make that distinction when a genuinely different
     /// upsert happens to write the same values this attempt did.
     @ObservationIgnored private var lastUpsertOwnerByServerId: [String: String] = [:]
+    /// The last known GENUINELY confirmed (or user-durable) state for a
+    /// given identity — as opposed to `peers.first(where:)`, which can just
+    /// as easily show another, still-uncommitted sibling attempt's own
+    /// provisional write. `addPeer` snapshots this as `previousState`
+    /// before its own round trip, specifically so that when its own
+    /// reciprocal exchange fails, rolling back reaches all the way to the
+    /// last state actually worth keeping — not merely "whatever the row
+    /// happened to hold a moment ago" — even across a chain of several
+    /// overlapping, ultimately-failed attempts for the same identity.
+    /// Updated only by genuine confirmation or restoration, never by a
+    /// bare provisional `upsert`; cleared by `forget` and
+    /// `removeProvisionalPeer`.
+    @ObservationIgnored private var durableStateByServerId: [String: RemotePeer] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -193,6 +206,9 @@ final class RemotePeerManager {
         self.makeConnection = makeConnection
         self.now = now
         self.peers = store.load()
+        // `reduce`, not `Dictionary(uniqueKeysWithValues:)`: a corrupted
+        // store with a duplicate `serverId` must not crash init.
+        self.durableStateByServerId = self.peers.reduce(into: [:]) { $0[$1.serverId] = $1 }
     }
 
     // MARK: - Pairing
@@ -261,14 +277,20 @@ final class RemotePeerManager {
                 endAttempt(counterCode: counterCode)
                 return .cancelled
             }
-            // Snapshot the record as it stood before this attempt, if one
-            // exists. If THIS attempt's own reciprocal exchange fails, the
-            // PREVIOUS relationship — untouched by anything that happens
-            // here, and possibly still entirely valid — must be restored
-            // rather than destroyed: `redeemPeer` never revoked the OLD
-            // device this peer already held, only a failed exchange from
-            // THIS attempt would revoke the NEW one it just minted.
-            let previousState = peers.first(where: { $0.serverId == serverId })
+            // Snapshot the LAST GENUINELY DURABLE record for this identity,
+            // if one exists — not `peers.first(where:)`, which could just as
+            // easily show a still-uncommitted SIBLING attempt's own
+            // provisional write in flight right now. If THIS attempt's own
+            // reciprocal exchange fails, the previous relationship —
+            // untouched by anything that happens here, and possibly still
+            // entirely valid — must be restored rather than destroyed:
+            // `redeemPeer` never revoked the OLD device this peer already
+            // held, only a failed exchange from THIS attempt would revoke
+            // the NEW one it just minted. Using the durable snapshot means
+            // this reaches the true last-known-good state even across a
+            // chain of several overlapping, ultimately-failed attempts,
+            // rather than just undoing one sibling's edit into another's.
+            let previousState = durableStateByServerId[serverId]
             upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
             lastUpsertOwnerByServerId[serverId] = counterCode
@@ -285,7 +307,7 @@ final class RemotePeerManager {
             // failure is invisible to us except by its absence: A revokes
             // the device it minted for us, but sends no error our way.
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
-            if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode) {
+            if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
                 return nil
             }
             // The wait gave up without finding a match, but a confirmation
@@ -437,6 +459,14 @@ final class RemotePeerManager {
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
             lastUpsertOwnerByServerId[request.peerServerId] = counterCode
+            // This branch's own upsert always carries a real
+            // `localDeviceId` — the responder's own reciprocal round trip
+            // completing IS the confirmation, with no separate wait step —
+            // so it's genuinely durable the moment it lands, not merely
+            // provisional the way `addPeer`'s own initial upsert is.
+            if let confirmed = peers.first(where: { $0.serverId == request.peerServerId }) {
+                durableStateByServerId[request.peerServerId] = confirmed
+            }
         } else {
             // We are the initiator: this is A's reciprocal call redeeming
             // OUR counter-code. Always buffer it, keyed by that code, rather
@@ -494,6 +524,7 @@ final class RemotePeerManager {
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
+        durableStateByServerId[peer.serverId] = nil
         // Bumped so any addPeer/handleInboundPeer exchange for this same
         // identity that is still in flight — including one that never
         // itself observed a peer existing, a concurrent sibling of
@@ -536,7 +567,19 @@ final class RemotePeerManager {
     /// and runs regardless of `isActive`: this depends only on the SERVER
     /// receiving A's reciprocal call, which has nothing to do with whether
     /// this manager's own outbound links are currently being dialed.
-    private func waitForReciprocalRedemption(peerId: String, counterCode: String) async -> Bool {
+    ///
+    /// `ownFields` is THIS attempt's own row, snapshotted immediately after
+    /// its own `upsert` — reasserted here on success rather than only
+    /// writing `localDeviceId` onto whatever the row currently holds, and
+    /// ownership is reclaimed in the same step. A concurrent SIBLING
+    /// attempt for the same identity can have upserted its own, different
+    /// fields onto this same row in the meantime; without reasserting,
+    /// this confirmation — proof THIS attempt's own exchange succeeded —
+    /// would land on top of a sibling's fields instead of its own, and
+    /// without reclaiming ownership, that sibling's own later timeout
+    /// would still see itself as the row's owner and could roll back a
+    /// confirmation that has nothing to do with it.
+    private func waitForReciprocalRedemption(peerId: String, counterCode: String, ownFields: RemotePeer) async -> Bool {
         let deadline = Date().addingTimeInterval(reciprocalConfirmationTimeout)
         while true {
             // `Task.sleep` throws immediately on a cancelled task rather
@@ -571,8 +614,13 @@ final class RemotePeerManager {
                     onRevokeDevice?(buffered.localDeviceId)
                     return false
                 }
-                peers[index].localDeviceId = buffered.localDeviceId
+                var confirmed = ownFields
+                confirmed.localDeviceId = buffered.localDeviceId
+                peers[index] = confirmed
+                lastUpsertOwnerByServerId[confirmed.serverId] = counterCode
+                durableStateByServerId[confirmed.serverId] = confirmed
                 store.save(peers)
+                if isActive { connect(confirmed) }
                 return true
             }
             if Date() >= deadline { return false }
@@ -604,6 +652,7 @@ final class RemotePeerManager {
             restored.localDeviceId = confirmedSinceUpsert
         }
         peers[index] = restored
+        durableStateByServerId[restored.serverId] = restored
         store.save(peers)
         if isActive { connect(restored) }
     }
@@ -617,10 +666,11 @@ final class RemotePeerManager {
     /// timeout has no standing to trigger.
     private func removeProvisionalPeer(peerId: String) {
         guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
-        peers.remove(at: index)
+        let peer = peers.remove(at: index)
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
+        durableStateByServerId[peer.serverId] = nil
         store.save(peers)
     }
 
