@@ -236,6 +236,71 @@ fn close_rejects_stale_generation_without_removing_broker() {
     assert_eq!(close["ok"], true);
 }
 
+/// Regression for a narrower race than the stale-generation case above: two
+/// closers can race a *still-valid* generation, both passing
+/// `ensure_generation`, if the second reaches the supervisor before the
+/// first's caller has gone on to spawn a replacement (which only bumps the
+/// generation, and happens later, outside this call, in a separate
+/// `acp/open`). Talks directly to the supervisor's socket — bypassing
+/// `acp_close`'s own `remove_broker_dir`, which a single helper process
+/// calling `acp/close` twice in a row would already have run by the second
+/// call — to model two different helper processes each reaching the same
+/// live supervisor.
+///
+/// Both raw connections are accepted before either sends its request, so
+/// the race under test is `broker_close`'s own `state.closing` guard, not
+/// an unrelated one against the accept loop (which stops taking *new*
+/// connections within ~50ms of the first close, per `serve_broker_ipc`'s
+/// `while !runtime_is_closing`) — a connection already accepted here is
+/// unaffected by that and reaches `broker_close` regardless.
+#[test]
+fn second_close_of_a_still_valid_generation_is_rejected_while_the_first_is_in_flight() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("close-already-closing");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-close-race", 0));
+    let generation = open["snapshot"]["metadata"]["generation"]
+        .as_u64()
+        .expect("generation");
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-race/broker.sock");
+    let close_request = format!(
+        r#"{{"method":"close","params":{{"brokerId":"broker-close-race","generation":{generation}}}}}"#
+    );
+
+    let mut first = UnixStream::connect(&socket).expect("first closer connects");
+    let mut second = UnixStream::connect(&socket).expect("second closer connects");
+
+    writeln!(first, "{close_request}").expect("first close request");
+    first.flush().expect("flush first close request");
+    let mut first_reply = String::new();
+    BufReader::new(&first)
+        .read_line(&mut first_reply)
+        .expect("first close reply");
+    let first_value: Value = serde_json::from_str(first_reply.trim()).expect("first reply JSON");
+    assert_eq!(first_value["ok"], true, "first closer: {first_value}");
+
+    writeln!(second, "{close_request}").expect("second close request");
+    second.flush().expect("flush second close request");
+    let mut second_reply = String::new();
+    BufReader::new(&second)
+        .read_line(&mut second_reply)
+        .expect("second close reply");
+    let second_value: Value =
+        serde_json::from_str(second_reply.trim()).expect("second reply JSON");
+    assert_eq!(second_value["ok"], false, "second closer: {second_value}");
+    assert_eq!(
+        second_value["code"], -32075,
+        "a second closer for the same still-valid generation must be rejected \
+         the same way a caller already knows to recover from — reopening — \
+         rather than silently succeeding and going on to spawn its own \
+         replacement alongside the first closer's: {second_value}"
+    );
+}
+
 #[test]
 fn helper_crash_during_prompt_preserves_completion_and_replays_events() {
     let fixture = Fixture::new("prompt-crash");

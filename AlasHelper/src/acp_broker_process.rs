@@ -1622,6 +1622,18 @@ fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBr
     let adapter_process_group_id = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
+        if state.closing {
+            // Two closers can both pass ensure_generation: the generation
+            // only changes once a replacement supervisor exists, which
+            // happens later and in a different process's acp_open, outside
+            // this lock. Without this check both would proceed past it,
+            // each independently remove_broker_dir and spawn its own
+            // replacement supervisor for the same broker id. Reuse the
+            // stale-generation error a caller already knows to recover
+            // from by reopening — this second closer isn't the one that
+            // gets to finish closing this generation.
+            return Err(broker_error(-32075, "broker generation mismatch"));
+        }
         state.closing = true;
         if state.adapter_exited {
             None
