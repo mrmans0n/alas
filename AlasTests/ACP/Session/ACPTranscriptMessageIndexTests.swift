@@ -79,6 +79,34 @@ struct ACPTranscriptMessageIndexTests {
         #expect(session.transcript.messageIndexCacheRebuildCountForTests == 0)
     }
 
+    @Test("a thought chunk and a text chunk sharing one messageId land in separate messages")
+    func thoughtAndTextChunksWithSharedMessageIdDoNotCollide() {
+        // OpenCode v2 uses "<assistantMessageId>:reasoning:<n>" for thought
+        // chunks and the plain assistant message id for text chunks, so they
+        // never actually share an id in practice — but nothing in Alas
+        // should assume they can't. messageIndex(messageId:kind:) keys on
+        // (kind, messageId), so even a coincidental id collision must not
+        // merge the two into one transcript message.
+        let session = ACPSession(id: "s", agentId: "opencode", worktreeId: "w", title: "t")
+
+        session.apply(.agentThoughtChunk(.init(messageId: "shared-id", content: .text("thinking..."))))
+        session.apply(.agentMessageChunk(.init(messageId: "shared-id", content: .text("the answer"))))
+
+        #expect(session.transcript.messages.count == 2)
+        #expect(session.transcript.messageIndex(messageId: "shared-id", kind: .thought) == 0)
+        #expect(session.transcript.messageIndex(messageId: "shared-id", kind: .agent) == 1)
+        guard case .thought(_, _, let thoughtBuffer) = session.transcript.messages[0] else {
+            Issue.record("expected a thought message at index 0")
+            return
+        }
+        guard case .agent(_, _, let agentBuffer) = session.transcript.messages[1] else {
+            Issue.record("expected an agent message at index 1")
+            return
+        }
+        #expect(thoughtBuffer.value == "thinking...")
+        #expect(agentBuffer.value == "the answer")
+    }
+
     @Test("prepending shifts cached indices")
     func prependRebuildsShiftedIndices() {
         let transcript = ACPTranscript()

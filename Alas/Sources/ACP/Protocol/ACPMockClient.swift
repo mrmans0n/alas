@@ -11,6 +11,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private var notificationAsyncScripts: [String: (ACPRequest) async throws -> Void] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
     private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
@@ -28,6 +29,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
     let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
@@ -46,6 +48,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var p: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { p = $0 }
         self.permsCont = p
+        var cr: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cr = $0 }
+        self.cancelRequestsCont = cr
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { q = $0 }
         self.questionsCont = q
@@ -97,6 +102,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         updatesCont.yield(update)
     }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
+    func emitCancelRequest(id: JSONRPCID) { cancelRequestsCont.yield(id) }
     func emitQuestion(id: JSONRPCID, params: ACPQuestionRequestParams) {
         questionsCont.yield(.init(id: id, params: params))
     }
@@ -159,6 +165,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         shutdownCount += 1
         updatesCont.finish()
         permsCont.finish()
+        cancelRequestsCont.finish()
         questionsCont.finish()
         plansCont.finish()
         elicitationsCont.finish()

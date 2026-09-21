@@ -277,7 +277,7 @@ actor WorkspaceCheckoutCoordinator {
             return WorkspaceMemberDeletionPreview(
                 member: member,
                 plan: plan,
-                preflight: .init(reasons: [], submoduleLocalState: .none),
+                preflight: .init(reasons: []),
                 rootObservation: root
             )
         default:
@@ -2561,11 +2561,70 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 usesRemoteHostRegistry: false
             )
         case .ssh(let host):
-            let forceFlag = force ? " -f -f" : ""
-            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove\(forceFlag) -- \(SSHCommand.shellQuote(plan.worktreePath))"
+            let command = Self.sshRemovalScript(
+                sourceRepositoryPath: plan.sourceRepositoryPath,
+                worktreePath: plan.worktreePath,
+                force: force
+            )
             let result = try await remote.run(host: host, command: command)
             guard result.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(result.stderr) }
         }
+    }
+
+    /// The submodule-refusal detection, the cleanliness re-audit, and the
+    /// forced retry all run as one remote shell script instead of three
+    /// separate SSH round trips. Splitting them across round trips left a
+    /// window between the audit and the retry wide enough for a concurrent
+    /// write over the network to slip through unaudited; one remote script
+    /// keeps that window down to the time between two `git` invocations on
+    /// the same host, matching the local path's guarantees.
+    ///
+    /// `--ignore-submodules=none` is explicit, not redundant: a submodule
+    /// that sets `submodule.<name>.ignore = all` in its own config makes the
+    /// superproject's default status blind to its changes. The recursive
+    /// `submodule foreach` pass catches a second gap on top of that — a
+    /// submodule with its own `status.showUntrackedFiles = no` hides its
+    /// untracked files even from an unignored superproject status, so only
+    /// an explicit override from inside it sees them. Mirrors
+    /// `WorktreeService.isRemovalClean` locally.
+    ///
+    /// Pure string construction so it can be executed directly (via
+    /// `/bin/sh -c`) against a real local repository in tests, without a
+    /// mocked SSH transport standing in for its own internal control flow.
+    static func sshRemovalScript(
+        sourceRepositoryPath: String,
+        worktreePath: String,
+        force: Bool
+    ) -> String {
+        let quotedRepoPath = SSHCommand.shellQuote(sourceRepositoryPath)
+        let quotedWorktreePath = SSHCommand.shellQuote(worktreePath)
+        let forceFlag = force ? " -f -f" : ""
+        return """
+        repo=\(quotedRepoPath)
+        wt=\(quotedWorktreePath)
+        if err=$(git -C "$repo" worktree remove\(forceFlag) -- "$wt" 2>&1); then
+          exit 0
+        fi
+        case "$err" in
+          *"containing submodules"*"cannot be moved or removed"*)
+            if ! status=$(git -C "$wt" status --porcelain=v1 --ignore-submodules=none --untracked-files=normal 2>&1); then
+              printf '%s\\n' "$status" >&2
+              exit 1
+            fi
+            if ! subs=$(git -C "$wt" submodule foreach --quiet --recursive 'git status --porcelain --ignore-submodules=none --untracked-files=all' 2>&1); then
+              printf '%s\\n' "$subs" >&2
+              exit 1
+            fi
+            if [ -z "$status" ] && [ -z "$subs" ]; then
+              exec git -C "$repo" worktree remove -f -- "$wt"
+            fi
+            printf 'Worktree contains modified or untracked files.\\n' >&2
+            exit 1
+            ;;
+        esac
+        printf '%s\\n' "$err" >&2
+        exit 1
+        """
     }
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
@@ -2708,29 +2767,35 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
 
     private func remoteDeletePreflight(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async throws -> WorktreeDeletePreflight {
         let quotedPath = SSHCommand.shellQuote(plan.worktreePath)
-        let status = try await remote.run(host: host, command: "git -C \(quotedPath) status --porcelain=v1 --untracked-files=normal")
+        // `--ignore-submodules=none` plus the recursive `submodule foreach`
+        // pass mirror exactly what `removeWorktree`'s SSH branch re-audits
+        // before forcing a removal. Without them here, a submodule with
+        // `submodule.<name>.ignore = all` (or its own
+        // `status.showUntrackedFiles = no`) could report no risk in the
+        // preview — `confirmingRisks: false` — while the actual removal
+        // still throws on it every time, leaving the user with no way to
+        // ever authorize the force that would let it through.
+        let status = try await remote.run(
+            host: host,
+            command: "git -C \(quotedPath) status --porcelain=v1 --ignore-submodules=none --untracked-files=normal"
+        )
         guard status.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(status.stderr) }
+        let submoduleStatus = try await remote.run(
+            host: host,
+            command: "git -C \(quotedPath) submodule foreach --quiet --recursive 'git status --porcelain --ignore-submodules=none --untracked-files=all'"
+        )
+        guard submoduleStatus.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(submoduleStatus.stderr) }
         var reasons: Set<WorktreeDeletePreflightReason> = []
-        if !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !submoduleStatus.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             reasons.insert(.dirty)
-        }
-        let submodules = try await remote.run(host: host, command: "git -C \(quotedPath) submodule status --recursive")
-        let submoduleLocalState: SubmoduleLocalState
-        let hasSubmodules = submodules.exitCode == 0 && !submodules.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasSubmodules {
-            reasons.insert(.containsInitializedSubmodules)
-        }
-        if submodules.exitCode == 0 {
-            submoduleLocalState = hasSubmodules ? .unknown : .none
-        } else {
-            submoduleLocalState = .unknown
         }
         let registrations = try await remote.run(host: host, command: "git -C \(quotedPath) worktree list --porcelain")
         guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
         if WorktreeService.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: URL(fileURLWithPath: plan.worktreePath)) {
             reasons.insert(.locked)
         }
-        return .init(reasons: reasons, submoduleLocalState: submoduleLocalState)
+        return .init(reasons: reasons)
     }
 
     private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {

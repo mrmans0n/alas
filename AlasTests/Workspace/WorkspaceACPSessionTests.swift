@@ -294,6 +294,36 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func copilotLaunchSpecIncludesExtraArgsAsSpawnTimeFlags() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["copilot"] = .init(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: ["--model", "gpt-5.1", "--effort", "high"]
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "copilot"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.arguments == ["--model", "gpt-5.1", "--effort", "high"] + spec.arguments)
+    }
+
+    @MainActor
+    @Test func extraTerminalArgsDoesNotLeakIntoNonCopilotACPLaunches() throws {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.builtinState["claude"] = .init(
+            isEnabled: true,
+            binaryOverride: nil,
+            extraTerminalArgs: ["--model", "sonnet"]
+        )
+        let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
+
+        let transformed = state.workspaceACPLaunchSpec(from: spec, useBypassPermissions: false)
+
+        #expect(transformed.arguments == spec.arguments)
+    }
+
+    @MainActor
     @Test func appStateCreatesCheckoutManagerAtTheFrozenRootAndKeepsMissingRootPending() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

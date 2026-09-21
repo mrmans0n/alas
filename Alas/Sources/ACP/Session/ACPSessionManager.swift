@@ -3902,7 +3902,8 @@ extension ACPSessionManager {
                         }
                         if hasRestorableContext {
                             restoreWarning = .init(
-                                message: "Agent context could not be restored.",
+                                message: ACPRestoreFailureMessage.invalidParamsMessage(from: error)
+                                    ?? "Agent context could not be restored.",
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
@@ -4031,7 +4032,8 @@ extension ACPSessionManager {
                         }
                         if hasRestorableContext {
                             restoreWarning = .init(
-                                message: "Agent context could not be restored.",
+                                message: ACPRestoreFailureMessage.invalidParamsMessage(from: error)
+                                    ?? "Agent context could not be restored.",
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }

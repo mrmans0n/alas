@@ -7,13 +7,12 @@ import Testing
         let member = checkoutMember()
         let plan = WorkspaceLifecycleConfirmationModel.memberDeletion(
             member: member,
-            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .present)
+            preflight: WorktreeDeletePreflight(reasons: [.dirty])
         )
 
         #expect(plan.requiresConfirmation == true)
         #expect(plan.title == "Delete Workspace Member Worktree?")
-        #expect(plan.risks.contains("Uncommitted changes"))
-        #expect(plan.risks.contains("Initialized submodules"))
+        #expect(plan.risks == ["Uncommitted changes"])
         #expect(plan.confirmAction == .deleteMember(confirmingRisks: true))
         #expect(plan.canForceDelete == false)
     }

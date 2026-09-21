@@ -300,7 +300,7 @@ struct WorkspaceCheckoutLifecycleTests {
             state.checkouts[0].members[0].availability = .missing
         }
         let lifecycle = FixtureLifecycle(
-            preflight: .init(reasons: [.dirty], submoduleLocalState: .none),
+            preflight: .init(reasons: [.dirty]),
             clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
         )
         let coordinator = WorkspaceCheckoutCoordinator(
@@ -325,7 +325,7 @@ struct WorkspaceCheckoutLifecycleTests {
         }
         let lifecycle = FixtureLifecycle(
             verification: .missing,
-            preflight: .init(reasons: [], submoduleLocalState: .none),
+            preflight: .init(reasons: []),
             clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
         )
         let coordinator = WorkspaceCheckoutCoordinator(
@@ -350,7 +350,7 @@ struct WorkspaceCheckoutLifecycleTests {
         }
         let lifecycle = FixtureLifecycle(
             verification: .missing,
-            preflight: .init(reasons: [.dirty], submoduleLocalState: .none)
+            preflight: .init(reasons: [.dirty])
         )
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
@@ -690,7 +690,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func riskyWorktreeRequiresAnExplicitCleanupConfirmationWithoutAForcePath() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
@@ -701,7 +701,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedRiskPassesForceToWorktreeRemoval() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
@@ -713,7 +713,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedLockedWorktreePassesDoubleForceToWorktreeRemoval() async throws {
         let fixture = try await Fixture.make()
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
@@ -725,7 +725,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func wholeDeletionRequiresRiskConfirmationBeforeRemovingAnyMember() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
@@ -736,7 +736,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func confirmedWholeDeletionPassesRiskConfirmationToEveryMember() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
-        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty]))
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
         let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id, confirmingRisks: true)
@@ -902,20 +902,63 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("m=$(cd") == false)
     }
 
-    @Test func concreteRemotePreflightTreatsFailedSubmoduleProbeAsUnknown() async throws {
-        let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: "", stderr: ""),
-            .init(exitCode: 128, stdout: "", stderr: "ssh failed"),
-            .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
-        ])
-        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
-            try await runner.run(executable: executable, args: args, timeout: timeout)
-        })
+    /// Regression: git's refusal to remove a worktree holding an
+    /// initialized submodule is structural, not a data-loss signal, so a
+    /// clean remote worktree must still delete without the caller having
+    /// pre-approved force. Matches the local `WorktreeService.remove` path.
+    ///
+    /// The generated command is a self-contained POSIX shell script, not a
+    /// sequence of independently mockable SSH round trips (that was the bug
+    /// Codex flagged — see `sshRemovalScript`'s doc comment), so this
+    /// exercises the script for real via `/bin/sh -c` against a local
+    /// repository standing in for the remote one, rather than a canned
+    /// `RemoteLifecycleRunner` queue.
+    @Test func sshRemovalScriptForcesCleanInitializedSubmoduleWithoutPriorApproval() async throws {
+        let fixture = try await Self.makeSubmoduleFixture(suffix: "ssh-script-clean")
+        defer { fixture.removeFiles() }
 
-        let preflight = try await lifecycle.deletePreflight(Self.sshCleanupPlan())
+        let script = WorkspaceCheckoutLifecycleOperator.sshRemovalScript(
+            sourceRepositoryPath: fixture.repo.path,
+            worktreePath: fixture.worktree.path,
+            force: false
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", script])
 
-        #expect(preflight.reasons.isEmpty)
-        #expect(preflight.submoduleLocalState == .unknown)
+        #expect(result.exitCode == 0)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path))
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: fixture.repo, usesRemoteHostRegistry: false)
+        #expect(!registrations.stdout.contains(fixture.worktree.path))
+    }
+
+    /// Regression: a submodule with `submodule.<name>.ignore = all` hides its
+    /// dirty content from a plain superproject `git status`, and a submodule
+    /// with its own `status.showUntrackedFiles = no` hides untracked files
+    /// even from an unignored one — only an explicit `--ignore-submodules=none`
+    /// plus a recursive `submodule foreach` override sees either. Without
+    /// both, an auto-force retry would silently discard that content.
+    @Test func sshRemovalScriptRefusesSubmoduleWithContentHiddenFromPlainStatus() async throws {
+        let fixture = try await Self.makeSubmoduleFixture(suffix: "ssh-script-hidden-dirty")
+        defer { fixture.removeFiles() }
+        try await Self.runGit(
+            ["config", "submodule.sub.ignore", "all"],
+            cwd: URL(fileURLWithPath: fixture.worktree.path)
+        )
+        try "dirty".write(
+            toFile: fixture.worktree.path + "/sub/tracked.txt",
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let script = WorkspaceCheckoutLifecycleOperator.sshRemovalScript(
+            sourceRepositoryPath: fixture.repo.path,
+            worktreePath: fixture.worktree.path,
+            force: false
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", script])
+
+        #expect(result.exitCode != 0)
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path))
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path + "/sub/tracked.txt"))
     }
 
     @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
@@ -1543,6 +1586,59 @@ struct WorkspaceCheckoutLifecycleTests {
         }
     }
 
+    private struct SSHScriptSubmoduleFixture {
+        let repo: URL
+        let submoduleRepo: URL
+        let worktree: URL
+
+        func removeFiles() {
+            try? FileManager.default.removeItem(at: worktree)
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
+    }
+
+    /// Builds a real local repository with an initialized submodule, used to
+    /// stand in for a remote host when exercising `sshRemovalScript` for
+    /// real via `/bin/sh -c`.
+    private static func makeSubmoduleFixture(suffix: String) async throws -> SSHScriptSubmoduleFixture {
+        let root = FileManager.default.temporaryDirectory
+        let uniqueSuffix = "\(suffix)-\(UUID().uuidString)"
+
+        let repo = root.appendingPathComponent("alas-ssh-script-repo-\(uniqueSuffix)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try await runGit(["init", "-q", "-b", "main"], cwd: repo)
+        try await runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await runGit(["config", "user.name", "Test"], cwd: repo)
+        try "root".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try await runGit(["add", "tracked.txt"], cwd: repo)
+        try await runGit(["commit", "-q", "-m", "root init"], cwd: repo)
+
+        let submoduleRepo = root.appendingPathComponent("alas-ssh-script-submodule-\(uniqueSuffix)")
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        try await runGit(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        try await runGit(["config", "user.email", "test@example.com"], cwd: submoduleRepo)
+        try await runGit(["config", "user.name", "Test"], cwd: submoduleRepo)
+        try "initial".write(to: submoduleRepo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try await runGit(["add", "tracked.txt"], cwd: submoduleRepo)
+        try await runGit(["commit", "-q", "-m", "submodule init"], cwd: submoduleRepo)
+
+        try await runGit(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "sub"],
+            cwd: repo
+        )
+        try await runGit(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let worktree = root.appendingPathComponent("alas-ssh-script-worktree-\(uniqueSuffix)")
+        try await runGit(["worktree", "add", "-q", worktree.path, "-b", "feature-\(uniqueSuffix)"], cwd: repo)
+        try await runGit(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: worktree
+        )
+
+        return SSHScriptSubmoduleFixture(repo: repo, submoduleRepo: submoduleRepo, worktree: worktree)
+    }
+
     private static func registeredAdminDirectory(repo: URL, worktree: URL) async throws -> URL {
         let result = try await Process.git(["rev-parse", "--absolute-git-dir"], cwd: worktree, usesRemoteHostRegistry: false)
         guard result.exitCode == 0 else {
@@ -1822,7 +1918,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let branchRemoved: Bool
     let clearError: (any Error)?
     let pendingStaleRegistrationCleanup: Bool
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: []), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
     self.preflight = preflight
     self.leftovers = leftovers
     self.failingMember = failingMember
@@ -1867,7 +1963,7 @@ private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
@@ -1896,7 +1992,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     private(set) var sawPersistedCleanupPlan = false
     init(store: WorkspaceStore, checkoutID: UUID) { self.store = store
     self.checkoutID = checkoutID }
-    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: []) }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
@@ -1916,7 +2012,7 @@ private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {

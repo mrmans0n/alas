@@ -71,6 +71,11 @@ protocol ACPClient: AnyObject {
     /// call `respondToPermission(id:decision:)` exactly once per emitted request.
     var permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { get }
 
+    /// Inbound `$/cancel_request` notifications (OpenCode v2), carrying the
+    /// id of a still-pending `session/request_permission` or
+    /// `fs/write_text_file` request the agent wants dropped.
+    var cancelRequests: AsyncStream<JSONRPCID> { get }
+
     /// Ask-user question requests from agent-specific ACP extensions. The
     /// client owner must call `respondToQuestion(id:response:)` exactly once
     /// per emitted request.
@@ -116,6 +121,10 @@ extension ACPClient {
     }
 
     var elicitationCompletions: AsyncStream<ACPElicitationCompleteParams> {
+        AsyncStream { $0.finish() }
+    }
+
+    var cancelRequests: AsyncStream<JSONRPCID> {
         AsyncStream { $0.finish() }
     }
 

@@ -258,6 +258,32 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Regression (code review on #1380): dispatchAdapterNotification had no
+    // case for $/cancel_request, so the primary local-session path (broker,
+    // not the raw stdio client) silently dropped OpenCode's cancellation —
+    // the permission prompt stayed parked forever for real sessions.
+    @Test func cancelRequestNotificationIsForwardedFromBroker() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "$/cancel_request",
+                    params: .object(["id": .number(7)])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+        let cancelTask = Task {
+            var iterator = client.cancelRequests.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        try await client.start()
+
+        #expect(try await #require(cancelTask.value) == .number(7))
+    }
+
     @Test func adapterExitNotificationFinishesUpdateStream() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

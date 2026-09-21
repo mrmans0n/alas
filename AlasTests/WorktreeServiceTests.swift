@@ -519,7 +519,6 @@ extension WorktreeServiceTests {
 
         #expect(preflight.requiresForce == false)
         #expect(preflight.reasons.isEmpty)
-        #expect(preflight.submoduleLocalState == .none)
     }
 
     @Test func deletePreflightReportsDirtyForUntrackedFile() async throws {
@@ -538,7 +537,6 @@ extension WorktreeServiceTests {
 
         #expect(preflight.requiresForce == true)
         #expect(preflight.reasons == [.dirty])
-        #expect(preflight.submoduleLocalState == .none)
     }
 
     @Test func deletePreflightReportsLockedWorktree() async throws {
@@ -577,54 +575,80 @@ extension WorktreeServiceTests {
         #expect(WorktreeService.porcelainMarksWorktreeLocked(porcelain, worktreePath: path))
     }
 
-    @Test func deletePreflightReportsInitializedSubmodulesWithoutLocalState() async throws {
+    @Test func deletePreflightIgnoresInitializedSubmodules() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-clean")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
-        }
+        defer { fixture.removeFiles() }
 
         let preflight = try await fixture.service.deletePreflight(worktreePath: fixture.worktree.path)
 
-        #expect(preflight.requiresForce == true)
-        #expect(preflight.reasons == [.containsInitializedSubmodules])
-        #expect(preflight.submoduleLocalState == .none)
+        #expect(preflight.requiresForce == false)
+        #expect(preflight.reasons.isEmpty)
     }
 
-    @Test func deletePreflightReportsInitializedSubmoduleWithLocalOnlyBranch() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-local-branch")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
-        }
-        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodulePath)
+    @Test func deletePreflightStillReportsDirtySubmoduleContent() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-dirty")
+        defer { fixture.removeFiles() }
+        try "dirty".write(
+            to: fixture.worktree.path.appendingPathComponent("Deps/Submodule/tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
 
         let preflight = try await fixture.service.deletePreflight(worktreePath: fixture.worktree.path)
 
-        #expect(preflight.requiresForce == true)
-        #expect(preflight.reasons == [.containsInitializedSubmodules])
-        #expect(preflight.submoduleLocalState == .present)
+        #expect(preflight.reasons == [.dirty])
     }
 
-    @Test func fastLocalForceRemoveDiscardsInitializedSubmoduleLocalState() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "force-remove-submodule-local-state")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
+    /// Regression: a missing or broken git-lfs filter makes the plain
+    /// cleanliness check inside `deletePreflight` throw, which used to
+    /// propagate straight through — failing the whole deletion preview —
+    /// even though `remove`'s own submodule-refusal audit tolerates the
+    /// exact same failure via the LFS-tolerant check.
+    @Test func deletePreflightToleratesMissingLFSFilterOnInitializedSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-missing-lfs")
+        defer { fixture.removeFiles() }
+        try "* filter=lfs -text\n".write(
+            to: fixture.worktree.path.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", ".gitattributes"], cwd: fixture.worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "attrs"], cwd: fixture.worktree.path)
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: fixture.worktree.path
+            )
         }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: fixture.worktree.path
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: fixture.worktree.path)
+
+        let preflight = try await fixture.service.deletePreflight(worktreePath: fixture.worktree.path)
+
+        #expect(preflight.requiresForce == false)
+        #expect(preflight.reasons.isEmpty)
+    }
+
+    /// Regression: a clean worktree holding an initialized submodule used to
+    /// fail with "Worktree contains initialized submodule local state" —
+    /// Alas audited the submodule's refs after staging and refused whenever
+    /// anything lived only there. Deleting it now just works, as `wt remove`
+    /// does.
+    @Test func fastLocalRemoveDeletesCleanWorktreeWithSubmoduleLocalStateWithoutForce() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-local-state-no-force")
+        defer { fixture.removeFiles() }
         let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
         _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodulePath)
+        _ = try await Process.git(["tag", "local-only-tag"], cwd: submodulePath)
 
         let outcome = try await fixture.service.removeFastLocal(
             repoPath: fixture.repo,
             worktree: fixture.worktree,
             deleteBranchIfMerged: false,
-            force: true,
-            allowsSubmoduleLocalState: true
+            force: false
         )
         guard case .staged(let ticket) = outcome else {
             Issue.record("Expected staged removal")
@@ -636,21 +660,24 @@ extension WorktreeServiceTests {
         #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
     }
 
-    @Test func deletePreflightReportsUnknownSubmoduleLocalStateWhenCheckFails() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-broken")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
+    @Test func fastLocalRemoveStillRefusesDirtySubmoduleWithoutForce() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-dirty-no-force")
+        defer { fixture.removeFiles() }
+        try "dirty".write(
+            to: fixture.worktree.path.appendingPathComponent("Deps/Submodule/tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false
+            )
         }
-        let gitfile = fixture.worktree.path.appendingPathComponent("Deps/Submodule/.git")
-        try "gitdir: /nonexistent/broken/path\n".write(to: gitfile, atomically: true, encoding: .utf8)
-
-        let preflight = try await fixture.service.deletePreflight(worktreePath: fixture.worktree.path)
-
-        #expect(preflight.requiresForce == true)
-        #expect(preflight.reasons == [.containsInitializedSubmodules])
-        #expect(preflight.submoduleLocalState == .unknown)
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
     @Test func removeFailsOnDirtyWorktreeWithoutForce() async throws {
@@ -1663,13 +1690,32 @@ extension WorktreeServiceTests {
         return InitializedSubmoduleFixture(repo: repo, submoduleRepo: submoduleRepo, service: svc, worktree: wt)
     }
 
-    @Test func removeWithoutForceFailsForCleanInitializedSubmodule() async throws {
+    /// Git refuses any worktree holding an initialized submodule without
+    /// `--force`. That refusal is structural, so `remove` answers it itself
+    /// once the tree is verified clean rather than bouncing it to the user.
+    @Test func removeWithoutForceDeletesCleanInitializedSubmodule() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-no-force")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
-        }
+        defer { fixture.removeFiles() }
+
+        try await fixture.service.remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
+    }
+
+    @Test func removeWithoutForceRefusesDirtyWorktreeWithInitializedSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-dirty-refuse")
+        defer { fixture.removeFiles() }
+        try "local".write(
+            to: fixture.worktree.path.appendingPathComponent("untracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
 
         await #expect(throws: WorktreeService.WorktreeError.self) {
             try await fixture.service.remove(
@@ -1681,6 +1727,99 @@ extension WorktreeServiceTests {
         }
 
         #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    /// Regression: the plain cleanliness check inside the submodule-refusal
+    /// auto-force branch can fail for a reason that has nothing to do with
+    /// dirty content — a missing or broken git-lfs smudge/clean filter
+    /// causes `git status` itself to error, and `try?` swallowing that into
+    /// `nil` used to get reported as "not clean," wrongly requiring an
+    /// explicit force for a worktree that is otherwise clean.
+    @Test func removeWithoutForceToleratesMissingLFSFilterWhileAuditingCleanSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-missing-lfs")
+        defer { fixture.removeFiles() }
+        try "* filter=lfs -text\n".write(
+            to: fixture.worktree.path.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", ".gitattributes"], cwd: fixture.worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "attrs"], cwd: fixture.worktree.path)
+        // Point the LFS filters at a binary that does not exist, the same
+        // failure shape a real missing git-lfs install produces.
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: fixture.worktree.path
+            )
+        }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: fixture.worktree.path
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: fixture.worktree.path)
+
+        try await fixture.service.remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    /// Regression: `canForceRemoveAfterMissingLFS`'s outer status check gets
+    /// the LFS override, but the recursive `submodule foreach` status check
+    /// it ran afterward did not — so a broken LFS filter configured inside
+    /// the *submodule itself* (not the outer worktree) still made the whole
+    /// LFS-tolerant fallback throw, defeating the point of having one.
+    @Test func removeWithoutForceToleratesMissingLFSFilterInsideSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-inner-missing-lfs")
+        defer { fixture.removeFiles() }
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        // Left untracked, and excluded so it doesn't itself show up as a
+        // dirty file: git honors `.gitattributes` from the working tree
+        // regardless of its tracked/ignored state, and committing here
+        // would move the submodule's HEAD off the SHA the outer worktree's
+        // gitlink records — a real, unrelated dirty condition this test
+        // must not introduce.
+        try "* filter=lfs -text\n".write(
+            to: submodulePath.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // The submodule's `.git` is a gitfile pointer, not a directory —
+        // resolve the real git directory before writing into `info/exclude`.
+        let submoduleGitDir = try await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: submodulePath
+        ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excludeFile = URL(fileURLWithPath: submoduleGitDir).appendingPathComponent("info/exclude")
+        let excludeHandle = try FileHandle(forWritingTo: excludeFile)
+        excludeHandle.seekToEndOfFile()
+        excludeHandle.write(Data(".gitattributes\n".utf8))
+        try excludeHandle.close()
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: submodulePath
+            )
+        }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: submodulePath
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: submodulePath)
+
+        try await fixture.service.remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
     @Test func removeWithForceDeletesCleanInitializedSubmodule() async throws {
@@ -1723,18 +1862,15 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1)
     }
 
-    @Test func fastLocalRemoveAllowsApprovedSubmoduleLocalState() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "fast-submodule-local-state")
+    @Test func fastLocalRemoveSupportsInitializedSubmodulesWithoutForce() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "fast-submodule-no-force")
         defer { fixture.removeFiles() }
-        let submodule = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["branch", "local-only", "HEAD"], cwd: submodule)
 
         let outcome = try await fixture.service.removeFastLocal(
             repoPath: fixture.repo,
             worktree: fixture.worktree,
             deleteBranchIfMerged: false,
-            force: true,
-            allowsSubmoduleLocalState: true
+            force: false
         )
         guard case .staged(let ticket) = outcome else {
             Issue.record("Expected staged removal")
@@ -1746,10 +1882,14 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1)
     }
 
-    @Test func fastLocalRemoveRestoresWhenSubmoduleLocalStateAppearsAfterApproval() async throws {
-        let fixture = try await makeRepoWithInitializedSubmodule(
-            suffix: "fast-submodule-local-state-race"
-        )
+    /// Regression: a write landing in a submodule during the narrow window
+    /// between the pre-stage clean check (on the live path) and staging used
+    /// to go unaudited, since the post-stage recheck skipped submodules
+    /// entirely (their relative `gitdir:` pointer dangles once staged).
+    /// `stagedInitializedSubmodulesAreClean` resolves each submodule's gitdir
+    /// explicitly and closes that window.
+    @Test func fastLocalRemoveRollsBackWhenSubmoduleIsDirtiedDuringStaging() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-dirtied-during-staging")
         let trashRoot = WorktreeTrash.root(
             commonGitDirectory: fixture.repo.appendingPathComponent(".git")
         )
@@ -1763,34 +1903,24 @@ extension WorktreeServiceTests {
                 repoPath: fixture.repo,
                 worktree: fixture.worktree,
                 deleteBranchIfMerged: false,
-                force: true,
+                force: false,
                 moveItem: { source, destination in
-                    if source.standardizedFileURL == fixture.worktree.path.standardizedFileURL {
-                        let submodule = source.appendingPathComponent("Deps/Submodule")
-                        let process = Foundation.Process()
-                        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-                        process.arguments = ["tag", "local-after-approval"]
-                        process.currentDirectoryURL = submodule
-                        try process.run()
-                        process.waitUntilExit()
-                        guard process.terminationStatus == 0 else {
-                            throw CocoaError(.fileWriteUnknown)
-                        }
-                    }
                     try FileManager.default.moveItem(at: source, to: destination)
+                    if source.standardizedFileURL == fixture.worktree.path.standardizedFileURL {
+                        try "late-write".write(
+                            to: destination.appendingPathComponent("Deps/Submodule/untracked.txt"),
+                            atomically: true,
+                            encoding: .utf8
+                        )
+                    }
                 }
             )
         }
 
         #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
         #expect(FileManager.default.fileExists(
-            atPath: fixture.worktree.path.appendingPathComponent("Deps/Submodule").path
+            atPath: fixture.worktree.path.appendingPathComponent("Deps/Submodule/untracked.txt").path
         ))
-        let registrations = try await Process.git(
-            ["worktree", "list", "--porcelain"],
-            cwd: fixture.repo
-        )
-        #expect(registrations.stdout.contains(fixture.worktree.path.path))
     }
 
     @Test func removeDoesNotForceDeleteIgnoredDirtySubmodule() async throws {
@@ -1983,16 +2113,36 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: nestedPath.path))
     }
 
-    @Test func removeDoesNotForceDeleteSubmoduleLocalBranch() async throws {
+    /// Regression: auditing a clean parent submodule post-stage with the
+    /// default `--ignore-submodules=none` tried to descend into *its* own
+    /// nested submodule via the same now-dangling relative gitfile pointer
+    /// the top-level audit exists to work around — exiting 128 before the
+    /// explicit recursive call ever got a chance to resolve the nested
+    /// submodule's gitdir properly, rolling back every unforced deletion of
+    /// a worktree with recursively initialized submodules.
+    @Test func fastLocalRemoveSupportsCleanRecursivelyInitializedSubmodulesWithoutForce() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
+
+        let nestedRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-nested-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: nestedRepo) }
+        try FileManager.default.createDirectory(at: nestedRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: nestedRepo)
+        try "one".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "nested.txt"], cwd: nestedRepo)
+        _ = try await Process.git(["commit", "-q", "-m", "nested init"], cwd: nestedRepo)
 
         let submoduleRepo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: submoduleRepo) }
         try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedRepo.path, "Nested"],
+            cwd: submoduleRepo
+        )
+        _ = try await Process.git(["commit", "-q", "-m", "add nested submodule"], cwd: submoduleRepo)
 
         _ = try await Process.git(
             ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
@@ -2001,282 +2151,38 @@ extension WorktreeServiceTests {
         _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-local-branch")
+            .appendingPathComponent("\(repo.lastPathComponent)-nested-submodule-clean")
         defer { try? FileManager.default.removeItem(at: dest) }
         let svc = WorktreeService()
         let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-local-branch",
+            repoPath: repo, base: "main", branch: "feat/nested-submodule-clean",
             destination: dest, projectId: "p"
         )
         _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "-q"],
             cwd: dest
         )
 
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        let recordedSha = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try await Process.git(["switch", "-q", "-c", "local-only"], cwd: submodulePath)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local submodule commit"], cwd: submodulePath)
-        _ = try await Process.git(["checkout", "-q", recordedSha], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        let outcome = try await svc.removeFastLocal(
+            repoPath: repo,
+            worktree: wt,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
         }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
     }
 
-    @Test func removeDoesNotForceDeleteSubmoduleExtraBranchAtRemoteCommit() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-extra-branch")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-extra-branch",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["branch", "keep-me", "HEAD"], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removeDoesNotForceDeleteSubmoduleLocalOnlyTag() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-local-tag")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-local-tag",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        let recordedSha = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "tagged local commit"], cwd: submodulePath)
-        _ = try await Process.git(["tag", "local-only"], cwd: submodulePath)
-        _ = try await Process.git(["checkout", "-q", recordedSha], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removeDoesNotForceDeleteSubmoduleLocalTagOnRemoteCommit() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-local-remote-tag")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-local-remote-tag",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["tag", "local-only"], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removeDoesNotForceDeleteSubmoduleRetargetedRemoteTag() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "tagged remote commit"], cwd: submoduleRepo)
-        _ = try await Process.git(["tag", "shared"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "current remote commit"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-retargeted-tag")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-retargeted-tag",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["tag", "-f", "shared", "HEAD"], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removeDoesNotForceDeleteSubmoduleRetaggedAnnotatedRemoteTag() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "current remote commit"], cwd: submoduleRepo)
-        _ = try await Process.git(["tag", "-a", "shared", "-m", "remote annotation"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-retagged-annotated")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-retagged-annotated",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        _ = try await Process.git(["tag", "-f", "-a", "shared", "-m", "local annotation", "HEAD"], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removeDoesNotForceDeleteSubmoduleReflogOnlyCommit() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-
-        let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-submodule-reflog")
-        defer { try? FileManager.default.removeItem(at: dest) }
-        let svc = WorktreeService()
-        let wt = try await svc.add(
-            repoPath: repo, base: "main", branch: "feat/submodule-reflog",
-            destination: dest, projectId: "p"
-        )
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: dest
-        )
-
-        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
-        let recordedSha = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "reflog only"], cwd: submodulePath)
-        _ = try await Process.git(["checkout", "-q", recordedSha], cwd: submodulePath)
-
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-        }
-        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
-    }
-
-    @Test func removePropagatesOriginalSubmoduleErrorWhenHelperFails() async throws {
-        // When the safety helpers throw (e.g. the submodule's gitdir is
-        // corrupt / unreadable / times out), `remove()` must NOT swallow
-        // the original "submodules cannot be moved" stderr from
-        // `git worktree remove` and surface the helper's failure instead.
-        // It should rethrow `WorktreeError.gitFailed` with the original
-        // stderr and leave the worktree on disk.
+    @Test func removeRefusesWhenSubmoduleStateCannotBeVerified() async throws {
+        // Git refuses a worktree with submodules unless forced, and `remove`
+        // only supplies that force after proving the tree is clean. When the
+        // submodule's gitdir is corrupt the proof is impossible, so the
+        // removal must stop rather than force blindly.
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -2313,17 +2219,8 @@ extension WorktreeServiceTests {
         let gitfile = dest.appendingPathComponent("Deps/Submodule/.git")
         try? "gitdir: /nonexistent/broken/path\n".write(to: gitfile, atomically: true, encoding: .utf8)
 
-        do {
+        await #expect(throws: WorktreeService.WorktreeError.self) {
             try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
-            Issue.record("expected throw")
-        } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
-            // Must be the original git-worktree-remove stderr, not the
-            // helper's internal failure (e.g., "not a git repository").
-            let lower = stderr.lowercased()
-            #expect(
-                lower.contains("submodules") && lower.contains("cannot be moved"),
-                "expected original submodules error, got: \(stderr)"
-            )
         }
         #expect(FileManager.default.fileExists(atPath: dest.path))
     }

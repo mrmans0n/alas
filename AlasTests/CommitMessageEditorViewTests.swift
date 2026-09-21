@@ -50,6 +50,7 @@ struct CommitMessageEditorViewTests {
         subject: String = "feat: hello",
         bodyText: String = "",
         busy: Bool = false,
+        protectedTrailers: [ProtectedCommitTrailer] = [],
         dirty: Bool = true,
         error: String? = nil,
         onSave: @escaping () -> Void = {}
@@ -71,7 +72,8 @@ struct CommitMessageEditorViewTests {
                 isEnabled: dirty && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 showSavedState: !dirty,
                 handler: onSave
-            )
+            ),
+            protectedTrailers: protectedTrailers
         )
         .environment(\.theme, currentTheme())
     }
@@ -112,6 +114,15 @@ struct CommitMessageEditorViewTests {
     @Test func rendersWithoutCrashing() {
         let view = makeView()
         let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view.fittingSize.height > 0)
+    }
+
+    @Test func rendersReadOnlyGGMetadata() {
+        let trailers = CommitMessage.split(
+            "Body.\n\nGG-ID: c-stable\nGG-Parent: c-parent"
+        ).protectedTrailers
+        let controller = NSHostingController(rootView: makeView(protectedTrailers: trailers))
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view.fittingSize.height > 0)
     }

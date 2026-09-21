@@ -24,7 +24,7 @@ struct ACPPermissionPolicyTests {
             .init(optionId: "allow", name: "Allow", kind: "allow_once"),
             .init(optionId: "deny", name: "Deny", kind: "reject_once")
         ]
-        let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams())
+        let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
         #expect(resp.outcome == .selected(optionId: "allow"))
     }
 
@@ -39,8 +39,49 @@ struct ACPPermissionPolicyTests {
             .init(optionId: "allow", name: "Allow", kind: "allow_once"),
             .init(optionId: "deny", name: "Deny", kind: "reject_once")
         ]
-        let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams())
+        let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(1))
         #expect(resp.outcome == .selected(optionId: "deny"))
+    }
+
+    @Test("cancelRequest resolves a parked permission matching its id as cancelled")
+    func cancelRequestResolvesMatchingParkedPermission() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "opencode", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        async let decision = policy.evaluate(
+            scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
+        try? await Task.sleep(for: .milliseconds(100))
+
+        policy.cancelRequest(id: .number(7))
+
+        let resp = await decision
+        #expect(resp.outcome == .cancelled)
+        #expect(session.transcript.pendingPermission == nil)
+    }
+
+    @Test("cancelRequest for a non-matching id leaves the parked permission untouched")
+    func cancelRequestIgnoresNonMatchingId() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "opencode", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        async let decision = policy.evaluate(
+            scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
+        try? await Task.sleep(for: .milliseconds(100))
+
+        policy.cancelRequest(id: .number(999))
+        #expect(session.transcript.pendingPermission != nil)
+
+        await policy.userDecided(scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: nil)
+        let resp = await decision
+        #expect(resp.outcome == .selected(optionId: "allow"))
     }
 
     @Test("persisted user decisions commit before userDecided returns")

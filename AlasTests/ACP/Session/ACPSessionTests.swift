@@ -1637,6 +1637,46 @@ struct ACPSessionTests {
         #expect(session.availableConfigOptions[0].currentValue == .string("high"))
     }
 
+    @Test("a config_option_update push mirroring an already-applied selection does not flicker")
+    func configOptionsUpdatePushAfterMergeDoesNotFlicker() async {
+        // OpenCode v1.18.31 pushes config_option_update *after* the
+        // session/set_config_option response, echoing the same final
+        // state through both channels. Reapplying that same state via the
+        // push must be a no-op — it must not regress the value the merge
+        // (ACPConfigOption.mergingSuccessfulSetResponse) already settled.
+        let session = ACPSession(id: "s", agentId: "opencode", worktreeId: "w", title: "t")
+        let baselineFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "false",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        session.availableConfigOptions = [baselineFast]
+
+        // Simulate ACPComposerShell.apply(configOptionId:value:): optimistic
+        // local write, then the RPC response merged via
+        // mergingSuccessfulSetResponse.
+        let optimisticFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: baselineFast.options)
+        session.availableConfigOptions = [optimisticFast]
+        let responseFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: baselineFast.options)
+        let merged = try? #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [responseFast],
+            configId: "fast",
+            selectedValue: .string("true"),
+            currentConfigOptions: session.availableConfigOptions))
+        session.availableConfigOptions = merged ?? session.availableConfigOptions
+        #expect(session.availableConfigOptions.first?.currentValue == .string("true"))
+
+        // The subsequent push echoes the same settled state.
+        session.apply(.sessionConfigOptionsUpdate([optimisticFast]))
+
+        #expect(session.availableConfigOptions.first?.currentValue == .string("true"))
+    }
+
     @Test("sessionConfigOptionsUpdate synchronizes config-backed currentModel")
     func configOptionsUpdateSynchronizesConfigBackedCurrentModel() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

@@ -123,6 +123,13 @@ struct ACPUserInputPrompt: View {
             optionList(field)
         case "string" where field.schema.format == "date" || field.schema.format == "date-time":
             dateField(field)
+        case "string" where field.schema.isSecret:
+            SecureField(field.label, text: textBinding(for: field))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .alasFieldChrome(theme: theme)
+                .focused($focusedField, equals: field.key)
         case "string":
             TextField(field.label, text: textBinding(for: field))
                 .textFieldStyle(.plain)
