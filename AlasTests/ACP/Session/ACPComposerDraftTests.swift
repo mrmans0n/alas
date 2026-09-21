@@ -66,4 +66,50 @@ struct ACPComposerDraftTests {
             text: "Ship it",
             attachments: [.checkpointReference(id: UUID())]))
     }
+
+    @Test("imageTextOffsets is empty when there are no image segments")
+    func imageTextOffsetsEmptyWithoutImages() {
+        let draft = ACPComposerDraft(segments: [.text("no images here")])
+        #expect(draft.imageTextOffsets() == [])
+    }
+
+    @Test("imageTextOffsets reports the character offset before a mid-sentence image")
+    func imageTextOffsetsMidSentence() {
+        let draft = ACPComposerDraft(segments: [
+            .text("before "),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" after")
+        ])
+        #expect(draft.imageTextOffsets() == [7])
+    }
+
+    @Test("imageTextOffsets reports zero for a leading image")
+    func imageTextOffsetsLeadingImage() {
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text("after")
+        ])
+        #expect(draft.imageTextOffsets() == [0])
+    }
+
+    @Test("imageTextOffsets accounts for a mention's rendered '@name ' text")
+    func imageTextOffsetsAfterMention() {
+        let draft = ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png")
+        ])
+        // "@File.swift " is 12 characters.
+        #expect(draft.imageTextOffsets() == [12])
+    }
+
+    @Test("imageTextOffsets reports one offset per image, in order")
+    func imageTextOffsetsMultipleImages() {
+        let draft = ACPComposerDraft(segments: [
+            .text("a "),
+            .image(uri: "file:///tmp/1.png", mimeType: "image/png"),
+            .text("b "),
+            .image(uri: "file:///tmp/2.png", mimeType: "image/png")
+        ])
+        #expect(draft.imageTextOffsets() == [2, 4])
+    }
 }

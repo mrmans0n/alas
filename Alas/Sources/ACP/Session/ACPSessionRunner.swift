@@ -1371,9 +1371,11 @@ extension ACPSessionRunner {
     ///   - enqueue  → appends to queue + persists
     ///   - steer    → cancels in-flight + preserves queue + sends
     ///   - noOp     → empty composer, ignore
-    /// `draft` is the structured composer state for lossless edit-restore;
-    /// it's consumed only on the `enqueue` route and ignored on the others
-    /// (sendNow/steer have no queued item to annotate).
+    /// `draft` is the structured composer state for lossless edit-restore.
+    /// The `enqueue` route persists it onto the queued item for that purpose;
+    /// every route also forwards it to `sendNow`, which reads its image
+    /// segments' offsets to annotate the recorded attachments' `textOffset`
+    /// (see `ACPSessionRunner.attachments(of:draft:)`).
     func send(
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
@@ -1590,7 +1592,8 @@ extension ACPSessionRunner {
             blocks: head.blocks,
             queuedItemId: head.id,
             delegatedSource: head.delegatedSource,
-            brokerOperationKey: brokerOperationKey
+            brokerOperationKey: brokerOperationKey,
+            draft: head.restorableDraft
         )
     }
 
@@ -1678,7 +1681,8 @@ extension ACPSessionRunner {
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
-            recordUserPrompt: !item.transcriptRecorded
+            recordUserPrompt: !item.transcriptRecorded,
+            draft: item.restorableDraft
         )
     }
 
@@ -1868,7 +1872,7 @@ extension ACPSessionRunner {
                         self.onResumeTranscriptTail?()
                     }
                     let messageID = self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
-                                                                  attachments: Self.attachments(of: blocks),
+                                                                  attachments: Self.attachments(of: blocks, draft: draft),
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore {
@@ -2139,8 +2143,23 @@ extension ACPSessionRunner {
     /// previously came from the composer-level attachments array). Inline-
     /// hydrated images (uri == nil) are intentionally skipped — they have no
     /// file to point the thumbnail at and only appear post-`hydrate`.
-    static func attachments(of blocks: [ACPContentBlock]) -> [ACPMessage.Attachment] {
-        blocks.compactMap { b -> ACPMessage.Attachment? in
+    ///
+    /// `blocks` always flattens an image's original mid-sentence position —
+    /// `Self.blocks(text:attachments:)` emits one leading text block followed
+    /// by every attachment in order, so the composer's interleaving is gone
+    /// by the time it gets here. `draft`, when supplied, is the structured
+    /// `ACPComposerDraft` captured at submit time (still ordered, still
+    /// interleaved); its image segments are matched to this call's image
+    /// blocks by position to recover each one's `textOffset`. Omitted
+    /// (`nil`) for callers with no draft on hand (checkpoint bookkeeping,
+    /// delegated/commentary content) — every image attachment they produce
+    /// simply carries no offset.
+    static func attachments(
+        of blocks: [ACPContentBlock],
+        draft: ACPComposerDraft? = nil
+    ) -> [ACPMessage.Attachment] {
+        var offsets = ArraySlice(draft?.imageTextOffsets() ?? [])
+        return blocks.compactMap { b -> ACPMessage.Attachment? in
             if case .resourceLink(let uri, let name) = b {
                 return ACPMessage.Attachment(uri: uri, name: name)
             }
@@ -2149,7 +2168,8 @@ extension ACPSessionRunner {
             }
             if case .image(_, let uri, let mime) = b, let uri {
                 let name = URL(string: uri)?.lastPathComponent
-                return ACPMessage.Attachment(uri: uri, name: name, mimeType: mime ?? "image/png")
+                let offset = offsets.isEmpty ? nil : offsets.removeFirst()
+                return ACPMessage.Attachment(uri: uri, name: name, mimeType: mime ?? "image/png", textOffset: offset)
             }
             return nil
         }

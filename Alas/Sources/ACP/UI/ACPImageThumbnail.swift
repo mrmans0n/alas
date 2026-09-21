@@ -5,6 +5,11 @@ import AppKit
 /// staged file in a floating preview panel over Alas.
 struct ACPImageThumbnail: View {
     let fileURL: URL
+    /// 1-based position among the message's images, shown as a small corner
+    /// badge so it matches the `` `🖼 N` `` marker `ACPUserMessageImageMarkers`
+    /// splices into the bubble's text. `nil` when the message has only one
+    /// image — nothing to disambiguate, so no badge.
+    var index: Int? = nil
 
     var body: some View {
         Button {
@@ -29,11 +34,24 @@ struct ACPImageThumbnail: View {
                 .frame(width: 96, height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+                .overlay(alignment: .topLeading) { indexBadge }
         } placeholder: {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.gray.opacity(0.3))
                 .frame(width: 96, height: 96)
                 .overlay(Image(systemName: "photo"))
+                .overlay(alignment: .topLeading) { indexBadge }
+        }
+    }
+
+    @ViewBuilder private var indexBadge: some View {
+        if let index {
+            Text("\(index)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(minWidth: 14, minHeight: 14)
+                .background(Circle().fill(.black.opacity(0.55)))
+                .padding(4)
         }
     }
 }

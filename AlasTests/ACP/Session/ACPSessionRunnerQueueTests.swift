@@ -212,6 +212,38 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test("flushQueueIfIdle annotates a queued image attachment's textOffset from its captured draft")
+    func flushQueueAnnotatesImageOffsetFromDraft() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.transcript.streamingState = .streaming
+        let draft = ACPComposerDraft(segments: [
+            .text("look at "),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" please")
+        ])
+        runner.send(
+            blocks: [
+                .text("look at  please"),
+                .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")
+            ],
+            intent: .auto,
+            draft: draft
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(session.queue.count == 1)
+
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.last else {
+            Issue.record("expected a recorded user message")
+            return
+        }
+        #expect(attachments.first?.textOffset == 8)
+    }
+
     @Test("empty blocks → noOp; nothing queued, no RPC, no state change")
     func emptyNoOp() async throws {
         let (runner, mock, session, _) = try mkRunner()

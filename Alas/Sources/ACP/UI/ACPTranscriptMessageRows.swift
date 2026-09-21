@@ -27,9 +27,12 @@ struct UserMessageRow: View {
                             // Key by index, not uri: content-addressed staging
                             // means the same image attached twice shares a uri,
                             // and duplicate ForEach ids collapse the row.
-                            ForEach(Array(images.enumerated()), id: \.offset) { _, a in
+                            ForEach(Array(images.enumerated()), id: \.offset) { index, a in
                                 if let url = URL(string: a.uri) {
-                                    ACPImageThumbnail(fileURL: url)
+                                    ACPImageThumbnail(
+                                        fileURL: url,
+                                        index: images.count > 1 ? index + 1 : nil
+                                    )
                                 }
                             }
                         }
@@ -42,7 +45,10 @@ struct UserMessageRow: View {
                         }
                     }
                 }
-                ACPMarkdownText(raw: text, typography: typography)
+                ACPMarkdownText(
+                    raw: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments),
+                    typography: typography
+                )
                     .padding(.vertical, 9)
                     .padding(.horizontal, 13)
                     .background(
