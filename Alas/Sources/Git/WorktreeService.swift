@@ -1470,6 +1470,13 @@ struct WorktreeService {
         "-c", "filter.lfs.required=false"
     ]
 
+    /// Same override as `lfsFilterOverride`, as a literal `sh -c` fragment:
+    /// `git submodule foreach`'s recursive command runs through the shell
+    /// per submodule, not as a `Process` argv, so the argv-form array can't
+    /// be spliced in directly.
+    private static let lfsFilterOverrideShellFlags =
+        "-c filter.lfs.process= -c filter.lfs.smudge= -c filter.lfs.clean= -c filter.lfs.required=false"
+
     private static func looksLikeMissingLFS(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
         return (lower.contains("command not found")
@@ -1552,12 +1559,15 @@ struct WorktreeService {
     private func areInitializedSubmodulesClean(
         _ path: URL,
         gitDirectory: URL? = nil,
+        allowsSmudgedLFS: Bool = false,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
+        let statusCommand = allowsSmudgedLFS
+            ? "git \(Self.lfsFilterOverrideShellFlags) status --porcelain --ignore-submodules=none --untracked-files=all"
+            : "git status --porcelain --ignore-submodules=none --untracked-files=all"
         let result = try await Process.git(
             Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
-                "submodule", "foreach", "--quiet", "--recursive",
-                "git status --porcelain --ignore-submodules=none --untracked-files=all"
+                "submodule", "foreach", "--quiet", "--recursive", statusCommand
             ],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
@@ -1677,6 +1687,7 @@ struct WorktreeService {
         return try await areInitializedSubmodulesClean(
             path,
             gitDirectory: gitDirectory,
+            allowsSmudgedLFS: true,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
     }

@@ -9908,18 +9908,29 @@ final class AppState {
         default:
             break
         }
+        // Claim immediately, before any `await`: every check below yields
+        // to other main-actor work (checkpoint discovery, the git
+        // preflight), and an unclaimed gap here is exactly the
+        // session-admission race `.preparingDelete` exists to close.
+        // Released on every path that doesn't end in an actual deletion.
+        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
+
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
             return .error("Could not find the project for this worktree.")
         }
         let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
         if !force, preflight.requiresForce {
+            projectsManager.setOperationState(id: worktree.id, state: nil)
             if preflight.reasons.contains(.dirty) {
                 return .error("worktree has local changes; rerun with --force to delete")
             }

@@ -1769,6 +1769,59 @@ extension WorktreeServiceTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
+    /// Regression: `canForceRemoveAfterMissingLFS`'s outer status check gets
+    /// the LFS override, but the recursive `submodule foreach` status check
+    /// it ran afterward did not — so a broken LFS filter configured inside
+    /// the *submodule itself* (not the outer worktree) still made the whole
+    /// LFS-tolerant fallback throw, defeating the point of having one.
+    @Test func removeWithoutForceToleratesMissingLFSFilterInsideSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-inner-missing-lfs")
+        defer { fixture.removeFiles() }
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        // Left untracked, and excluded so it doesn't itself show up as a
+        // dirty file: git honors `.gitattributes` from the working tree
+        // regardless of its tracked/ignored state, and committing here
+        // would move the submodule's HEAD off the SHA the outer worktree's
+        // gitlink records — a real, unrelated dirty condition this test
+        // must not introduce.
+        try "* filter=lfs -text\n".write(
+            to: submodulePath.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // The submodule's `.git` is a gitfile pointer, not a directory —
+        // resolve the real git directory before writing into `info/exclude`.
+        let submoduleGitDir = try await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: submodulePath
+        ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excludeFile = URL(fileURLWithPath: submoduleGitDir).appendingPathComponent("info/exclude")
+        let excludeHandle = try FileHandle(forWritingTo: excludeFile)
+        excludeHandle.seekToEndOfFile()
+        excludeHandle.write(Data(".gitattributes\n".utf8))
+        try excludeHandle.close()
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: submodulePath
+            )
+        }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: submodulePath
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: submodulePath)
+
+        try await fixture.service.remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
     @Test func removeWithForceDeletesCleanInitializedSubmodule() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-force")
         defer {
