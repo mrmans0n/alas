@@ -117,6 +117,55 @@ struct ACPSubagentRoutingTests {
         #expect(decoded.text == "abc")
     }
 
+    @Test("a nested collaborator announced on a child session is registered on the root")
+    func nestedSpawnIsRegisteredFlat() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+
+        // The grandchild is announced on ITS parent, which is our child.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentSpawned(.init(subagentSessionId: "grandchild", name: "Deeper"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("nested output"))))
+
+        // Two rows on the root, one per subagent, and the nested output
+        // went to the grandchild rather than leaking into the parent.
+        #expect(runner.session.transcript.messages.count == 2)
+        #expect(runner.session.subagentRun("grandchild")?.name == "Deeper")
+        #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
+        #expect(runner.session.subagentRun("child-1")?.messages.isEmpty == true)
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentStateUpdate(.init(
+                subagentSessionId: "grandchild", state: .completed))))
+        #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+    }
+
+    @Test("tearing the runner down stops running children and records it")
+    func stopMarksChildrenDisconnected() async throws {
+        let (runner, store, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+
+        runner.stop()
+        await runner.flushPersistence()
+
+        #expect(runner.session.subagentRun("child-1")?.state == .disconnected)
+        let rows = try store.loadMessages(sessionId: "s")
+        let toolCall = try #require(rows.compactMap {
+            try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload)
+        }.first)
+        let descriptor = try #require(ACPSubagentRowDescriptor(toolCall: toolCall))
+        #expect(descriptor.state == .disconnected)
+        #expect(toolCall.status == "failed")
+    }
+
     @Test("a child write rejected by the lease fence is not acknowledged")
     func rejectedChildWriteIsNotAcknowledged() async throws {
         let url = FileManager.default.temporaryDirectory

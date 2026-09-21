@@ -728,13 +728,28 @@ final class ACPSessionRunner {
             durableConsumptionAcknowledgement?()
             return
         }
-        let dirty = session.applySubagentUpdate(
-            params.update,
-            subagentSessionId: params.sessionId)
-        persistSubagentIndices(
-            dirty,
-            subagentSessionId: params.sessionId,
-            completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+        switch params.update {
+        case .subagentSpawned, .subagentStateUpdate:
+            // A nested collaborator is announced on ITS parent's session,
+            // which is a child of ours. Register it flat on the root rather
+            // than dropping it: otherwise its own session id never enters
+            // the allowlist and its output would be applied to the root
+            // transcript as ordinary parent output. This is the same shape
+            // the OpenCode variant already produces, where every
+            // descendant is reported against the root regardless of depth.
+            let dirty = session.apply(params.update)
+            persistIndices(
+                dirty,
+                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+        default:
+            let dirty = session.applySubagentUpdate(
+                params.update,
+                subagentSessionId: params.sessionId)
+            persistSubagentIndices(
+                dirty,
+                subagentSessionId: params.sessionId,
+                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+        }
     }
 
     /// Persists the named rows of a child transcript.
@@ -839,6 +854,14 @@ final class ACPSessionRunner {
         )
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
+        // Teardown always shuts this runner's connection down (see
+        // `tearDownSession`: the `detach()` path has no runner), so every
+        // child dies with it. Marking them here — after the streaming
+        // flush, so it cannot cancel that write's debounce — is what stops
+        // a reopened session from showing a subagent spinning forever.
+        // `persistIndices` requires the writer lease, so an instance that
+        // lost it in a takeover records nothing.
+        persistIndices(session.markSubagentsDisconnected())
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
