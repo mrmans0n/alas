@@ -52,6 +52,31 @@ struct ACPContextCompactionPresentationTests {
         #expect(compaction?.label == "Context compaction failed")
     }
 
+    @MainActor
+    @Test("a completed compaction with no summary and no summary chunk renders without one")
+    func completedCompactionWithoutSummaryDoesNotCrash() {
+        // Codex 1.13 emits a standard compaction_update with status
+        // "completed" but no `summary` field and no compaction_summary_chunk
+        // at all — confirm the session applies it cleanly and the resulting
+        // tool call still reports completed with no content synthesized.
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let update = ACPCompactionUpdate(compactionId: "compact-1", status: "completed")
+        #expect(update.summaryWasProvided == false)
+
+        session.apply(.compactionUpdate(update))
+
+        let toolCallId = "context-compaction:compact-1"
+        guard let index = session.transcript.toolCallIndex(toolCallId: toolCallId),
+              case .toolCall(let toolCall) = session.transcript.messages[index] else {
+            Issue.record("expected a persisted context-compaction tool call")
+            return
+        }
+        #expect(toolCall.status == "completed")
+        #expect(toolCall.content.isEmpty)
+        let compaction = ACPContextCompaction(toolCall: toolCall)
+        #expect(compaction?.status == .completed)
+    }
+
     @Test("ordinary tool calls are not context compactions")
     func ordinaryToolCall() {
         #expect(ACPContextCompaction(toolCall: .init(

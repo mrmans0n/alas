@@ -36,6 +36,14 @@ struct ACPAgentProfilesTests {
         #expect(p.autoRun == .ignored)
     }
 
+    @Test("copilot auto-run is ignored since it no longer requests permission")
+    func copilot() {
+        let p = ACPAgentProfiles.routing(for: "copilot")
+        #expect(p.modeSource == .mode)
+        #expect(p.thinkingSource == .heuristic)
+        #expect(p.autoRun == .ignored)
+    }
+
     @Test("unknown agent falls back to modes for Mode + heuristic Thinking")
     func unknown() {
         let p = ACPAgentProfiles.routing(for: "some-new-agent")

@@ -22,7 +22,7 @@ enum ACPLaunchCatalog {
         ACPLaunchSpec(
             agentID: "gemini",
             command: "gemini",
-            arguments: ["--experimental-acp"],
+            arguments: ["--acp"],
             extraEnv: [:],
             setupCheck: .binaryOnPath(name: "gemini"),
             supportsModelSelection: true,
@@ -76,7 +76,7 @@ enum ACPLaunchCatalog {
         // GitHub Copilot CLI. Native ACP support (public preview Jan 2026).
         // `copilot --acp` starts the ACP server over stdio (default).
         // Also supports TCP via `--port N`.
-        // Auth via `copilot auth login`.
+        // Auth via `copilot login`.
         ACPLaunchSpec(
             agentID: "copilot",
             command: "copilot",

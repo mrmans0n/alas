@@ -184,7 +184,7 @@ struct ACPPermissionPrompt: View {
 
     private func commandSummary(_ p: ACPPermissionRequestParams) -> String? {
         guard let blocks = p.toolCall.content else { return nil }
-        for b in blocks { if case .text(let s) = b { return s } }
+        for b in blocks { if case .content(.text(let s)) = b { return s } }
         return nil
     }
 

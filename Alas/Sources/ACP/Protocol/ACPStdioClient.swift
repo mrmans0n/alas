@@ -4,6 +4,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
@@ -18,6 +19,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
@@ -53,6 +55,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
+
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
 
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
@@ -91,6 +97,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
+
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
 
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
@@ -142,6 +152,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             drainPending(with: ACPClientError.notRunning)
             updatesCont.finish()
             permsCont.finish()
+            cancelRequestsCont.finish()
             questionsCont.finish()
             elicitationsCont.finish()
             elicitationCompletionsCont.finish()
@@ -206,6 +217,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 acknowledgeAfterDispatch = false
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 permsCont.yield((id, p))
+            }
+        case "$/cancel_request":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCancelRequestParams>.self, from: data),
+               let p = env.params {
+                cancelRequestsCont.yield(p.id)
             }
         case "cursor/ask_question":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
