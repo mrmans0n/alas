@@ -114,9 +114,10 @@ final class RightPaneState: GGSplitCommitServicing {
     var checkpointsExpanded: Bool = true
     var automaticCheckpointsExpanded: Bool = false
     var expandedCheckpointIDs: Set<CheckpointID> = []
-    /// Checkpoints whose expanded card is showing every captured file group
-    /// instead of the `CheckpointPresentation.maxInlineFileGroups` cap.
-    var expandedCheckpointFileListIDs: Set<CheckpointID> = []
+    /// Extra `CheckpointPresentation.maxInlineFileGroups`-sized pages a
+    /// checkpoint's expanded card has revealed beyond the first, via its
+    /// "Show N more files" button. 0 means only the capped first page.
+    var checkpointFileListExtraPages: [CheckpointID: Int] = [:]
     var checkpointManifests: [CheckpointID: WorktreeCheckpointManifest] = [:]
     var loadingCheckpointManifestIDs: Set<CheckpointID> = []
     var checkpointManifestErrors: [CheckpointID: String] = [:]
@@ -769,7 +770,9 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointLoadError = nil
             let availableCheckpointIDs = Set(catalog.summaries.filter { $0.unavailableReason == nil }.map(\.id))
             expandedCheckpointIDs.formIntersection(availableCheckpointIDs)
-            expandedCheckpointFileListIDs.formIntersection(availableCheckpointIDs)
+            checkpointFileListExtraPages = checkpointFileListExtraPages.filter { id, _ in
+                availableCheckpointIDs.contains(id)
+            }
             checkpointManifests = checkpointManifests.filter { id, _ in
                 availableCheckpointIDs.contains(id)
             }
@@ -884,22 +887,25 @@ final class RightPaneState: GGSplitCommitServicing {
     func toggleCheckpointExpanded(_ id: CheckpointID) {
         if expandedCheckpointIDs.contains(id) {
             expandedCheckpointIDs.remove(id)
-            expandedCheckpointFileListIDs.remove(id)
+            checkpointFileListExtraPages[id] = nil
         } else {
             expandedCheckpointIDs.insert(id)
             loadCheckpointManifest(id: id)
         }
     }
 
-    /// Toggles between the capped and full inline file list inside an
-    /// already-expanded checkpoint card. Independent of `expandedCheckpointIDs`
-    /// so collapsing the card resets it back to capped next time it opens.
-    func toggleCheckpointFileListExpanded(_ id: CheckpointID) {
-        if expandedCheckpointFileListIDs.contains(id) {
-            expandedCheckpointFileListIDs.remove(id)
-        } else {
-            expandedCheckpointFileListIDs.insert(id)
-        }
+    /// Number of manifest groups visible inline in an expanded checkpoint
+    /// card: one capped page by default, plus one `maxInlineFileGroups`
+    /// chunk per "Show more" click. Always bounded, so a single click on a
+    /// checkpoint with thousands of groups never materializes more than one
+    /// extra page at a time.
+    func checkpointVisibleFileGroupLimit(for id: CheckpointID) -> Int {
+        (1 + (checkpointFileListExtraPages[id] ?? 0)) * CheckpointPresentation.maxInlineFileGroups
+    }
+
+    /// Reveals one more capped page of an expanded checkpoint's file list.
+    func revealMoreCheckpointFiles(_ id: CheckpointID) {
+        checkpointFileListExtraPages[id, default: 0] += 1
     }
 
     func loadCheckpointManifest(id: CheckpointID) {
@@ -1020,7 +1026,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointStorageUsage = catalog.byteCount
             checkpointManifests[id] = nil
             expandedCheckpointIDs.remove(id)
-            expandedCheckpointFileListIDs.remove(id)
+            checkpointFileListExtraPages[id] = nil
             pendingCheckpointDeletion = nil
             await refresh()
         } catch {

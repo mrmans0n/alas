@@ -114,7 +114,7 @@ struct ChangesTabViewTests {
             mutationsDisabled: false,
             manifest: nil,
             blockedReason: nil,
-            showAllFiles: false
+            visibleFileGroupLimit: 24
         )
         let disabled = ChangesTabView.checkpointSummaryRowToken(
             summary: available,
@@ -124,7 +124,7 @@ struct ChangesTabViewTests {
             mutationsDisabled: true,
             manifest: nil,
             blockedReason: "A restore is already in progress.",
-            showAllFiles: false
+            visibleFileGroupLimit: 24
         )
         let nowUnavailable = ChangesTabView.checkpointSummaryRowToken(
             summary: unavailable,
@@ -134,9 +134,9 @@ struct ChangesTabViewTests {
             mutationsDisabled: false,
             manifest: nil,
             blockedReason: nil,
-            showAllFiles: false
+            visibleFileGroupLimit: 24
         )
-        let showingAllFiles = ChangesTabView.checkpointSummaryRowToken(
+        let showingMoreFiles = ChangesTabView.checkpointSummaryRowToken(
             summary: available,
             expanded: false,
             loading: false,
@@ -144,12 +144,12 @@ struct ChangesTabViewTests {
             mutationsDisabled: false,
             manifest: nil,
             blockedReason: nil,
-            showAllFiles: true
+            visibleFileGroupLimit: 48
         )
 
         #expect(enabled != disabled)
         #expect(enabled != nowUnavailable)
-        #expect(enabled != showingAllFiles)
+        #expect(enabled != showingMoreFiles)
     }
 
     @Test func checkpointsSectionHiddenWhenThereIsNothingToShow() {

@@ -135,11 +135,13 @@ struct CheckpointCard: View {
     let manifestError: String?
     let mutationsDisabled: Bool
     let blockedReason: String?
-    /// Whether an already-expanded card is showing every manifest group
-    /// instead of `CheckpointPresentation.maxInlineFileGroups`.
-    let showAllFiles: Bool
+    /// Number of manifest groups this expanded card will render inline. Bounded
+    /// by `RightPaneState.checkpointVisibleFileGroupLimit`: one capped page by
+    /// default, one more `maxInlineFileGroups` chunk per "Show more" click —
+    /// never the full remainder in a single render.
+    let visibleFileGroupLimit: Int
     let onToggle: () -> Void
-    let onToggleShowAllFiles: () -> Void
+    let onShowMoreFiles: () -> Void
     let onRestore: () -> Void
     let onDelete: () -> Void
     let onInspect: (CheckpointFileGroup) -> Void
@@ -279,9 +281,7 @@ struct CheckpointCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
             let pathIndex = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
-            let visibleGroups = showAllFiles
-                ? manifest.groups[...]
-                : manifest.groups.prefix(CheckpointPresentation.maxInlineFileGroups)
+            let visibleGroups = manifest.groups.prefix(visibleFileGroupLimit)
             ForEach(Array(visibleGroups)) { group in
                 CheckpointFileGroupRow(
                     group: group,
@@ -291,7 +291,8 @@ struct CheckpointCard: View {
             }
             let overflow = manifest.groups.count - visibleGroups.count
             if overflow > 0 {
-                Button("Show \(overflow) more file\(overflow == 1 ? "" : "s")", action: onToggleShowAllFiles)
+                let nextPage = min(overflow, CheckpointPresentation.maxInlineFileGroups)
+                Button("Show \(nextPage) more file\(nextPage == 1 ? "" : "s")", action: onShowMoreFiles)
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(theme.color("accent"))
