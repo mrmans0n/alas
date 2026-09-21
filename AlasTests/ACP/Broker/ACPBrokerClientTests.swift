@@ -84,6 +84,25 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
+    @Test func adoptedLegacyBrokerWithoutTodoSnapshotIsRestarted() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        let opened = try await client.start()
+
+        #expect(opened.adopted == false)
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+        let attachParams = try await #require(service.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
     @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -1850,6 +1869,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
     var openAdopted = false
+    var openSnapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     private var respondFailuresRemaining = 0
 
     func enqueueAttach(
@@ -1857,7 +1877,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
+        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
         turnState: ACPBrokerTurnState = .idle,
         delayNanoseconds: UInt64 = 0,
         shouldThrow: Bool = false
@@ -1882,6 +1902,10 @@ private actor MockBrokerService: ACPBrokerServicing {
         openAdopted = adopted
     }
 
+    func setOpenSnapshotCursorTodosByToolCallId(_ todos: [String: [ACPCursorTodo]]?) {
+        openSnapshotCursorTodosByToolCallId = todos
+    }
+
     func setSnapshotResults(
         initializeResult: ACPBrokerJSONValue?,
         remoteSessionResult: ACPBrokerJSONValue?
@@ -1892,7 +1916,10 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
-        return ACPBrokerOpenResult(snapshot: snapshot(journalTail: 0), adopted: openAdopted)
+        return ACPBrokerOpenResult(
+            snapshot: snapshot(journalTail: 0, cursorTodosByToolCallId: openSnapshotCursorTodosByToolCallId),
+            adopted: openAdopted
+        )
     }
 
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
@@ -1973,6 +2000,8 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
         closed.append(params)
+        openAdopted = false
+        openSnapshotCursorTodosByToolCallId = [:]
         return ACPBrokerSimpleOK(ok: true)
     }
 
@@ -1982,7 +2011,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         pendingRequests: [ACPBrokerPendingRequest] = [],
         operations: [ACPBrokerOperationSnapshot] = [],
         turnState: ACPBrokerTurnState = .idle,
-        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
+        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
@@ -2036,7 +2065,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
+            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
             turnState: ACPBrokerTurnState = .idle,
             delayNanoseconds: UInt64 = 0,
             shouldThrow: Bool = false
