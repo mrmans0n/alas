@@ -172,6 +172,54 @@ struct RemotePeerManagerTests {
         #expect(links.byPeerId.values.first?.disconnectCalls == 1)
     }
 
+    // A first-time addPeer's own reciprocal wait can time out while a
+    // completely separate, concurrent INBOUND exchange for the SAME
+    // identity is still awaiting its own pair-back reply — it has not
+    // called `upsert` yet, so the timed-out attempt's ownership check still
+    // names it. Rolling back with `forget` semantics here would bump the
+    // shared forget generation and fail that unrelated exchange's own
+    // generation check purely as collateral damage from a timeout it has
+    // nothing to do with; only this attempt's own provisional row may be
+    // removed.
+    @Test func addPeerTimeoutDoesNotFailAConcurrentInboundExchangeStillAwaitingItsOwnReply() async throws {
+        let requests = Requests()
+        let pairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            if req.url!.host == "10.0.0.9" {
+                // Still in flight when addPeer's own timeout fires below.
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                return (Data(#"{"token":"tokB","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                        HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            return (Data(#"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 0.05)
+        manager.connectAll()
+
+        // Nothing ever confirms this attempt's own counter-code, so its own
+        // wait times out and rolls back.
+        async let addResult: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
+        // While that rollback is pending, a separate inbound exchange for
+        // the same identity redeems ITS OWN counter-code and starts pairing
+        // back — dialing the slow origin above, still unresolved when
+        // addPeer's own timeout fires.
+        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+        async let inbound: Void = manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.9:8765"], counterCode: "INBOUND-CODE",
+            localDeviceId: "device-for-a", redeemedCode: "irrelevant"))
+
+        let error = await addResult
+        _ = await inbound
+        #expect(error == .reciprocalPairingFailed)
+        // The unrelated inbound exchange's own success must survive
+        // addPeer's rollback, not be discarded by a generation bump that
+        // rollback had no business causing.
+        let peer = try #require(manager.peers.first)
+        #expect(peer.localDeviceId == "device-for-a")
+        #expect(peer.token == "tokB")
+    }
+
     // `Task.sleep` throws immediately on a cancelled task rather than
     // actually sleeping, and a bare `try?` around it discards that signal.
     // Without an explicit cancellation check, the wait loop would busy-spin

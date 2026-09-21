@@ -309,7 +309,15 @@ final class RemotePeerManager {
                 if let previousState {
                     restorePreviousState(previousState, peerId: peer.id)
                 } else {
-                    forget(peerId: peer.id)
+                    // Not `forget`: this is this attempt's own automatic
+                    // rollback, not a user-initiated cancellation, and a
+                    // completely unrelated, concurrent INBOUND exchange for
+                    // this same identity may still be awaiting its own
+                    // pair-back. `forget` bumping the shared generation and
+                    // revoking every device for the identity would fail
+                    // that exchange's own generation check as collateral
+                    // damage from a timeout it has nothing to do with.
+                    removeProvisionalPeer(peerId: peer.id)
                 }
             }
             endAttempt(counterCode: counterCode)
@@ -598,6 +606,22 @@ final class RemotePeerManager {
         peers[index] = restored
         store.save(peers)
         if isActive { connect(restored) }
+    }
+
+    /// Undoes THIS attempt's own provisional `upsert` when no earlier
+    /// relationship for this identity existed to restore instead. Unlike
+    /// `forget`, this never bumps the shared forget generation, records no
+    /// `lastForgottenAt`, and revokes no device beyond what `endAttempt`'s
+    /// own orphan check already handles for THIS attempt's counter-code —
+    /// those broader effects are user-Forget semantics that a purely local
+    /// timeout has no standing to trigger.
+    private func removeProvisionalPeer(peerId: String) {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+        peers.remove(at: index)
+        connections[peerId]?.disconnect()
+        connections[peerId] = nil
+        states[peerId] = nil
+        store.save(peers)
     }
 
     // MARK: - Links
