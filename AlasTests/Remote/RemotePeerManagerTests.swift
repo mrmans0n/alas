@@ -769,6 +769,30 @@ struct RemotePeerManagerTests {
         #expect(Array(peer.origins.prefix(freshOrigins.count)) == freshOrigins)
     }
 
+    // A's reciprocal callback must claim the SAME identity its original
+    // reply established this record under. A callback claiming a DIFFERENT
+    // identity has only proven it somehow obtained our counter-code, not
+    // that it IS the peer we started this exchange with — accepting it
+    // would authorize a device recorded under an identity `forget` never
+    // checks (it sweeps by the record's STORED serverId), letting that
+    // device survive indefinitely even after the user forgets this peer.
+    @Test func aReciprocalConfirmationClaimingADifferentIdentityThanTheOriginalReplyIsRejected() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let requests = Requests()
+        var revoked: [String] = []
+        let manager = makeManager(pairing: pairing,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-x","name":"Mac X"}"#)], requests: requests),
+                                  links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        let mismatched = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac Y", peerServerId: "srv-y")
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-y", localDeviceId: mismatched.deviceId)
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        #expect(manager.peers.isEmpty)
+        #expect(revoked.contains(mismatched.deviceId))
+        #expect(pairing.validate(token: mismatched.token) == nil)
+    }
+
     // A confirmation that arrives with no addPeer attempt left waiting
     // for its counter-code (the attempt it belonged to already gave up, or
     // never existed) sits buffered until swept by expiry — the device it

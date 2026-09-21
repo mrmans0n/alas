@@ -431,6 +431,21 @@ final class RemotePeerManager {
                     revokeIfOrphaned(serverId: buffered.serverId, localDeviceId: buffered.localDeviceId)
                     return false
                 }
+                // The confirmation must claim the SAME identity the
+                // original reply established this record under. A peer
+                // that claimed X in its reply but Y in the reciprocal
+                // callback redeeming OUR counter-code has not proven it IS
+                // X — it has only proven it somehow obtained our
+                // counter-code. Accepting it would authorize a device
+                // recorded under an identity `forget` never checks (it
+                // sweeps by the record's STORED serverId), letting that
+                // device survive indefinitely even after the user forgets
+                // this peer.
+                guard buffered.serverId == peers[index].serverId else {
+                    pairing.revoke(deviceId: buffered.localDeviceId)
+                    onRevokeDevice?(buffered.localDeviceId)
+                    return false
+                }
                 peers[index].localDeviceId = buffered.localDeviceId
                 store.save(peers)
                 return true
