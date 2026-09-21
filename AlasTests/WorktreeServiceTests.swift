@@ -2113,6 +2113,71 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: nestedPath.path))
     }
 
+    /// Regression: auditing a clean parent submodule post-stage with the
+    /// default `--ignore-submodules=none` tried to descend into *its* own
+    /// nested submodule via the same now-dangling relative gitfile pointer
+    /// the top-level audit exists to work around — exiting 128 before the
+    /// explicit recursive call ever got a chance to resolve the nested
+    /// submodule's gitdir properly, rolling back every unforced deletion of
+    /// a worktree with recursively initialized submodules.
+    @Test func fastLocalRemoveSupportsCleanRecursivelyInitializedSubmodulesWithoutForce() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let nestedRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-nested-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: nestedRepo) }
+        try FileManager.default.createDirectory(at: nestedRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: nestedRepo)
+        try "one".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "nested.txt"], cwd: nestedRepo)
+        _ = try await Process.git(["commit", "-q", "-m", "nested init"], cwd: nestedRepo)
+
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedRepo.path, "Nested"],
+            cwd: submoduleRepo
+        )
+        _ = try await Process.git(["commit", "-q", "-m", "add nested submodule"], cwd: submoduleRepo)
+
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-nested-submodule-clean")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/nested-submodule-clean",
+            destination: dest, projectId: "p"
+        )
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "-q"],
+            cwd: dest
+        )
+
+        let outcome = try await svc.removeFastLocal(
+            repoPath: repo,
+            worktree: wt,
+            deleteBranchIfMerged: false,
+            force: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func removeRefusesWhenSubmoduleStateCannotBeVerified() async throws {
         // Git refuses a worktree with submodules unless forced, and `remove`
         // only supplies that force after proving the tree is clean. When the

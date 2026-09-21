@@ -1658,9 +1658,18 @@ struct WorktreeService {
                 relativePath: relativePath,
                 parentGitDirectory: gitDirectory
             ) else { return false }
+            // `ignoresSubmodules: true`: this submodule's own nested
+            // submodules have the exact same dangling-gitfile problem the
+            // parent worktree has post-stage, so a default `git status`
+            // here would try to descend into them and exit 128 before the
+            // explicit recursive call below ever resolves their gitdir.
+            // That recursive call already audits them properly; this pass
+            // only has to catch this submodule's own tracked/untracked
+            // content.
             guard try await isWorktreeClean(
                 submodulePath,
                 gitDirectory: submoduleGitDirectory,
+                ignoresSubmodules: true,
                 usesRemoteHostRegistry: false
             ) else { return false }
             guard try await stagedInitializedSubmodulesAreClean(

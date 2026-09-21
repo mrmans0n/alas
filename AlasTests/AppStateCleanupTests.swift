@@ -1212,6 +1212,33 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.operationState(for: wt.id) == nil)
     }
 
+    /// Regression: a worktree removed externally (another terminal, `git
+    /// worktree prune`) while its `.preparingDelete` claim was still up had
+    /// nothing to ever clear that claim — confirming looks the worktree up
+    /// by id, fails, and returns before touching operation state;
+    /// cancelling only clears it when the state still matches
+    /// `.preparingDelete` for a *live* worktree. A worktree recreated at
+    /// the same path reuses the id, so the stale claim would block its new
+    /// incarnation from session admission until app restart.
+    @Test func preparingDeleteClaimClearsWhenWorktreeIsRemovedExternally() async throws {
+        let repo = try await makeRepo(name: "external-removal")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "external-removal", color: "#5fb7c4")
+        let worktreePath = repo.deletingLastPathComponent().appendingPathComponent("external-removal-target")
+        defer { try? FileManager.default.removeItem(at: worktreePath) }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "external-removal-target", worktreePath.path, "main"], cwd: repo)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "external-removal-target" })
+
+        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+
+        _ = try await Process.git(["worktree", "remove", "--force", worktreePath.path], cwd: repo)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        #expect(state.projectsManager.operationState(for: target.id) == nil)
+    }
+
     @Test func removeProjectClosesTabsForProjectWorktrees() async throws {
         let repo = try await makeRepo(name: "remove-tabs")
         defer { try? FileManager.default.removeItem(at: repo) }

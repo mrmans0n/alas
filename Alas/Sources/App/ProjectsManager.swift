@@ -527,7 +527,18 @@ final class ProjectsManager {
                     }
                 }
             case .preparingDelete:
-                break
+                // A worktree removed externally (another terminal, git
+                // worktree prune) while its confirmation was still pending
+                // leaves nothing to ever clear the claim otherwise:
+                // confirming looks the worktree up by id, fails, and
+                // returns before touching operation state; cancelling only
+                // clears it when the state still matches `.preparingDelete`
+                // for a *live* worktree. Recreating a worktree at the same
+                // path reuses the id, so an uncleared claim would block its
+                // new incarnation from session admission forever.
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
+                }
             case .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
