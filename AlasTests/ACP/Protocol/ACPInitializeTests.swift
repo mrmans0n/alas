@@ -114,6 +114,7 @@ struct ACPInitializeTests {
         let configOptions = try #require(session["configOptions"] as? [String: Any])
         #expect(configOptions["boolean"] as? [String: Any] != nil)
         #expect(session["compaction"] as? [String: Any] != nil)
+        #expect(session["notices"] as? [String: Any] != nil)
         #expect(capabilities["terminal"] as? Bool == true)
         let elicitation = try #require(capabilities["elicitation"] as? [String: Any])
         #expect(elicitation["form"] as? [String: Any] != nil)

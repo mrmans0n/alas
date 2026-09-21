@@ -80,6 +80,12 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var retryStatus: ACPRetryStatus?
     @Published var contextRestoreWarning: ContextRestoreWarning?
     @Published var contextRecoveryStatus: ContextRecoveryStatus?
+    /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
+    /// event (MCP server dropped, rate limit, model fallback…). Live state
+    /// only: never written into the persisted transcript, never restored
+    /// from `session/load` replay, and does not affect `streamingState`.
+    /// Surfaced as a transient banner above the composer.
+    @Published private(set) var activeNotice: ACPSessionNotice?
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
@@ -144,6 +150,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
+    private var noticeAutoDismissTask: Task<Void, Never>?
 
     /// When false, `appendStreaming` discards chunks that would cross a
     /// completed-output boundary (i.e. create a duplicate agent message bubble).
@@ -338,6 +345,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     deinit {
         contextRecoveryExpiryTask?.cancel()
+        noticeAutoDismissTask?.cancel()
         // Foundation cannot await main-actor methods from deinit; dispatch.
         let host = terminalHost
         Task { @MainActor in host.killAll() }
@@ -583,6 +591,9 @@ final class ACPSession: ObservableObject, Identifiable {
         case .compactionSummaryChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             return appendContextCompactionSummary(chunk)
+        case .notice(let notice):
+            applyNotice(notice)
+            return []
         case .sessionInfoUpdate(let info):
             applySessionInfoUpdate(info, tracksRetryStatus: tracksRetryStatus)
             return []
@@ -690,6 +701,31 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         }
         return [index]
+    }
+
+    /// Applies a live ACP `notice`. Coalesces an identical consecutive
+    /// notice (same severity/title/description) into a no-op so a chatty
+    /// agent re-sending the same event doesn't restart its auto-dismiss
+    /// timer or flash the banner. `info` auto-dismisses after a delay;
+    /// `warning`/`error` stay until the user dismisses them.
+    private func applyNotice(_ notice: ACPSessionNotice) {
+        guard activeNotice != notice else { return }
+        noticeAutoDismissTask?.cancel()
+        activeNotice = notice
+        guard notice.severity == .info else { return }
+        noticeAutoDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, self?.activeNotice == notice else { return }
+            self?.activeNotice = nil
+        }
+    }
+
+    /// User-initiated dismissal of the active notice (the composer banner's
+    /// close button). Also cancels any pending auto-dismiss for it.
+    func dismissActiveNotice() {
+        noticeAutoDismissTask?.cancel()
+        noticeAutoDismissTask = nil
+        activeNotice = nil
     }
 
     static func contextCompactionToolCallId(_ id: String) -> String {

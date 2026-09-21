@@ -116,6 +116,54 @@ struct ACPSessionTests {
         session.apply(.usageUpdate(.init(used: 3_000, size: 8_000, cost: nil)))
         #expect(session.contextUsage == .init(used: 3_000, size: 8_000, cost: nil))
     }
+
+    @Test("notices are live-only: no transcript row, no persistence, no streaming state change")
+    func noticesAreLiveStateOnly() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.streamingState = .idle
+
+        let dirty = session.apply(.notice(.init(severity: .warning, title: "MCP server unavailable")))
+
+        #expect(dirty.isEmpty)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(session.activeNotice?.title == "MCP server unavailable")
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("an identical consecutive notice coalesces instead of restarting")
+    func identicalConsecutiveNoticesCoalesce() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let notice = ACPSessionNotice(severity: .info, title: "Model fallback", description: "Using backup model.")
+
+        session.apply(.notice(notice))
+        session.apply(.notice(notice))
+
+        #expect(session.activeNotice == notice)
+    }
+
+    @Test("dismissing the active notice clears it")
+    func dismissActiveNoticeClears() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.notice(.init(severity: .error, title: "Rate limited")))
+        #expect(session.activeNotice != nil)
+
+        session.dismissActiveNotice()
+
+        #expect(session.activeNotice == nil)
+    }
+
+    @Test("notices arriving during load-replay suppression are ignored")
+    func noticesIgnoredDuringLoadReplay() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.beginSuppressedReplaySideEffects()
+
+        let touched = session.applySuppressedReplaySideEffects(
+            .notice(.init(severity: .warning, title: "Should not surface")))
+
+        #expect(touched.isEmpty)
+        #expect(session.activeNotice == nil)
+    }
+
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
