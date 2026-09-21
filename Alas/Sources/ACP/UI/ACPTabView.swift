@@ -554,14 +554,14 @@ private struct ACPSessionView: View {
                     }
                 }
             },
-            onCancelSubagent: { subagentSessionId in
-                Task {
-                    await state.cancelSubagent(
-                        for: sessionId,
-                        worktreeID: worktree.id,
-                        subagentSessionId: subagentSessionId
-                    )
-                }
+            // Nil in a mirror so the row never draws a Cancel the reader
+            // cannot use. The closure ALSO re-reads `isMirror` when it
+            // fires, for the same reason the queue callbacks above do: a
+            // mounted row keeps its closures until its equality token
+            // changes, and that token cannot cover callback identity.
+            onCancelSubagent: isMirror ? nil : { subagentSessionId in
+                guard !isMirror else { return }
+                Task { await manager.cancelSubagent(for: sessionId, subagentSessionId: subagentSessionId) }
             },
             onOpenForkSource: { sourceSessionID in
                 Task {

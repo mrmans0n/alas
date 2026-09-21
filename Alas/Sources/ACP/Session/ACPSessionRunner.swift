@@ -774,9 +774,13 @@ final class ACPSessionRunner {
         let fence = leaseFenceProvider()
         let subagentRows = rows
         enqueuePersistence({ persistence in
-            _ = try await persistence.persistSubagentMessages(subagentRows, fence: fence)
+            // Return the fence's verdict rather than discarding it: a write
+            // rejected because ownership moved mid-flight stores nothing and
+            // must NOT acknowledge the durable update, or the child's output
+            // is dropped instead of being replayed to the new writer.
+            try await persistence.persistSubagentMessages(subagentRows, fence: fence)
         }, completion: { persisted in
-            completion?(persisted != nil)
+            completion?(persisted == true)
         })
         return true
     }

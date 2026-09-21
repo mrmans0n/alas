@@ -13580,13 +13580,6 @@ extension AppState: RemoteSessionsProvider {
         await manager.interrupt(for: id)
     }
 
-    /// Cancel one native subagent of a session, leaving the parent turn
-    /// running.
-    func cancelSubagent(for id: String, worktreeID: String, subagentSessionId: String) async {
-        guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
-        await manager.cancelSubagent(for: id, subagentSessionId: subagentSessionId)
-    }
-
     func queueForceSend(for id: String, itemId: UUID) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.queueForceSend(for: id, itemId: itemId)

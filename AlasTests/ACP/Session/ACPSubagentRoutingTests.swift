@@ -117,6 +117,59 @@ struct ACPSubagentRoutingTests {
         #expect(decoded.text == "abc")
     }
 
+    @Test("a child write rejected by the lease fence is not acknowledged")
+    func rejectedChildWriteIsNotAcknowledged() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-fence-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: "s", instanceId: "ME", pid: Int64(getpid()), now: now)
+        let ourLease = try #require(try store.loadLease(sessionId: "s"))
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.remoteSessionId = "remote-parent"
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                .init(sessionId: "s", ownerInstance: "ME", token: ourLease.token)
+            })
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+
+        // Ownership moves: the cached `canWrite` still admits the write, but
+        // the persistence actor sees a stale token and stores nothing. The
+        // durable update must stay unacknowledged so the new writer replays
+        // it rather than losing the child's output.
+        try store.seizeLease(sessionId: "s", instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("dropped")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(try store.loadSubagentMessages(sessionId: "s").isEmpty)
+        #expect(acknowledged.value == false)
+    }
+
+    /// Box so the acknowledgement closure can report back without capturing
+    /// a `var` across the `@Sendable` boundary.
+    private final class Acknowledged: @unchecked Sendable {
+        var value = false
+    }
+
     @Test("cancel is a no-op unless the child advertised it and is still running")
     func cancelRequiresCapabilityAndLiveChild() async throws {
         let (runner, _, _) = try makeRunner()
