@@ -222,6 +222,15 @@ struct RunSchedulesFile: Codable, Equatable, Sendable {
         }
     }
 
+    /// Same idea for one schedule's remembered timing and outcome.
+    private struct LenientState: Decodable {
+        let state: RunScheduleState?
+
+        init(from decoder: Decoder) throws {
+            state = try? RunScheduleState(from: decoder)
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decode(Int.self, forKey: .version)) ?? 1
@@ -230,7 +239,11 @@ struct RunSchedulesFile: Codable, Equatable, Sendable {
         // schedules" and then be persisted over the ones that still decode.
         schedules = ((try? c.decode([LenientSchedule].self, forKey: .schedules)) ?? [])
             .compactMap(\.schedule)
-        states = (try? c.decode([String: RunScheduleState].self, forKey: .states)) ?? [:]
+        // Also per entry: losing every schedule's `nextFireAt` would re-anchor
+        // them on `createdAt`, which makes a `runLatest` schedule believe it
+        // has a huge backlog and fire the moment the app starts.
+        states = ((try? c.decode([String: LenientState].self, forKey: .states)) ?? [:])
+            .compactMapValues(\.state)
         pausedProjectIDs = (try? c.decode(Set<String>.self, forKey: .pausedProjectIDs)) ?? []
         isPausedGlobally = (try? c.decode(Bool.self, forKey: .isPausedGlobally)) ?? false
         lastEvaluatedAt = try? c.decode(Date.self, forKey: .lastEvaluatedAt)

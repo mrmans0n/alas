@@ -130,6 +130,38 @@ struct RunSchedulerTests {
         #expect(second.schedules.map(\.id) == ["keep-1", "keep-2"])
     }
 
+    /// Losing every remembered `nextFireAt` would re-anchor schedules on
+    /// their creation date, which makes a `runLatest` schedule think it has a
+    /// backlog and fire the moment the app starts.
+    @Test func oneUndecodableStateDoesNotDiscardTheOthers() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (first, _) = makeScheduler(store: store, clock: clock)
+        first.add(interval("a", seconds: 600, at: clock.now))
+        first.add(interval("b", seconds: 600, at: clock.now))
+        clock.advance(605)
+        first.evaluate()
+        await first.waitForRunsForTesting()
+
+        var object = try #require(
+            JSONSerialization.jsonObject(with: try #require(store.files[fileURL])) as? [String: Any]
+        )
+        var states = try #require(object["states"] as? [String: Any])
+        states["b"] = ["lastFiredAt": "not-a-date"]
+        object["states"] = states
+        store.files[fileURL] = try JSONSerialization.data(withJSONObject: object)
+
+        let (second, log) = makeScheduler(store: store, clock: clock)
+        #expect(second.state(for: "a").nextFireAt != nil)
+        #expect(second.state(for: "a").lastOutcome == .succeeded)
+
+        // The surviving schedule keeps its schedule, so a fresh evaluation
+        // right away fires nothing.
+        second.evaluate()
+        await second.waitForRunsForTesting()
+        #expect(!log.fired.contains("a"))
+    }
+
     @Test func schedulesWithoutAnActionAreDroppedOnLoad() throws {
         let store = MemoryStore()
         var file = RunSchedulesFile()

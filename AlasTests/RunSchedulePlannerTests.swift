@@ -202,4 +202,45 @@ struct RunSchedulePlannerTests {
         let branch = RunSchedulePlanner.renderBranch(template: "   ", name: "", now: date(2026, 9, 20, 9, 5), calendar: calendar)
         #expect(branch == "scheduled-20260920-0905")
     }
+
+    /// Whatever the user types, the rendered branch has to be something git
+    /// will actually accept — a schedule that renders an invalid ref would
+    /// fail on every single firing.
+    @Test func renderedBranchesAlwaysPassTheGitValidator() {
+        let now = date(2026, 9, 20, 9, 5)
+        let templates = [
+            "release/.nightly",
+            "fix.lock",
+            "nightly.LOCK/{date}",
+            "{name}/../escape",
+            "trailing./{time}",
+            "-leading/{name}",
+            "weird ~^:?*[ chars/{date}",
+            "a//b/{name}",
+            "...",
+            "@",
+            "feature/{name}-{date}-{time}",
+        ]
+        for template in templates {
+            let branch = RunSchedulePlanner.renderBranch(
+                template: template, name: "Nightly Tests", now: now, calendar: calendar
+            )
+            #expect(!branch.isEmpty, "empty branch for \(template)")
+            #expect(
+                GitNameValidator.validateBranchName(branch) == .valid,
+                "git rejected \(branch) rendered from \(template)"
+            )
+        }
+    }
+
+    @Test func sanitizerRepairsTheComponentsGitRejects() {
+        let now = date(2026, 9, 20, 9, 5)
+        func render(_ template: String) -> String {
+            RunSchedulePlanner.renderBranch(template: template, name: "x", now: now, calendar: calendar)
+        }
+        #expect(render("release/.nightly") == "release/nightly")
+        #expect(render("fix.lock") == "fix")
+        #expect(render("a//b") == "a/b")
+        #expect(render("trailing.") == "trailing")
+    }
 }

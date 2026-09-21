@@ -152,27 +152,56 @@ enum RunSchedulePlanner {
         return result
     }
 
+    /// Renders a template into something `GitNameValidator` accepts. A user
+    /// is free to type any template, and it is expanded unattended at fire
+    /// time, so anything git would reject has to be repaired here rather than
+    /// turning every firing into a launch failure.
+    ///
+    /// git's rules, per component between slashes: no leading dot, no
+    /// trailing dot, no `.lock` suffix, no `..`, and no empty component.
     private static func sanitizeBranch(_ text: String) -> String {
-        var result = ""
-        var previous: Character?
+        var mapped = ""
+        var previousWasDash = false
         for character in text {
-            let scalarOK = character.unicodeScalars.allSatisfy { scalar in
-                scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "-_./".unicodeScalars.contains(scalar))
-            }
-            guard scalarOK else {
-                if previous != "-" {
-                    result.append("-")
-                    previous = "-"
-                }
+            if "/._-".contains(character) {
+                mapped.append(character)
+                previousWasDash = character == "-"
                 continue
             }
-            // git refuses "..", "//", leading dots and trailing slashes.
-            if (character == "." && previous == ".") || (character == "/" && previous == "/") { continue }
-            if result.isEmpty, character == "." || character == "/" || character == "-" { continue }
-            result.append(character)
-            previous = character
+            let isAllowed = character.unicodeScalars.allSatisfy { scalar in
+                scalar.isASCII && CharacterSet.alphanumerics.contains(scalar)
+            }
+            if isAllowed {
+                mapped.append(character)
+                previousWasDash = false
+            } else if !previousWasDash {
+                mapped.append("-")
+                previousWasDash = true
+            }
         }
-        while let last = result.last, last == "/" || last == "." || last == "-" { result.removeLast() }
-        return result
+        let components = mapped
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .compactMap { raw -> String? in
+                var component = String(raw)
+                while component.contains("..") {
+                    component = component.replacingOccurrences(of: "..", with: ".")
+                }
+                while let first = component.first, first == "." || first == "-" {
+                    component.removeFirst()
+                }
+                while true {
+                    if component.lowercased().hasSuffix(".lock") {
+                        component.removeLast(5)
+                        continue
+                    }
+                    if let last = component.last, last == "." || last == "-" {
+                        component.removeLast()
+                        continue
+                    }
+                    break
+                }
+                return component.isEmpty ? nil : component
+            }
+        return components.joined(separator: "/")
     }
 }
