@@ -117,6 +117,17 @@ struct ACPTokenCount: Equatable {
             outputTokens: lhs.outputTokens + rhs.outputTokens,
             reasoningOutputTokens: lhs.reasoningOutputTokens + rhs.reasoningOutputTokens)
     }
+
+    /// `totalTokens` decodes to 0 when an adapter omits it (see the
+    /// defensive decode below) even if the other counters are nonzero —
+    /// showing that 0 in the UI would misreport real usage. Falls back to
+    /// summing the parts in that case; genuinely all-zero usage still
+    /// displays as 0.
+    var displayTotal: Int {
+        totalTokens != 0
+            ? totalTokens
+            : inputTokens + cachedInputTokens + cachedWriteTokens + outputTokens + reasoningOutputTokens
+    }
 }
 
 extension ACPTokenCount: Decodable {

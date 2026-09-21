@@ -79,6 +79,26 @@ struct ACPPromptQuotaTests {
         #expect(afterSecond.modelUsage.first(where: { $0.model == "b" })?.tokenCount.totalTokens == 20)
     }
 
+    @Test("displayTotal falls back to summing the parts when totalTokens is missing (decodes to 0)")
+    func displayTotalFallsBackWhenTotalTokensMissing() {
+        // An adapter that sends per-field counters but omits totalTokens
+        // decodes totalTokens as 0 (ACPTokenCount's lenient decode) even
+        // though real usage occurred — displayTotal must not show that 0.
+        let partial = tokenCount(total: 0, input: 30, cachedInput: 5, cachedWrite: 2, output: 10, reasoning: 1)
+        #expect(partial.displayTotal == 48)
+    }
+
+    @Test("displayTotal uses totalTokens when it is present and nonzero")
+    func displayTotalUsesTotalTokensWhenPresent() {
+        let full = tokenCount(total: 120, input: 80, output: 40)
+        #expect(full.displayTotal == 120)
+    }
+
+    @Test("displayTotal is 0 when every field is genuinely 0")
+    func displayTotalIsZeroWhenAllPartsAreZero() {
+        #expect(tokenCount(total: 0).displayTotal == 0)
+    }
+
     @Test("hasDisplayableContent recognizes a model breakdown or a top-level total alone")
     func hasDisplayableContentRecognizesEitherShape() {
         #expect(ACPPromptQuota(

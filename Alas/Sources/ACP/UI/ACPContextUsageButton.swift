@@ -105,11 +105,11 @@ struct ACPContextUsageButton: View {
                 // Adapter sent only the top-level token_count, no
                 // model_usage breakdown.
                 if let total = quota.tokenCount {
-                    quotaRow(label: "Total", tokens: total.totalTokens)
+                    quotaRow(label: "Total", tokens: total.displayTotal)
                 }
             } else {
                 ForEach(quota.modelUsage, id: \.model) { usage in
-                    quotaRow(label: usage.model, tokens: usage.tokenCount.totalTokens)
+                    quotaRow(label: usage.model, tokens: usage.tokenCount.displayTotal)
                 }
             }
         }
