@@ -593,15 +593,21 @@ final class ACPSessionRunner {
     /// yet. A no-op only when there is nothing worth persisting at all.
     private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) {
         let chosenOption: ACPPermissionOption?
+        let wasCancelled: Bool
         switch response.outcome {
-        case .selected(let optionId): chosenOption = params.options.first { $0.optionId == optionId }
-        case .cancelled: chosenOption = nil
+        case .selected(let optionId):
+            chosenOption = params.options.first { $0.optionId == optionId }
+            wasCancelled = false
+        case .cancelled:
+            chosenOption = nil
+            wasCancelled = true
         }
         guard let index = session.mergePermissionDecision(
             toolCall: params.toolCall,
             presentation: ACPPermissionPresentation(metadata: params.metadata),
             chosenOption: chosenOption,
-            mcpServerName: params.toolCall.mcpServerName
+            mcpServerName: params.toolCall.mcpServerName,
+            wasCancelled: wasCancelled
         ) else { return }
         persistIndices([index], requiresLease: true)
     }

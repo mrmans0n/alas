@@ -2321,6 +2321,45 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission == nil)
     }
 
+    @Test("a permission cancelled before its tool-call row exists materializes it as canceled, not stuck pending")
+    func cancelledPermissionMaterializesCanceledRow() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        // No tool_call row for "call_1" has arrived yet — cancel now, before
+        // any cancelInFlightToolCalls() sweep could have touched it.
+        mock.emitCancelRequest(id: requestId)
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
+    }
+
     @Test("$/cancel_request for an id that isn't the pending permission is a no-op")
     func cancelRequestIgnoresUnrelatedId() async throws {
         let (runner, mock) = try makeRunner()

@@ -842,12 +842,17 @@ final class ACPSession: ObservableObject, Identifiable {
     /// normally — merged in place, not duplicated — by any `tool_call`/
     /// `tool_call_update` that does arrive afterward for the same id; see
     /// the existing-row guard in the `.toolCall` apply case.
+    /// `wasCancelled` reflects the actual `session/request_permission`
+    /// outcome, not merely "no option was chosen" — a `.selected` outcome
+    /// whose id somehow doesn't match any offered option also has no
+    /// `chosenOption`, and must not be materialized as canceled.
     @MainActor
     func mergePermissionDecision(
         toolCall: ACPPermissionToolCall,
         presentation: ACPPermissionPresentation?,
         chosenOption: ACPPermissionOption?,
-        mcpServerName: String?
+        mcpServerName: String?,
+        wasCancelled: Bool
     ) -> Int? {
         let toolCallId = toolCall.toolCallId
         guard let facts = Self.permissionDecisionMetadata(
@@ -858,16 +863,22 @@ final class ACPSession: ObservableObject, Identifiable {
         }) {
             return index
         }
-        return materializeToolCall(fromPermission: toolCall, facts: facts)
+        return materializeToolCall(fromPermission: toolCall, facts: facts, wasCancelled: wasCancelled)
     }
 
     /// Appends a placeholder tool-call row from a permission request's own
     /// `toolCall` snapshot, carrying `facts` as its metadata. See
     /// `mergePermissionDecision`.
-    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable) -> Int {
+    ///
+    /// `wasCancelled` overrides the row's status to `"canceled"`: a Stop or
+    /// `$/cancel_request` sweeps existing in-flight rows to that status via
+    /// `cancelInFlightToolCalls()` before the permission continuation
+    /// resumes, so a row this call first materializes afterward would
+    /// otherwise escape that sweep and sit as indefinitely "pending".
+    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable, wasCancelled: Bool) -> Int {
         let items = toolCall.content ?? []
         let raw = Self.flatten(items)
-        let status = toolCall.status ?? "pending"
+        let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")
         let full = Self.stripWrappingFence(raw, isFinal: Self.isFinalStatus(status))
         transcript.appendMessage(.toolCall(.init(
             toolCallId: toolCall.toolCallId,
