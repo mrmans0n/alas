@@ -36,12 +36,13 @@ struct ACPSystemNoticeView: View {
     }
 }
 
-/// Transient banner above the composer for a live ACP `session.notices`
-/// update. Distinct from `ACPSystemNoticeView` above: that one is a muted
-/// transcript row for persisted client-side asides, this one is dismissible
-/// chrome for an agent-sent, never-persisted out-of-band event. Each
-/// severity gets a distinct color/icon; an unrecognized (including
-/// `_`-prefixed) severity falls back to the `info` style per spec.
+/// Transient floating card above the composer pill for a live ACP
+/// `session.notices` update. Distinct from `ACPSystemNoticeView` above:
+/// that one is a muted transcript row for persisted client-side asides,
+/// this one is dismissible chrome for an agent-sent, never-persisted
+/// out-of-band event. Each severity gets a distinct color/icon; an
+/// unrecognized (including `_`-prefixed) severity falls back to the
+/// `info` style per spec.
 struct ACPSessionNoticeBanner: View {
     let notice: ACPSessionNotice
     let onDismiss: () -> Void
@@ -73,25 +74,23 @@ struct ACPSessionNoticeBanner: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(accentColor.opacity(0.10))
-        .overlay(alignment: .top) {
-            Rectangle().fill(accentColor.opacity(0.3)).frame(height: 0.5)
-        }
+        .background(.ultraThinMaterial)
+        .background(accentColor.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(accentColor.opacity(0.35), lineWidth: 0.75)
+        )
+        .padding(.bottom, 6)
     }
 
     private var accentColor: Color {
-        switch notice.severity {
-        case .warning: return theme.color("warn")
-        case .error: return theme.color("del")
-        case .info, .other: return theme.color("info")
-        }
+        notice.severity.behavesAsInfo ? theme.color("info")
+            : (notice.severity == .warning ? theme.color("warn") : theme.color("del"))
     }
 
     private var iconName: String {
-        switch notice.severity {
-        case .warning: return "exclamationmark.triangle"
-        case .error: return "exclamationmark.octagon"
-        case .info, .other: return "info.circle"
-        }
+        if notice.severity.behavesAsInfo { return "info.circle" }
+        return notice.severity == .warning ? "exclamationmark.triangle" : "exclamationmark.octagon"
     }
 }

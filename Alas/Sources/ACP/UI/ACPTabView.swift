@@ -578,23 +578,6 @@ private struct ACPSessionView: View {
         contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
         typography: ACPChatTypography? = nil
     ) -> some View {
-        VStack(spacing: 0) {
-            if let notice = session.activeNotice {
-                ACPSessionNoticeBanner(notice: notice) {
-                    session.dismissActiveNotice()
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            composerBody(placement: placement, contentMaxWidth: contentMaxWidth, typography: typography)
-        }
-        .animation(.easeOut(duration: 0.15), value: session.activeNotice)
-    }
-
-    private func composerBody(
-        placement: ACPComposerPlacement,
-        contentMaxWidth: CGFloat,
-        typography: ACPChatTypography?
-    ) -> some View {
         ACPComposer(
             session: session,
             manager: manager,
