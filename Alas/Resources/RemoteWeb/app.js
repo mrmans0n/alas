@@ -3181,7 +3181,16 @@ function showPermission(sessionId, payload) {
   // adapter's `_meta.permission` extension (see ACPPermissionPresentation
   // on the native side) and are absent for adapters that don't send it —
   // fall back to the generic prompt so untagged adapters render as before.
-  $("perm-tool").textContent = payload.title || ("Allow “" + payload.toolName + "”?");
+  // When a metadata title is present it becomes a heading ABOVE the tool
+  // name, never replacing it — approving without seeing what will actually
+  // run (e.g. a generic "Run command?" hiding the real command) would be
+  // a real safety regression, matching how the native prompt keeps both.
+  const headingEl = $("perm-heading");
+  if (headingEl) {
+    headingEl.textContent = payload.title || "";
+    headingEl.hidden = !payload.title;
+  }
+  $("perm-tool").textContent = payload.title ? payload.toolName : ("Allow “" + payload.toolName + "”?");
   const reasonEl = $("perm-reason");
   if (reasonEl) {
     reasonEl.textContent = payload.reason || "";
