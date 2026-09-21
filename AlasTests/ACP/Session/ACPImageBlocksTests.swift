@@ -44,6 +44,52 @@ struct ACPImageBlocksTests {
         #expect(atts == [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")])
     }
 
+    @Test("attachments(of:) leaves textOffset nil without a draft")
+    func attachmentsWithoutDraftHaveNoTextOffset() {
+        let atts = ACPSessionRunner.attachments(of: [
+            .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")
+        ])
+        #expect(atts.first?.textOffset == nil)
+    }
+
+    @Test("attachments(of:) assigns textOffset from the draft's image order")
+    func attachmentsWithDraftAssignTextOffset() {
+        let draft = ACPComposerDraft(segments: [
+            .text("before "),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" after")
+        ])
+        let atts = ACPSessionRunner.attachments(
+            of: [
+                .text("before  after"),
+                .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")
+            ],
+            draft: draft
+        )
+        #expect(atts.first { $0.uri == "file:///tmp/shot.png" }?.textOffset == 7)
+    }
+
+    @Test("attachments(of:) assigns offsets to multiple images in order, skipping a resourceLink between them")
+    func attachmentsWithDraftMultipleImages() {
+        let draft = ACPComposerDraft(segments: [
+            .text("a "),
+            .image(uri: "file:///tmp/1.png", mimeType: "image/png"),
+            .text("b "),
+            .image(uri: "file:///tmp/2.png", mimeType: "image/png")
+        ])
+        let atts = ACPSessionRunner.attachments(
+            of: [
+                .text("a  b "),
+                .image(data: nil, uri: "file:///tmp/1.png", mimeType: "image/png"),
+                .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift"),
+                .image(data: nil, uri: "file:///tmp/2.png", mimeType: "image/png")
+            ],
+            draft: draft
+        )
+        #expect(atts.first { $0.uri == "file:///tmp/1.png" }?.textOffset == 2)
+        #expect(atts.first { $0.uri == "file:///tmp/2.png" }?.textOffset == 4)
+    }
+
     @Test("image-only prompt omits the whitespace leading text block")
     func imageOnlyOmitsTextBlock() {
         // The composer leaves a trailing space after an image chip, so an

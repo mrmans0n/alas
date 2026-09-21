@@ -30,6 +30,30 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         }
     }
 
+    /// Character offset, into the flattened message text, of each `.image`
+    /// segment in order. Mirrors how `ACPInputField.Coordinator.extract`
+    /// concatenates a submitted draft into a single string: a `.text`
+    /// segment contributes its literal characters, `.mention` contributes
+    /// `"@displayName "`, and `.image` contributes nothing — so its offset is
+    /// however much text precedes it. Used to attach `textOffset` onto the
+    /// recorded `ACPMessage.Attachment` for each image, so the transcript
+    /// bubble can mark exactly where the image sat in the sentence.
+    func imageTextOffsets() -> [Int] {
+        var offset = 0
+        var offsets: [Int] = []
+        for segment in segments {
+            switch segment {
+            case .text(let value):
+                offset += value.count
+            case .mention(let displayName, _):
+                offset += ("@" + displayName + " ").count
+            case .image:
+                offsets.append(offset)
+            }
+        }
+        return offsets
+    }
+
     enum Segment: Codable, Equatable, Sendable {
         case text(String)
         case mention(displayName: String, uri: String)

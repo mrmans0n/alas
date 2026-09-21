@@ -111,11 +111,28 @@ enum ACPMessage: Equatable {
         /// thumbnail rendering in the user bubble. Synthesized Codable
         /// decodes a missing key as nil, so legacy rows stay valid.
         let mimeType: String?
+        /// Character offset into the sibling message's `text` where this
+        /// image chip sat in the composer, used to place an inline marker
+        /// in the transcript bubble at the exact spot (see
+        /// `ACPUserMessageImageMarkers`). Populated from
+        /// `ACPComposerDraft.imageTextOffsets()` when a captured draft is
+        /// available; `nil` for legacy rows, agent-echoed attachments, and
+        /// queue items restored via the lossy `blocks`-only heuristic — the
+        /// bubble then shows no inline marker, only the summary thumbnails.
+        ///
+        /// Deliberately excluded from `==`/`hash(into:)` below: it is
+        /// positional UI metadata, not part of the attachment's identity,
+        /// and an agent-echoed copy of the same attachment never carries it
+        /// — including it in equality would make local/echoed reconciliation
+        /// in `ACPSession.appendUserChunk` spuriously treat identical
+        /// attachments as different.
+        let textOffset: Int?
 
-        init(uri: String, name: String?, mimeType: String? = nil) {
+        init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil) {
             self.uri = uri
             self.name = name
             self.mimeType = mimeType
+            self.textOffset = textOffset
         }
 
         static func checkpointReference(id: CheckpointID) -> Self {
@@ -128,6 +145,16 @@ enum ACPMessage: Equatable {
         }
 
         var isCheckpointReference: Bool { checkpointID != nil }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.uri == rhs.uri && lhs.name == rhs.name && lhs.mimeType == rhs.mimeType
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(uri)
+            hasher.combine(name)
+            hasher.combine(mimeType)
+        }
     }
 
     struct ToolCallAsset: Codable, Equatable, Hashable, Sendable {
