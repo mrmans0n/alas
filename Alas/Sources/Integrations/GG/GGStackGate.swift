@@ -2,13 +2,14 @@ import Foundation
 
 enum GGCommitMetadata {
     static func ggID(in body: String) -> String? {
-        var fencedCodeMarker: Character?
+        var fencedCodeMarker: (marker: Character, length: Int)?
         for line in body.split(whereSeparator: \.isNewline) {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if let marker = codeFenceMarker(in: trimmedLine) {
+            if let marker = codeFence(in: trimmedLine) {
                 if fencedCodeMarker == nil {
                     fencedCodeMarker = marker
-                } else if fencedCodeMarker == marker {
+                } else if fencedCodeMarker?.marker == marker.marker,
+                          marker.length >= fencedCodeMarker?.length ?? 0 {
                     fencedCodeMarker = nil
                 }
                 continue
@@ -24,14 +25,11 @@ enum GGCommitMetadata {
         return nil
     }
 
-    private static func codeFenceMarker(in line: String) -> Character? {
-        guard line.count >= 3,
-              let marker = line.first,
-              marker == "`" || marker == "~"
-        else {
-            return nil
-        }
-        return line.prefix(3).allSatisfy { $0 == marker } ? marker : nil
+    private static func codeFence(in line: String) -> (marker: Character, length: Int)? {
+        guard let marker = line.first, marker == "`" || marker == "~" else { return nil }
+        let length = line.prefix { $0 == marker }.count
+        guard length >= 3 else { return nil }
+        return (marker, length)
     }
 }
 

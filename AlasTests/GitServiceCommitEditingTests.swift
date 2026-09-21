@@ -132,6 +132,16 @@ struct GitServiceCommitEditingTests {
         #expect(try await commitBody(repo, result.currentSha) == body)
     }
 
+    @Test func rewordKeepsGGIDAfterShorterFenceWithinLongerFence() {
+        let message = CommitMessage.split("Original explanation.\n\nGG-ID: c-stable")
+        let body = "Example output:\n\n````\n```\nGG-ID: generated-id\n````"
+
+        #expect(
+            CommitMessage.compose(body: body, preserving: message.protectedTrailers)
+                == body + "\n\nGG-ID: c-stable"
+        )
+    }
+
     @Test func rewordPreservesGGTrailersBeforeCherryPickAnnotation() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

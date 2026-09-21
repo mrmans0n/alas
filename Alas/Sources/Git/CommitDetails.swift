@@ -150,14 +150,15 @@ struct CommitMessage {
     }
 
     private static func removingShadowingProtectedTrailers(from lines: [String]) -> [String] {
-        var fencedCodeMarker: Character?
+        var fencedCodeMarker: (marker: Character, length: Int)?
         var isRemovingShadowTrailer = false
         return lines.filter { line in
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if let marker = codeFenceMarker(in: trimmedLine) {
+            if let marker = codeFence(in: trimmedLine) {
                 if fencedCodeMarker == nil {
                     fencedCodeMarker = marker
-                } else if fencedCodeMarker == marker {
+                } else if fencedCodeMarker?.marker == marker.marker,
+                          marker.length >= fencedCodeMarker?.length ?? 0 {
                     fencedCodeMarker = nil
                 }
                 return true
@@ -175,14 +176,11 @@ struct CommitMessage {
         }
     }
 
-    private static func codeFenceMarker(in line: String) -> Character? {
-        guard line.count >= 3,
-              let marker = line.first,
-              marker == "`" || marker == "~"
-        else {
-            return nil
-        }
-        return line.prefix(3).allSatisfy { $0 == marker } ? marker : nil
+    private static func codeFence(in line: String) -> (marker: Character, length: Int)? {
+        guard let marker = line.first, marker == "`" || marker == "~" else { return nil }
+        let length = line.prefix { $0 == marker }.count
+        guard length >= 3 else { return nil }
+        return (marker, length)
     }
 
     private static func isCherryPickAnnotation(_ line: String) -> Bool {
