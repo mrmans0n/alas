@@ -73,10 +73,24 @@ extension AppState {
                 await self.runSchedule(schedule, project: target.project, worktree: target.worktree)
             }
         }
+        // Cancellation is forwarded by hand because these children are
+        // unstructured and so do not inherit it. `RunScheduler` cancels the
+        // task it dispatched when a schedule is removed, and without this
+        // the targets would carry on regardless — including a prompt still
+        // waiting to be typed into, and submitted to, an agent belonging to
+        // a schedule that no longer exists.
+        let reports = await withTaskCancellationHandler {
+            var collected: [RunScheduleRunReport] = []
+            for run in runs {
+                collected.append(await run.value)
+            }
+            return collected
+        } onCancel: {
+            for run in runs { run.cancel() }
+        }
         var outcomes: [RunScheduleOutcome] = []
         var references: [RunScheduleFiring.RunReference] = []
-        for run in runs {
-            let report = await run.value
+        for report in reports {
             outcomes.append(report.outcome)
             references.append(contentsOf: report.runs)
         }
