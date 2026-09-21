@@ -9067,13 +9067,38 @@ final class AppState {
         fileActionErrorHandler(title, message)
     }
 
+    /// Never modal under a test host. `runModal` waits for a click that can
+    /// never come there, so it blocks the main thread for the rest of the run:
+    /// the suite stops dead at whichever test raised the error, reporting no
+    /// failure and producing no further output. A test that cares about the
+    /// error injects `fileActionErrorHandler`; every other test at least keeps
+    /// running, and the log says what was suppressed.
     private static func showWarningAlert(title: String, message: String) {
+        guard !isRunningUnitTests else {
+            logger.error("Suppressed alert under tests: \(title, privacy: .public) — \(message, privacy: .public)")
+            return
+        }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// Whether this process is an XCTest host. Swift Testing runs inside one
+    /// too, so this covers both frameworks.
+    nonisolated static var isRunningUnitTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+            || CommandLine.arguments.contains { $0.localizedCaseInsensitiveContains("xctest") }
+            || NSClassFromString("XCTestCase") != nil
+            || NSClassFromString("XCTest.XCTestCase") != nil
+            || Bundle.allBundles.contains { bundle in
+                bundle.bundlePath.hasSuffix(".xctest")
+                    || bundle.bundleIdentifier?.hasPrefix("com.apple.dt.XCTest") == true
+            }
     }
 
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree

@@ -129,18 +129,40 @@ struct AppStateRunScheduleTests {
         )
     }
 
+    /// Lives here because this is the suite the problem was found in, but the
+    /// invariant is repo-wide: most `AlasTests` fixtures do not inject
+    /// `fileActionErrorHandler`, and its default ends in `NSAlert.runModal`.
+    /// In a test host nobody can dismiss that alert, so the main thread blocks
+    /// for the rest of the run and the suite stops dead with no failure and no
+    /// output — which is what "these suites can't run locally" really was.
+    @Test func noAlertCanBlockATestHost() throws {
+        // Aborts rather than falling through to the call below, so a broken
+        // guard is a reported failure instead of a fresh hang.
+        try #require(AppState.isRunningUnitTests)
+        let state = AppState(store: MemoryStore())
+        state.showFileActionError(title: "Run History Failed", message: "Could not save run history.")
+    }
+
     @Test func scheduledRunReportsTheScriptExitThroughTheManualPath() async throws {
         let fixture = try makeFixture(exitCode: 7)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .worktree(projectId: "project", worktreeId: "wt-1")))
+        let report = await fixture.state.runSchedule(schedule(target: .worktree(projectId: "project", worktreeId: "wt-1")))
         await fixture.state.flushRunHistoryPersistence()
 
-        #expect(outcome == .failed(exitCode: 7))
+        #expect(report.outcome == .failed(exitCode: 7))
         let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh"))
         #expect(record.status == .finished(.failed(exitCode: 7)))
         #expect(record.target.host == nil)
         #expect(fixture.state.runScriptFailures(in: "wt-1").count == 1)
+        // A failed run is exactly the one whose report the user opens from
+        // the schedule's history, so the firing has to carry its coordinates.
+        let reference = try #require(report.runs.first)
+        #expect(report.runs.count == 1)
+        #expect(reference.runID == record.id)
+        #expect(reference.worktreeID == "wt-1")
+        #expect(reference.branch == "main")
+        #expect(reference.scriptName == "dev")
         let archived = try await fixture.history.entry(id: record.id)
         #expect(archived?.outcome == .failed(exitCode: 7))
         #expect(archived?.output == .available(text: "out\n", truncated: false))
@@ -152,7 +174,7 @@ struct AppStateRunScheduleTests {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         #expect(outcome == .succeeded)
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
         #expect(fixture.state.runScriptFailures(in: "wt-1").isEmpty)
@@ -162,7 +184,7 @@ struct AppStateRunScheduleTests {
         let fixture = try makeFixture(host: "devbox")
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .allProjects))
+        let outcome = await fixture.state.runSchedule(schedule(target: .allProjects)).outcome
         #expect(outcome == .succeeded)
         let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh"))
         #expect(record.target.host == "devbox")
@@ -178,7 +200,7 @@ struct AppStateRunScheduleTests {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"), scriptKey: "repo:nope.sh"))
+        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"), scriptKey: "repo:nope.sh")).outcome
         #expect(outcome == .skipped(reason: "Script repo:nope.sh was not found in main."))
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:nope.sh") == nil)
         #expect(fixture.errors().isEmpty)
@@ -188,9 +210,9 @@ struct AppStateRunScheduleTests {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let gone = await fixture.state.runSchedule(schedule(target: .worktree(projectId: "project", worktreeId: "wt-gone")))
+        let gone = await fixture.state.runSchedule(schedule(target: .worktree(projectId: "project", worktreeId: "wt-gone"))).outcome
         #expect(gone == .skipped(reason: "The worktree no longer exists in Project."))
-        let noProject = await fixture.state.runSchedule(schedule(target: .project(id: "nope")))
+        let noProject = await fixture.state.runSchedule(schedule(target: .project(id: "nope"))).outcome
         #expect(noProject == .skipped(reason: "The project no longer exists."))
     }
 
@@ -208,7 +230,7 @@ struct AppStateRunScheduleTests {
             startedAt: Date()
         ))
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         #expect(outcome == .skipped(reason: "dev is already running in main."))
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.id == "manual")
     }
@@ -218,7 +240,7 @@ struct AppStateRunScheduleTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         fixture.state.config.terminal.shell = "/bin/fish"
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         guard case .launchFailed(let message) = outcome else {
             Issue.record("Expected launch failure, got \(outcome)")
             return
@@ -240,14 +262,40 @@ struct AppStateRunScheduleTests {
         })
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        let report = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
 
-        #expect(outcome == .launchFailed("Host is unreachable"))
+        #expect(report.outcome == .launchFailed("Host is unreachable"))
+        // The record was rolled back, so there is no report to open. The
+        // history entry must not offer one anyway.
+        #expect(report.runs.isEmpty)
         #expect(fixture.errors().isEmpty)
         // The same failure started from the Run tab still alerts.
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
         #expect(fixture.errors().contains(where: { $0.title == "Run Script Failed" }))
+    }
+
+    /// A schedule's history links runs in worktrees whose Run tab may never
+    /// have been opened — a worktree the schedule created itself, most
+    /// obviously. After a relaunch nothing has loaded their report ids, so the
+    /// links would silently stop being offered unless the tab primes them.
+    @Test func historyLinksArePrimedWithoutVisitingTheWorktree() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let report = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        await fixture.state.flushRunHistoryPersistence()
+        #expect(report.outcome == .succeeded)
+        let reference = try #require(report.runs.first)
+        #expect(try await fixture.history.entry(id: reference.runID) != nil)
+
+        // As after a relaunch: the report exists, but nothing has loaded the
+        // ids for its worktree yet.
+        fixture.state.durableRunReportIDsByWorktreeID = [:]
+        #expect(!fixture.state.hasRunReport(worktreeID: reference.worktreeID, runID: reference.runID))
+
+        await fixture.state.primeScheduleRunReportIDs([reference.worktreeID])
+        #expect(fixture.state.hasRunReport(worktreeID: reference.worktreeID, runID: reference.runID))
     }
 
     /// "Pause <project>" has to stop an all-projects schedule from running in
@@ -257,12 +305,12 @@ struct AppStateRunScheduleTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         fixture.state.runScheduler.setProjectPaused(true, projectID: "project")
 
-        let scheduled = await fixture.state.runSchedule(schedule(target: .allProjects))
+        let scheduled = await fixture.state.runSchedule(schedule(target: .allProjects)).outcome
         #expect(scheduled == .skipped(reason: "Every project with a main worktree is paused."))
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
 
         // Run Now is an explicit instruction, so it still runs.
-        let manual = await fixture.state.runSchedule(schedule(target: .allProjects), invocation: .manual)
+        let manual = await fixture.state.runSchedule(schedule(target: .allProjects), invocation: .manual).outcome
         #expect(manual == .succeeded)
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
     }
@@ -298,15 +346,20 @@ struct AppStateRunScheduleTests {
             lastActivity: Date()
         ))
 
-        let run = Task { await fixture.state.runSchedule(schedule(target: .allProjects)) }
+        let run = Task { await fixture.state.runSchedule(schedule(target: .allProjects)).outcome }
         // Both projects must reach "running" even though neither can finish.
+        // Wait on both: the targets start as independent tasks, so waiting on
+        // only one of them and then asserting the other is a race the suite
+        // loses whenever the second one happens to win.
+        func isRunning(_ worktreeID: String) -> Bool {
+            fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: "repo:dev.sh")?.status == .running
+        }
         let deadline = Date().addingTimeInterval(5)
-        while fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status != .running,
-              Date() < deadline {
+        while !(isRunning("wt-1") && isRunning("wt-2")), Date() < deadline {
             await Task.yield()
         }
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(isRunning("wt-1"))
+        #expect(isRunning("wt-2"))
 
         await gate.open()
         #expect(await run.value == .succeeded)
@@ -317,12 +370,12 @@ struct AppStateRunScheduleTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         fixture.state.runScheduler.setProjectPaused(true, projectID: "project")
 
-        let byProject = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        let byProject = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         #expect(byProject == .skipped(reason: "Project is paused."))
 
         let byWorktree = await fixture.state.runSchedule(
             schedule(target: .worktree(projectId: "project", worktreeId: "wt-1"))
-        )
+        ).outcome
         #expect(byWorktree == .skipped(reason: "Project is paused."))
     }
 
@@ -358,7 +411,7 @@ struct AppStateRunScheduleTests {
             try? FileManager.default.removeItem(at: fixture.directory)
         }
 
-        let run = Task { await fixture.state.runSchedule(schedule(target: .project(id: "project"))) }
+        let run = Task { await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome }
         // Tear down only once the command is actually running: that is the
         // path where the worktree's runs are purged rather than finished.
         let deadline = Date().addingTimeInterval(5)
@@ -398,6 +451,13 @@ struct AppStateRunScheduleTests {
         var openCount = 0
         let state = AppState(
             store: MemoryStore(),
+            // Without this the default handler is `NSAlert.runModal`, which in
+            // a headless test blocks the main thread forever: the run stops
+            // dead at whichever test raised the error, with no failure and no
+            // output. Any error here is a real problem, so report it as one.
+            fileActionErrorHandler: { title, message in
+                Issue.record("Unexpected alert during a composed schedule run: \(title) — \(message)")
+            },
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
@@ -440,11 +500,20 @@ struct AppStateRunScheduleTests {
             composition: RunScheduleComposition(branchTemplate: "sched/{name}-{date}", agentId: "claude")
         )
         composed.name = "Morning"
-        let outcome = await state.runSchedule(composed)
-        #expect(outcome == .succeeded)
+        let report = await state.runSchedule(composed)
+        // The archive has to land before the temp repo holding its sqlite
+        // file is deleted; unlinking it mid-write fails the write.
+        await state.flushRunHistoryPersistence()
+        #expect(report.outcome == .succeeded)
 
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(created.branch.hasPrefix("sched/morning-"))
+        // The history has to point at the run in the worktree the schedule
+        // made, not at the origin worktree it was aimed from.
+        let reference = try #require(report.runs.first)
+        #expect(report.runs.count == 1)
+        #expect(reference.worktreeID == created.id)
+        #expect(reference.branch == created.branch)
         // The script and its record belong to the new worktree, not main.
         let record = try #require(state.runRecords.record(worktreeID: created.id, scriptKey: "repo:setup.sh"))
         #expect(record.status == .finished(.succeeded))
@@ -463,6 +532,135 @@ struct AppStateRunScheduleTests {
         #expect(state.selectedWorktreeId == main.id)
     }
 
+    /// A composed schedule's run lives in the worktree the schedule created,
+    /// never the one whose card shows the history. Opening its report has to
+    /// move the selection there too: activating a tab under another worktree
+    /// leaves the centre pane where it was, so the link would look dead.
+    @Test func openingAFiringRunSelectsThatRunsWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        state.selectWorktree(id: main.id)
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        #expect(report.outcome == .succeeded)
+        let run = try #require(report.runs.first)
+        #expect(run.worktreeID != main.id)
+        // Firing in the background left the selection alone.
+        #expect(state.selectedWorktreeId == main.id)
+
+        state.openScheduleFiringRun(run)
+
+        // Following the link is an explicit request to go there, so it moves.
+        #expect(state.selectedWorktreeId == run.worktreeID)
+        #expect(state.tabs.tabs(forWorktree: run.worktreeID).contains { tab in
+            if case .runReport = tab { return true }
+            return false
+        })
+    }
+
+    /// An all-projects firing can land in a project that lives in another
+    /// Space. `RootView` resolves the centre pane through the active Space's
+    /// projects, so moving the selection alone would leave it empty.
+    @Test func openingAFiringRunSwitchesToItsSpace() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        // The project lives in a Space that is not the active one.
+        let other = state.spacesManager.addSpace(name: "Nightly", emoji: "🌙")
+        state.spacesManager.addProject(project.id, toSpace: other)
+        #expect(state.spacesManager.activeSpaceId != other)
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+
+        state.openScheduleFiringRun(run)
+
+        #expect(state.spacesManager.activeSpaceId == other)
+        #expect(state.selectedWorktreeId == run.worktreeID)
+    }
+
+    /// Archiving clears the report-id cache to empty while deliberately
+    /// keeping the rows in the database. Treating empty as "already loaded"
+    /// would leave an unarchived worktree's links dead for the session.
+    @Test func unarchivingAWorktreeRestoresItsHistoryLinks() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+
+        // Exactly the state archiving leaves behind: the id cache emptied by
+        // `cleanupWorktreeState(purgeRunHistory: false)` while the rows stay
+        // in the database. Unarchiving restores the worktree but reloads
+        // nothing, so priming has to.
+        state.durableRunReportIDsByWorktreeID[run.worktreeID] = []
+        #expect(!state.canOpenScheduleFiringRun(run))
+
+        await state.primeScheduleRunReportIDs([run.worktreeID])
+
+        #expect(state.canOpenScheduleFiringRun(run))
+    }
+
+    /// Archiving a worktree keeps its run history on purpose, so the report
+    /// outlives the sidebar entry. The centre pane resolves only visible
+    /// worktrees, though, so the link has to stop being offered rather than
+    /// select an id that renders nothing.
+    @Test func anArchivedWorktreesRunIsNamedButNotOffered() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+        let created = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first { $0.id == run.worktreeID }
+        )
+        #expect(state.canOpenScheduleFiringRun(run))
+
+        state.projectsManager.setWorktreeHidden(projectId: project.id, path: created.path, hidden: true)
+
+        // The report itself is deliberately still there...
+        #expect(state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID))
+        // ...but nothing can render it, so the row must not pretend otherwise.
+        #expect(!state.canOpenScheduleFiringRun(run))
+        #expect(state.visibleProjectForWorktree(run.worktreeID) == nil)
+
+        // Unarchiving flips that signal back. The Schedules pane keys its
+        // priming task on it, so a worktree restored while the pane stays
+        // mounted re-primes instead of keeping dead links until a remount.
+        state.projectsManager.setWorktreeHidden(projectId: project.id, path: created.path, hidden: false)
+        #expect(state.visibleProjectForWorktree(run.worktreeID)?.id == project.id)
+        #expect(state.canOpenScheduleFiringRun(run))
+    }
+
     /// A branch template need not vary per occurrence. A second run of the
     /// same schedule has to get its own worktree rather than failing forever
     /// on the name the first one took.
@@ -478,8 +676,11 @@ struct AppStateRunScheduleTests {
             composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
         )
 
-        #expect(await state.runSchedule(composed) == .succeeded)
-        #expect(await state.runSchedule(composed) == .succeeded)
+        #expect(await state.runSchedule(composed).outcome == .succeeded)
+        #expect(await state.runSchedule(composed).outcome == .succeeded)
+        // The archive has to land before the temp repo holding its sqlite
+        // file is deleted; unlinking it mid-write fails the write.
+        await state.flushRunHistoryPersistence()
 
         let created = state.projectsManager.worktrees(projectId: project.id)
             .filter { $0.id != main.id }
@@ -499,7 +700,10 @@ struct AppStateRunScheduleTests {
             target: .project(id: project.id),
             scriptKey: nil,
             composition: RunScheduleComposition(agentId: "claude")
-        ))
+        )).outcome
+        // The archive has to land before the temp repo holding its sqlite
+        // file is deleted; unlinking it mid-write fails the write.
+        await state.flushRunHistoryPersistence()
         #expect(outcome == .succeeded)
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(state.tabs.tabs(forWorktree: created.id).count == 1)
@@ -519,7 +723,10 @@ struct AppStateRunScheduleTests {
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
             composition: RunScheduleComposition(agentId: "claude")
-        ))
+        )).outcome
+        // The archive has to land before the temp repo holding its sqlite
+        // file is deleted; unlinking it mid-write fails the write.
+        await state.flushRunHistoryPersistence()
         #expect(outcome == .launchFailed(AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription))
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         // The script still ran in the new worktree; only the agent step failed.
@@ -554,7 +761,10 @@ struct AppStateRunScheduleTests {
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
             composition: RunScheduleComposition(agentId: "claude")
-        ))
+        )).outcome
+        // The archive has to land before the temp repo holding its sqlite
+        // file is deleted; unlinking it mid-write fails the write.
+        await state.flushRunHistoryPersistence()
         guard case .launchFailed = outcome else {
             Issue.record("Expected the script refusal to surface, got \(outcome)")
             return

@@ -156,9 +156,82 @@ struct RunScheduleMissedOccurrences: Codable, Equatable, Hashable, Sendable {
     let count: Int
     let policy: RunScheduleMissedRunPolicy
     let observedAt: Date
+
+    /// Reason text for the history entry a skipped batch leaves behind, so
+    /// "nothing ran last night" reads as a recorded decision rather than a
+    /// hole in the list.
+    var skippedReason: String {
+        count == 1
+            ? "1 occurrence was missed and skipped."
+            : "\(count) occurrences were missed and skipped."
+    }
+}
+
+/// One entry in a schedule's history: an occurrence that was dispatched, or
+/// one that was deliberately not.
+///
+/// Transcripts are deliberately absent. A firing that started a script points
+/// at that run instead, because `RunHistoryStore` already owns the durable
+/// output and already bounds and purges it per worktree; duplicating it here
+/// would mean two copies with two different retention rules.
+struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
+    /// Where a run this firing started can be found. Branch and script name
+    /// are copied because the row has to stay readable after the worktree or
+    /// the script file is gone, even though the report itself is then absent.
+    struct RunReference: Codable, Equatable, Hashable, Sendable {
+        let worktreeID: String
+        let branch: String
+        let runID: String
+        let scriptName: String
+    }
+
+    let id: String
+    /// When the occurrence was dispatched, not when it settled.
+    let firedAt: Date
+    let finishedAt: Date
+    /// A Run Now rather than the clock. Kept because a manual run explains an
+    /// entry that does not line up with the trigger.
+    let wasManual: Bool
+    let outcome: RunScheduleOutcome
+    let runs: [RunReference]
+
+    init(
+        id: String = UUID().uuidString,
+        firedAt: Date,
+        finishedAt: Date,
+        wasManual: Bool,
+        outcome: RunScheduleOutcome,
+        runs: [RunReference] = []
+    ) {
+        self.id = id
+        self.firedAt = firedAt
+        self.finishedAt = finishedAt
+        self.wasManual = wasManual
+        self.outcome = outcome
+        self.runs = runs
+    }
+
+    var duration: TimeInterval { finishedAt.timeIntervalSince(firedAt) }
+}
+
+/// What one firing produced. The outcome is what the row shows; the runs are
+/// what its history entry links to.
+struct RunScheduleRunReport: Equatable, Sendable {
+    var outcome: RunScheduleOutcome
+    var runs: [RunScheduleFiring.RunReference]
+
+    init(outcome: RunScheduleOutcome, runs: [RunScheduleFiring.RunReference] = []) {
+        self.outcome = outcome
+        self.runs = runs
+    }
 }
 
 struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
+    /// How many firings one schedule remembers. A short history, not an audit
+    /// log: this file is rewritten whole on every persist, and the durable
+    /// per-run record lives in `RunHistoryStore`.
+    static let maximumRememberedFirings = 20
+
     var lastFiredAt: Date?
     var nextFireAt: Date?
     var lastOutcome: RunScheduleOutcome?
@@ -168,6 +241,10 @@ struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
     /// wall-clock time, so the stored instant stops meaning "09:00" once the
     /// user changes time zone and has to be recomputed.
     var timeZoneIdentifier: String?
+    /// Most recently settled first, bounded by `maximumRememberedFirings`.
+    /// Settlement rather than dispatch, because a long run that started
+    /// before a later occurrence was refused still finishes after it.
+    var firings: [RunScheduleFiring]
 
     init(
         lastFiredAt: Date? = nil,
@@ -175,7 +252,8 @@ struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
         lastOutcome: RunScheduleOutcome? = nil,
         lastOutcomeAt: Date? = nil,
         lastMissed: RunScheduleMissedOccurrences? = nil,
-        timeZoneIdentifier: String? = nil
+        timeZoneIdentifier: String? = nil,
+        firings: [RunScheduleFiring] = []
     ) {
         self.lastFiredAt = lastFiredAt
         self.nextFireAt = nextFireAt
@@ -183,6 +261,46 @@ struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
         self.lastOutcomeAt = lastOutcomeAt
         self.lastMissed = lastMissed
         self.timeZoneIdentifier = timeZoneIdentifier
+        self.firings = firings
+    }
+
+    /// Prepends a firing and drops the oldest beyond the cap.
+    mutating func record(_ firing: RunScheduleFiring) {
+        firings.insert(firing, at: 0)
+        if firings.count > Self.maximumRememberedFirings {
+            firings.removeLast(firings.count - Self.maximumRememberedFirings)
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case lastFiredAt, nextFireAt, lastOutcome, lastOutcomeAt, lastMissed, timeZoneIdentifier, firings
+    }
+
+    /// Decodes one firing without letting its failure sink the array.
+    private struct LenientFiring: Decodable {
+        let firing: RunScheduleFiring?
+
+        init(from decoder: Decoder) throws {
+            firing = try? RunScheduleFiring(from: decoder)
+        }
+    }
+
+    /// Written by hand because `firings` arrived after the first release and
+    /// synthesized decoding ignores property defaults: an older file has no
+    /// such key, and treating that as a decode failure would drop the whole
+    /// state — including `nextFireAt`, whose loss re-anchors the schedule.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastFiredAt = try c.decodeIfPresent(Date.self, forKey: .lastFiredAt)
+        nextFireAt = try c.decodeIfPresent(Date.self, forKey: .nextFireAt)
+        lastOutcome = try c.decodeIfPresent(RunScheduleOutcome.self, forKey: .lastOutcome)
+        lastOutcomeAt = try c.decodeIfPresent(Date.self, forKey: .lastOutcomeAt)
+        lastMissed = try c.decodeIfPresent(RunScheduleMissedOccurrences.self, forKey: .lastMissed)
+        timeZoneIdentifier = try c.decodeIfPresent(String.self, forKey: .timeZoneIdentifier)
+        // Per entry, and never fatal: history is the least important thing in
+        // this struct and must not cost the timing fields around it.
+        firings = ((try? c.decode([LenientFiring].self, forKey: .firings)) ?? [])
+            .compactMap(\.firing)
     }
 }
 

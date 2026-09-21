@@ -15,7 +15,7 @@ private let schedulerLogger = Logger(subsystem: "io.nlopez.alas", category: "Run
 @MainActor
 @Observable
 final class RunScheduler {
-    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleOutcome
+    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleRunReport
 
     private(set) var schedules: [RunSchedule] = []
     private(set) var states: [String: RunScheduleState] = [:]
@@ -114,6 +114,12 @@ final class RunScheduler {
 
     func schedule(id: String) -> RunSchedule? {
         schedules.first { $0.id == id }
+    }
+
+    /// Recent firings, most recently settled first. Bounded by
+    /// `RunScheduleState.maximumRememberedFirings`.
+    func firings(for id: String) -> [RunScheduleFiring] {
+        state(for: id).firings
     }
 
     /// Whether a schedule is paused *as a whole*. An `.allProjects` schedule
@@ -298,7 +304,18 @@ final class RunScheduler {
             case let .skip(next, missed):
                 var updated = state
                 updated.nextFireAt = next
-                updated.lastMissed = RunScheduleMissedOccurrences(count: missed, policy: .skip, observedAt: current)
+                let occurrences = RunScheduleMissedOccurrences(count: missed, policy: .skip, observedAt: current)
+                updated.lastMissed = occurrences
+                // A deliberate non-run is an event too. Without it the history
+                // would show a gap the user has to guess the meaning of.
+                // `lastOutcome` is left alone: nothing ran, so the row's status
+                // still describes the last occurrence that did.
+                updated.record(RunScheduleFiring(
+                    firedAt: current,
+                    finishedAt: current,
+                    wasManual: false,
+                    outcome: .skipped(reason: occurrences.skippedReason)
+                ))
                 states[schedule.id] = updated
                 changed = true
                 schedulerLogger.info(
@@ -355,9 +372,16 @@ final class RunScheduler {
 
     private func dispatch(_ schedule: RunSchedule, at current: Date, invocation: RunScheduleInvocation) {
         guard runTasks[schedule.id] == nil else {
+            let outcome = RunScheduleOutcome.skipped(reason: "The previous run is still in progress.")
             var state = self.state(for: schedule.id)
-            state.lastOutcome = .skipped(reason: "The previous run is still in progress.")
+            state.lastOutcome = outcome
             state.lastOutcomeAt = current
+            state.record(RunScheduleFiring(
+                firedAt: current,
+                finishedAt: current,
+                wasManual: invocation == .manual,
+                outcome: outcome
+            ))
             states[schedule.id] = state
             persist()
             return
@@ -368,11 +392,19 @@ final class RunScheduler {
         }
         runningScheduleIDs.insert(schedule.id)
         runTasks[schedule.id] = Task { @MainActor [weak self] in
-            let outcome = await runner(schedule, invocation)
+            let report = await runner(schedule, invocation)
             guard let self else { return }
             var state = self.state(for: schedule.id)
-            state.lastOutcome = outcome
-            state.lastOutcomeAt = self.now()
+            let settledAt = self.now()
+            state.lastOutcome = report.outcome
+            state.lastOutcomeAt = settledAt
+            state.record(RunScheduleFiring(
+                firedAt: current,
+                finishedAt: settledAt,
+                wasManual: invocation == .manual,
+                outcome: report.outcome,
+                runs: report.runs
+            ))
             if self.schedules.contains(where: { $0.id == schedule.id }) {
                 self.states[schedule.id] = state
             }

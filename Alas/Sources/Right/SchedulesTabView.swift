@@ -52,6 +52,9 @@ struct SchedulesTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScheduler.evaluationGeneration) { now = Date() }
+        .task(id: historyPrimingToken) {
+            await state.primeScheduleRunReportIDs(historyWorktreeIDs)
+        }
         .sheet(item: $editing) { target in
             switch target {
             case .new:
@@ -77,6 +80,35 @@ struct SchedulesTabView: View {
             projectID: worktree.projectId,
             isMainWorktree: isMainWorktree
         )
+    }
+
+    /// What the priming task keys on: the referenced worktrees *and* whether
+    /// each is currently visible.
+    ///
+    /// The ids alone are not enough. Archiving a worktree clears its cached
+    /// report ids, and unarchiving restores the worktree without changing
+    /// which worktrees the histories reference — so keying on ids alone would
+    /// leave the task unfired and the restored links dead until this pane was
+    /// remounted.
+    private var historyPrimingToken: [String] {
+        historyWorktreeIDs.map { id in
+            "\(id):\(state.visibleProjectForWorktree(id) != nil ? 1 : 0)"
+        }
+    }
+
+    /// Worktrees the visible histories link runs in, deduplicated and stable.
+    private var historyWorktreeIDs: [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        for schedule in schedules {
+            for firing in state.runScheduler.firings(for: schedule.id) {
+                for run in firing.runs where !seen.contains(run.worktreeID) {
+                    seen.insert(run.worktreeID)
+                    ordered.append(run.worktreeID)
+                }
+            }
+        }
+        return ordered
     }
 
     private var header: some View {
@@ -177,6 +209,7 @@ private struct ScheduleCard: View {
     @State private var hovering = false
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
+    @State private var isShowingHistory = false
 
     var body: some View {
         let scheduleState = state.runScheduler.state(for: schedule.id)
@@ -253,6 +286,9 @@ private struct ScheduleCard: View {
                 }
                 .padding(.leading, 13)
             }
+            if !scheduleState.firings.isEmpty {
+                history(scheduleState.firings)
+            }
         }
         .padding(10)
         .rightPaneCardChrome(accent: accentColor(scheduleState, isRunning: isRunning), isHovering: hovering)
@@ -294,6 +330,91 @@ private struct ScheduleCard: View {
         .onHover { menuHovered = $0 }
         .help("More actions for \(schedule.name)")
         .accessibilityLabel("More actions for \(schedule.name)")
+    }
+
+    /// Past firings, collapsed by default. The card's job is the next run; the
+    /// history is for the question you only ask after something looked wrong.
+    private func history(_ firings: [RunScheduleFiring]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                isShowingHistory.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Icon(
+                        name: isShowingHistory ? "chev-down" : "chev-right",
+                        size: 8,
+                        color: theme.color("fg-faint")
+                    )
+                    Text(RunSchedulePresentation.historyLabel(firings))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Past firings of \(schedule.name)")
+            .accessibilityLabel("\(isShowingHistory ? "Hide" : "Show") history for \(schedule.name)")
+            .accessibilityIdentifier("schedule-history-toggle-\(schedule.id)")
+            if isShowingHistory {
+                ForEach(firings) { firing in
+                    firingRow(firing)
+                }
+            }
+        }
+        .padding(.top, 2)
+        .padding(.leading, 13)
+    }
+
+    private func firingRow(_ firing: RunScheduleFiring) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(RunSchedulePresentation.outcomeLabel(firing.outcome))
+                .font(.system(size: 10))
+                .foregroundColor(outcomeColor(firing.outcome))
+                .lineLimit(2)
+            Text(RunSchedulePresentation.firingTimeLabel(firing))
+                .font(.system(size: 9.5))
+                .foregroundColor(theme.color("fg-faint"))
+            ForEach(firing.runs, id: \.runID) { run in
+                runLink(run)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("schedule-firing-\(firing.id)")
+    }
+
+    /// A run whose report has been purged, or whose worktree has since been
+    /// archived, is still named but is not offered as something to open: the
+    /// history outlives both the transcript and the worktree.
+    @ViewBuilder
+    private func runLink(_ run: RunScheduleFiring.RunReference) -> some View {
+        let label = RunSchedulePresentation.firingRunLabel(run)
+        if state.canOpenScheduleFiringRun(run) {
+            Button {
+                state.openScheduleFiringRun(run)
+            } label: {
+                HStack(spacing: 3) {
+                    Icon(name: "doc.text", size: 8, color: theme.color("accent"))
+                    Text(label)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(theme.color("accent"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open the run report for \(label)")
+            .accessibilityLabel("Open the run report for \(label)")
+            .accessibilityIdentifier("schedule-firing-run-\(run.runID)")
+        } else {
+            Text(label)
+                .font(.system(size: 9.5))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 
     private var actionLabel: String {
