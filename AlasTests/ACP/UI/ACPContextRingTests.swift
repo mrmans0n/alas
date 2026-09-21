@@ -90,6 +90,16 @@ struct ACPContextRingTests {
         #expect(!button.hasContent)
     }
 
+    @Test("context usage button renders when quota has only a top-level token count, no per-model breakdown")
+    func hasContentWithTokenCountOnlyNoModelUsage() {
+        let quota = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 53, inputTokens: 53, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0),
+            modelUsage: [])
+        let button = ACPContextUsageButton(usage: nil, modelName: nil, lastTurnQuota: quota)
+        #expect(button.hasContent)
+    }
+
     @Test("context usage button body evaluates on the main actor with quota only")
     @MainActor
     func quotaOnlyBodyEvaluates() {

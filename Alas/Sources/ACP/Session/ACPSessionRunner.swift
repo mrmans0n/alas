@@ -2053,9 +2053,16 @@ extension ACPSessionRunner {
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
-                    self.session.recordPromptQuota(promptOutcome.quota)
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // A cancelled/superseded prompt's response can still
+                    // arrive after a successor has started or finished.
+                    // Its tokens are real spend, so always fold them into
+                    // the session total, but only overwrite "last turn"
+                    // when this response still belongs to the active
+                    // prompt — otherwise it would show stale usage as
+                    // current, or clear a newer prompt's just-recorded one.
+                    self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
                     let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
@@ -2194,9 +2201,12 @@ extension ACPSessionRunner {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
                 await MainActor.run {
-                    self.session.recordPromptQuota(promptOutcome.quota)
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
+                    // See the matching comment in sendNow: always accumulate
+                    // into the session total, only overwrite "last turn"
+                    // when this response still belongs to the active prompt.
+                    self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
                     if isActivePrompt {
                         self.activePromptID = nil
                         let outputBoundaryReady = self.deferCompletedOutputBoundaryUntilUpdatesDrain()

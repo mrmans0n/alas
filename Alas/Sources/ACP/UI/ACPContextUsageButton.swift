@@ -6,8 +6,10 @@ struct ACPContextUsageButton: View {
     let usage: ACPUsageInfo?
     let modelName: String?
     /// Per-model breakdown from the last `session/prompt` response's
-    /// `_meta.quota`, and the running session total. Both nil for agents
-    /// that don't send the extension — the popover just omits the section.
+    /// `_meta.quota`, and the running total accumulated since this session
+    /// was last attached (not the full persisted session — see
+    /// `ACPSession.sessionQuotaTotal`). Both nil for agents that don't send
+    /// the extension — the popover just omits the section.
     var lastTurnQuota: ACPPromptQuota? = nil
     var sessionQuotaTotal: ACPPromptQuota? = nil
 
@@ -24,7 +26,16 @@ struct ACPContextUsageButton: View {
     }
 
     private var hasQuotaContent: Bool {
-        (lastTurnQuota?.modelUsage.isEmpty == false) || (sessionQuotaTotal?.modelUsage.isEmpty == false)
+        Self.hasDisplayableContent(lastTurnQuota) || Self.hasDisplayableContent(sessionQuotaTotal)
+    }
+
+    /// A quota is worth showing when it has a per-model breakdown, or —
+    /// some adapters send only the top-level `token_count` and omit
+    /// `model_usage`, which `ACPPromptQuota` decodes as an empty array —
+    /// at least a top-level total.
+    private static func hasDisplayableContent(_ quota: ACPPromptQuota?) -> Bool {
+        guard let quota else { return false }
+        return !quota.modelUsage.isEmpty || quota.tokenCount != nil
     }
 
     var body: some View {
@@ -78,34 +89,50 @@ struct ACPContextUsageButton: View {
                         .foregroundStyle(theme.color("fg-muted"))
                 }
             }
-            if let lastTurnQuota, !lastTurnQuota.modelUsage.isEmpty {
+            if let lastTurnQuota, Self.hasDisplayableContent(lastTurnQuota) {
                 if usage != nil { Divider() }
                 quotaSection(title: "Last turn", quota: lastTurnQuota)
             }
-            if let sessionQuotaTotal, !sessionQuotaTotal.modelUsage.isEmpty {
-                quotaSection(title: "Session total", quota: sessionQuotaTotal)
+            if let sessionQuotaTotal, Self.hasDisplayableContent(sessionQuotaTotal) {
+                // Accumulated since this session was last attached, not
+                // necessarily the full persisted session — see
+                // `ACPSession.sessionQuotaTotal`.
+                quotaSection(title: "Since reconnect", quota: sessionQuotaTotal)
             }
         }
         .padding(14)
         .frame(minWidth: 220, alignment: .leading)
     }
 
+    @ViewBuilder
     private func quotaSection(title: String, quota: ACPPromptQuota) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(theme.color("fg-faint"))
-            ForEach(quota.modelUsage, id: \.model) { usage in
-                HStack {
-                    Text(usage.model)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("fg-muted"))
-                    Spacer(minLength: 12)
-                    Text(formatContextTokens(usage.tokenCount.totalTokens))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(theme.color("fg-muted"))
+            if quota.modelUsage.isEmpty {
+                // Adapter sent only the top-level token_count, no
+                // model_usage breakdown.
+                if let total = quota.tokenCount {
+                    quotaRow(label: "Total", tokens: total.totalTokens)
+                }
+            } else {
+                ForEach(quota.modelUsage, id: \.model) { usage in
+                    quotaRow(label: usage.model, tokens: usage.tokenCount.totalTokens)
                 }
             }
+        }
+    }
+
+    private func quotaRow(label: String, tokens: Int) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-muted"))
+            Spacer(minLength: 12)
+            Text(formatContextTokens(tokens))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(theme.color("fg-muted"))
         }
     }
 

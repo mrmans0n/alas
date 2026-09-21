@@ -280,6 +280,35 @@ struct ACPSessionTests {
         #expect(session.sessionQuotaTotal == turn1)
     }
 
+    @Test("recordPromptQuota with updatesLastTurn false accumulates into the total without touching lastTurnQuota")
+    func recordPromptQuotaWithUpdatesLastTurnFalseSkipsLastTurn() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let active = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
+        session.recordPromptQuota(active)
+
+        // A stale, superseded prompt's response arrives late: its tokens
+        // still count toward the session total, but must not clobber the
+        // active prompt's lastTurnQuota (nor clear it, when nil).
+        let stale = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 50, inputTokens: 40, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 50, inputTokens: 40, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0))])
+        session.recordPromptQuota(stale, updatesLastTurn: false)
+
+        #expect(session.lastTurnQuota == active)
+        #expect(session.sessionQuotaTotal?.tokenCount?.totalTokens == 150)
+
+        session.recordPromptQuota(nil, updatesLastTurn: false)
+        #expect(session.lastTurnQuota == active)
+    }
+
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

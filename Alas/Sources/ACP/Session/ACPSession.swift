@@ -74,10 +74,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
     /// only: re-derived on each prompt response, never persisted.
     @Published private(set) var lastTurnQuota: ACPPromptQuota?
-    /// Running sum of every turn's `lastTurnQuota` this session, per model.
-    /// `_meta.quota` reports each turn's own usage rather than a running
-    /// total, so this is accumulated client-side — see
-    /// `ACPPromptQuota.accumulating(_:with:)`.
+    /// Running sum of every turn's `lastTurnQuota` since this session was
+    /// last attached, per model. `_meta.quota` reports each turn's own
+    /// usage rather than a running total, so this is accumulated
+    /// client-side — see `ACPPromptQuota.accumulating(_:with:)`. Runtime
+    /// only, like `lastTurnQuota`: a restored session starts this at nil
+    /// and rebuilds it only from turns prompted after reattaching, not from
+    /// the full persisted transcript — the UI labels it accordingly rather
+    /// than claiming the whole session's usage.
     @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
     @Published var currentGoal: ACPGoalState?
@@ -1469,14 +1473,25 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Stores a `session/prompt` response's decoded `_meta.quota` as the
-    /// last turn's usage and folds it into the running session total. A nil
-    /// quota (agent doesn't send the extension on this turn, or decode
-    /// failed) still clears `lastTurnQuota` — an earlier turn's usage must
-    /// not linger under "Last turn" once it no longer describes the most
-    /// recent one — but `sessionQuotaTotal` is untouched, since it's a
-    /// valid cumulative total regardless of any single turn's quota.
-    func recordPromptQuota(_ quota: ACPPromptQuota?) {
-        lastTurnQuota = quota
+    /// last turn's usage and folds it into the running session total.
+    ///
+    /// `updatesLastTurn` defaults to true; callers pass `false` when this
+    /// response belongs to a cancelled/superseded prompt (its RPC can still
+    /// complete after a successor started or finished) — the tokens are
+    /// real spend either way, so they still accumulate into
+    /// `sessionQuotaTotal`, but a stale response must not overwrite (or, if
+    /// nil, clear) a newer prompt's `lastTurnQuota`.
+    ///
+    /// A nil quota (agent doesn't send the extension on this turn, or
+    /// decode failed) still clears `lastTurnQuota` when `updatesLastTurn`
+    /// — an earlier turn's usage must not linger under "Last turn" once it
+    /// no longer describes the most recent one — but `sessionQuotaTotal` is
+    /// untouched, since it's a valid cumulative total regardless of any
+    /// single turn's quota.
+    func recordPromptQuota(_ quota: ACPPromptQuota?, updatesLastTurn: Bool = true) {
+        if updatesLastTurn {
+            lastTurnQuota = quota
+        }
         guard let quota else { return }
         sessionQuotaTotal = ACPPromptQuota.accumulating(sessionQuotaTotal, with: quota)
     }
