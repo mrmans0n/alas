@@ -1310,10 +1310,28 @@ struct WorktreeService {
             reasons.insert(.locked)
         }
 
-        if try await !isRemovalClean(
-            worktreePath,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
-        ) {
+        let isClean: Bool
+        do {
+            isClean = try await isRemovalClean(
+                worktreePath,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
+        } catch {
+            // The plain status check can fail for a reason that has nothing
+            // to do with dirty content — a missing or broken git-lfs
+            // filter, the same class of failure `remove`'s own
+            // submodule-refusal audit tolerates. Fall back to the
+            // LFS-tolerant check before failing the whole preview over it;
+            // only rethrow if that one can't determine cleanliness either.
+            guard let tolerant = try? await canForceRemoveAfterMissingLFS(
+                worktreePath,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            ) else {
+                throw error
+            }
+            isClean = tolerant
+        }
+        if !isClean {
             reasons.insert(.dirty)
         }
 

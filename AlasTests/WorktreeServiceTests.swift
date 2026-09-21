@@ -599,6 +599,39 @@ extension WorktreeServiceTests {
         #expect(preflight.reasons == [.dirty])
     }
 
+    /// Regression: a missing or broken git-lfs filter makes the plain
+    /// cleanliness check inside `deletePreflight` throw, which used to
+    /// propagate straight through — failing the whole deletion preview —
+    /// even though `remove`'s own submodule-refusal audit tolerates the
+    /// exact same failure via the LFS-tolerant check.
+    @Test func deletePreflightToleratesMissingLFSFilterOnInitializedSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-missing-lfs")
+        defer { fixture.removeFiles() }
+        try "* filter=lfs -text\n".write(
+            to: fixture.worktree.path.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", ".gitattributes"], cwd: fixture.worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "attrs"], cwd: fixture.worktree.path)
+        for key in ["smudge", "clean"] {
+            _ = try await Process.git(
+                ["config", "filter.lfs.\(key)", "git-lfs-nonexistent-binary \(key) -- %f"],
+                cwd: fixture.worktree.path
+            )
+        }
+        _ = try await Process.git(
+            ["config", "filter.lfs.process", "git-lfs-nonexistent-binary filter-process"],
+            cwd: fixture.worktree.path
+        )
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: fixture.worktree.path)
+
+        let preflight = try await fixture.service.deletePreflight(worktreePath: fixture.worktree.path)
+
+        #expect(preflight.requiresForce == false)
+        #expect(preflight.reasons.isEmpty)
+    }
+
     /// Regression: a clean worktree holding an initialized submodule used to
     /// fail with "Worktree contains initialized submodule local state" —
     /// Alas audited the submodule's refs after staging and refused whenever
