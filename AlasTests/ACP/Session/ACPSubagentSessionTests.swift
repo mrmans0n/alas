@@ -100,6 +100,39 @@ struct ACPSubagentSessionTests {
         #expect(session.transcript.messages.isEmpty)
     }
 
+    @Test("a permission decision for a registered child updates its own transcript, not the parent's")
+    func permissionDecisionRoutesToChildTranscript() throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        let index = session.mergePermissionDecision(
+            toolCall: .init(toolCallId: "tc-1", title: "Run command", kind: "execute", status: "pending"),
+            presentation: nil,
+            chosenOption: nil,
+            mcpServerName: nil,
+            wasCancelled: true,
+            subagentSessionId: "child-1")
+
+        #expect(index != nil)
+        // The parent transcript still holds only the one synthetic
+        // subagent row — no duplicate, no orphaned parent-level card.
+        #expect(session.transcript.messages.count == 1)
+        guard case .toolCall(let parentRow) = session.transcript.messages[0] else {
+            Issue.record("expected the parent's row to stay the synthetic subagent row")
+            return
+        }
+        #expect(ACPSubagentRowDescriptor(toolCall: parentRow)?.subagentSessionId == "child-1")
+
+        let run = try #require(session.subagentRun("child-1"))
+        #expect(run.messages.count == 1)
+        guard case .toolCall(let childRow) = run.messages[0] else {
+            Issue.record("expected the permission decision's row in the child's own transcript")
+            return
+        }
+        #expect(childRow.toolCallId == "tc-1")
+        #expect(childRow.status == "canceled")
+    }
+
     // MARK: - Child transcript
 
     @Test("child output lands in the child transcript, never the parent's")

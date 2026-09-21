@@ -838,7 +838,8 @@ final class ACPSession: ObservableObject, Identifiable {
         presentation: ACPPermissionPresentation?,
         chosenOption: ACPPermissionOption?,
         mcpServerName: String?,
-        wasCancelled: Bool
+        wasCancelled: Bool,
+        subagentSessionId: String? = nil
     ) -> Int? {
         let toolCallId = toolCall.toolCallId
         let facts = Self.permissionDecisionMetadata(
@@ -848,6 +849,12 @@ final class ACPSession: ObservableObject, Identifiable {
         // going stale is a correctness issue, independent of whether the
         // adapter also attached any `_meta.permission` presentation.
         guard facts != nil || wasCancelled else { return nil }
+        // The request named a registered child's session, not the root —
+        // its resulting row belongs in that child's own transcript. See
+        // `ACPSubagentRun.mergePermissionDecision`.
+        if let subagentSessionId, let run = subagents[subagentSessionId] {
+            return run.mergePermissionDecision(toolCall: toolCall, facts: facts, wasCancelled: wasCancelled)
+        }
         if let index = updateToolCall(id: toolCallId, { tc in
             if let facts { tc.metadata = Self.mergeMetadata(tc.metadata, facts) }
             // `$/cancel_request` cancellation (unlike Stop) never routes
@@ -2361,7 +2368,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
+    static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
         guard var merged = Self.metadataObject(existing),
               let updateObject = Self.metadataObject(update) else {
             return update

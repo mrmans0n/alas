@@ -676,14 +676,23 @@ final class ACPSessionRunner {
             chosenOption = nil
             wasCancelled = true
         }
+        // A permission request can name a registered child's own session,
+        // not the root — its resulting row belongs in that child's own
+        // transcript. See `ACPSession.mergePermissionDecision`.
+        let subagentSessionId = session.subagentRun(params.sessionId) != nil ? params.sessionId : nil
         guard let index = session.mergePermissionDecision(
             toolCall: params.toolCall,
             presentation: ACPPermissionPresentation(metadata: params.metadata),
             chosenOption: chosenOption,
             mcpServerName: params.toolCall.mcpServerName,
-            wasCancelled: wasCancelled
+            wasCancelled: wasCancelled,
+            subagentSessionId: subagentSessionId
         ) else { return }
-        persistIndices([index], requiresLease: true)
+        if let subagentSessionId {
+            persistSubagentIndices([index], subagentSessionId: subagentSessionId)
+        } else {
+            persistIndices([index], requiresLease: true)
+        }
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {

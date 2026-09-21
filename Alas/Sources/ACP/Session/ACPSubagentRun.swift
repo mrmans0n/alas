@@ -369,6 +369,48 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         return seqs[index]
     }
 
+    /// Merges a `session/request_permission` decision into this child's own
+    /// transcript, mirroring `ACPSession.mergePermissionDecision` — the
+    /// request named THIS child's session id, so its resulting row belongs
+    /// here, not in the parent: routing it to the parent instead produces a
+    /// duplicate row if a `.toolCall` creation event later arrives (which
+    /// IS correctly routed to the child by session id), or an orphaned
+    /// child update that finds no matching row at all if only a
+    /// `.toolCallUpdate` follows.
+    @discardableResult
+    func mergePermissionDecision(
+        toolCall: ACPPermissionToolCall, facts: AnyCodable?, wasCancelled: Bool, at timestamp: Date = Date()
+    ) -> Int {
+        if let index = toolCallIndex(id: toolCall.toolCallId), case .toolCall(var tc) = messages[index] {
+            if let facts { tc.metadata = ACPSession.mergeMetadata(tc.metadata, facts) }
+            if wasCancelled, tc.status == "pending" || tc.status == "in_progress" {
+                tc.status = "canceled"
+                if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+                    tc.executionFinishedAt = timestamp
+                }
+            }
+            messages[index] = .toolCall(tc)
+            return index
+        }
+        let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")
+        let payload = ACPToolCallPayload(
+            toolCallId: toolCall.toolCallId,
+            title: toolCall.title ?? toolCall.toolCallId,
+            kind: toolCall.kind,
+            status: status,
+            content: toolCall.content,
+            locations: toolCall.locations,
+            rawInput: toolCall.rawInput,
+            rawOutput: toolCall.rawOutput,
+            metadata: toolCall.metadata,
+            name: toolCall.name)
+        var fresh = ACPSession.makeToolCall(from: payload, at: timestamp)
+        if let facts {
+            fresh.metadata = toolCall.metadata.map { ACPSession.mergeMetadata($0, facts) } ?? facts
+        }
+        return append(.toolCall(fresh), at: timestamp)
+    }
+
     // MARK: - Private
 
     private enum StreamKind: Hashable {
