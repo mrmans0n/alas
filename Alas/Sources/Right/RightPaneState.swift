@@ -114,6 +114,12 @@ final class RightPaneState: GGSplitCommitServicing {
     var checkpointsExpanded: Bool = true
     var automaticCheckpointsExpanded: Bool = false
     var expandedCheckpointIDs: Set<CheckpointID> = []
+    /// Current window (0-based page index) of an expanded checkpoint's file
+    /// list. Only this page's groups render; navigating pages never
+    /// accumulates previously shown groups, so the card renders at most
+    /// `CheckpointPresentation.maxInlineFileGroups` rows regardless of how
+    /// many pages a huge checkpoint has or how far the user has paged.
+    var checkpointFileListPageIndices: [CheckpointID: Int] = [:]
     var checkpointManifests: [CheckpointID: WorktreeCheckpointManifest] = [:]
     var loadingCheckpointManifestIDs: Set<CheckpointID> = []
     var checkpointManifestErrors: [CheckpointID: String] = [:]
@@ -766,6 +772,9 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointLoadError = nil
             let availableCheckpointIDs = Set(catalog.summaries.filter { $0.unavailableReason == nil }.map(\.id))
             expandedCheckpointIDs.formIntersection(availableCheckpointIDs)
+            checkpointFileListPageIndices = checkpointFileListPageIndices.filter { id, _ in
+                availableCheckpointIDs.contains(id)
+            }
             checkpointManifests = checkpointManifests.filter { id, _ in
                 availableCheckpointIDs.contains(id)
             }
@@ -880,10 +889,31 @@ final class RightPaneState: GGSplitCommitServicing {
     func toggleCheckpointExpanded(_ id: CheckpointID) {
         if expandedCheckpointIDs.contains(id) {
             expandedCheckpointIDs.remove(id)
+            checkpointFileListPageIndices[id] = nil
         } else {
             expandedCheckpointIDs.insert(id)
             loadCheckpointManifest(id: id)
         }
+    }
+
+    /// Current 0-based page of an expanded checkpoint's file list.
+    func checkpointFileListPage(for id: CheckpointID) -> Int {
+        checkpointFileListPageIndices[id] ?? 0
+    }
+
+    /// Moves to the next page, clamped to the manifest's last page so it
+    /// never advances past the end.
+    func advanceCheckpointFileListPage(_ id: CheckpointID) {
+        guard let totalGroups = checkpointManifests[id]?.groups.count, totalGroups > 0 else { return }
+        let lastPage = (totalGroups - 1) / CheckpointPresentation.maxInlineFileGroups
+        let next = min(checkpointFileListPage(for: id) + 1, lastPage)
+        checkpointFileListPageIndices[id] = next == 0 ? nil : next
+    }
+
+    /// Moves to the previous page, clamped at the first.
+    func retreatCheckpointFileListPage(_ id: CheckpointID) {
+        let previous = max(0, checkpointFileListPage(for: id) - 1)
+        checkpointFileListPageIndices[id] = previous == 0 ? nil : previous
     }
 
     func loadCheckpointManifest(id: CheckpointID) {
@@ -1004,6 +1034,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointStorageUsage = catalog.byteCount
             checkpointManifests[id] = nil
             expandedCheckpointIDs.remove(id)
+            checkpointFileListPageIndices[id] = nil
             pendingCheckpointDeletion = nil
             await refresh()
         } catch {

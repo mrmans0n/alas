@@ -46,5 +46,7 @@ struct SubHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count)")
+        .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
     }
 }
