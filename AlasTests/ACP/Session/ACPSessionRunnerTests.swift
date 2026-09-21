@@ -1604,6 +1604,166 @@ struct ACPSessionRunnerTests {
         #expect(mock.permissionResponses[.number(11)]?.outcome == .selected(optionId: "allow"))
     }
 
+    @Test("persists decoded _meta.permission presentation onto the resolved tool call")
+    func persistsPermissionPresentationOntoResolvedToolCall() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = PermissionOrderingClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            incomingUpdateCoalesceNanos: 100_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.toolCall(.init(
+            toolCallId: "tc-permission",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil
+        )))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                    "description": AnyCodable("Reason: needs shell access"),
+                    "defaultToNo": AnyCodable(true),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable]),
+            optionMetadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "description": AnyCodable("Run this command one time"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+
+        try await waitUntil {
+            mock.permissionResponses[.number(11)] != nil
+        }
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        let permission = try #require(persisted.metadata?.value as? [String: AnyCodable])
+        let facts = try #require(permission["permission"]?.value as? [String: AnyCodable])
+        #expect(facts["title"]?.value as? String == "Run command?")
+        #expect(facts["description"]?.value as? String == "Reason: needs shell access")
+        #expect(facts["defaultToNo"]?.value as? Bool == true)
+        let decision = try #require(facts["decision"]?.value as? [String: AnyCodable])
+        #expect(decision["optionId"]?.value as? String == "allow")
+        #expect(decision["description"]?.value as? String == "Run this command one time")
+    }
+
+    @Test("materializes a tool-call row from the permission request and merges the real tool_call into it, not a duplicate")
+    func retainsPermissionFactsUntilToolCallArrives() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = PermissionOrderingClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            incomingUpdateCoalesceNanos: 100_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        // Handle the permission request BEFORE its tool_call row exists —
+        // reproducing the race between ACPStdioClient's separate
+        // incomingUpdates/permissionRequests streams. Some adapters never
+        // send a separate tool_call at all for this id, only the
+        // permission request followed by tool_call_updates, so the row
+        // must be materialized here rather than merely stashing the facts.
+        mock.emitPermission(
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        try await waitUntil {
+            mock.permissionResponses[.number(11)] != nil
+        }
+
+        func toolCallRows() -> [ACPMessage.ToolCall] {
+            session.transcript.messages.compactMap {
+                if case .toolCall(let tc) = $0 { return tc }
+                return nil
+            }
+        }
+
+        // The row already exists immediately after the permission response
+        // — not after a subsequent tool_call.
+        #expect(toolCallRows().count == 1)
+        #expect(toolCallRows().first?.status == "pending")
+
+        // A tool_call "creation" event can still arrive afterward for the
+        // same id (redundant, but not disallowed): it must merge into the
+        // materialized row, not duplicate it.
+        mock.emit(.toolCall(.init(
+            toolCallId: "tc-permission",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil
+        )))
+        try await waitUntil { toolCallRows().first?.status == "in_progress" }
+        #expect(toolCallRows().count == 1)
+        // Merging into the materialized row must still apply the same
+        // side effects the normal creation path would (executionStartedAt).
+        #expect(toolCallRows().first?.executionStartedAt != nil)
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.filter { $0.kind == "tool_call" }.count == 1)
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.status == "in_progress")
+        let permission = try #require(persisted.metadata?.value as? [String: AnyCodable])
+        let facts = try #require(permission["permission"]?.value as? [String: AnyCodable])
+        #expect(facts["title"]?.value as? String == "Run command?")
+    }
+
     @Test("user cancel flushes buffered updates before appending interruption notice")
     func userCancelFlushesBufferedUpdatesBeforeAppendingInterruptionNotice() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -2164,6 +2324,83 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission == nil)
     }
 
+    @Test("cancelling a permission whose tool-call row already exists marks that row canceled")
+    func cancelRequestCancelsExistingToolCallRow() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        // The row already exists (announced separately) before the
+        // permission is even requested — unlike the materialize case.
+        mock.emit(.init(sessionId: "s", update: .toolCall(.init(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil))))
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        // $/cancel_request (unlike Stop) never routes through
+        // cancelInFlightToolCalls() — the row must still end up canceled.
+        mock.emitCancelRequest(id: requestId)
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
+    }
+
+    @Test("a permission cancelled before its tool-call row exists materializes it as canceled, not stuck pending")
+    func cancelledPermissionMaterializesCanceledRow() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        // No tool_call row for "call_1" has arrived yet — cancel now, before
+        // any cancelInFlightToolCalls() sweep could have touched it.
+        mock.emitCancelRequest(id: requestId)
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
+    }
+
     @Test("$/cancel_request for an id that isn't the pending permission is a no-op")
     func cancelRequestIgnoresUnrelatedId() async throws {
         let (runner, mock) = try makeRunner()
@@ -2218,6 +2455,190 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.permissionResponses[requestId] != nil }
         #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
         #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("a $/cancel_request that lands before dequeue still materializes a canceled row with its facts")
+    func earlyCancelStillPersistsPermissionFacts() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(42)
+
+        // Same early-cancel ordering as the test above — the cancel lands in
+        // pendingCancelledRequestIDs before permissionsTask ever dequeues
+        // the matching request, taking the `continue`-before-evaluate()
+        // branch rather than the normal evaluate()-returns-.cancelled path.
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
+        let permission = toolCalls.first?.metadata?.value as? [String: AnyCodable]
+        let facts = permission?["permission"]?.value as? [String: AnyCodable]
+        #expect(facts?["title"]?.value as? String == "Run command?")
+    }
+
+    @Test("a materialized in-progress row initializes executionStartedAt, matching the normal creation path")
+    func materializedInProgressRowInitializesTiming() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // The permission's own snapshot already reports in_progress — the
+        // adapter shape materialization exists for, where no separate
+        // .toolCall ever announces this id.
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        let requestId = JSONRPCID.number(9)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "in_progress")
+        #expect(toolCalls.first?.executionStartedAt != nil)
+    }
+
+    @Test("materializing a permission's row still waits for an already-queued session/update to land first")
+    func materializedRowPreservesUpdateOrdering() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // Emit an agent message, then immediately (no await/sleep — this
+        // is the point) a permission for a different id that auto-run
+        // resolves with no suspension of its own. Without draining
+        // already-queued updates first, the materialized tool_call row
+        // could land in the transcript ahead of "before".
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("before"))))
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        mock.emitPermission(id: .number(9), params: params)
+
+        try await waitUntil { mock.permissionResponses[.number(9)] != nil }
+        try await waitUntil {
+            runner.session.transcript.messages.contains {
+                if case .toolCall = $0 { return true }
+                return false
+            }
+        }
+
+        let kinds = runner.session.transcript.messages.map(\.kind)
+        #expect(kinds == ["agent", "tool_call"])
+    }
+
+    @Test("draining before materializing waits for the exact watermark, not a fixed attempt count")
+    func materializedRowDrainsAnyNumberOfQueuedUpdates() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // More updates than a small fixed-attempt-count heuristic (the
+        // previous fix's bounded loop) could reliably drain — proving this
+        // waits for connection.client.yieldedUpdateCount specifically
+        // rather than guessing a scheduler-turn count.
+        for i in 0..<8 {
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("chunk-\(i)"))))
+        }
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        mock.emitPermission(id: .number(9), params: params)
+
+        try await waitUntil { mock.permissionResponses[.number(9)] != nil }
+        try await waitUntil {
+            runner.session.transcript.messages.contains {
+                if case .toolCall = $0 { return true }
+                return false
+            }
+        }
+
+        let kinds = runner.session.transcript.messages.map(\.kind)
+        #expect(kinds.last == "tool_call")
+        #expect(kinds.dropLast().allSatisfy { $0 == "agent" })
+    }
+
+    @Test("materializing preserves the permission snapshot's own tool-call metadata, not just the synthesized facts")
+    func materializedRowPreservesToolCallMetadata() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil,
+            metadata: AnyCodable(["is_mcp_tool_call": AnyCodable(true)] as [String: AnyCodable])
+        )
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(9)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        let metadata = toolCalls.first?.metadata?.value as? [String: AnyCodable]
+        #expect(metadata?["is_mcp_tool_call"]?.value as? Bool == true)
+        let permission = metadata?["permission"]?.value as? [String: AnyCodable]
+        #expect(permission?["title"]?.value as? String == "Run command?")
     }
 
     @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
@@ -3342,6 +3763,59 @@ struct ACPSessionRunnerTests {
         #expect(posts >= 1)
     }
 
+    @Test("a permission decision is not merged into the transcript when the runner has lost the write lease")
+    func permissionDecisionSkippedWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-perm-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId —
+        // this runner is a stale/superseded owner (e.g. after a cross-window takeover).
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: sid,
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")],
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        let requestId = JSONRPCID.number(7)
+        mock.emitPermission(id: requestId, params: params)
+
+        // auto-run still answers the agent — that part is unaffected by lease
+        // ownership — but the shared session transcript must stay untouched.
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .selected(optionId: "allow"))
+        #expect(session.transcript.messages.isEmpty)
+    }
+
     @Test("runner does not persist when it has lost the session lease")
     func persistSkippedWhenLeaseLost() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -3765,7 +4239,7 @@ private final class PermissionOrderingClient: ACPClient {
         updatesCont.yield(.init(sessionId: "s", update: update))
     }
 
-    func emitPermission() {
+    func emitPermission(metadata: AnyCodable? = nil, optionMetadata: AnyCodable? = nil) {
         let params = ACPPermissionRequestParams(
             sessionId: "s",
             toolCall: .init(
@@ -3779,9 +4253,10 @@ private final class PermissionOrderingClient: ACPClient {
                 rawOutput: nil
             ),
             options: [
-                .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+                .init(optionId: "allow", name: "Allow", kind: "allow_once", metadata: optionMetadata),
                 .init(optionId: "reject", name: "Reject", kind: "reject_once")
-            ]
+            ],
+            metadata: metadata
         )
         permissionsCont.yield((id: .number(11), params: params))
     }

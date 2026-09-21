@@ -572,6 +572,24 @@ final class ACPSession: ObservableObject, Identifiable {
             return flushedForThought.union([i])
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
+            // Normally the first event for a given id, so appending
+            // unconditionally below is safe — except when a permission
+            // request for this same id already materialized a placeholder
+            // row (see `mergePermissionDecision`) before this "creation"
+            // event arrived. Merge into that row instead of duplicating it.
+            if transcript.toolCallIndex(toolCallId: payload.toolCallId) != nil {
+                let touched = updateToolCall(id: payload.toolCallId) { tc in
+                    Self.applyToolCallPayloadFields(payload, to: &tc)
+                    if tc.status == "in_progress", tc.executionStartedAt == nil {
+                        tc.executionStartedAt = timestamp
+                    }
+                }
+                if let touched {
+                    applyToolCallMetadata(payload.metadata)
+                    let diffTouched = applyDiffStatsFromToolCallContent(payload.content ?? [], worktreeRoot: worktreeRoot)
+                    return diffTouched.union([touched])
+                }
+            }
             let items = payload.content ?? []
             let raw = Self.flatten(items)
             let full = Self.stripWrappingFence(raw,
@@ -808,6 +826,143 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         return AnyCodable(["contextCompaction": AnyCodable(facts)])
+    }
+
+    /// Merges the decoded `_meta.permission` presentation and the user's
+    /// (or auto-run's) decision into the matching persisted tool call, so a
+    /// rehydrated transcript still carries the title/reason/chosen-option
+    /// context that drove the now-resolved prompt. Returns the touched
+    /// index for the caller to persist, or `nil` when there is nothing
+    /// worth persisting (no `_meta`, no MCP server name, no recorded
+    /// decision).
+    ///
+    /// When no row exists yet, materializes one from the permission
+    /// request's own `toolCall` snapshot instead of dropping the facts:
+    /// some adapters announce a call solely via `session/request_permission`
+    /// and never separately send a `tool_call`, only later
+    /// `tool_call_update`s — which `updateToolCall` ignores when no row
+    /// exists, so the facts would otherwise vanish (memory-only) with
+    /// nothing to persist them. A materialized row is still updated
+    /// normally — merged in place, not duplicated — by any `tool_call`/
+    /// `tool_call_update` that does arrive afterward for the same id; see
+    /// the existing-row guard in the `.toolCall` apply case.
+    /// `wasCancelled` reflects the actual `session/request_permission`
+    /// outcome, not merely "no option was chosen" — a `.selected` outcome
+    /// whose id somehow doesn't match any offered option also has no
+    /// `chosenOption`, and must not be materialized as canceled.
+    @MainActor
+    func mergePermissionDecision(
+        toolCall: ACPPermissionToolCall,
+        presentation: ACPPermissionPresentation?,
+        chosenOption: ACPPermissionOption?,
+        mcpServerName: String?,
+        wasCancelled: Bool
+    ) -> Int? {
+        let toolCallId = toolCall.toolCallId
+        let facts = Self.permissionDecisionMetadata(
+            presentation: presentation, chosenOption: chosenOption, mcpServerName: mcpServerName
+        )
+        // A cancellation is itself worth persisting — the row's status
+        // going stale is a correctness issue, independent of whether the
+        // adapter also attached any `_meta.permission` presentation.
+        guard facts != nil || wasCancelled else { return nil }
+        if let index = updateToolCall(id: toolCallId, { tc in
+            if let facts { tc.metadata = Self.mergeMetadata(tc.metadata, facts) }
+            // `$/cancel_request` cancellation (unlike Stop) never routes
+            // through cancelInFlightToolCalls(), so an already-existing row
+            // for a canceled permission would otherwise sit indefinitely
+            // "pending"/"in_progress" with nothing left to ever touch it.
+            if wasCancelled, tc.status == "pending" || tc.status == "in_progress" {
+                tc.status = "canceled"
+                if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+                    tc.executionFinishedAt = Date()
+                }
+            }
+        }) {
+            return index
+        }
+        return materializeToolCall(fromPermission: toolCall, facts: facts, wasCancelled: wasCancelled)
+    }
+
+    /// Appends a placeholder tool-call row from a permission request's own
+    /// `toolCall` snapshot, carrying `facts` as its metadata when present
+    /// (a cancellation with no other facts still materializes, just with
+    /// `metadata == nil`). See `mergePermissionDecision`.
+    ///
+    /// `wasCancelled` overrides the row's status to `"canceled"`: a Stop or
+    /// `$/cancel_request` sweeps existing in-flight rows to that status via
+    /// `cancelInFlightToolCalls()` before the permission continuation
+    /// resumes, so a row this call first materializes afterward would
+    /// otherwise escape that sweep and sit as indefinitely "pending".
+    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable?, wasCancelled: Bool) -> Int {
+        let items = toolCall.content ?? []
+        let raw = Self.flatten(items)
+        let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")
+        let full = Self.stripWrappingFence(raw, isFinal: Self.isFinalStatus(status))
+        // Merge the snapshot's own `_meta` (terminal info, is_mcp_tool_call,
+        // etc. — whatever the adapter actually sent on this toolCall) with
+        // the synthesized permission facts, matching the normal `.toolCall`
+        // creation path rather than discarding it: a later update that
+        // omits metadata (common — adapters usually send it once) would
+        // otherwise have nothing to restore those fields from.
+        let metadata: AnyCodable?
+        if let raw = toolCall.metadata, let facts {
+            metadata = Self.mergeMetadata(raw, facts)
+        } else {
+            metadata = facts ?? toolCall.metadata
+        }
+        transcript.appendMessage(.toolCall(.init(
+            toolCallId: toolCall.toolCallId,
+            title: toolCall.title ?? toolCall.toolCallId,
+            kind: toolCall.kind,
+            status: status,
+            content: full,
+            preview: Self.previewLine(full),
+            contentLanguage: Self.wrappingFenceLanguage(raw),
+            rawInput: Self.metadataString(toolCall.rawInput),
+            rawOutput: Self.metadataString(toolCall.rawOutput),
+            metadata: metadata,
+            assets: Self.mergeAssets(Self.extractAssets(items), Self.extractRawOutputAssets(toolCall.rawOutput)),
+            locations: toolCall.locations?.map(\.path) ?? [],
+            // Matches the .toolCall creation path: without this, an
+            // adapter that reports the permission snapshot itself as
+            // already in_progress (and never sends a separate .toolCall)
+            // would reach a final .toolCallUpdate with executionStartedAt
+            // still nil — which refuses to set executionFinishedAt either,
+            // permanently losing the call's duration.
+            executionStartedAt: status == "in_progress" ? Date() : nil,
+            name: toolCall.name)))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        applyToolCallMetadata(toolCall.metadata)
+        return transcript.messages.count - 1
+    }
+
+    private static func permissionDecisionMetadata(
+        presentation: ACPPermissionPresentation?,
+        chosenOption: ACPPermissionOption?,
+        mcpServerName: String?
+    ) -> AnyCodable? {
+        var facts: [String: AnyCodable] = [:]
+        if let presentation {
+            facts["version"] = AnyCodable(1)
+            if let title = presentation.title { facts["title"] = AnyCodable(title) }
+            if let description = presentation.description { facts["description"] = AnyCodable(description) }
+            facts["defaultToNo"] = AnyCodable(presentation.defaultToNo)
+        }
+        if let mcpServerName { facts["mcpServerName"] = AnyCodable(mcpServerName) }
+        if let chosenOption {
+            var decision: [String: AnyCodable] = [
+                "optionId": AnyCodable(chosenOption.optionId),
+                "kind": AnyCodable(chosenOption.kind),
+            ]
+            if let description = chosenOption.presentationDescription {
+                decision["description"] = AnyCodable(description)
+            }
+            facts["decision"] = AnyCodable(decision)
+        }
+        guard !facts.isEmpty else { return nil }
+        return AnyCodable(["permission": AnyCodable(facts)])
     }
 
     /// Materialise held replay candidates of the given `kinds` as new rows

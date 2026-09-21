@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=53" />
+  <link rel="stylesheet" href="/style.css?v=54" />
 </head>
 <body>
   <header id="bar">
@@ -141,8 +141,13 @@
   </nav>
   <div id="permission" class="sheet hidden">
     <div class="sheet-card">
-      <p id="perm-tool"></p>
-      <div id="perm-options"></div>
+      <div id="perm-scroll">
+        <p id="perm-heading" class="sheet-title" hidden></p>
+        <p id="perm-tool"></p>
+        <p id="perm-server" class="perm-meta" hidden></p>
+        <p id="perm-reason" class="perm-meta" hidden></p>
+        <div id="perm-options"></div>
+      </div>
       <button id="perm-close" class="sheet-close">Close</button>
     </div>
   </div>
@@ -291,7 +296,7 @@
   <script src="/file-browser.js?v=3"></script>
   <script src="/hub-registry.js?v=1"></script>
   <script src="/hub-links.js?v=1"></script>
-  <script src="/app.js?v=89"></script>
+  <script src="/app.js?v=90"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
