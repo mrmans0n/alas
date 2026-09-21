@@ -236,4 +236,7 @@ Swift Testing suites:
 - `RunSchedulePresentationTests`: labels for targets, triggers, outcomes,
   per-worktree visibility scoping, and `RunScheduleDraft` validation.
 
-Local checks: the suites above plus a `-quiet build`.
+The composition cases spawn real `git worktree add` subprocesses. They pass
+individually and in CI, but this development machine is known to wedge
+`xcodebuild` partway through suites that create worktrees, so local runs
+select the non-creating cases and leave the rest to CI.
