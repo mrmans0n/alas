@@ -323,6 +323,13 @@ a:hover { color: var(--accent-hover); }
 .sheet-card button { display: block; width: 100%; padding: 13px; margin: 7px 0; border: none; border-radius: 12px; font-size: 16px; cursor: pointer; }
 .btn-allow { background: var(--add); color: var(--on-accent); } .btn-deny { background: var(--del); color: var(--fg); }
 .is-default { box-shadow: 0 0 0 2px var(--accent); }
+/* A long reason or per-option description can make the card taller than a
+   short mobile viewport. Cap the card and let only the variable body
+   scroll (mirrors #cfg-scroll) so the close/approve controls never push
+   the tool name being approved off-screen. */
+#permission .sheet-card { max-height: min(85vh, 640px); display: flex; flex-direction: column; }
+#perm-scroll { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#perm-close { flex: 0 0 auto; }
 .perm-meta { margin: -4px 0 10px; color: var(--fg-muted); font-size: 13px; line-height: 1.35; }
 .perm-option { margin: 7px 0; }
 .perm-option button { margin: 0; }
