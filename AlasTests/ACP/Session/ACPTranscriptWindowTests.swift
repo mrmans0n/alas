@@ -102,6 +102,83 @@ struct ACPTranscriptWindowTests {
         #expect(t.visibleTail == nil)
     }
 
+    /// Regression test for the "short conversation, many swallowed tools"
+    /// auto-scroll bug: a live turn dominated by a long run of tool calls —
+    /// each individually appended, but collapsing to a single "Ran N tools"
+    /// row in the UI — must not, by itself, push enough raw messages past
+    /// `tailWindow` to trim genuinely short, still-relevant context (here, a
+    /// user prompt and a notice) out of the render window.
+    @Test("resetWindowToTail does not trim earlier context when a tool-call run alone exceeds tailWindow")
+    func resetKeepsPrefixWhenToolCallRunDominatesWindow() {
+        let t = ACPTranscript()
+        t.messages.append(.user(id: UUID(), text: "the user's prompt", attachments: []))
+        t.messages.append(.systemNotice(id: UUID(), text: "a short notice"))
+        for i in 0..<43 {
+            t.messages.append(.toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed")))
+        }
+
+        t.resetWindowToTail()
+
+        #expect(t.visibleHead == 0)
+    }
+
+    /// A tool-call run that exceeds `tailWindow` still only counts as ONE
+    /// unit, but the messages before it are budgeted normally — a run long
+    /// enough, preceded by enough OTHER distinct messages, still trims once
+    /// the combined budget is exhausted.
+    @Test("tailWindowHead still trims once enough non-tool-call units precede the run")
+    func tailWindowHeadTrimsPastEnoughPrecedingUnits() {
+        var messages: [ACPMessage] = (0..<40).map { index in
+            .systemNotice(id: UUID(), text: "m\(index)")
+        }
+        messages += (0..<10).map { i in
+            .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+        }
+
+        // 40 leading notices + 1 unit for the trailing tool-call run = 41
+        // units total; a budget of 30 must still trim into the notices,
+        // landing exactly `30 - 1` (the run's unit) notices before the end
+        // of the notice run, i.e. at index 40 - 29 = 11.
+        let head = ACPTranscript.tailWindowHead(messages: messages, tailWindow: 30)
+        #expect(head == 11)
+    }
+
+    /// Weighting a tool-call run as one unit must never make the window
+    /// bigger than it would be for an all-plain-message transcript at the
+    /// same length — it only ever holds the head back (or leaves it
+    /// unchanged), never advances it further.
+    @Test("tailWindowHead for an all-tool-call transcript never exceeds the plain-message baseline")
+    func tailWindowHeadNeverExceedsPlainBaseline() {
+        let messages: [ACPMessage] = (0..<80).map { i in
+            .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+        }
+        let head = ACPTranscript.tailWindowHead(messages: messages, tailWindow: 30)
+        let plainBaseline = max(0, messages.count - 30)
+        #expect(head <= plainBaseline)
+        #expect(head == 0) // one contiguous run costs a single unit
+    }
+
+    /// `collapsesFinishedToolCalls` is a UI-only setting this model-layer
+    /// computation cannot see, so with it off (the default) every call in a
+    /// run renders as its own row. An uncapped run could otherwise leave an
+    /// unbounded number of raw messages inside the window regardless of
+    /// `tailWindow` — reopening an unbounded-window problem, and
+    /// permanently exempting that run's messages from
+    /// `trimHiddenMessages`'s off-window content truncation. A single run
+    /// must therefore only ever absorb up to `tailWindow * maxVisibleRows`
+    /// raw messages for free.
+    @Test("a pathologically long tool-call run is still bounded by tailWindow * maxVisibleRows")
+    func tailWindowHeadCapsAPathologicallyLongRun() {
+        let runLength = ACPTranscript.tailWindow * ACPTranscript.maxVisibleRows + 300
+        let messages: [ACPMessage] = (0..<runLength).map { i in
+            .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+        }
+
+        let head = ACPTranscript.tailWindowHead(messages: messages)
+
+        #expect(head == 300)
+    }
+
     @Test("resetWindowToTail does not publish when head is already current")
     func resetDoesNotPublishWhenUnchanged() {
         let t = ACPTranscript()

@@ -1337,6 +1337,33 @@ struct ACPSessionTests {
         #expect(session.transcript.visibleHead == 0)
     }
 
+    /// Reported bug: an actively-streaming turn that runs many tools — each
+    /// tool call is its own transcript message, but a whole run collapses
+    /// into a single "Ran N tools" row in the UI — silently trimmed the
+    /// user's own prompt out of the live render window, because the render
+    /// window used to advance by raw message count on every appended
+    /// message while following the tail. The visible result looked short
+    /// (a couple of rows) while the window had already moved well past the
+    /// start of the conversation. Goes through the real `apply` update path
+    /// (not a direct array mutation) so this exercises exactly what a live
+    /// ACP turn does.
+    @Test("a long tool-call burst does not trim the user's prompt out of the live render window")
+    func liveTranscriptToolCallBurstKeepsPromptInWindow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.recordUserPrompt(text: "the user's prompt", attachments: [])
+        session.appendSystemNotice("a short notice")
+
+        for i in 0..<43 {
+            let id = "tc-\(i)"
+            session.apply(.toolCall(ACPToolCallPayload(
+                toolCallId: id, title: "Tool \(i)", kind: "read", status: "in_progress"
+            )))
+            session.apply(.toolCallUpdate(ACPToolCallUpdate(toolCallId: id, status: "completed")))
+        }
+
+        #expect(session.transcript.visibleHead == 0)
+    }
+
     @Test("empty transcript has no conversation transcript")
     func emptyTranscriptHasNoConversationTranscript() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
