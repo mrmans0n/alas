@@ -378,7 +378,11 @@ extension ACPPermissionRequestParams {
     /// Test factory: one tool call named "Bash" with an allow_once +
     /// reject_once option, matching the real ACPPermissionToolCall /
     /// ACPPermissionOption initializers.
-    static func stub(sessionId: String = "remote", toolTitle: String = "Bash") -> ACPPermissionRequestParams {
+    static func stub(
+        sessionId: String = "remote", toolTitle: String = "Bash",
+        metadata: AnyCodable? = nil, toolCallMetadata: AnyCodable? = nil,
+        allowOptionMetadata: AnyCodable? = nil
+    ) -> ACPPermissionRequestParams {
         ACPPermissionRequestParams(
             sessionId: sessionId,
             toolCall: ACPPermissionToolCall(
@@ -389,11 +393,13 @@ extension ACPPermissionRequestParams {
                 content: nil,
                 locations: nil,
                 rawInput: nil,
-                rawOutput: nil),
+                rawOutput: nil,
+                metadata: toolCallMetadata),
             options: [
-                ACPPermissionOption(optionId: "allow_once", name: "Allow once", kind: "allow_once"),
+                ACPPermissionOption(optionId: "allow_once", name: "Allow once", kind: "allow_once", metadata: allowOptionMetadata),
                 ACPPermissionOption(optionId: "reject_once", name: "Reject once", kind: "reject_once"),
-            ])
+            ],
+            metadata: metadata)
     }
 }
 #endif
@@ -1013,6 +1019,51 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
         #expect(sent.contains { if case .permissionResolved(_, 0) = $0 { return true }
         return false })
+    }
+
+    @Test func permissionRequestForwardsDecodedPresentationToTheRemoteClient() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.streamingState = .awaitingPermission
+        s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                    "description": AnyCodable("Reason: needs shell access"),
+                    "defaultToNo": AnyCodable(true),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable]),
+            toolCallMetadata: AnyCodable([
+                "claudeCode": AnyCodable([
+                    "mcpServer": AnyCodable(["name": AnyCodable("github")] as [String: AnyCodable]),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable]),
+            allowOptionMetadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "description": AnyCodable("Run this command one time"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        ))
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .permissionRequest(_, let payload) = try #require(sent.first(where: {
+            if case .permissionRequest = $0 { return true }
+            return false
+        })) else {
+            Issue.record("expected a permissionRequest message")
+            return
+        }
+        #expect(payload.title == "Run command?")
+        #expect(payload.reason == "Reason: needs shell access")
+        #expect(payload.defaultToNo == true)
+        #expect(payload.mcpServerName == "github")
+        #expect(payload.options.first { $0.optionId == "allow_once" }?.description == "Run this command one time")
+        #expect(payload.options.first { $0.optionId == "reject_once" }?.description == nil)
     }
 
     @Test func subscribeEmitsQuestionRequest() async throws {

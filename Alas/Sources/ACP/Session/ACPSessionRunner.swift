@@ -338,13 +338,20 @@ final class ACPSessionRunner {
             for await (id, params) in self.connection.client.permissionRequests {
                 self.flushPendingIncomingUpdates()
                 if self.pendingCancelledRequestIDs.remove(id) != nil {
-                    self.connection.client.respondToPermission(id: id, response: .init(outcome: .cancelled))
+                    let response = ACPPermissionResponse(outcome: .cancelled)
+                    self.connection.client.respondToPermission(id: id, response: response)
+                    // Matches the below: a metadata-bearing request cancelled
+                    // before evaluate() even starts must still get the same
+                    // treatment as one cancelled afterward, or its
+                    // presentation is silently lost.
+                    await self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
                 self.connection.client.respondToPermission(id: id, response: response)
+                await self.persistPermissionDecision(params: params, response: response)
             }
         }
 
@@ -612,6 +619,71 @@ final class ACPSessionRunner {
                 _ = try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
             }
         }
+    }
+
+    /// Folds the decoded `_meta.permission` presentation and the outcome
+    /// (auto-run, remembered decision, or user click — `evaluate` already
+    /// resolved all three the same way) into the matching persisted tool
+    /// call, so a later hydration of this transcript still shows the same
+    /// title/reason/chosen-option context. Materializes the row from the
+    /// permission request's own toolCall snapshot when it hasn't landed
+    /// yet. A no-op only when there is nothing worth persisting at all.
+    ///
+    /// Gated on `holdsLeaseForWrite()`, matching `applyAuthStatus` and every
+    /// other runner-owned mutation: `stop()` cancelling a parked
+    /// `policy.evaluate` (via `userCancelled()`) resumes this same loop
+    /// iteration, which keeps running past the cancellation to reach this
+    /// call — without the guard, a detached/superseded runner could still
+    /// mutate (and even materialize a new row into) the shared session
+    /// transcript after losing write ownership during a takeover.
+    private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) async {
+        guard holdsLeaseForWrite() else { return }
+        // `session/update` and `session/request_permission` arrive on two
+        // independent async streams (ACPStdioClient). A fast decision
+        // (auto-run, or an early $/cancel_request) can reach here with no
+        // suspension of its own, while an update already yielded into the
+        // other stream hasn't been dequeued by updatesTask yet —
+        // flushPendingIncomingUpdates() only drains what updatesTask has
+        // already dequeued into its own buffer, so it can't see that
+        // update either. Drain to the exact watermark already yielded
+        // (yieldedUpdateCount/appliedUpdateCount, the same pair
+        // deferCompletedOutputBoundaryUntilUpdatesDrain() uses) rather
+        // than guessing an attempt count, so a materialized/merged tool
+        // call row never jumps ahead of a preceding agent/thought message
+        // regardless of how many updates are queued. Bounded only by
+        // cancellation (stop() cancels updatesTask too, so nothing more
+        // would ever apply past that point).
+        let updateWatermark = connection.client.yieldedUpdateCount
+        while appliedUpdateCount < updateWatermark, !Task.isCancelled {
+            await Task.yield()
+            flushPendingIncomingUpdates()
+        }
+        guard !Task.isCancelled else { return }
+        // Re-check: holdsLeaseForWrite() above can no longer speak for
+        // "now" after the suspensions just above — a cross-window takeover
+        // could have seized the lease in the interim. persistIndices below
+        // still gates the actual disk write, but mergePermissionDecision
+        // itself mutates the shared in-memory transcript synchronously, so
+        // that mutation needs its own fresh check.
+        guard holdsLeaseForWrite() else { return }
+        let chosenOption: ACPPermissionOption?
+        let wasCancelled: Bool
+        switch response.outcome {
+        case .selected(let optionId):
+            chosenOption = params.options.first { $0.optionId == optionId }
+            wasCancelled = false
+        case .cancelled:
+            chosenOption = nil
+            wasCancelled = true
+        }
+        guard let index = session.mergePermissionDecision(
+            toolCall: params.toolCall,
+            presentation: ACPPermissionPresentation(metadata: params.metadata),
+            chosenOption: chosenOption,
+            mcpServerName: params.toolCall.mcpServerName,
+            wasCancelled: wasCancelled
+        ) else { return }
+        persistIndices([index], requiresLease: true)
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {

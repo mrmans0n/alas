@@ -17,10 +17,11 @@ struct ACPPermissionPrompt: View {
 
     @ViewBuilder
     private func content(for params: ACPPermissionRequestParams) -> some View {
+        let presentation = ACPPermissionPresentation(metadata: params.metadata)
         VStack(alignment: .leading, spacing: 0) {
             header(params)
-            commandBody(params)
-            actionRow(params)
+            commandBody(params, presentation: presentation)
+            actionRow(params, presentation: presentation)
         }
         .background(
             LinearGradient(
@@ -63,6 +64,12 @@ struct ACPPermissionPrompt: View {
                     .foregroundStyle(theme.color("fg-faint"))
             }
 
+            if let server = params.toolCall.mcpServerName, !server.isEmpty {
+                Text("· via \(server)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+
             Spacer(minLength: 6)
 
             PendingPulse()
@@ -79,13 +86,17 @@ struct ACPPermissionPrompt: View {
 
     /// The actual `Allow … ?` body. Title (e.g. the command) sits on its
     /// own line; if the agent included a separate content block (e.g. a
-    /// preview of stdin), that follows below in monospace.
+    /// preview of stdin), that follows below in monospace. When the
+    /// adapter attached `_meta.permission`, its `title` replaces the
+    /// generic "Allow this?" heading and its `description` renders as a
+    /// reason line under the command summary.
     @ViewBuilder
-    private func commandBody(_ params: ACPPermissionRequestParams) -> some View {
+    private func commandBody(_ params: ACPPermissionRequestParams, presentation: ACPPermissionPresentation?) -> some View {
         let title = params.toolCall.title ?? params.toolCall.toolCallId
         let summary = commandSummary(params)
+        let heading = presentation?.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Allow this?"
         VStack(alignment: .leading, spacing: 8) {
-            Text("Allow this?")
+            Text(heading)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.3)
                 .foregroundStyle(theme.color("fg-faint"))
@@ -110,35 +121,53 @@ struct ACPPermissionPrompt: View {
                     .overlay(RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(theme.color("line"), lineWidth: 0.5))
             }
+            if let reason = presentation?.description, !reason.isEmpty {
+                Text(reason)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 12)
     }
 
+    /// Compact horizontal button row when no option carries a
+    /// `_meta.permission.description` — pixel-identical to the pre-#1365
+    /// layout. Collapses to a vertical, per-option list with secondary
+    /// description text the moment any option has one.
     @ViewBuilder
-    private func actionRow(_ params: ACPPermissionRequestParams) -> some View {
-        HStack(spacing: 10) {
-            Spacer()
-            ForEach(params.options) { opt in
-                Button {
-                    handle(option: opt, scopeKey: scopeKey)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: glyph(for: opt))
-                            .font(.system(size: 10))
-                        Text(opt.name)
-                            .font(.system(size: 11.5, weight: .medium))
+    private func actionRow(_ params: ACPPermissionRequestParams, presentation: ACPPermissionPresentation?) -> some View {
+        let defaultToNo = presentation?.defaultToNo ?? false
+        let hasDescriptions = params.options.contains { $0.presentationDescription?.isEmpty == false }
+        Group {
+            if hasDescriptions {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(params.options) { opt in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Spacer()
+                                optionButton(opt, defaultToNo: defaultToNo)
+                            }
+                            if let description = opt.presentationDescription, !description.isEmpty {
+                                Text(description)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(theme.color("fg-faint"))
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(background(for: opt))
-                    .foregroundStyle(foreground(for: opt))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(border(for: opt), lineWidth: 0.5)
-                    )
                 }
-                .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 10) {
+                    Spacer()
+                    ForEach(params.options) { opt in
+                        optionButton(opt, defaultToNo: defaultToNo)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -146,6 +175,31 @@ struct ACPPermissionPrompt: View {
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
         }
+    }
+
+    @ViewBuilder
+    private func optionButton(_ opt: ACPPermissionOption, defaultToNo: Bool) -> some View {
+        Button {
+            handle(option: opt, scopeKey: scopeKey)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: glyph(for: opt))
+                    .font(.system(size: 10))
+                Text(opt.name)
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(background(for: opt, defaultToNo: defaultToNo))
+            .foregroundStyle(foreground(for: opt, defaultToNo: defaultToNo))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(border(for: opt, defaultToNo: defaultToNo), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(isDefaultAction(opt, defaultToNo: defaultToNo) ? .defaultAction : nil)
     }
 
     // MARK: - per-option styling
@@ -164,19 +218,33 @@ struct ACPPermissionPrompt: View {
         return "circle"
     }
 
-    private func background(for opt: ACPPermissionOption) -> Color {
-        if opt.kind == "allow_once" { return theme.color("accent") }
-        if isDestructive(opt) { return theme.color("bg-3") }
+    /// The option that should carry default-button styling and the return
+    /// key. Normally the once-only allow option (today's behavior); when
+    /// the adapter set `_meta.permission.defaultToNo`, the once-only
+    /// reject option takes its place instead.
+    private func isDefaultStyled(_ opt: ACPPermissionOption, defaultToNo: Bool) -> Bool {
+        defaultToNo ? opt.kind == "reject_once" : opt.kind == "allow_once"
+    }
+
+    /// Only bind the return key when the adapter explicitly asked for
+    /// `defaultToNo` — untagged adapters keep today's exact behavior (no
+    /// keyboard shortcut at all) per the #1365 acceptance criteria.
+    private func isDefaultAction(_ opt: ACPPermissionOption, defaultToNo: Bool) -> Bool {
+        defaultToNo && isDefaultStyled(opt, defaultToNo: defaultToNo)
+    }
+
+    private func background(for opt: ACPPermissionOption, defaultToNo: Bool) -> Color {
+        if isDefaultStyled(opt, defaultToNo: defaultToNo) { return theme.color("accent") }
         return theme.color("bg-3")
     }
 
-    private func foreground(for opt: ACPPermissionOption) -> Color {
-        if opt.kind == "allow_once" { return theme.color("bg-0") }
+    private func foreground(for opt: ACPPermissionOption, defaultToNo: Bool) -> Color {
+        if isDefaultStyled(opt, defaultToNo: defaultToNo) { return theme.color("bg-0") }
         return theme.color("fg")
     }
 
-    private func border(for opt: ACPPermissionOption) -> Color {
-        if opt.kind == "allow_once" { return theme.color("accent") }
+    private func border(for opt: ACPPermissionOption, defaultToNo: Bool) -> Color {
+        if isDefaultStyled(opt, defaultToNo: defaultToNo) { return theme.color("accent") }
         return theme.color("line")
     }
 

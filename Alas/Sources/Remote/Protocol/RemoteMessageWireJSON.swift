@@ -169,12 +169,67 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
     let requestId: Int
     let toolName: String
     let options: [RemotePermissionOption]
+    /// `_meta.permission.title` (see `ACPPermissionPresentation`). Absent
+    /// for adapters without the extension — the client falls back to the
+    /// generic "Allow “<toolName>”?" prompt.
+    let title: String?
+    /// `_meta.permission.description` — reason line under the prompt.
+    let reason: String?
+    /// `_meta.permission.defaultToNo` — the client should give the reject
+    /// option default-button styling instead of the allow option.
+    let defaultToNo: Bool
+    /// `_meta.claudeCode.mcpServer.name` for `mcp__*` calls.
+    let mcpServerName: String?
+
+    init(
+        requestId: Int, toolName: String, options: [RemotePermissionOption],
+        title: String? = nil, reason: String? = nil, defaultToNo: Bool = false,
+        mcpServerName: String? = nil
+    ) {
+        self.requestId = requestId
+        self.toolName = toolName
+        self.options = options
+        self.title = title
+        self.reason = reason
+        self.defaultToNo = defaultToNo
+        self.mcpServerName = mcpServerName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName
+    }
+
+    // `RemotePeerConnection` decodes this from other Alas instances, which
+    // can run an older protocol version that predates defaultToNo entirely
+    // — RemoteProtocolVersion treats additive fields like this one as
+    // version-compatible, so a missing key must decode to `false`, not
+    // fail the whole payload the way synthesized Decodable would for a
+    // non-optional Bool.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.decode(Int.self, forKey: .requestId)
+        toolName = try c.decode(String.self, forKey: .toolName)
+        options = try c.decode([RemotePermissionOption].self, forKey: .options)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        defaultToNo = try c.decodeIfPresent(Bool.self, forKey: .defaultToNo) ?? false
+        mcpServerName = try c.decodeIfPresent(String.self, forKey: .mcpServerName)
+    }
 }
 
 struct RemotePermissionOption: Codable, Equatable, Sendable {
     let optionId: String
     let name: String
     let kind: String
+    /// `_meta.permission.description` for this option.
+    let description: String?
+
+    init(optionId: String, name: String, kind: String, description: String? = nil) {
+        self.optionId = optionId
+        self.name = name
+        self.kind = kind
+        self.description = description
+    }
 }
 
 /// A question option as sent to the client.

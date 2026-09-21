@@ -3177,12 +3177,49 @@ function planText(o) {
 let permState = null;
 function showPermission(sessionId, payload) {
   permState = { sessionId, requestId: payload.requestId };
-  $("perm-tool").textContent = "Allow “" + payload.toolName + "”?";
+  // #perm-scroll is reused across prompts and keeps its scrollTop —
+  // without resetting it, a short prompt shown after a long, scrolled one
+  // can open already scrolled past its own heading/tool name.
+  const scrollEl = $("perm-scroll");
+  if (scrollEl) scrollEl.scrollTop = 0;
+  // `title`/`reason`/option `description`/`mcpServerName` come from the
+  // adapter's `_meta.permission` extension (see ACPPermissionPresentation
+  // on the native side) and are absent for adapters that don't send it —
+  // fall back to the generic prompt so untagged adapters render as before.
+  // When a metadata title is present it becomes a heading ABOVE the tool
+  // name, never replacing it — approving without seeing what will actually
+  // run (e.g. a generic "Run command?" hiding the real command) would be
+  // a real safety regression, matching how the native prompt keeps both.
+  const headingEl = $("perm-heading");
+  if (headingEl) {
+    headingEl.textContent = payload.title || "";
+    headingEl.hidden = !payload.title;
+  }
+  $("perm-tool").textContent = payload.title ? payload.toolName : ("Allow “" + payload.toolName + "”?");
+  const reasonEl = $("perm-reason");
+  if (reasonEl) {
+    reasonEl.textContent = payload.reason || "";
+    reasonEl.hidden = !payload.reason;
+  }
+  const serverEl = $("perm-server");
+  if (serverEl) {
+    serverEl.textContent = payload.mcpServerName ? "via " + payload.mcpServerName : "";
+    serverEl.hidden = !payload.mcpServerName;
+  }
   const box = $("perm-options"); box.innerHTML = "";
+  // Only bind Enter/default-button styling when the adapter explicitly set
+  // `defaultToNo` — moving it to the once-only reject option. Untagged
+  // adapters (defaultToNo absent/false) get no default button at all, same
+  // as the native prompt: focusing Allow there would silently bind Enter
+  // to approve every legacy prompt.
+  let defaultButton = null;
   payload.options.forEach(o => {
+    const wrap = document.createElement("div");
+    wrap.className = "perm-option";
     const b = document.createElement("button");
     b.textContent = o.name;
     b.className = o.kind.startsWith("allow") ? "btn-allow" : "btn-deny";
+    if (payload.defaultToNo && o.kind === "reject_once") { b.classList.add("is-default"); defaultButton = b; }
     b.onclick = () => {
       // "once" kinds send null so the server reproduces the local prompt's
       // mapping (once → don't persist / re-ask next time); only "*_always"
@@ -3190,9 +3227,21 @@ function showPermission(sessionId, payload) {
       send({ type: "permissionDecision", sessionId, requestId: payload.requestId, optionId: o.optionId, persistScope: o.kind.endsWith("always") ? "project" : null });
       hidePermission();
     };
-    box.appendChild(b);
+    wrap.appendChild(b);
+    if (o.description) {
+      const desc = document.createElement("p");
+      desc.className = "perm-option-desc";
+      desc.textContent = o.description;
+      wrap.appendChild(desc);
+    }
+    box.appendChild(wrap);
   });
   $("permission").classList.remove("hidden");
+  // preventScroll: #perm-scroll is a scrollable ancestor now (see the
+  // scrollable-sheet fix) — a plain focus() would scroll a below-the-fold
+  // reject button into view, hiding the heading/tool name it was made
+  // scrollable to keep visible.
+  if (defaultButton) defaultButton.focus({ preventScroll: true });
 }
 function hidePermission() { $("permission").classList.add("hidden"); permState = null; }
 
