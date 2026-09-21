@@ -715,10 +715,21 @@ final class RemotePeerManager {
             // protocol version are cosmetic and safe to take from the peer.
             peers[index].name = name
             peers[index].protocolVersion = protocolVersion
+            // Keeps `durableStateByServerId` from going stale: a peer only
+            // gets `.hello` events once it's an active, confirmed link, so
+            // this row IS the current durable truth. Without this, a LATER
+            // re-pair attempt that fails would roll back to whatever name
+            // or protocol version this snapshot last had — reverting
+            // cosmetic metadata a working connection has since updated.
+            durableStateByServerId[peers[index].serverId] = peers[index]
             store.save(peers)
         case .originChanged(let origin):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             peers[index].lastOrigin = origin
+            // Same reasoning as `.hello` above: a stale durable snapshot
+            // restored after a later failed re-pair could prefer a dead
+            // origin again over the one this connection just proved works.
+            durableStateByServerId[peers[index].serverId] = peers[index]
             store.save(peers)
         case .message:
             break

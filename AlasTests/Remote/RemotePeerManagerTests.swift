@@ -1267,6 +1267,43 @@ struct RemotePeerManagerTests {
         #expect(store.saved.first?.lastOrigin == "http://10.0.0.5:8765")
     }
 
+    // `.hello`/`.originChanged` update `peers` directly on an already
+    // confirmed link, bypassing `upsert` entirely. If the durable snapshot
+    // `addPeer` rolls back to on a later failed re-pair isn't refreshed the
+    // same way, that rollback would revert the name/protocol version/origin
+    // a working connection already updated — potentially preferring a dead
+    // origin again over the one just proven to work.
+    @Test func linkEventsKeepTheDurableSnapshotInSyncSoALaterFailedRepairDoesNotRevertThem() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: nil,
+                               localDeviceId: "old-device", addedAt: Date(timeIntervalSince1970: 1))])
+        let links = Links()
+        let requests = Requests()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokNew","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: links, reciprocalConfirmationTimeout: 0.02)
+        manager.connectAll()
+        let link = try #require(links.byPeerId["p1"])
+        link.emit(.hello(serverId: "srv-a", name: "Mac A (renamed)", protocolVersion: 2, federationEnabled: true))
+        link.emit(.originChanged("http://10.0.0.9:8765"))
+
+        // A re-pair attempt starts, its own reciprocal call is never
+        // confirmed, and it rolls back.
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "old-token")
+        #expect(peer.localDeviceId == "old-device")
+        // Restored to the pre-attempt relationship, but with the metadata
+        // a working connection already updated — not the stale snapshot
+        // from before those link events.
+        #expect(peer.name == "Mac A (renamed)")
+        #expect(peer.protocolVersion == 2)
+        #expect(peer.lastOrigin == "http://10.0.0.9:8765")
+    }
+
     // A `hello` is whatever answered the origin. Adopting its identity would
     // let a reassigned address or a squatter re-key the record, and because
     // `forget` revokes devices by identity the user would then revoke the
