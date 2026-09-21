@@ -40,6 +40,7 @@ struct RunSchedulerTests {
         var fired: [String] = []
         var invocations: [RunScheduleInvocation] = []
         var outcome: RunScheduleOutcome = .succeeded
+        var runs: [RunScheduleFiring.RunReference] = []
         var gate: CheckedContinuation<Void, Never>?
         var holdsRuns = false
     }
@@ -69,7 +70,7 @@ struct RunSchedulerTests {
                     log.gate = continuation
                 }
             }
-            return log.outcome
+            return RunScheduleRunReport(outcome: log.outcome, runs: log.runs)
         }
         return (scheduler, log)
     }
@@ -390,12 +391,23 @@ struct RunSchedulerTests {
         scheduler.evaluate()
         #expect(log.fired == ["a"])
         #expect(scheduler.state(for: "a").lastOutcome == .skipped(reason: "The previous run is still in progress."))
+        // A collision is an event too, and is the explanation for an
+        // occurrence that otherwise looks like it simply never happened.
+        #expect(
+            scheduler.firings(for: "a").map(\.outcome)
+                == [.skipped(reason: "The previous run is still in progress.")]
+        )
 
         log.holdsRuns = false
         log.gate?.resume()
         await scheduler.waitForRunsForTesting()
         #expect(scheduler.isRunning(scheduler.schedule(id: "a")!) == false)
         #expect(scheduler.state(for: "a").lastOutcome == .succeeded)
+        // Newest first: the run that finished, then the one it refused.
+        #expect(
+            scheduler.firings(for: "a").map(\.outcome)
+                == [.succeeded, .skipped(reason: "The previous run is still in progress.")]
+        )
     }
 
     // MARK: - Missed occurrences and gaps
@@ -462,5 +474,167 @@ struct RunSchedulerTests {
         scheduler.pruneSchedules(missingProjectIDs: ["p1"])
         #expect(scheduler.schedules.map(\.id) == ["p2", "all"])
         #expect(scheduler.pausedProjectIDs.isEmpty)
+    }
+
+    // MARK: - History
+
+    @Test func everyFiringIsRecordedNewestFirstWithItsRuns() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, log) = makeScheduler(store: store, clock: clock)
+        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-1", scriptName: "test.sh")]
+        scheduler.add(interval("a", seconds: 600, at: clock.now))
+
+        clock.advance(605)
+        scheduler.evaluate()
+        await scheduler.waitForRunsForTesting()
+        log.outcome = .failed(exitCode: 2)
+        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-2", scriptName: "test.sh")]
+        clock.advance(600)
+        scheduler.evaluate()
+        await scheduler.waitForRunsForTesting()
+
+        let firings = scheduler.firings(for: "a")
+        #expect(firings.count == 2)
+        #expect(firings.map(\.outcome) == [.failed(exitCode: 2), .succeeded])
+        #expect(firings.first?.runs.map(\.runID) == ["run-2"])
+        #expect(firings.last?.runs.map(\.runID) == ["run-1"])
+        #expect(firings.allSatisfy { !$0.wasManual })
+    }
+
+    /// A Run Now is marked as one, because an entry that does not line up with
+    /// the trigger is otherwise unexplainable.
+    @Test func aManualRunIsRecordedAsManual() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, _) = makeScheduler(store: store, clock: clock)
+        scheduler.add(interval("a", seconds: 600, at: clock.now))
+        scheduler.runNow(id: "a")
+        await scheduler.waitForRunsForTesting()
+
+        #expect(scheduler.firings(for: "a").map(\.wasManual) == [true])
+    }
+
+    /// The list is a short history, not an audit log: the file is rewritten
+    /// whole on every persist, so it has to stop growing.
+    @Test func historyIsBoundedAndDropsTheOldest() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, _) = makeScheduler(store: store, clock: clock)
+        scheduler.add(interval("a", seconds: 600, at: clock.now))
+        let total = RunScheduleState.maximumRememberedFirings + 5
+        for _ in 0..<total {
+            clock.advance(605)
+            scheduler.evaluate()
+            await scheduler.waitForRunsForTesting()
+        }
+
+        let firings = scheduler.firings(for: "a")
+        #expect(firings.count == RunScheduleState.maximumRememberedFirings)
+        // Newest first, so the survivors are the tail of the run, and the
+        // oldest firing is gone rather than the newest.
+        let firedAt = firings.map(\.firedAt)
+        #expect(firedAt == firedAt.sorted(by: >))
+    }
+
+    /// "Nothing ran last night" is an answer, and the history has to give it
+    /// rather than leave a hole the user has to interpret.
+    @Test func aSkippedBatchOfMissedOccurrencesIsRecorded() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, log) = makeScheduler(store: store, clock: clock)
+        scheduler.add(interval("a", seconds: 600, policy: .skip, at: clock.now))
+
+        // Three occurrences pass unobserved, well beyond the grace period.
+        clock.advance(1_900)
+        scheduler.evaluate()
+        await scheduler.waitForRunsForTesting()
+
+        #expect(log.fired.isEmpty)
+        let firing = try #require(scheduler.firings(for: "a").first)
+        #expect(firing.outcome == .skipped(reason: "3 occurrences were missed and skipped."))
+        #expect(!firing.wasManual)
+        #expect(firing.runs.isEmpty)
+        // Nothing ran, so the row's status still describes the last run that
+        // did — here, none at all.
+        #expect(scheduler.state(for: "a").lastOutcome == nil)
+    }
+
+    @Test func historySurvivesRelaunch() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (first, log) = makeScheduler(store: store, clock: clock)
+        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-1", scriptName: "test.sh")]
+        first.add(interval("a", seconds: 600, at: clock.now))
+        clock.advance(605)
+        first.evaluate()
+        await first.waitForRunsForTesting()
+
+        let (second, _) = makeScheduler(store: store, clock: clock)
+        let firings = second.firings(for: "a")
+        #expect(firings.count == 1)
+        #expect(firings.first?.outcome == .succeeded)
+        #expect(firings.first?.runs.first?.runID == "run-1")
+        #expect(firings.first?.runs.first?.scriptName == "test.sh")
+    }
+
+    /// `firings` arrived after the first release. A file written before it
+    /// has no such key, and treating that as a decode failure would drop the
+    /// whole state — `nextFireAt` included, which re-anchors the schedule.
+    @Test func aStateWrittenBeforeHistoryExistedStillDecodes() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (first, _) = makeScheduler(store: store, clock: clock)
+        first.add(interval("a", seconds: 600, at: clock.now))
+        clock.advance(605)
+        first.evaluate()
+        await first.waitForRunsForTesting()
+        let expectedNextFire = try #require(first.state(for: "a").nextFireAt)
+
+        let persisted = try #require(store.files[fileURL])
+        var object = try #require(JSONSerialization.jsonObject(with: persisted) as? [String: Any])
+        var states = try #require(object["states"] as? [String: Any])
+        var state = try #require(states["a"] as? [String: Any])
+        state.removeValue(forKey: "firings")
+        states["a"] = state
+        object["states"] = states
+        store.files[fileURL] = try JSONSerialization.data(withJSONObject: object)
+
+        let (second, log) = makeScheduler(store: store, clock: clock)
+        #expect(second.state(for: "a").nextFireAt == expectedNextFire)
+        #expect(second.state(for: "a").lastOutcome == .succeeded)
+        #expect(second.firings(for: "a").isEmpty)
+        // And the recovered timing still holds it back from an instant re-fire.
+        second.evaluate()
+        await second.waitForRunsForTesting()
+        #expect(log.fired.isEmpty)
+    }
+
+    /// History is the least important field in the state. One entry a newer
+    /// build wrote must cost at most itself, never the timing around it.
+    @Test func oneUndecodableFiringDoesNotDiscardTheState() async throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (first, _) = makeScheduler(store: store, clock: clock)
+        first.add(interval("a", seconds: 600, at: clock.now))
+        clock.advance(605)
+        first.evaluate()
+        await first.waitForRunsForTesting()
+        let expectedNextFire = try #require(first.state(for: "a").nextFireAt)
+
+        let persisted = try #require(store.files[fileURL])
+        var object = try #require(JSONSerialization.jsonObject(with: persisted) as? [String: Any])
+        var states = try #require(object["states"] as? [String: Any])
+        var state = try #require(states["a"] as? [String: Any])
+        var firings = try #require(state["firings"] as? [[String: Any]])
+        firings.insert(["id": "broken"], at: 0)
+        state["firings"] = firings
+        states["a"] = state
+        object["states"] = states
+        store.files[fileURL] = try JSONSerialization.data(withJSONObject: object)
+
+        let (second, _) = makeScheduler(store: store, clock: clock)
+        #expect(second.state(for: "a").nextFireAt == expectedNextFire)
+        #expect(second.firings(for: "a").map(\.outcome) == [.succeeded])
     }
 }

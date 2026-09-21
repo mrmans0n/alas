@@ -172,4 +172,63 @@ struct RunSchedulePresentationTests {
         #expect(hours.intervalValue == 2)
         #expect(hours.intervalUnit == .hours)
     }
+
+    // MARK: - History
+
+    @Test func historyHeadingCarriesItsCount() {
+        #expect(RunSchedulePresentation.historyLabel([firing(duration: 0)]) == "History (1)")
+        #expect(
+            RunSchedulePresentation.historyLabel([firing(duration: 0), firing(duration: 2)])
+                == "History (2)"
+        )
+    }
+
+    /// Nothing under a second is timed: a skip and an instant launch failure
+    /// both settle immediately, and "0.0s" would suggest a measurement.
+    @Test func durationsBelowASecondAreNotReported() {
+        #expect(RunSchedulePresentation.durationLabel(0) == nil)
+        #expect(RunSchedulePresentation.durationLabel(0.4) == nil)
+        #expect(RunSchedulePresentation.durationLabel(3.42) == "3.4s")
+        #expect(RunSchedulePresentation.durationLabel(90) == "1 minute")
+        #expect(RunSchedulePresentation.durationLabel(7_200) == "2 hours")
+    }
+
+    @Test func aFiringLineCarriesItsTimeDurationAndOrigin() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        let scheduled = firing(duration: 12)
+        #expect(
+            RunSchedulePresentation.firingTimeLabel(scheduled, formatter: formatter)
+                == "2027-01-15 08:00 · 12.0s"
+        )
+        // A manual run is marked, because an entry that does not line up with
+        // the trigger is otherwise unexplainable.
+        let manual = firing(duration: 0, wasManual: true)
+        #expect(
+            RunSchedulePresentation.firingTimeLabel(manual, formatter: formatter)
+                == "2027-01-15 08:00 · Run Now"
+        )
+    }
+
+    @Test func aLinkedRunIsNamedByScriptAndBranch() {
+        let run = RunScheduleFiring.RunReference(
+            worktreeID: "wt-1",
+            branch: "sched/nightly",
+            runID: "run-1",
+            scriptName: "build.sh (repo)"
+        )
+        #expect(RunSchedulePresentation.firingRunLabel(run) == "build.sh (repo) in sched/nightly")
+    }
+
+    private func firing(duration: TimeInterval, wasManual: Bool = false) -> RunScheduleFiring {
+        // 2027-01-15 08:00 UTC.
+        let firedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        return RunScheduleFiring(
+            firedAt: firedAt,
+            finishedAt: firedAt.addingTimeInterval(duration),
+            wasManual: wasManual,
+            outcome: .succeeded
+        )
+    }
 }

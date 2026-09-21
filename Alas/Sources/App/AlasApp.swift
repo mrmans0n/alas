@@ -7,18 +7,7 @@ struct AlasApp: App {
     @State private var state: AppState
     @State private var editorCommandAvailability = EditorCommandAvailability.shared
 
-    private static var isRunningUnitTests: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-            || CommandLine.arguments.contains { $0.localizedCaseInsensitiveContains("xctest") }
-            || NSClassFromString("XCTestCase") != nil
-            || NSClassFromString("XCTest.XCTestCase") != nil
-            || Bundle.allBundles.contains { bundle in
-                bundle.bundlePath.hasSuffix(".xctest")
-                    || bundle.bundleIdentifier?.hasPrefix("com.apple.dt.XCTest") == true
-            }
-    }
+    private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
     init() {
         if Self.isRunningUnitTests {

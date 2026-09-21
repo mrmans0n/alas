@@ -16,7 +16,9 @@ extension AppState {
 
     func installRunScheduleRunner() {
         runScheduler.runner = { [weak self] schedule, invocation in
-            guard let self else { return .launchFailed("Alas is shutting down.") }
+            guard let self else {
+                return RunScheduleRunReport(outcome: .launchFailed("Alas is shutting down."))
+            }
             return await self.runSchedule(schedule, invocation: invocation)
         }
     }
@@ -53,13 +55,13 @@ extension AppState {
     func runSchedule(
         _ schedule: RunSchedule,
         invocation: RunScheduleInvocation = .scheduled
-    ) async -> RunScheduleOutcome {
+    ) async -> RunScheduleRunReport {
         let targets: [(project: ProjectConfig, worktree: Worktree)]
         switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
             targets = resolved
         case .unavailable(let reason):
-            return .skipped(reason: reason)
+            return RunScheduleRunReport(outcome: .skipped(reason: reason))
         }
         // Start every target before waiting on any of them. Run scripts are
         // allowed to be long-running servers that never exit, so awaiting one
@@ -72,10 +74,27 @@ extension AppState {
             }
         }
         var outcomes: [RunScheduleOutcome] = []
+        var references: [RunScheduleFiring.RunReference] = []
         for run in runs {
-            outcomes.append(await run.value)
+            let report = await run.value
+            outcomes.append(report.outcome)
+            references.append(contentsOf: report.runs)
         }
-        return RunScheduleOutcome.combined(outcomes)
+        // Every target's run is linked, not just the one whose outcome won:
+        // a fan-out that failed in one project should still let the user open
+        // the reports of the projects that did run.
+        return RunScheduleRunReport(outcome: .combined(outcomes), runs: references)
+    }
+
+    /// Loads the durable report ids for worktrees a schedule's history points
+    /// at, so its links work without first visiting each worktree's Run tab.
+    /// A schedule that composes its own worktree otherwise shows entries whose
+    /// reports exist but cannot be opened until something else happens to load
+    /// them. Already-loaded worktrees are skipped; archiving refreshes them.
+    func primeScheduleRunReportIDs(_ worktreeIDs: [String]) async {
+        for worktreeID in worktreeIDs where durableRunReportIDsByWorktreeID[worktreeID] == nil {
+            await reloadDurableRunReportIDs(worktreeID: worktreeID)
+        }
     }
 
     enum ScheduleTargetResolution {
@@ -133,7 +152,7 @@ extension AppState {
         _ schedule: RunSchedule,
         project: ProjectConfig,
         worktree originWorktree: Worktree
-    ) async -> RunScheduleOutcome {
+    ) async -> RunScheduleRunReport {
         var worktree = originWorktree
         if let composition = schedule.composition {
             switch await createScheduledWorktree(for: schedule, composition: composition, project: project) {
@@ -143,14 +162,18 @@ extension AppState {
                 reportScheduleFailure(
                     schedule, reason: failure.message, project: project, worktree: originWorktree
                 )
-                return .launchFailed(failure.message)
+                return RunScheduleRunReport(outcome: .launchFailed(failure.message))
             }
         }
 
+        var references: [RunScheduleFiring.RunReference] = []
         if let scriptKey = schedule.scriptKey {
-            let scriptOutcome = await runScheduledScript(key: scriptKey, in: worktree, project: project)
-            guard case .succeeded = scriptOutcome else {
-                switch scriptOutcome {
+            let script = await runScheduledScript(key: scriptKey, in: worktree, project: project)
+            // Kept even when the script failed: a failed run is exactly the
+            // one whose report the user wants to open from the history.
+            references = script.runs
+            guard case .succeeded = script.outcome else {
+                switch script.outcome {
                 case .skipped:
                     // Nothing was launched, so there is nothing to compose on.
                     break
@@ -167,12 +190,17 @@ extension AppState {
                         )
                     }
                 }
-                return scriptOutcome
+                return RunScheduleRunReport(outcome: script.outcome, runs: references)
             }
         }
 
-        guard let composition = schedule.composition else { return .succeeded }
-        return await launchScheduledAgent(for: schedule, composition: composition, worktree: worktree, project: project)
+        guard let composition = schedule.composition else {
+            return RunScheduleRunReport(outcome: .succeeded, runs: references)
+        }
+        let agent = await launchScheduledAgent(
+            for: schedule, composition: composition, worktree: worktree, project: project
+        )
+        return RunScheduleRunReport(outcome: agent, runs: references)
     }
 
     /// Announces a failure that no other channel will report. A scheduled
@@ -265,25 +293,38 @@ extension AppState {
         key: String,
         in worktree: Worktree,
         project: ProjectConfig
-    ) async -> RunScheduleOutcome {
+    ) async -> RunScheduleRunReport {
         let discovery = await runScheduleScriptDiscovery(worktree.path, project.host)
         let scripts: [RunScript]
         switch discovery {
         case .scripts(let found):
             scripts = found
         case .failed(let message):
-            return .launchFailed("Could not list scripts in \(worktree.branch): \(message)")
+            return RunScheduleRunReport(
+                outcome: .launchFailed("Could not list scripts in \(worktree.branch): \(message)")
+            )
         }
         guard let script = scripts.first(where: { $0.key == key }) else {
-            return .skipped(reason: "Script \(key) was not found in \(worktree.branch).")
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "Script \(key) was not found in \(worktree.branch).")
+            )
         }
         if runningScriptTab(for: script, in: worktree) != nil
             || runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true {
-            return .skipped(reason: "\(script.displayName) is already running in \(worktree.branch).")
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "\(script.displayName) is already running in \(worktree.branch).")
+            )
         }
+        var reference: RunScheduleFiring.RunReference?
         let settlement: RunScriptSettlement = await withCheckedContinuation { continuation in
             switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false) {
             case .started(let runID):
+                reference = RunScheduleFiring.RunReference(
+                    worktreeID: worktree.id,
+                    branch: worktree.branch,
+                    runID: runID,
+                    scriptName: script.displayName
+                )
                 awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
                     continuation.resume(returning: $0)
                 }
@@ -297,9 +338,15 @@ extension AppState {
         }
         switch settlement {
         case .finished(let outcome):
-            return RunScheduleOutcome(outcome)
+            // Only a settled run is archived, so only a settled run has a
+            // report to link. A launch that never produced a command had its
+            // record rolled back, and its reference would point at nothing.
+            return RunScheduleRunReport(
+                outcome: RunScheduleOutcome(outcome),
+                runs: reference.map { [$0] } ?? []
+            )
         case .launchFailed(let message):
-            return .launchFailed(message)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
         }
     }
 

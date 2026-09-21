@@ -43,6 +43,43 @@ enum RunSchedulePresentation {
         }
     }
 
+    /// Heading for the history disclosure. Carries the count so the row says
+    /// how much there is to open before it is opened. A schedule with no
+    /// firings shows no disclosure at all; "Never run" already says that.
+    static func historyLabel(_ firings: [RunScheduleFiring]) -> String {
+        "History (\(firings.count))"
+    }
+
+    /// When a firing happened, and how long it took. The outcome is rendered
+    /// separately so the two can be coloured differently.
+    static func firingTimeLabel(
+        _ firing: RunScheduleFiring,
+        formatter: DateFormatter = defaultDateFormatter
+    ) -> String {
+        var label = formatter.string(from: firing.firedAt)
+        if let duration = durationLabel(firing.duration) {
+            label += " · \(duration)"
+        }
+        if firing.wasManual {
+            label += " · Run Now"
+        }
+        return label
+    }
+
+    /// Nil under a second: a skip and an instant launch failure both settle
+    /// immediately, and "0.0s" would suggest something was measured.
+    static func durationLabel(_ duration: TimeInterval) -> String? {
+        guard duration >= 1 else { return nil }
+        if duration < 60 { return String(format: "%.1fs", duration) }
+        if duration < 3_600 { return plural(Int(duration / 60), "minute") }
+        return plural(Int(duration / 3_600), "hour")
+    }
+
+    /// What a firing's linked run was, for the button that opens its report.
+    static func firingRunLabel(_ run: RunScheduleFiring.RunReference) -> String {
+        "\(run.scriptName) in \(run.branch)"
+    }
+
     static func missedLabel(_ missed: RunScheduleMissedOccurrences) -> String {
         let count = plural(missed.count, "occurrence")
         switch missed.policy {

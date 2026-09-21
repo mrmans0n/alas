@@ -245,7 +245,44 @@ Swift Testing suites:
 - `RunSchedulePresentationTests`: labels for targets, triggers, outcomes,
   per-worktree visibility scoping, and `RunScheduleDraft` validation.
 
-The composition cases spawn real `git worktree add` subprocesses. They pass
-individually and in CI, but this development machine is known to wedge
-`xcodebuild` partway through suites that create worktrees, so local runs
-select the non-creating cases and leave the rest to CI.
+The composition cases spawn real `git worktree add` subprocesses. An earlier
+revision of this document claimed the suite wedged locally past the third
+such case and had to be left to CI. That was wrong: the runs it was based on
+never reached the test phase at all — one ended in `** BUILD INTERRUPTED **`
+mid-compile and another failed to compile — and both happened while the host
+was saturated by parallel builds. Re-measured on 2026-09-21 at normal load,
+the whole suite, all five composition cases included, passes locally in
+2.3 s with no test-timeout flags. Run it locally.
+
+## Firing history (follow-up to the original issue)
+
+The issue listed event history as a follow-up: schedules originally kept only
+`lastOutcome`. They now keep a bounded list of past firings.
+
+| Concern | Decision |
+| --- | --- |
+| Where | `RunScheduleState.firings`, newest first, capped at `maximumRememberedFirings` (20), in the same JSON file |
+| What counts | Anything dispatched, plus the two deliberate non-runs: a batch of missed occurrences dropped by the `skip` policy, and an occurrence refused because the previous run was still going |
+| Transcripts | Not stored. A firing keeps a `RunReference` (worktree, branch, run id, script name) and the row opens `openRunReport`, so `RunHistoryStore` stays the single owner of output and of its retention |
+| Fan-out | Every target's run is referenced, not just the one whose outcome won the `combined` comparison |
+| Purged runs | The entry still names the run; the button is offered only when `hasRunReport` says the report survives |
+| `lastOutcome` | Unchanged by a missed-occurrence skip. Nothing ran, so the row's status keeps describing the last occurrence that did |
+
+The runner's return type changed from `RunScheduleOutcome` to
+`RunScheduleRunReport` (outcome plus references) to carry the run ids back
+from `AppState` to the scheduler that records them.
+
+Decoding is hand-written for `RunScheduleState`, because synthesized
+`Decodable` ignores property defaults: a file written before `firings`
+existed has no such key, and treating that as a failure would drop the whole
+state, `nextFireAt` included, which re-anchors the schedule and can make a
+`runLatest` schedule fire on launch. Individual firings decode leniently for
+the same reason one bad schedule must not discard the rest.
+
+Covered by `RunSchedulerTests` (recording order, the 20-entry bound, manual
+marking, missed-batch and collision entries, relaunch round-trip, a state
+written before `firings` existed, one undecodable firing),
+`AppStateRunScheduleTests` (a failed run is linked; a composed run links the
+worktree it created, not the one it was aimed from) and
+`RunSchedulePresentationTests` (heading, duration thresholds, firing line,
+run label).
