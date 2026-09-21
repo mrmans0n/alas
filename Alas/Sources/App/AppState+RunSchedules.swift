@@ -503,22 +503,43 @@ extension AppState {
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
-    /// Ready means the harness detector has matched the session's foreground
-    /// process to a known agent. A changed foreground pid alone is not
+    /// Ready means the detector currently sees a known agent as the
+    /// session's foreground process. A changed foreground pid alone is not
     /// enough — the user's startup script spawns processes too — so an agent
     /// the detector does not know never gets its prompt, which is the safe
     /// side to fail on.
+    ///
+    /// `activeHarnessBySession` rather than `harnessBySession`: the latter is
+    /// never cleared when the process exits, so it answers "did an agent ever
+    /// run here", which stays true for the shell that reclaims the terminal
+    /// afterwards.
+    ///
+    /// Cancellation ends the wait instead of being swallowed. A cancelled
+    /// sleep returns immediately, so ignoring it would spin this loop on the
+    /// main actor until the deadline and freeze the app.
     private func waitForScheduledAgent(sessionID: String) async -> Bool {
         if let scheduledAgentReadiness {
             return await scheduledAgentReadiness(sessionID)
         }
         let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
-        while harness.harnessBySession[sessionID] == nil {
+        while harness.activeHarnessBySession[sessionID] == nil {
             guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }
-            try? await Task.sleep(for: .milliseconds(500))
+            do {
+                try await Task.sleep(for: .milliseconds(500))
+            } catch {
+                return false
+            }
         }
-        try? await Task.sleep(for: Self.scheduledPromptSettleDelay)
-        return harness.detector.isRegistered(sessionId: sessionID)
+        // The agent can still exit while the TUI is settling, and the
+        // terminal outlives it. Re-ask rather than trusting the earlier
+        // sighting: typing into the shell that took the session back would,
+        // with auto-send, run the prompt as a command.
+        do {
+            try await Task.sleep(for: Self.scheduledPromptSettleDelay)
+        } catch {
+            return false
+        }
+        return harness.activeHarnessBySession[sessionID] != nil
     }
 
     private func typeIntoTerminal(_ text: String, sessionID: String) -> Bool {

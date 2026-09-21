@@ -702,7 +702,11 @@ private struct DigitCell: View {
                     text = digits
                     return
                 }
-                guard let typed = Int(digits) else { return }
+                // An emptied box reads as its lowest legal value rather than
+                // silently keeping the old one: the field would otherwise
+                // show nothing while the draft still carried, and saved, the
+                // number the user just deleted.
+                let typed = Int(digits) ?? range.lowerBound
                 let clamped = min(max(typed, range.lowerBound), range.upperBound)
                 if clamped != typed {
                     text = formatted(clamped)
