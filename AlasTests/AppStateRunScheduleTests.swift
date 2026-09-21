@@ -566,6 +566,63 @@ struct AppStateRunScheduleTests {
         })
     }
 
+    /// An all-projects firing can land in a project that lives in another
+    /// Space. `RootView` resolves the centre pane through the active Space's
+    /// projects, so moving the selection alone would leave it empty.
+    @Test func openingAFiringRunSwitchesToItsSpace() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        // The project lives in a Space that is not the active one.
+        let other = state.spacesManager.addSpace(name: "Nightly", emoji: "🌙")
+        state.spacesManager.addProject(project.id, toSpace: other)
+        #expect(state.spacesManager.activeSpaceId != other)
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+
+        state.openScheduleFiringRun(run)
+
+        #expect(state.spacesManager.activeSpaceId == other)
+        #expect(state.selectedWorktreeId == run.worktreeID)
+    }
+
+    /// Archiving clears the report-id cache to empty while deliberately
+    /// keeping the rows in the database. Treating empty as "already loaded"
+    /// would leave an unarchived worktree's links dead for the session.
+    @Test func unarchivingAWorktreeRestoresItsHistoryLinks() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+
+        // Exactly the state archiving leaves behind: the id cache emptied by
+        // `cleanupWorktreeState(purgeRunHistory: false)` while the rows stay
+        // in the database. Unarchiving restores the worktree but reloads
+        // nothing, so priming has to.
+        state.durableRunReportIDsByWorktreeID[run.worktreeID] = []
+        #expect(!state.canOpenScheduleFiringRun(run))
+
+        await state.primeScheduleRunReportIDs([run.worktreeID])
+
+        #expect(state.canOpenScheduleFiringRun(run))
+    }
+
     /// Archiving a worktree keeps its run history on purpose, so the report
     /// outlives the sidebar entry. The centre pane resolves only visible
     /// worktrees, though, so the link has to stop being offered rather than

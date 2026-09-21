@@ -96,35 +96,52 @@ extension AppState {
     /// selecting an archived id would empty the centre pane and strand the tab.
     /// The entry is still named in that case; it is just not a link.
     func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
-        guard hasRunReport(worktreeID: run.worktreeID, runID: run.runID) else { return false }
-        return projects.contains { project in
-            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == run.worktreeID }
-        }
+        hasRunReport(worktreeID: run.worktreeID, runID: run.runID) && visibleProject(for: run) != nil
     }
 
-    /// Opens the report of a run a firing started, selecting that run's
-    /// worktree first.
+    /// Opens the report of a run a firing started, navigating to that run
+    /// first.
     ///
     /// A composed schedule's run is never in the worktree whose card shows it,
-    /// and an `.allProjects` fan-out can land in another project entirely.
-    /// `openRunReport` activates a tab under the run's worktree but does not
-    /// move `selectedWorktreeId`, so without this the centre pane keeps
-    /// rendering the worktree the user was on and the link looks dead.
+    /// and an `.allProjects` fan-out can land in another project — which may
+    /// sit in another Space. `openRunReport` activates a tab under the run's
+    /// worktree but changes no navigation, and `RootView` resolves the centre
+    /// pane through the active Space's projects, so both the selection and the
+    /// Space have to move or the pane is simply empty. `focusGlobalWorktree`
+    /// is the existing path that does both.
     ///
     /// Firing in the background still never steals the selection; only
     /// following a link does, because that is an explicit request to go there.
     func openScheduleFiringRun(_ run: RunScheduleFiring.RunReference) {
-        selectWorktree(id: run.worktreeID)
+        guard let project = visibleProject(for: run) else { return }
+        focusGlobalWorktree(id: run.worktreeID, projectId: project.id)
         openRunReport(worktreeID: run.worktreeID, runID: run.runID)
+    }
+
+    /// The project owning a firing's run, but only while that run's worktree
+    /// is still visible. Archived worktrees are excluded on purpose: see
+    /// `canOpenScheduleFiringRun`.
+    private func visibleProject(for run: RunScheduleFiring.RunReference) -> ProjectConfig? {
+        projects.first { project in
+            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == run.worktreeID }
+        }
     }
 
     /// Loads the durable report ids for worktrees a schedule's history points
     /// at, so its links work without first visiting each worktree's Run tab.
     /// A schedule that composes its own worktree otherwise shows entries whose
     /// reports exist but cannot be opened until something else happens to load
-    /// them. Already-loaded worktrees are skipped; archiving refreshes them.
+    /// them.
+    ///
+    /// Empty counts as unloaded, not as loaded-and-known-empty. Archiving a
+    /// worktree clears this cache to `[]` while deliberately keeping the rows
+    /// in the database, so a nil-only check would treat an unarchived worktree
+    /// as already primed and leave its links dead for the rest of the session.
+    /// Every worktree reaching here has at least one firing run, so an empty
+    /// entry is always worth one query.
     func primeScheduleRunReportIDs(_ worktreeIDs: [String]) async {
-        for worktreeID in worktreeIDs where durableRunReportIDsByWorktreeID[worktreeID] == nil {
+        for worktreeID in worktreeIDs
+            where durableRunReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
             await reloadDurableRunReportIDs(worktreeID: worktreeID)
         }
     }
