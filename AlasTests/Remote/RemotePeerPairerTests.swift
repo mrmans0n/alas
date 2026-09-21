@@ -58,6 +58,66 @@ struct RemotePeerPairerTests {
         }
     }
 
+    /// A raw TCP server that answers the headers immediately, then trickles
+    /// one byte at a time, well within `RemotePeerPairer.maxReplyBytes` but
+    /// spaced far apart — the scenario the byte cap alone cannot catch,
+    /// since each arriving byte is itself enough to keep
+    /// `URLRequest.timeoutInterval` from ever elapsing on its own.
+    @MainActor
+    private final class SlowTrickleServer {
+        private(set) var port: UInt16?
+        private var listener: NWListener?
+        private let queue = DispatchQueue(label: "io.alas.tests.remote.slow-trickle")
+        private let byteInterval: TimeInterval
+
+        init(byteInterval: TimeInterval) {
+            self.byteInterval = byteInterval
+        }
+
+        func start() throws {
+            let listener = try NWListener(using: .tcp, on: .any)
+            self.listener = listener
+            listener.stateUpdateHandler = { [weak self] state in
+                guard case .ready = state else { return }
+                let assigned = listener.port?.rawValue
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    self.port = assigned
+                }
+            }
+            let interval = byteInterval
+            listener.newConnectionHandler = { [queue] conn in
+                conn.start(queue: queue)
+                var buffer = Data()
+                func trickle() {
+                    conn.send(content: Data("x".utf8), completion: .contentProcessed { _ in
+                        queue.asyncAfter(deadline: .now() + interval) { trickle() }
+                    })
+                }
+                func receiveLoop() {
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+                        if let data, !data.isEmpty { buffer.append(data) }
+                        if buffer.range(of: Data("\r\n\r\n".utf8)) != nil {
+                            let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
+                            conn.send(content: Data(headers.utf8), completion: .contentProcessed { _ in
+                                trickle()
+                            })
+                        } else if data != nil {
+                            receiveLoop()
+                        }
+                    }
+                }
+                receiveLoop()
+            }
+            listener.start(queue: queue)
+        }
+
+        func stop() {
+            listener?.cancel()
+            listener = nil
+        }
+    }
+
     private func pairer(_ script: [String: (Int, String)], recorder: Recorder) -> RemotePeerPairer {
         RemotePeerPairer(fetch: { req in
             recorder.requests.append(req)
@@ -209,5 +269,31 @@ struct RemotePeerPairerTests {
         await #expect(throws: (any Error).self) {
             _ = try await boundedFetch(request, maxBytes: RemotePeerPairer.maxReplyBytes)
         }
+    }
+
+    // The byte cap alone does not bound elapsed time: an origin that sends
+    // one byte just inside each timeout interval can keep resetting
+    // `URLRequest.timeoutInterval` indefinitely, well below the byte cap.
+    // `boundedFetch` has to race the whole read against an absolute
+    // deadline, not just rely on the per-chunk timeout URLSession applies
+    // on its own.
+    @MainActor
+    @Test func liveFetchEnforcesAnElapsedDeadlineEvenWithinTheByteCap() async throws {
+        let server = SlowTrickleServer(byteInterval: 0.1)
+        try server.start()
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 0.3
+        let start = Date()
+        await #expect(throws: (any Error).self) {
+            _ = try await boundedFetch(request, maxBytes: RemotePeerPairer.maxReplyBytes)
+        }
+        #expect(Date().timeIntervalSince(start) < 2.0,
+                "must give up at the elapsed deadline, not after streaming every trickled byte up to the cap")
     }
 }
