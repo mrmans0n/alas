@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorktreesPane: View {
     @Bindable var state: AppState
+    @State private var branchPrefixDraft: String?
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -40,7 +41,7 @@ struct WorktreesPane: View {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
                         VStack(alignment: .leading, spacing: 2) {
-                            AlasField(text: branchPrefixBinding, monospaced: true, inputFilter: .branchPrefix)
+                            AlasField(text: branchPrefixBinding, monospaced: true, disablesAutomaticTextSubstitutions: true)
                             if let prefixError = branchPrefixError {
                                 Text(prefixError)
                                     .font(.system(size: 11))
@@ -125,24 +126,45 @@ struct WorktreesPane: View {
 
     private var branchPrefixBinding: Binding<String> {
         Binding(
-            get: { state.config.worktrees.branchPrefix },
-            set: {
-                state.config.worktrees.branchPrefix = $0
-                state.saveConfig()
+            get: { branchPrefixDraft ?? state.config.worktrees.branchPrefix },
+            set: { newValue in
+                if let persisted = Self.persistableBranchPrefix(newValue) {
+                    state.config.worktrees.branchPrefix = persisted
+                    state.saveConfig()
+                    branchPrefixDraft = nil
+                } else {
+                    // Keep the rejected text as a local draft instead of persisting
+                    // an invalid prefix: NewWorktreeDialog seeds its branch field
+                    // straight from the saved config value.
+                    branchPrefixDraft = newValue
+                }
             }
         )
     }
 
-    private var branchPrefixError: String? {
-        if state.config.worktrees.branchPrefix.isEmpty {
-            return nil
+    /// Returns `candidate` when it is safe to persist as the configured branch
+    /// prefix (empty or a valid ref-name prefix), `nil` otherwise.
+    nonisolated static func persistableBranchPrefix(_ candidate: String) -> String? {
+        switch GitNameValidator.validateBranchPrefix(candidate) {
+        case .valid: return candidate
+        case .invalid: return nil
         }
-        switch GitNameValidator.validateBranchPrefix(state.config.worktrees.branchPrefix) {
-        case .valid:
-            return nil
-        case .invalid(let message):
+    }
+
+    private var branchPrefixError: String? {
+        Self.branchPrefixValidationMessage(draft: branchPrefixDraft, persisted: state.config.worktrees.branchPrefix)
+    }
+
+    /// Validates the value currently displayed in the field — the unpersisted
+    /// draft when one exists (an in-flight edit that failed to persist),
+    /// otherwise the saved config value. A persisted prefix predating this
+    /// safeguard, or edited by hand in the config file, must still surface
+    /// its error instead of being silently treated as valid.
+    nonisolated static func branchPrefixValidationMessage(draft: String?, persisted: String) -> String? {
+        if case .invalid(let message) = GitNameValidator.validateBranchPrefix(draft ?? persisted) {
             return message
         }
+        return nil
     }
 }
 
