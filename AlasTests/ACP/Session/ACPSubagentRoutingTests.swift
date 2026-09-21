@@ -146,6 +146,36 @@ struct ACPSubagentRoutingTests {
         #expect(runner.session.subagentRun("grandchild")?.state == .completed)
     }
 
+    @Test("a replayed nested lifecycle update is reconciled, its content is not")
+    func replayReconcilesNestedLifecycleOnly() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentSpawned(.init(subagentSessionId: "grandchild"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("restored output"))))
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        // Replayed content is dropped — the child transcript already came
+        // back from SQLite — but the lifecycle state is the one thing the
+        // replay may hold that the store does not.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("duplicate"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentStateUpdate(.init(
+                subagentSessionId: "grandchild", state: .completed))))
+
+        #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
+        #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+    }
+
     @Test("tearing the runner down stops running children and records it")
     func stopMarksChildrenDisconnected() async throws {
         let (runner, store, _) = try makeRunner()

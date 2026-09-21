@@ -594,6 +594,14 @@ final class ACPSessionRunner {
             applySubagentUpdate(
                 params,
                 durableConsumptionAcknowledgement: durableConsumptionAcknowledgement)
+            // A child update still advances `appliedUpdateCount`, so it can
+            // be the one that satisfies a boundary deferred until the
+            // buffered updates drain. Skipping the check here would leave
+            // the boundary pending — and the queue unflushed — whenever a
+            // turn's last buffered notification is child-scoped.
+            if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
+                flushQueueIfIdle()
+            }
             return
         }
         let preAppliedSessionInfoDirty: Set<Int>?
@@ -722,12 +730,6 @@ final class ACPSessionRunner {
                 finishLoadReplaySuppression()
             }
         }
-        guard !suppressingLoadReplay else {
-            // The child transcript was restored from SQLite at hydration;
-            // a `session/load` replay of it would only duplicate rows.
-            durableConsumptionAcknowledgement?()
-            return
-        }
         switch params.update {
         case .subagentSpawned, .subagentStateUpdate:
             // A nested collaborator is announced on ITS parent's session,
@@ -737,7 +739,18 @@ final class ACPSessionRunner {
             // transcript as ordinary parent output. This is the same shape
             // the OpenCode variant already produces, where every
             // descendant is reported against the root regardless of depth.
-            let dirty = session.apply(params.update)
+            //
+            // Lifecycle updates are reconciled even while replay is
+            // suppressed — they are idempotent and keyed by child session
+            // id, and the replay may carry the only copy of a terminal
+            // state the previous process never committed. Root-level
+            // spawns already take that path via
+            // `applySuppressedReplaySideEffects`; a nested one must not
+            // behave differently just because it is addressed one level
+            // down.
+            let dirty = suppressingLoadReplay
+                ? session.applySuppressedReplaySideEffects(params.update)
+                : session.apply(params.update)
             if dirty.isEmpty {
                 acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
             } else {
@@ -746,6 +759,14 @@ final class ACPSessionRunner {
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
             }
         default:
+            guard !suppressingLoadReplay else {
+                // The child transcript was restored from SQLite at
+                // hydration; a `session/load` replay of its content would
+                // only duplicate rows. Only the lifecycle cases above
+                // carry state worth reconciling from a replay.
+                durableConsumptionAcknowledgement?()
+                return
+            }
             let dirty = session.applySubagentUpdate(
                 params.update,
                 subagentSessionId: params.sessionId)
