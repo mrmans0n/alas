@@ -165,6 +165,251 @@ fn open_list_and_close_broker_without_persisting_env_values() {
     assert_eq!(close["ok"], true);
 }
 
+/// Two different alas-helper processes can both reach `acp_open` for the
+/// same broker id while nothing is running yet — this is exactly how the
+/// loser of a legacy-broker restart race (rejected by `broker_close`,
+/// falling through to reopen) and the winner (which just removed the old
+/// broker's directory before spawning its own replacement) both end up
+/// here. Without cross-process coordination around "nothing is running,
+/// spawn one", both would independently spawn a supervisor and each would
+/// only be aware of its own.
+///
+/// The assertions hold regardless of how the two requests actually
+/// interleave — they would already hold if one simply finished before the
+/// other started — so this cannot prove the coordination is exercised on
+/// every run. It is, however, the regression case: without it, true
+/// concurrent execution of these two opens can (non-deterministically)
+/// produce two different generations.
+#[test]
+fn concurrent_opens_of_a_not_yet_running_broker_spawn_only_one_supervisor() {
+    let fixture = Fixture::new("concurrent-open-spawn");
+    let mut helper_a = Helper::start(&fixture.home);
+    let mut helper_b = Helper::start(&fixture.home);
+    let params_a = fixture.open_params("broker-concurrent-open", 0);
+    let params_b = params_a.clone();
+
+    let a = std::thread::spawn(move || helper_a.request("acp/open", params_a));
+    let b = std::thread::spawn(move || helper_b.request("acp/open", params_b));
+    let open_a = a.join().expect("closer a");
+    let open_b = b.join().expect("closer b");
+
+    assert_eq!(
+        open_a["snapshot"]["metadata"]["generation"],
+        open_b["snapshot"]["metadata"]["generation"],
+        "both opens must observe the same broker generation — a mismatch \
+         means two separate supervisors were spawned for the same broker \
+         id: a={open_a} b={open_b}"
+    );
+    let spawners = [&open_a, &open_b]
+        .into_iter()
+        .filter(|value| value["adopted"] == false)
+        .count();
+    assert_eq!(
+        spawners, 1,
+        "exactly one caller must have spawned the supervisor and the other \
+         adopted it: a={open_a} b={open_b}"
+    );
+}
+
+/// Regression for keeping the open-decision lock outside the directory
+/// `acp_close` deletes. A lock file removed out from under its holder stops
+/// serializing anything — the next `acp_open` just creates a fresh inode at
+/// the same path, no longer contending with whoever still holds the
+/// (now-unlinked) old one. This can't reproduce the exact multi-process
+/// timing that makes that matter, but it does directly verify the
+/// structural property the fix relies on: the lock file lives in the
+/// never-removed `acp-brokers` root and survives closing (and so removing
+/// the directory of) the broker it guards.
+#[test]
+fn the_open_lock_file_survives_broker_close_and_removal() {
+    let fixture = Fixture::new("open-lock-survives-close");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-lock-survival", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    let lock_path = fixture
+        .home
+        .join(".alas/acp-brokers/broker-lock-survival.open.lock");
+    assert!(
+        lock_path.exists(),
+        "acp_open must create its per-broker lock file in the never-removed \
+         acp-brokers root, not inside the broker's own directory"
+    );
+
+    let close = helper.request(
+        "acp/close",
+        json!({ "brokerId": "broker-lock-survival", "generation": generation }),
+    );
+    assert_eq!(close["ok"], true);
+
+    assert!(
+        !fixture
+            .home
+            .join(".alas/acp-brokers/broker-lock-survival")
+            .exists(),
+        "acp_close must still remove the broker's own directory"
+    );
+    assert!(
+        lock_path.exists(),
+        "closing a broker must not remove its open lock file — the whole \
+         point of keeping it outside the broker's own directory is that a \
+         losing closer, rejected by broker_close and about to retry its \
+         own open, can still be serialized against a concurrent \
+         close-then-respawn even after remove_broker_dir runs"
+    );
+}
+
+/// Moving the lock outside the removable directory (previous test) only
+/// helps if `acp_close`'s removal and `acp_open`'s spawn sequence actually
+/// take the same lock. Without that, a close racing a concurrent reopen can
+/// delete the directory while the reopen is mid-write (`launch.json`,
+/// spawning) — failing the reopen with `ENOENT`, or deleting the
+/// newly-spawned broker's own files, even though each side individually
+/// held (or would have held) the lock at some point.
+///
+/// Both sides here close-then-reopen, matching `ACPBrokerClient.start()`'s
+/// actual pattern (a close failure is best-effort and always followed by a
+/// reopen) — a bare close racing an unrelated open is not the scenario this
+/// guards: adopting a broker a moment before an unrelated legitimate close
+/// removes it is expected behavior with or without this fix, not a bug, so
+/// asserting a survivor after *that* race would be asserting the wrong
+/// thing. Here, every participant unconditionally reopens, so at least one
+/// of them is guaranteed to observe (and if needed, restore) a replacement.
+///
+/// As with the concurrent-open test above, the assertions hold regardless
+/// of how the race actually interleaves — this is the regression case, not
+/// a proof the race is exercised on every run.
+#[test]
+fn concurrent_close_then_reopen_pairs_do_not_corrupt_the_broker_directory() {
+    let fixture = Fixture::new("close-then-reopen-race");
+    let mut setup = Helper::start(&fixture.home);
+    let opened = setup.request("acp/open", fixture.open_params("broker-close-reopen", 0));
+    let generation = opened["snapshot"]["metadata"]["generation"].clone();
+    drop(setup);
+
+    let mut helper_a = Helper::start(&fixture.home);
+    let mut helper_b = Helper::start(&fixture.home);
+    let close_params_a = json!({ "brokerId": "broker-close-reopen", "generation": generation });
+    let close_params_b = close_params_a.clone();
+    let reopen_params_a = fixture.open_params("broker-close-reopen", 0);
+    let reopen_params_b = reopen_params_a.clone();
+
+    let a = std::thread::spawn(move || {
+        // Best-effort, like ACPBrokerClient.start(): ignore whether this
+        // side's own close won the race, and always reopen after.
+        let _ = helper_a.raw_request("acp/close", close_params_a);
+        helper_a.request("acp/open", reopen_params_a)
+    });
+    let b = std::thread::spawn(move || {
+        let _ = helper_b.raw_request("acp/close", close_params_b);
+        helper_b.request("acp/open", reopen_params_b)
+    });
+    let open_a = a.join().expect("closer/reopener a");
+    let open_b = b.join().expect("closer/reopener b");
+
+    assert!(
+        open_a["snapshot"]["metadata"]["generation"].is_u64(),
+        "a's reopen must not fail even when its own close races b's: {open_a}"
+    );
+    assert!(
+        open_b["snapshot"]["metadata"]["generation"].is_u64(),
+        "b's reopen must not fail even when its own close races a's: {open_b}"
+    );
+
+    // Whichever way the race actually went, the broker must land in a
+    // single, fully consistent, queryable state afterward — not a
+    // half-removed or half-written directory, and not two independently
+    // spawned supervisors for the same broker id.
+    let mut verify = Helper::start(&fixture.home);
+    let list = verify.request("acp/list", json!({}));
+    assert_eq!(
+        list["brokers"].as_array().map(Vec::len),
+        Some(1),
+        "exactly one broker must remain after the race: {list}"
+    );
+    let adopted = verify.request("acp/open", fixture.open_params("broker-close-reopen", 0));
+    assert_eq!(adopted["adopted"], true, "the survivor must be adoptable: {adopted}");
+}
+
+/// The two tests above reproduce real corruption, but not reliably enough
+/// to catch a lock that's acquired too late: `acp_close` needs to hold the
+/// open lock *before* it tells the supervisor to close, not just around
+/// `remove_broker_dir`, or a losing legacy-restart client can fully spawn
+/// and stand up a replacement — in the gap between this call's own close
+/// IPC succeeding and it reaching the lock — only for this call to then
+/// delete that replacement once it finally acquires the (by-then free)
+/// lock. That gap is far too narrow to hit by chance (0/60 in manual
+/// testing); this test controls the ordering directly instead of hoping
+/// for it.
+///
+/// Holds the lock itself, from the test process, then confirms a
+/// concurrent `acp/close` neither completes nor tells the supervisor
+/// anything — proven by the supervisor still answering normally over its
+/// own socket — until the lock is released.
+#[cfg(unix)]
+#[test]
+fn acp_close_holds_the_open_lock_before_telling_the_supervisor_to_close() {
+    use std::os::unix::io::AsRawFd;
+
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+
+    let fixture = Fixture::new("close-lock-ordering");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request(
+        "acp/open",
+        fixture.open_params("broker-close-lock-order", 0),
+    );
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    let lock_path = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-lock-order.open.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .expect("open lock file");
+    assert_eq!(
+        unsafe { flock(lock_file.as_raw_fd(), LOCK_EX) },
+        0,
+        "test must be able to take the same open lock acp_open/acp_close use"
+    );
+
+    let mut helper_close = Helper::start(&fixture.home);
+    let broker_id = "broker-close-lock-order".to_string();
+    let closer = std::thread::spawn(move || {
+        helper_close.request(
+            "acp/close",
+            json!({ "brokerId": broker_id, "generation": generation }),
+        )
+    });
+
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !closer.is_finished(),
+        "acp/close must block on the open lock this test holds, not \
+         complete while it's still held"
+    );
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-lock-order/broker.sock");
+    let (reply, _) = broker_roundtrip(&socket, r#"{"method":"snapshot","params":{}}"#, false);
+    let snapshot: Value = serde_json::from_str(reply.trim()).expect("snapshot reply JSON");
+    assert_eq!(
+        snapshot["ok"], true,
+        "the supervisor must not have been told to close yet — acp/close \
+         must acquire the open lock (which this test holds) before its \
+         close IPC, not after: {snapshot}"
+    );
+
+    drop(lock_file);
+    let close_result = closer.join().expect("closer thread");
+    assert_eq!(close_result["ok"], true);
+}
+
 #[cfg(unix)]
 #[test]
 fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {
@@ -215,6 +460,16 @@ fn close_rejects_stale_generation_without_removing_broker() {
             .is_some_and(|message| message.contains("broker generation mismatch")),
         "stale close response: {stale}"
     );
+    // Regression: the broker supervisor's own error code must survive the
+    // IPC hop back through `acp_open`'s helper process — it used to
+    // collapse into that call's generic transport code (-32072),
+    // indistinguishable from a connect/read/write failure and unusable by a
+    // caller (e.g. `ACPBrokerClient.start()`) that needs to recognize this
+    // specific failure to recover from a legacy-broker restart race.
+    assert_eq!(
+        stale["error"]["code"], -32075,
+        "stale close response: {stale}"
+    );
 
     let list = helper.request("acp/list", json!({}));
     assert_eq!(list["brokers"].as_array().unwrap().len(), 1);
@@ -224,6 +479,71 @@ fn close_rejects_stale_generation_without_removing_broker() {
         json!({ "brokerId": "broker-close-stale", "generation": generation }),
     );
     assert_eq!(close["ok"], true);
+}
+
+/// Regression for a narrower race than the stale-generation case above: two
+/// closers can race a *still-valid* generation, both passing
+/// `ensure_generation`, if the second reaches the supervisor before the
+/// first's caller has gone on to spawn a replacement (which only bumps the
+/// generation, and happens later, outside this call, in a separate
+/// `acp/open`). Talks directly to the supervisor's socket — bypassing
+/// `acp_close`'s own `remove_broker_dir`, which a single helper process
+/// calling `acp/close` twice in a row would already have run by the second
+/// call — to model two different helper processes each reaching the same
+/// live supervisor.
+///
+/// Both raw connections are accepted before either sends its request, so
+/// the race under test is `broker_close`'s own `state.closing` guard, not
+/// an unrelated one against the accept loop (which stops taking *new*
+/// connections within ~50ms of the first close, per `serve_broker_ipc`'s
+/// `while !runtime_is_closing`) — a connection already accepted here is
+/// unaffected by that and reaches `broker_close` regardless.
+#[test]
+fn second_close_of_a_still_valid_generation_is_rejected_while_the_first_is_in_flight() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let fixture = Fixture::new("close-already-closing");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-close-race", 0));
+    let generation = open["snapshot"]["metadata"]["generation"]
+        .as_u64()
+        .expect("generation");
+    let socket = fixture
+        .home
+        .join(".alas/acp-brokers/broker-close-race/broker.sock");
+    let close_request = format!(
+        r#"{{"method":"close","params":{{"brokerId":"broker-close-race","generation":{generation}}}}}"#
+    );
+
+    let mut first = UnixStream::connect(&socket).expect("first closer connects");
+    let mut second = UnixStream::connect(&socket).expect("second closer connects");
+
+    writeln!(first, "{close_request}").expect("first close request");
+    first.flush().expect("flush first close request");
+    let mut first_reply = String::new();
+    BufReader::new(&first)
+        .read_line(&mut first_reply)
+        .expect("first close reply");
+    let first_value: Value = serde_json::from_str(first_reply.trim()).expect("first reply JSON");
+    assert_eq!(first_value["ok"], true, "first closer: {first_value}");
+
+    writeln!(second, "{close_request}").expect("second close request");
+    second.flush().expect("flush second close request");
+    let mut second_reply = String::new();
+    BufReader::new(&second)
+        .read_line(&mut second_reply)
+        .expect("second close reply");
+    let second_value: Value =
+        serde_json::from_str(second_reply.trim()).expect("second reply JSON");
+    assert_eq!(second_value["ok"], false, "second closer: {second_value}");
+    assert_eq!(
+        second_value["code"], -32075,
+        "a second closer for the same still-valid generation must be rejected \
+         the same way a caller already knows to recover from — reopening — \
+         rather than silently succeeding and going on to spawn its own \
+         replacement alongside the first closer's: {second_value}"
+    );
 }
 
 #[test]

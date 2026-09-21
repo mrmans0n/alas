@@ -190,6 +190,15 @@ struct BrokerIpcResponse {
     ok: bool,
     result: Option<Value>,
     error: Option<String>,
+    /// The originating `AcpBrokerProcessError::code`, so a caller like
+    /// `send_ipc_within` can recognize a specific failure (e.g. `-32075`,
+    /// "broker generation mismatch") instead of every broker-reported
+    /// failure collapsing into that call's own generic `-32072`.
+    /// `#[serde(default)]` matters here for the same reason it does on
+    /// `ACPBrokerSnapshot::cursor_todos_by_tool_call_id`: a broker
+    /// supervisor from an older build never wrote this key at all.
+    #[serde(default)]
+    code: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -381,47 +390,60 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpOpenParams = decode(params)?;
     validate_broker_id(params.broker_id.as_str())?;
     let dir = broker_dir(params.broker_id.as_str())?;
+
+    // Deliberately not created here: try_adopt_running_broker only reads
+    // pid.json (broker_is_running reports "not running", not an error,
+    // when it's absent) and never writes into `dir`, so it needs nothing
+    // to exist yet. Creating it this early, unprotected by the lock below,
+    // raced a concurrent acp_close's now-also-lock-protected removal —
+    // create_dir_all would win, then set_restrictive_dir_permissions would
+    // fail with ENOENT once the close's removal landed in between the two.
+    if let Some(adopted) = try_adopt_running_broker(&dir, &params)? {
+        return Ok(adopted);
+    }
+
+    // Nothing usable is running. Spawning a replacement and having it
+    // become reachable (a pid, then a listening socket) is two separate
+    // steps with no atomicity between them, and a broker outlives the
+    // process that started it — more than one alas-helper can reach this
+    // same point for the same broker id at once (this is exactly how an
+    // adopted legacy broker gets restarted: whichever client loses that
+    // race falls through to here too). Without serializing across
+    // processes, both would independently spawn a supervisor, and whichever
+    // wins the socket bind silently orphans the other's.
+    //
+    // Hold an exclusive, cross-process lock for exactly this decision —
+    // not the whole function, so two processes concurrently *adopting* an
+    // already-healthy broker (an ordinary multi-window/multi-attach
+    // pattern) never serialize on each other. The OS releases this
+    // automatically if the holder exits or crashes, so there is no
+    // stale-lock state to clean up, unlike a marker-file-based lock would
+    // need.
+    //
+    // The lock file lives next to `dir`, not inside it: `acp_close`
+    // deletes `dir` wholesale (`remove_broker_dir`) once its own close
+    // succeeds, which can happen while a losing closer, rejected at
+    // `broker_close`, is already waiting on this very lock to retry its
+    // own open. A lock file removed out from under its holder stops
+    // serializing anything — the next opener just creates a fresh inode at
+    // the same path and never contends with whoever still holds the
+    // (now-unlinked) old one. `broker_root()` is never removed, so a lock
+    // there survives every `dir` removal in between.
+    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
+
+    // Create (or recreate) `dir` now that this call actually needs to write
+    // into it, entirely under the lock: acp_close takes this same lock
+    // around its own remove_broker_dir (see there), so from here on a
+    // concurrent close cannot delete `dir` out from under the
+    // write-launch-json-then-spawn sequence below.
     std::fs::create_dir_all(&dir)
         .map_err(|error| broker_error(-32070, format!("broker dir failed: {error}")))?;
     set_restrictive_dir_permissions(&dir)?;
 
-    if broker_is_running(&dir) {
-        match send_ipc_with_retry(&dir, "snapshot", json!({}), Duration::from_secs(2)) {
-            Ok(result) => {
-                let snapshot: ACPBrokerSnapshot =
-                    serde_json::from_value(result.clone()).map_err(|error| {
-                        broker_error(-32072, format!("snapshot decode failed: {error}"))
-                    })?;
-                if result
-                    .get("adapterExited")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    let _ = send_ipc(
-                        &dir,
-                        "close",
-                        json!({
-                            "brokerId": params.broker_id.clone(),
-                            "generation": snapshot.metadata.generation
-                        }),
-                    );
-                    // The supervisor is alive but its adapter is gone. Close
-                    // that generation and fall through to spawn a replacement.
-                } else {
-                    return Ok(json!(AcpOpenResult {
-                        snapshot,
-                        adopted: true,
-                    }));
-                }
-            }
-            Err(error) if broker_is_running(&dir) => {
-                return Err(error);
-            }
-            Err(_) => {
-                // The pid disappeared while we were waiting for its socket.
-                // It is now safe to remove stale startup files and spawn a replacement.
-            }
-        }
+    // Someone else may have spawned a replacement while this call waited
+    // for the lock above.
+    if let Some(adopted) = try_adopt_running_broker(&dir, &params)? {
+        return Ok(adopted);
     }
 
     let env = decode_env(params.env)?;
@@ -442,6 +464,88 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
             .map_err(|error| broker_error(-32072, format!("snapshot decode failed: {error}")))?,
         adopted: false,
     }))
+}
+
+/// `Ok(Some(..))` — a running broker answered and is usable; return this
+/// value as-is. `Ok(None)` — nothing usable is running (including: nothing
+/// was running at all, or it was running but its adapter had exited and has
+/// now been asked to close); the caller should spawn a replacement.
+fn try_adopt_running_broker(
+    dir: &Path,
+    params: &AcpOpenParams,
+) -> Result<Option<Value>, AcpBrokerProcessError> {
+    if !broker_is_running(dir) {
+        return Ok(None);
+    }
+    match send_ipc_with_retry(dir, "snapshot", json!({}), Duration::from_secs(2)) {
+        Ok(result) => {
+            let snapshot: ACPBrokerSnapshot = serde_json::from_value(result.clone())
+                .map_err(|error| broker_error(-32072, format!("snapshot decode failed: {error}")))?;
+            if result
+                .get("adapterExited")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                let _ = send_ipc(
+                    dir,
+                    "close",
+                    json!({
+                        "brokerId": params.broker_id.clone(),
+                        "generation": snapshot.metadata.generation
+                    }),
+                );
+                // The supervisor is alive but its adapter is gone. Close
+                // that generation and fall through to spawn a replacement.
+                Ok(None)
+            } else {
+                Ok(Some(json!(AcpOpenResult {
+                    snapshot,
+                    adopted: true,
+                })))
+            }
+        }
+        Err(error) if broker_is_running(dir) => Err(error),
+        Err(_) => {
+            // The pid disappeared while we were waiting for its socket.
+            // It is now safe to remove stale startup files and spawn a replacement.
+            Ok(None)
+        }
+    }
+}
+
+/// Lives in `broker_root()`, keyed by broker id, deliberately not inside
+/// that broker's own (removable) directory — see the caller. Never cleaned
+/// up: an unused broker id leaves behind one empty lock file, which is a
+/// cheap, permanent trade-off against ever deleting a lock file a live
+/// holder might still be waiting on.
+#[cfg(unix)]
+fn acquire_broker_open_lock(broker_id: &str) -> Result<std::fs::File, AcpBrokerProcessError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let root = broker_root()?;
+    std::fs::create_dir_all(&root)
+        .map_err(|error| broker_error(-32070, format!("broker root failed: {error}")))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).mode(0o600);
+    let file = options
+        .open(root.join(format!("{broker_id}.open.lock")))
+        .map_err(|error| broker_error(-32070, format!("open lock failed: {error}")))?;
+    // SAFETY: `file` owns a valid, open file descriptor through this call,
+    // which is all `flock` needs; it stays open (and so locked) for as long
+    // as the caller holds onto the returned `File`.
+    if unsafe { flock(file.as_raw_fd(), LOCK_EX) } != 0 {
+        return Err(broker_error(
+            -32070,
+            format!("open lock failed: {}", io::Error::last_os_error()),
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn acquire_broker_open_lock(broker_id: &str) -> Result<(), AcpBrokerProcessError> {
+    let _ = broker_id;
+    Err(broker_error(-32072, "ACP broker IPC requires Unix sockets"))
 }
 
 fn acp_attach(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
@@ -503,6 +607,20 @@ fn acp_detach(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpCloseParams = decode(params)?;
     let dir = broker_dir(params.broker_id.as_str())?;
+    // Coordinate with acp_open's own use of this same lock (see there),
+    // across the *whole* close decision — not just remove_broker_dir. A
+    // narrower lock here left a gap between this call's own send_ipc
+    // "close" below succeeding and it reaching the lock: a losing
+    // legacy-restart client, rejected by broker_close and racing this
+    // call's open() back, could acquire the lock first, fully spawn and
+    // stand up a replacement, and return success to its own caller — only
+    // for this call to then acquire the (now-free) lock and delete that
+    // replacement's directory, since remove_broker_dir has no way to tell
+    // "the old generation I meant to close" from "a brand-new one that
+    // happens to be sitting in the same directory". The loser would end up
+    // with a "successful" open for a broker whose directory is already
+    // gone, and its own supervisor orphaned.
+    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
     if broker_is_running(&dir) {
         send_ipc(
             &dir,
@@ -1256,17 +1374,20 @@ fn handle_ipc_line(runtime: Runtime, stream: UnixStream, line: String) -> io::Re
                 ok: true,
                 result: Some(result),
                 error: None,
+                code: None,
             },
             Err(error) => BrokerIpcResponse {
                 ok: false,
                 result: None,
                 error: Some(error.message),
+                code: Some(error.code),
             },
         },
         Err(error) => BrokerIpcResponse {
             ok: false,
             result: None,
             error: Some(format!("invalid IPC request: {error}")),
+            code: None,
         },
     };
     // Replies are never framed, whichever encoding the request used.
@@ -1610,6 +1731,18 @@ fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBr
     let adapter_process_group_id = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
+        if state.closing {
+            // Two closers can both pass ensure_generation: the generation
+            // only changes once a replacement supervisor exists, which
+            // happens later and in a different process's acp_open, outside
+            // this lock. Without this check both would proceed past it,
+            // each independently remove_broker_dir and spawn its own
+            // replacement supervisor for the same broker id. Reuse the
+            // stale-generation error a caller already knows to recover
+            // from by reopening — this second closer isn't the one that
+            // gets to finish closing this generation.
+            return Err(broker_error(-32075, "broker generation mismatch"));
+        }
         state.closing = true;
         if state.adapter_exited {
             None
@@ -2030,8 +2163,16 @@ fn send_ipc_within(
         if response.ok {
             Ok(response.result.unwrap_or(Value::Null))
         } else {
+            // Preserve the broker's own error code when the supervisor sent
+            // one (a legacy supervisor's response has no `code` key, so this
+            // still falls back to the generic transport code for those).
+            // Without this, every broker-reported failure collapsed into
+            // this call's own `-32072`, indistinguishable from an IPC
+            // transport failure — losing e.g. `-32075` ("broker generation
+            // mismatch"), which callers need to recognize specifically.
+            let code = response.code.unwrap_or(-32072);
             Err(broker_error(
-                -32072,
+                code,
                 response
                     .error
                     .unwrap_or_else(|| "broker request failed".to_string()),
@@ -2234,6 +2375,7 @@ fn signal_process_group(_process_group_id: u32, _signal: i32) {}
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn getpgid(pid: i32) -> i32;
+    fn flock(fd: i32, operation: i32) -> i32;
 }
 
 #[cfg(unix)]
@@ -2245,6 +2387,12 @@ unsafe fn libc_kill(pid: i32, sig: i32) -> i32 {
 unsafe fn libc_getpgid(pid: i32) -> i32 {
     unsafe { getpgid(pid) }
 }
+
+/// `flock(2)`'s `LOCK_EX`. Fixed across every Unix `acp_open` targets
+/// (Darwin locally, Linux for a remote helper); POSIX does not guarantee
+/// the value, but every platform this binary actually runs on agrees on it.
+#[cfg(unix)]
+const LOCK_EX: i32 = 2;
 
 fn validate_broker_id(broker_id: &str) -> Result<(), AcpBrokerProcessError> {
     if broker_id.is_empty()

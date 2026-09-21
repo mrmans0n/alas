@@ -1296,7 +1296,16 @@ private actor ForkRelaunchBrokerService: ACPBrokerServicing {
                     method: "session/fork",
                     terminalOutcome: forkOutcome
                 )
-            ]
+            ],
+            // Present (even if empty), not nil: this mock's open() always
+            // returns adopted: true, and a nil todos map on an adopted
+            // snapshot means "legacy broker, restart it" to
+            // ACPBrokerClient.start() — which this mock's close()/open()
+            // pair can't satisfy (it always replies with the same
+            // snapshot), so start() would throw
+            // ACPBrokerLegacyRestartFailedError instead of exercising the
+            // fork-relaunch behavior this file actually tests.
+            cursorTodosByToolCallId: [:]
         )
     }
 }

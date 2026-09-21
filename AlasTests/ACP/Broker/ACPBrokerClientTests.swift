@@ -84,6 +84,105 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
+    @Test func adoptedLegacyBrokerWithoutTodoSnapshotIsRestarted() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        let opened = try await client.start()
+
+        #expect(opened.adopted == false)
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+        let attachParams = try await #require(service.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
+    /// Two clients can race to restart the same legacy broker: both see the
+    /// same missing-snapshot generation and both try to close it. The loser
+    /// reaches the helper after the winner already closed that generation
+    /// and opened its replacement, so the helper rejects the loser's
+    /// stale-generation close with -32075. `start()` must adopt the
+    /// winner's replacement rather than fail the whole connection.
+    @Test func adoptedLegacyBrokerRestartRaceAdoptsWinnersReplacement() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrowGenerationMismatch(true)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        let opened = try await client.start()
+
+        #expect(opened.adopted == true)
+        #expect(opened.snapshot.cursorTodosByToolCallId != nil)
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+        let attachParams = try await #require(service.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
+    /// A raced close on a legacy broker can fail in more shapes than a clean
+    /// -32075: the loser's connection might never even be accepted before
+    /// the old supervisor's listener drops, surfacing as a generic
+    /// transport error with no recognizable code at all. `start()` treats
+    /// closing the legacy broker as best-effort — any close failure, not
+    /// just a recognized one, still falls through to reopen, the same way
+    /// `shutdown()` already treats its own close as advisory.
+    ///
+    /// That tolerance only holds because the reopen actually landed on a
+    /// current-build broker (see the race test above, where the mock
+    /// updates its state as if a concurrent racing client had won). If the
+    /// close failed because it never reached the broker at all — leaving it
+    /// alive, unchanged, still legacy — the reopen below just re-adopts the
+    /// exact same broker `start()` was trying to get rid of. Silently
+    /// proceeding from there would replay without todo history: the data
+    /// loss this whole restart exists to prevent, reached by a different
+    /// path than the one it already guards against. `start()` must fail
+    /// loudly instead of guessing.
+    @Test func adoptedLegacyBrokerRestartFailsWhenReopenIsStillLegacy() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrow(MockBrokerServiceError.injected)
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        // The mock's thrown close leaves the broker's adopted/legacy state
+        // untouched (unlike the generation-mismatch case above), so the
+        // reopen sees the same still-legacy snapshot.
+        await #expect(throws: ACPBrokerLegacyRestartFailedError.self) {
+            try await client.start()
+        }
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+    }
+
+    /// The best-effort close above must not paper over a genuinely broken
+    /// helper: if the *reopen* itself fails, `start()` still throws.
+    @Test func adoptedLegacyBrokerRestartStillFailsWhenReopenFails() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrow(MockBrokerServiceError.injected)
+        await service.setOpenShouldThrowAfter(callCount: 1, error: MockBrokerServiceError.injected)
+        let client = makeClient(service: service)
+
+        await #expect(throws: MockBrokerServiceError.self) {
+            try await client.start()
+        }
+    }
+
     @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -1883,14 +1982,18 @@ private actor MockBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
     var openAdopted = false
+    var openSnapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     private var respondFailuresRemaining = 0
+    private var closeShouldThrowGenerationMismatch = false
+    private var closeShouldThrowError: (any Error)?
+    private var openShouldThrowAfter: (callCount: Int, error: any Error)?
 
     func enqueueAttach(
         events: [ACPBrokerEvent],
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
+        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
         turnState: ACPBrokerTurnState = .idle,
         delayNanoseconds: UInt64 = 0,
         shouldThrow: Bool = false
@@ -1915,6 +2018,26 @@ private actor MockBrokerService: ACPBrokerServicing {
         openAdopted = adopted
     }
 
+    func setOpenSnapshotCursorTodosByToolCallId(_ todos: [String: [ACPCursorTodo]]?) {
+        openSnapshotCursorTodosByToolCallId = todos
+    }
+
+    func setCloseShouldThrowGenerationMismatch(_ value: Bool) {
+        closeShouldThrowGenerationMismatch = value
+    }
+
+    func setCloseShouldThrow(_ error: any Error) {
+        closeShouldThrowError = error
+    }
+
+    /// Makes `open()` throw once its call count exceeds `callCount` — e.g.
+    /// `callCount: 1` lets the first `open()` succeed and every one after
+    /// it fail, modeling a reopen-after-close that hits a genuinely broken
+    /// helper rather than a race.
+    func setOpenShouldThrowAfter(callCount: Int, error: any Error) {
+        openShouldThrowAfter = (callCount, error)
+    }
+
     func setSnapshotResults(
         initializeResult: ACPBrokerJSONValue?,
         remoteSessionResult: ACPBrokerJSONValue?
@@ -1925,7 +2048,13 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
-        return ACPBrokerOpenResult(snapshot: snapshot(journalTail: 0), adopted: openAdopted)
+        if let openShouldThrowAfter, opened.count > openShouldThrowAfter.callCount {
+            throw openShouldThrowAfter.error
+        }
+        return ACPBrokerOpenResult(
+            snapshot: snapshot(journalTail: 0, cursorTodosByToolCallId: openSnapshotCursorTodosByToolCallId),
+            adopted: openAdopted
+        )
     }
 
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
@@ -2006,6 +2135,23 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
         closed.append(params)
+        if let closeShouldThrowError {
+            self.closeShouldThrowError = nil
+            throw closeShouldThrowError
+        }
+        if closeShouldThrowGenerationMismatch {
+            closeShouldThrowGenerationMismatch = false
+            // Model another client having won the same restart race: it
+            // already closed this generation and opened a current-build
+            // replacement, which is what a retried `open()` should now find.
+            openAdopted = true
+            openSnapshotCursorTodosByToolCallId = [:]
+            throw RemoteHelperClientError.jsonrpc(
+                JSONRPCError(code: -32075, message: "broker generation mismatch", data: nil)
+            )
+        }
+        openAdopted = false
+        openSnapshotCursorTodosByToolCallId = [:]
         return ACPBrokerSimpleOK(ok: true)
     }
 
@@ -2015,7 +2161,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         pendingRequests: [ACPBrokerPendingRequest] = [],
         operations: [ACPBrokerOperationSnapshot] = [],
         turnState: ACPBrokerTurnState = .idle,
-        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
+        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
@@ -2069,7 +2215,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
-            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
+            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
             turnState: ACPBrokerTurnState = .idle,
             delayNanoseconds: UInt64 = 0,
             shouldThrow: Bool = false
