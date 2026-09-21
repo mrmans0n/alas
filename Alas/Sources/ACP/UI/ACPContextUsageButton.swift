@@ -26,16 +26,7 @@ struct ACPContextUsageButton: View {
     }
 
     private var hasQuotaContent: Bool {
-        Self.hasDisplayableContent(lastTurnQuota) || Self.hasDisplayableContent(sessionQuotaTotal)
-    }
-
-    /// A quota is worth showing when it has a per-model breakdown, or —
-    /// some adapters send only the top-level `token_count` and omit
-    /// `model_usage`, which `ACPPromptQuota` decodes as an empty array —
-    /// at least a top-level total.
-    private static func hasDisplayableContent(_ quota: ACPPromptQuota?) -> Bool {
-        guard let quota else { return false }
-        return !quota.modelUsage.isEmpty || quota.tokenCount != nil
+        (lastTurnQuota?.hasDisplayableContent == true) || (sessionQuotaTotal?.hasDisplayableContent == true)
     }
 
     var body: some View {
@@ -89,11 +80,11 @@ struct ACPContextUsageButton: View {
                         .foregroundStyle(theme.color("fg-muted"))
                 }
             }
-            if let lastTurnQuota, Self.hasDisplayableContent(lastTurnQuota) {
+            if let lastTurnQuota, lastTurnQuota.hasDisplayableContent {
                 if usage != nil { Divider() }
                 quotaSection(title: "Last turn", quota: lastTurnQuota)
             }
-            if let sessionQuotaTotal, Self.hasDisplayableContent(sessionQuotaTotal) {
+            if let sessionQuotaTotal, sessionQuotaTotal.hasDisplayableContent {
                 // Accumulated since this session was last attached, not
                 // necessarily the full persisted session — see
                 // `ACPSession.sessionQuotaTotal`.

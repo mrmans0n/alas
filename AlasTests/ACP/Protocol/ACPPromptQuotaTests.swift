@@ -78,4 +78,16 @@ struct ACPPromptQuotaTests {
         #expect(afterSecond.modelUsage.first(where: { $0.model == "a" })?.tokenCount.totalTokens == 130)
         #expect(afterSecond.modelUsage.first(where: { $0.model == "b" })?.tokenCount.totalTokens == 20)
     }
+
+    @Test("hasDisplayableContent recognizes a model breakdown or a top-level total alone")
+    func hasDisplayableContentRecognizesEitherShape() {
+        #expect(ACPPromptQuota(
+            tokenCount: nil,
+            modelUsage: [.init(model: "a", tokenCount: tokenCount(total: 1))]
+        ).hasDisplayableContent)
+
+        #expect(ACPPromptQuota(tokenCount: tokenCount(total: 1), modelUsage: []).hasDisplayableContent)
+
+        #expect(!ACPPromptQuota(tokenCount: nil, modelUsage: []).hasDisplayableContent)
+    }
 }

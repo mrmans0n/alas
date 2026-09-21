@@ -28,6 +28,15 @@ extension ACPPromptQuota: Decodable {
 }
 
 extension ACPPromptQuota {
+    /// A quota is worth showing when it has a per-model breakdown, or —
+    /// some adapters send only the top-level `token_count` and omit
+    /// `model_usage`, which decodes as an empty array — at least a
+    /// top-level total. Shared by every UI surface that gates on quota
+    /// presence (composer footer, agent sidebar).
+    var hasDisplayableContent: Bool {
+        !modelUsage.isEmpty || tokenCount != nil
+    }
+
     /// Accumulates a newly-arrived per-turn quota into a running session
     /// total: token counts sum per model (and the top-level total); a model
     /// not seen before is appended as-is.
