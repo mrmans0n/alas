@@ -10277,8 +10277,14 @@ final class AppState {
                     removedIndex: removedIndex,
                     stderr: stderr
                ) {
-                // Clear deleting so the user can see the row again while deciding.
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+                // `.preparingDelete`, not `nil`: the row still shows a
+                // "Preparing deletion…" state (rather than the alarming
+                // "Deleting…" one) while the force-delete alert is up, but
+                // stays claimed against new session admission for the same
+                // reason the first confirmation does — this SwiftUI `.alert`
+                // is no less capable of yielding to other main-actor work
+                // while it's open than `NSAlert.runModal()` is.
+                projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
                 pendingForceDeleteWorktree = pending
                 return .needsForce
             } else if !force,
@@ -10368,6 +10374,10 @@ final class AppState {
 
     /// Called from the SwiftUI alert when the user cancels force delete.
     func cancelForceDeletePendingWorktree() {
+        if let pending = pendingForceDeleteWorktree,
+           projectsManager.operationState(for: pending.id) == .preparingDelete {
+            projectsManager.setOperationState(id: pending.id, state: nil)
+        }
         pendingForceDeleteWorktree = nil
     }
 
