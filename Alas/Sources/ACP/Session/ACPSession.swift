@@ -703,16 +703,19 @@ final class ACPSession: ObservableObject, Identifiable {
         return [index]
     }
 
-    /// Applies a live ACP `notice`. Coalesces an identical consecutive
-    /// notice (same severity/title/description) into a no-op so a chatty
-    /// agent re-sending the same event doesn't restart its auto-dismiss
-    /// timer or flash the banner. `info` auto-dismisses after a delay;
-    /// `warning`/`error` stay until the user dismisses them.
+    /// Applies a live ACP `notice`. Coalesces a visually identical
+    /// consecutive notice (same severity/title/description — `_meta` is
+    /// excluded, since it carries no displayed content) into a no-op so a
+    /// chatty agent re-sending the same event with a bumped timestamp
+    /// doesn't restart its auto-dismiss timer or flash the banner. `info`
+    /// (and any unrecognized severity, which renders generically as info)
+    /// auto-dismisses after a delay; `warning`/`error` stay until the user
+    /// dismisses them.
     private func applyNotice(_ notice: ACPSessionNotice) {
-        guard activeNotice != notice else { return }
+        if let active = activeNotice, active.isVisuallyIdentical(to: notice) { return }
         noticeAutoDismissTask?.cancel()
         activeNotice = notice
-        guard notice.severity == .info else { return }
+        guard notice.severity.behavesAsInfo else { return }
         noticeAutoDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard !Task.isCancelled, self?.activeNotice == notice else { return }

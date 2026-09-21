@@ -303,12 +303,31 @@ struct ACPSessionNotice: Codable, Equatable {
             case .other(let value): return value
             }
         }
+
+        /// True for `.info` and any unrecognized value (`_`-prefixed or
+        /// reserved-unknown): the spec requires both to render — and
+        /// therefore behave, e.g. auto-dismiss — generically as info.
+        /// `.warning`/`.error` are the only severities that stay pinned.
+        var behavesAsInfo: Bool {
+            switch self {
+            case .info, .other: return true
+            case .warning, .error: return false
+            }
+        }
     }
 
     let severity: Severity
     let title: String
     let description: String?
     let metadata: AnyCodable?
+
+    /// Whether `other` shows the same banner content as `self` — i.e. same
+    /// severity/title/description. `_meta` is deliberately excluded: it
+    /// carries no displayed content, so a chatty agent re-sending the same
+    /// notice with a bumped trace id must still coalesce.
+    func isVisuallyIdentical(to other: ACPSessionNotice) -> Bool {
+        severity == other.severity && title == other.title && description == other.description
+    }
 
     private enum CodingKeys: String, CodingKey {
         case severity, title, description

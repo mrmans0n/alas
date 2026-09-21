@@ -141,6 +141,34 @@ struct ACPSessionTests {
         #expect(session.activeNotice == notice)
     }
 
+    @Test("notices that only differ by _meta still coalesce as visually identical")
+    func noticesDifferingOnlyByMetadataCoalesce() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let first = ACPSessionNotice(
+            severity: .info, title: "Model fallback", description: "Using backup model.",
+            metadata: AnyCodable(["traceId": "a"]))
+        let second = ACPSessionNotice(
+            severity: .info, title: "Model fallback", description: "Using backup model.",
+            metadata: AnyCodable(["traceId": "b"]))
+
+        session.apply(.notice(first))
+        session.apply(.notice(second))
+
+        // Coalescing keeps the original instance in place rather than
+        // adopting the later metadata, so a chatty repeat doesn't restart
+        // the auto-dismiss timer or flash the banner.
+        #expect(session.activeNotice == first)
+    }
+
+    @Test("an unrecognized severity auto-dismisses like info")
+    func unrecognizedSeverityBehavesAsInfo() async {
+        #expect(ACPSessionNotice.Severity.other("_debug").behavesAsInfo)
+        #expect(ACPSessionNotice.Severity.other("future-severity").behavesAsInfo)
+        #expect(ACPSessionNotice.Severity.info.behavesAsInfo)
+        #expect(!ACPSessionNotice.Severity.warning.behavesAsInfo)
+        #expect(!ACPSessionNotice.Severity.error.behavesAsInfo)
+    }
+
     @Test("dismissing the active notice clears it")
     func dismissActiveNoticeClears() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
