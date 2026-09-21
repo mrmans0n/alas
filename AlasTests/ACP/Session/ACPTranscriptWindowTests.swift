@@ -158,12 +158,12 @@ struct ACPTranscriptWindowTests {
         #expect(head == 0) // one contiguous run costs a single unit
     }
 
-    /// Codex review finding: `collapsesFinishedToolCalls` is a UI-only
-    /// setting this model-layer computation cannot see, so with it off (the
-    /// default) every call in a run renders as its own row. An uncapped run
-    /// could otherwise leave an unbounded number of raw messages inside the
-    /// window regardless of `tailWindow` — reopening an unbounded-window
-    /// problem, and permanently exempting that run's messages from
+    /// `collapsesFinishedToolCalls` is a UI-only setting this model-layer
+    /// computation cannot see, so with it off (the default) every call in a
+    /// run renders as its own row. An uncapped run could otherwise leave an
+    /// unbounded number of raw messages inside the window regardless of
+    /// `tailWindow` — reopening an unbounded-window problem, and
+    /// permanently exempting that run's messages from
     /// `trimHiddenMessages`'s off-window content truncation. A single run
     /// must therefore only ever absorb up to `tailWindow * maxVisibleRows`
     /// raw messages for free.
