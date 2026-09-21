@@ -6,6 +6,10 @@ import AppKit
 @Suite(.serialized)
 @MainActor
 struct AlasFieldTests {
+    init() {
+        _ = NSApplication.shared
+    }
+
     private func currentTheme() -> Theme {
         try! ThemeStore().current
     }
@@ -75,8 +79,9 @@ struct AlasFieldTests {
         #expect(field.currentEditor() != nil)
     }
 
-    @Test func typingIntoFilteredFieldKeepsEveryCharacterAndCaretAtEnd() {
-        let host = TypingHost()
+    @Test(arguments: ["", "nacho/"])
+    func typingIntoFilteredFieldKeepsEveryCharacterAndCaretAtEnd(prefix: String) {
+        let host = TypingHost(initialText: prefix)
         let controller = NSHostingController(rootView: host.body.environment(\.theme, currentTheme()))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 28),
@@ -95,29 +100,135 @@ struct AlasFieldTests {
         let editor = try! #require(field.currentEditor() as? NSTextView)
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
 
-        for character in "feature" {
-            editor.insertText(String(character), replacementRange: editor.selectedRange())
+        var expected = prefix
+        for character in "feature-branch" {
+            let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil,
+                characters: String(character), charactersIgnoringModifiers: String(character),
+                isARepeat: false, keyCode: 0
+            )!
+            editor.keyDown(with: event)
+            expected.append(character)
+            #expect(editor.string == expected)
+            #expect(editor.selectedRange() == NSRange(location: expected.utf16.count, length: 0))
             pump()
+            #expect(editor.string == expected)
+            #expect(editor.selectedRange() == NSRange(location: expected.utf16.count, length: 0))
         }
-
-        #expect(editor.string == "nacho/feature")
-        #expect(editor.selectedRange().location == (editor.string as NSString).length)
     }
 
     private struct TypingHost {
-        var body: some View { Inner() }
+        var initialText = "nacho/"
+        @MainActor var body: some View { Inner(text: initialText) }
 
         private struct Inner: View {
-            @State private var text = "nacho/"
+            @State var text: String
             var body: some View {
                 AlasField(
                     text: $text,
                     monospaced: true,
                     focusOnAppear: true,
+                    onSubmit: {},
                     inputFilter: .branchName
                 )
             }
         }
+    }
+
+    @Test func filteredFieldDisablesAutomaticWordChanges() throws {
+        let field = AlasNSTextFieldView()
+        field.inputFilter = .branchName
+        let cell = try #require(field.cell as? AlasNSTextFieldCell)
+        let editor = try #require(cell.setUpFieldEditorAttributes(NSTextView()) as? NSTextView)
+        #expect(!editor.isAutomaticTextCompletionEnabled)
+        #expect(editor.inlinePredictionType == .no)
+        #expect(!editor.isAutomaticTextReplacementEnabled)
+        #expect(!editor.isAutomaticSpellingCorrectionEnabled)
+        #expect(!editor.isAutomaticQuoteSubstitutionEnabled)
+        #expect(!editor.isAutomaticDashSubstitutionEnabled)
+    }
+
+    @Test func filteredPasteAndCompositionKeepTheirCaret() {
+        let editor = GitRefNameFieldEditor()
+        editor.inputFilter = .branchName
+        editor.string = "nacho/"
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+        editor.insertText("new name/", replacementRange: editor.selectedRange())
+        #expect(editor.string == "nacho/newname")
+        #expect(editor.selectedRange() == NSRange(location: 13, length: 0))
+
+        editor.setMarkedText("^", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
+        #expect(editor.hasMarkedText())
+        #expect(editor.string == "nacho/newname^")
+        editor.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.string == "nacho/newnameê")
+        #expect(!editor.hasMarkedText())
+        #expect(editor.selectedRange() == NSRange(location: 14, length: 0))
+
+        editor.setSelectedRange(NSRange(location: 6, length: 3))
+        editor.insertText("old", replacementRange: editor.selectedRange())
+        #expect(editor.string == "nacho/oldnameê")
+        #expect(editor.selectedRange() == NSRange(location: 9, length: 0))
+
+        editor.string = "feature"
+        editor.setSelectedRange(NSRange(location: 0, length: 7))
+        editor.insertText("fea ture", replacementRange: editor.selectedRange())
+        #expect(editor.string == "feature")
+        #expect(editor.selectedRange() == NSRange(location: 7, length: 0))
+    }
+
+    @Test func markedTextDoesNotUpdateFilteredBindingUntilCommit() throws {
+        var text = "nacho/"
+        let view = AlasField(
+            text: Binding(get: { text }, set: { text = $0 }),
+            monospaced: true,
+            focusOnAppear: true,
+            onSubmit: {},
+            inputFilter: .branchName
+        )
+        .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: controller)
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+        let field = try #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+
+        editor.setMarkedText("^", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.hasMarkedText())
+        #expect(editor.string == "nacho/^")
+        #expect(text == "nacho/")
+
+        editor.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
+        pump()
+        #expect(!editor.hasMarkedText())
+        #expect(editor.string == "nacho/ê")
+        #expect(text == "nacho/ê")
+    }
+
+    @Test func rejectingCharacterInMiddleKeepsNextInsertionAtCaret() throws {
+        let controller = NSHostingController(rootView: TypingHost().body.environment(\.theme, currentTheme()))
+        let window = NSWindow(contentViewController: controller)
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+        let field = try #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+        editor.insertText("feature", replacementRange: editor.selectedRange())
+        pump()
+        editor.setSelectedRange(NSRange(location: 9, length: 0))
+        editor.insertText("?", replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.string == "nacho/feature")
+        #expect(editor.selectedRange() == NSRange(location: 9, length: 0))
+        editor.insertText("s", replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.string == "nacho/feasture")
     }
 
     private func pump(_ seconds: TimeInterval = 0.05) {
