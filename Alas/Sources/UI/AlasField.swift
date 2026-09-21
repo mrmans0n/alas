@@ -230,8 +230,23 @@ class AlasNSTextFieldView: NSTextField {
     }
 }
 
+/// Fields that disable automatic text substitutions get a private field
+/// editor instead of AppKit's window-shared one: `setUpFieldEditorAttributes`
+/// mutates the editor instance in place, and the shared editor is reused by
+/// every plain `NSTextField` in the window, so disabling substitutions on it
+/// would leak into unrelated fields the next time they're focused.
 final class AlasNSTextFieldCell: NSTextFieldCell {
     var disablesAutomaticTextSubstitutions = false
+
+    private lazy var isolatedFieldEditor: NSTextView = {
+        let editor = NSTextView()
+        editor.isFieldEditor = true
+        return editor
+    }()
+
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+        disablesAutomaticTextSubstitutions ? isolatedFieldEditor : super.fieldEditor(for: controlView)
+    }
 
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
         let editor = super.setUpFieldEditorAttributes(textObj)

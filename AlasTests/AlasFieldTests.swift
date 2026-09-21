@@ -188,6 +188,21 @@ struct AlasFieldTests {
         #expect(editor.isAutomaticTextReplacementEnabled == defaultReplacementSetting)
     }
 
+    @Test func disablingSubstitutionsUsesAPrivateFieldEditorInsteadOfTheSharedOne() throws {
+        let field = AlasNSTextFieldView()
+        field.disablesAutomaticTextSubstitutions = true
+        let cell = try #require(field.cell as? AlasNSTextFieldCell)
+        let dummyControlView = NSView()
+        let first = cell.fieldEditor(for: dummyControlView)
+        let second = cell.fieldEditor(for: dummyControlView)
+        #expect(first != nil)
+        #expect(first === second)
+
+        let plainField = AlasNSTextFieldView()
+        let plainCell = try #require(plainField.cell as? AlasNSTextFieldCell)
+        #expect(plainCell.fieldEditor(for: dummyControlView) == nil)
+    }
+
     private func pump(_ seconds: TimeInterval = 0.05) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
