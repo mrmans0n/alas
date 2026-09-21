@@ -12,6 +12,14 @@ struct RemotePairingLinkParts: Equatable, Sendable {
 /// A fresh phone scanning it lands on `base` and pairs as before; a hub
 /// pastes it and tries every origin in `hosts` in order, preferred first.
 enum RemotePairingLink {
+    /// Cap on origins accepted from any source — a pasted link or an inbound
+    /// peer advertisement. A real Mac advertises a handful (tailnet, LAN, a
+    /// couple of interfaces); anything beyond this is a malformed or hostile
+    /// list, not a peer. `RemotePeerPairer` dials each one sequentially with
+    /// its own multi-second timeout, so an unbounded list from a pasted link
+    /// could stall an Add attempt — and its disabled UI — for minutes.
+    static let maxOrigins = 8
+
     static func build(base: String, code: String, addresses: [RemoteAdvertisedAddress]) -> String {
         var origins = [base]
         for address in addresses where !origins.contains(address.url) {
@@ -57,6 +65,7 @@ enum RemotePairingLink {
         candidates.append(trimmed)
         var origins: [String] = []
         for candidate in candidates {
+            guard origins.count < maxOrigins else { break }
             guard let origin = normalizeOrigin(candidate), !origins.contains(origin) else { continue }
             origins.append(origin)
         }

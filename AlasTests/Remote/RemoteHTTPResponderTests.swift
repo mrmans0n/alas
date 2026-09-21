@@ -209,6 +209,24 @@ struct RemoteHTTPResponderTests {
         #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
     }
 
+    // Pasting this same Mac's own pairing link back at itself over a
+    // reachable LAN or tailnet address would otherwise pass every other
+    // check — the advertised serverId legitimately equals the local
+    // identity's own — and persist an "online" peer that is actually just
+    // this Mac.
+    @Test func pairWithAPeerAdvertisingThisSameMacsOwnIdentityIsRejected() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac A","peer":{"serverId":"srv-a","name":"Mac A","origins":["http://10.0.0.1:8765"]}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect(sink.requests.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
     @Test func pairWithAnOverlongDeviceNameIsRejected() {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let sink = PeerSink()

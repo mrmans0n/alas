@@ -36,6 +36,19 @@ struct RemotePairingLinkTests {
         #expect(parts.origins == ["http://100.64.1.5:8765", "http://192.168.1.20:8765"])
     }
 
+    // A pasted link's `hosts` can carry an arbitrary number of entries.
+    // `RemotePeerPairer` dials every parsed origin sequentially with a
+    // multi-second timeout each, so an unbounded list — malformed or
+    // hostile — could stall an Add attempt for minutes; the cap is applied
+    // before any of them are ever dialed.
+    @Test func parseCapsTheNumberOfOriginsAccepted() throws {
+        let hosts = (1...20).map { RemotePairingLink.encodeOrigin("http://10.0.0.\($0):8765") }.joined(separator: ",")
+        let link = "http://10.0.0.1:8765/?code=ABC123&hosts=\(hosts)"
+        let parts = try #require(RemotePairingLink.parse(link))
+        #expect(parts.origins.count == RemotePairingLink.maxOrigins)
+        #expect(parts.origins == (1...RemotePairingLink.maxOrigins).map { "http://10.0.0.\($0):8765" })
+    }
+
     @Test func parseLegacyLinkWithoutHostsUsesItsOwnOrigin() throws {
         let parts = try #require(RemotePairingLink.parse("http://192.168.1.20:8765/?code=ABC123"))
         #expect(parts.origins == ["http://192.168.1.20:8765"])

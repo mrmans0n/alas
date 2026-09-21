@@ -104,9 +104,6 @@ struct RemoteHTTPResponder {
         return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data, extraHeaders: extraHeaders)
     }
 
-    /// A real Mac advertises a handful of addresses (tailnet, LAN, a couple of
-    /// interfaces); anything beyond this is a probe list, not a peer.
-    private static let maxPeerOrigins = 8
     /// Upper bound on peer-supplied display strings, which are stored and shown.
     private static let maxPeerTextLength = 200
 
@@ -139,11 +136,20 @@ struct RemoteHTTPResponder {
             // port scan of the local network; an empty `serverId` collapses
             // every peer onto one identity; and `name`/`deviceName` are both
             // adopted into records and shown in Settings.
-            guard peer.origins.count <= Self.maxPeerOrigins,
+            guard peer.origins.count <= RemotePairingLink.maxOrigins,
                   !peer.serverId.isEmpty,
                   peer.name.count <= Self.maxPeerTextLength,
                   pr.deviceName.count <= Self.maxPeerTextLength
             else { return forbidden("peer rejected") }
+            // A peer whose advertised identity matches this Mac's own would
+            // have both reciprocal legs loop back into this same server,
+            // reporting success while persisting an "online" peer that is
+            // actually just this Mac — most likely the user pasting their
+            // own pairing link back at themselves over a reachable LAN or
+            // tailnet address.
+            if let ownServerId = identity?().serverId, !ownServerId.isEmpty, ownServerId == peer.serverId {
+                return forbidden("cannot pair with self")
+            }
             guard let result = try? pairing.redeemPeer(code: pr.code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId) else { return unauthorized }
             token = result.token
