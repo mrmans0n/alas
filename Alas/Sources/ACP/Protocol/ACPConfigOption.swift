@@ -163,16 +163,18 @@ struct ACPConfigOptionItem: Codable, Equatable, Identifiable, Hashable {
     let id: String
     let name: String
     let description: String?
+    let kind: ACPModeKind?
 
-    init(id: String, name: String, description: String? = nil) {
+    init(id: String, name: String, description: String? = nil, kind: ACPModeKind? = nil) {
         self.id = id
         self.name = name
         self.description = description
+        self.kind = kind
     }
 
     // Wire format uses `value` for the option identifier; accept both
     // shapes so older draft payloads (which used `id`) keep decoding.
-    enum CodingKeys: String, CodingKey { case id, value, name, description }
+    enum CodingKeys: String, CodingKey { case id, value, name, description, meta = "_meta" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if let v = try? c.decode(String.self, forKey: .value) {
@@ -182,6 +184,8 @@ struct ACPConfigOptionItem: Codable, Equatable, Identifiable, Hashable {
         }
         name = try c.decode(String.self, forKey: .name)
         description = try? c.decode(String.self, forKey: .description)
+        let meta = (try? c.decodeIfPresent(ACPModeKindMetadata.self, forKey: .meta)) ?? nil
+        kind = meta?.kind.flatMap(ACPModeKind.init(rawValue:))
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)

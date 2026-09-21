@@ -70,6 +70,15 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
+    /// Per-model token usage from the most recent `session/prompt` result's
+    /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
+    /// only: re-derived on each prompt response, never persisted.
+    @Published private(set) var lastTurnQuota: ACPPromptQuota?
+    /// Running sum of every turn's `lastTurnQuota` this session, per model.
+    /// `_meta.quota` reports each turn's own usage rather than a running
+    /// total, so this is accumulated client-side — see
+    /// `ACPPromptQuota.accumulating(_:with:)`.
+    @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
     @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
@@ -582,7 +591,7 @@ final class ACPSession: ObservableObject, Identifiable {
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
-            return [transcript.messages.count - 1]
+            return applyDiffStatsFromToolCallContent(items).union([transcript.messages.count - 1])
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
@@ -598,7 +607,8 @@ final class ACPSession: ObservableObject, Identifiable {
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
             }
-            return touched.map { [$0] } ?? []
+            let diffTouched = applyDiffStatsFromToolCallContent(u.content ?? [])
+            return touched.map { diffTouched.union([$0]) } ?? diffTouched
         case .compactionUpdate(let update):
             clearRestoredContextRecoveryStatus()
             return applyContextCompaction(update)
@@ -1201,7 +1211,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return true
         case (.terminal(let a), .terminal(let b)):
             return a == b
-        case (.diff(let p1, let o1, let n1), .diff(let p2, let o2, let n2)):
+        case (.diff(let p1, let o1, let n1, _, _), .diff(let p2, let o2, let n2, _, _)):
             return p1 == p2 && o1 == o2 && n1 == n2
         case (.content(.image(let d1, let u1, let m1)),
               .content(.image(let d2, let u2, let m2))):
@@ -1454,6 +1464,16 @@ final class ACPSession: ObservableObject, Identifiable {
         flushPendingReplayCandidates()
         transcript.appendMessage(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
+    }
+
+    /// Stores a `session/prompt` response's decoded `_meta.quota` as the
+    /// last turn's usage and folds it into the running session total. A nil
+    /// quota (agent doesn't send the extension, or decode failed) is a
+    /// no-op — both properties keep their previous values.
+    func recordPromptQuota(_ quota: ACPPromptQuota?) {
+        guard let quota else { return }
+        lastTurnQuota = quota
+        sessionQuotaTotal = ACPPromptQuota.accumulating(sessionQuotaTotal, with: quota)
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
@@ -1795,7 +1815,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 continue
             case .content(.resource(_, _, let text)):
                 out.append(text)
-            case .diff(let path, let old, let new):
+            case .diff(let path, let old, let new, _, _):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
                     for line in Self.diffLines(old) {
@@ -1816,6 +1836,33 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// Correlates adapter-supplied diff statistics (AIR extension,
+    /// `_meta.jetbrains.air.diffStats` on a `diff` content block) into the
+    /// most recent `.fileEdit` transcript row for the same path.
+    ///
+    /// `fs/write_text_file` only sees before/after text and falls back to
+    /// `ACPFileWriter`'s crude line-set heuristic; when the same edit's
+    /// tool call later reports the adapter's real patch counts, prefer
+    /// those. A diff item without stats, or with no matching file edit yet
+    /// (the write hasn't landed, or this is a preview-only diff with no
+    /// corresponding write), is a no-op — the heuristic count stands.
+    private func applyDiffStatsFromToolCallContent(_ items: [ACPToolCallContent]) -> Set<Int> {
+        var touched: Set<Int> = []
+        for item in items {
+            guard case .diff(let path, _, _, _, let diffStats?) = item else { continue }
+            guard let index = transcript.messages.lastIndex(where: {
+                if case .fileEdit(_, let edit) = $0 { return edit.path == path }
+                return false
+            }), case .fileEdit(let id, var edit) = transcript.messages[index] else { continue }
+            guard edit.added != diffStats.added || edit.removed != diffStats.removed else { continue }
+            edit.added = diffStats.added
+            edit.removed = diffStats.removed
+            transcript.replaceMessage(at: index, with: .fileEdit(id: id, edit))
+            touched.insert(index)
+        }
+        return touched
     }
 
     /// Split a diff hunk into lines while preserving blank lines inside

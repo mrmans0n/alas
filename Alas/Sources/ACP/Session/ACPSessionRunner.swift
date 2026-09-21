@@ -2044,13 +2044,15 @@ extension ACPSessionRunner {
                 guard await MainActor.run(body: { self.activePromptID == promptID }) else {
                     throw CancellationError()
                 }
-                let promptAcknowledgement = try await self.connection.prompt(
+                let promptOutcome = try await self.connection.prompt(
                     sessionId: remoteId,
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil
                 )
+                let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
+                    self.session.recordPromptQuota(promptOutcome.quota)
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     let deliveredForkContext = pendingForkContext != nil

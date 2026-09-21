@@ -5,6 +5,11 @@ import SwiftUI
 struct ACPContextUsageButton: View {
     let usage: ACPUsageInfo?
     let modelName: String?
+    /// Per-model breakdown from the last `session/prompt` response's
+    /// `_meta.quota`, and the running session total. Both nil for agents
+    /// that don't send the extension — the popover just omits the section.
+    var lastTurnQuota: ACPPromptQuota? = nil
+    var sessionQuotaTotal: ACPPromptQuota? = nil
 
     @State private var showDetails = false
     @Environment(\.theme) private var theme
@@ -42,9 +47,35 @@ struct ACPContextUsageButton: View {
                     .font(.system(size: 11))
                     .foregroundStyle(theme.color("fg-muted"))
             }
+            if let lastTurnQuota, !lastTurnQuota.modelUsage.isEmpty {
+                Divider()
+                quotaSection(title: "Last turn", quota: lastTurnQuota)
+            }
+            if let sessionQuotaTotal, !sessionQuotaTotal.modelUsage.isEmpty {
+                quotaSection(title: "Session total", quota: sessionQuotaTotal)
+            }
         }
         .padding(14)
         .frame(minWidth: 220, alignment: .leading)
+    }
+
+    private func quotaSection(title: String, quota: ACPPromptQuota) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.color("fg-faint"))
+            ForEach(quota.modelUsage, id: \.model) { usage in
+                HStack {
+                    Text(usage.model)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-muted"))
+                    Spacer(minLength: 12)
+                    Text(formatContextTokens(usage.tokenCount.totalTokens))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.color("fg-muted"))
+                }
+            }
+        }
     }
 
     private func formatCost(_ cost: ACPUsageInfo.Cost) -> String {
