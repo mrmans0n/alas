@@ -383,6 +383,24 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.streamingState == .streaming)
     }
 
+    @Test("broker-delivered Cursor plan preserves active state from awaiting input snapshot")
+    func brokerPlanResponseRestoresActiveTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.transcript.streamingState = .awaitingInput
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(session.transcript.streamingState == .streaming)
+    }
+
     @Test("Cursor plan awaiting notifies the input owner")
     func planAwaitingNotifiesInputOwner() async throws {
         var notified: ACPCursorPlanRequest?

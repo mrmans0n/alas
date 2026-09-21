@@ -847,11 +847,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func respond<T: Encodable & Sendable>(id: JSONRPCID, value: T) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.respond(id: id, result: ACPBrokerJSONValue(encodable: value), error: nil)
-            } catch {}
+        do {
+            respondToRawResult(id: id, result: .success(try JSONEncoder().encode(value)))
+        } catch {
+            respondToRawResult(id: id, result: .failure(.init(
+                code: -32603,
+                message: "response could not be encoded: \(error.localizedDescription)",
+                data: nil
+            )))
         }
     }
 
@@ -887,12 +890,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func respond(id: JSONRPCID, error: JSONRPCError) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.respond(id: id, result: nil, error: error)
-            } catch {}
-        }
+        respondToRawResult(id: id, result: .failure(error))
     }
 
     private func respond(id: JSONRPCID, result: ACPBrokerJSONValue?, error: JSONRPCError?) async throws {

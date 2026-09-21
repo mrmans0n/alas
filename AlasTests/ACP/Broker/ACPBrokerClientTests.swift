@@ -487,6 +487,37 @@ struct ACPBrokerClientTests {
         ))
     }
 
+    @Test func failedCursorExtensionResponseReportsErrorToAdapter() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        await service.failNextResponds(1)
+        try await client.start()
+
+        try await waitUntil { await service.responded.count == 2 }
+        let fallback = try await #require(service.responded.last)
+        #expect(fallback.requestId == .string("todo-1"))
+        #expect(fallback.result == nil)
+        #expect(fallback.error != nil)
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
