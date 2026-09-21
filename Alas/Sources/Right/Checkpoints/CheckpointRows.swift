@@ -9,7 +9,6 @@ enum CheckpointPresentation {
     /// construct and measure every row instead of only the visible ones.
     static let maxInlineFileGroups = 24
 
-
     static func compactDate(_ date: Date, now: Date = .now) -> String {
         let formatter = DateFormatter()
         formatter.locale = .current
