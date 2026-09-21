@@ -17,6 +17,12 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     let subagentSessionId: String
     nonisolated var id: String { subagentSessionId }
 
+    /// Seq space reserved below a persisted row's own seq for a run of
+    /// consecutive missing PREFIX rows recovered ahead of it — see
+    /// `insertRecovered`. Far larger than any realistic number of rows a
+    /// single crash window could have dropped.
+    private static let prefixRecoverySeqReserve: Int64 = 1_000_000
+
     @Published private(set) var name: String?
     @Published private(set) var task: String?
     @Published private(set) var state: ACPSubagentState
@@ -745,7 +751,16 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         case let (b?, a?) where a > b + 1:
             seq = b + 1
         case let (nil, a?):
-            seq = a - 1
+            // No lower neighbor at all — this could be the first of SEVERAL
+            // consecutive missing prefix rows (e.g. seq 0 and 1 both never
+            // persisted, only seq 2 did). Reserving just `a - 1` leaves no
+            // room for a second one: its own neighbors would then be
+            // exactly adjacent (`a - 1` and `a`), fall through to `nextSeq`
+            // below, and reload AFTER `a` even though it sits before it in
+            // memory, since SQLite orders by seq. Reserve a wide block
+            // instead, so any realistic run of consecutive prefix recoveries
+            // still lands in strictly increasing, gap-preserving order.
+            seq = a - Self.prefixRecoverySeqReserve
         default:
             seq = nextSeq
         }

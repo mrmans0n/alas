@@ -468,6 +468,40 @@ struct ACPSubagentSessionTests {
         #expect(buffer.value == "hello world")
     }
 
+    @Test("replay recovers multiple consecutive missing prefix rows in order")
+    func replayRecoversMultipleMissingPrefixRowsInOrder() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Only seq 2 made it to SQLite — seq 0 and 1 never did.
+        run.restore(
+            messages: [.agent(id: UUID(), messageId: "m2", StreamingText("third"))],
+            createdAts: [Date()],
+            seqs: [2])
+
+        // `session/load` resends the full chronological history: the two
+        // missing rows, then the one that did persist.
+        run.applyReplayed(.agentMessageChunk(.init(messageId: "m0", content: .text("first"))))
+        run.applyReplayed(.agentMessageChunk(.init(messageId: "m1", content: .text("second"))))
+        run.applyReplayed(.agentMessageChunk(.init(messageId: "m2", content: .text("third"))))
+
+        #expect(run.messages.count == 3)
+        guard case .agent(_, "m0", let first) = run.messages[0],
+              case .agent(_, "m1", let second) = run.messages[1],
+              case .agent(_, "m2", let third) = run.messages[2] else {
+            Issue.record("expected all three rows in chronological order")
+            return
+        }
+        #expect(first.value == "first")
+        #expect(second.value == "second")
+        #expect(third.value == "third")
+        // The seq assigned to each recovered row must stay STRICTLY
+        // increasing in array order — SQLite reloads by `ORDER BY seq`,
+        // so an out-of-order seq would resurface these rows in the wrong
+        // order on the next reattach even though this session's in-memory
+        // array is correct right now.
+        #expect(run.seq(at: 0) < run.seq(at: 1))
+        #expect(run.seq(at: 1) < run.seq(at: 2))
+    }
+
     @Test("replay recovers a lost tail without duplicating what was persisted")
     func replayRecoversLostTailWithoutDuplication() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")

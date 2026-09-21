@@ -1126,15 +1126,10 @@ final class ACPSessionRunner {
             guard let self else { return }
             // Mirrors learn about new rows through this notifier — gated on
             // THIS write's own outcome alone, not the batch-combined
-            // `succeeded` below: for a direct (non-broker) connection
-            // `completion` is always nil, so `succeeded` can stay
-            // permanently poisoned by one earlier transient failure, and
-            // gating the notifier on it too would leave every later
-            // successful write's mirror notification silently dropped for
-            // the rest of the runner's lifetime. A child that streams
-            // without touching its synthetic parent row would otherwise
-            // stay invisible to another instance until the next parent-row
-            // write (its terminal state, at the earliest).
+            // `succeeded` below. A child that streams without touching its
+            // synthetic parent row would otherwise stay invisible to
+            // another instance until the next parent-row write (its
+            // terminal state, at the earliest).
             //
             // Deliberately NOT `onMessageActivity`: that moves the recents
             // ordering by bumping `updatedAt` in memory, while
@@ -2914,26 +2909,33 @@ extension ACPSessionRunner {
         let acknowledgements = pendingStreamingPersistAcknowledgements
         pendingStreamingPersistAcknowledgements.removeAll(keepingCapacity: true)
         streamingPersistInFlightIndices.formUnion(indices)
-        if persistIndices(indices, requiresLease: true, completion: { [weak self] succeeded in
-            guard let self else { return }
-            self.streamingPersistInFlightIndices.subtract(indices)
-            if succeeded {
-                for acknowledgement in acknowledgements {
-                    acknowledgement()
+        // This flush's own completion is not part of any subagent lifecycle
+        // batch — an unrelated earlier failure must not report a spurious
+        // `false` here, which would be misread below as the write lease
+        // having moved and stop scheduling the rest of this prompt's output.
+        if persistIndices(
+            indices, requiresLease: true, participatesInLifecycleBatch: false,
+            completion: { [weak self] succeeded in
+                guard let self else { return }
+                self.streamingPersistInFlightIndices.subtract(indices)
+                if succeeded {
+                    for acknowledgement in acknowledgements {
+                        acknowledgement()
+                    }
+                    for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
+                        self.pendingStreamingPersistIndices.remove(index)
+                        self.pendingStreamingPersistRevisions.removeValue(forKey: index)
+                    }
+                    if !self.pendingStreamingPersistIndices.isEmpty, !self.streamingLeaseLost {
+                        self.flushStreamingPersist()
+                    }
+                    return
                 }
-                for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
-                    self.pendingStreamingPersistIndices.remove(index)
-                    self.pendingStreamingPersistRevisions.removeValue(forKey: index)
-                }
-                if !self.pendingStreamingPersistIndices.isEmpty, !self.streamingLeaseLost {
-                    self.flushStreamingPersist()
-                }
-                return
+                self.freezeStreamingPersistSnapshots()
+                self.streamingLeaseLost = true
+                self.persistStreamingPersistSnapshots()
             }
-            self.freezeStreamingPersistSnapshots()
-            self.streamingLeaseLost = true
-            self.persistStreamingPersistSnapshots()
-        }) {
+        ) {
             return
         }
         streamingPersistInFlightIndices.subtract(indices)
@@ -3038,6 +3040,7 @@ extension ACPSessionRunner {
     func persistIndices(
         _ indices: Set<Int>,
         requiresLease: Bool = true,
+        participatesInLifecycleBatch: Bool = true,
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         streamingPersistTask?.cancel()
@@ -3071,17 +3074,26 @@ extension ACPSessionRunner {
             }, completion: { [weak self] persisted in
                 guard let self else { return }
                 // This write's own bookkeeping — what Alas now believes is
-                // actually on disk — reflects ONLY this write's own outcome.
-                // An unrelated earlier write's failure combined into
-                // `succeeded` below must not make it forget that THIS row
-                // really did land in SQLite: for a direct (non-broker)
-                // connection, `completion` is always nil, so `succeeded`
-                // below can stay permanently poisoned by one transient
-                // failure — gating bookkeeping on it too would leave every
-                // later successful write's rows unrecorded for the rest of
-                // the runner's lifetime, even though they DID persist.
+                // actually on disk — reflects ONLY this write's own outcome,
+                // regardless of any other write's combined `succeeded` below.
                 if persisted == true {
                     self.commitPersistedMessageRows(messageRows)
+                }
+                // `lastQueuedPersistenceSucceeded` combining exists to
+                // couple an OpenCode-normalized dual-write batch (a spawn
+                // with no ack of its own, followed by a trailing update
+                // that carries the real one) — live or replayed. A caller
+                // whose write has nothing to do with that batch, like
+                // `flushStreamingPersist`'s own non-durable completion on
+                // every streaming flush, opts out via
+                // `participatesInLifecycleBatch: false`: an unrelated
+                // EARLIER batch's transient failure must not make THIS
+                // write's own success report back as `false`, which
+                // `flushStreamingPersist` reads as its write lease having
+                // moved and stops scheduling further output.
+                guard participatesInLifecycleBatch else {
+                    completion?(persisted == true)
+                    return
                 }
                 // See the matching comment in `persistSubagentIndices`:
                 // combine with the preceding write's outcome rather than

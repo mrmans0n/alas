@@ -493,6 +493,37 @@ struct ACPSubagentRoutingTests {
         #expect(secondAcknowledged.value == true)
     }
 
+    @Test("a write that opts out of the lifecycle batch is not poisoned by an unrelated prior failure")
+    func nonParticipatingWriteIsNotPoisonedByPriorLifecycleFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A subagent spawn with no ack of its own (the OpenCode-style
+        // dual-write shape) whose write fails — poisons
+        // `lastQueuedPersistenceSucceeded`.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // A LATER, unrelated write that explicitly opts out of the
+        // lifecycle batch coupling — exactly what `flushStreamingPersist`
+        // does for its own non-durable completion on every streaming flush.
+        // Before the fix, every `persistIndices` completion combined with
+        // the stale poisoned flag regardless of the caller, so this write's
+        // own success still reported back as `false` — which
+        // `flushStreamingPersist` reads as its write lease having moved,
+        // dropping the rest of the prompt's output.
+        let liveWriteAcknowledged = Acknowledged()
+        _ = runner.persistIndices(
+            [0], participatesInLifecycleBatch: false,
+            completion: { liveWriteAcknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(liveWriteAcknowledged.value == true)
+    }
+
     @Test("a spawn's failure is not erased by the child write that follows it")
     func spawnFailureSurvivesSuccessfulChildWrite() async throws {
         let (runner, store, _) = try makeRunner()
