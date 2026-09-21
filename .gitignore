@@ -20,6 +20,7 @@ ThirdParty/treesitter-pack/target/
 /.worktrees/
 /.claude/*
 !/.claude/skills
+!/.claude/settings.json
 
 # Let's ignore superpower docs
 docs/superpowers
