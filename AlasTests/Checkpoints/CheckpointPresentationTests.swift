@@ -17,21 +17,58 @@ struct CheckpointPresentationTests {
 
     @Test func summaryOmitsZeroCountsAndUsesCompactSeparators() {
         let summary = WorktreeCheckpointSummary(
-            id: UUID(), kind: .manual, label: "Before edit", createdAt: .now, byteCount: 0,
+            id: UUID(), kind: .manual, label: "Before edit", createdAt: .now, byteCount: 1_536,
             stagedFileCount: 2, unstagedFileCount: 0, untrackedFileCount: 4, unavailableReason: nil
         )
         #expect(CheckpointPresentation.summary(summary) == "2 staged · 4 untracked")
-        #expect(CheckpointPresentation.statusLine(summary).contains(CheckpointPresentation.summary(summary)))
+        #expect(CheckpointPresentation.detail(summary) == "2 staged · 4 untracked · 1.5 KiB")
         let clean = WorktreeCheckpointSummary(
-            id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: summary.byteCount,
+            id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: 0,
             stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: nil
         )
         #expect(CheckpointPresentation.summary(clean) == "Clean")
-        let unavailable = WorktreeCheckpointSummary(
-            id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: summary.byteCount,
-            stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: "Checkpoint data is missing."
+        #expect(CheckpointPresentation.detail(clean) == "Clean · 0 B")
+    }
+
+    @Test func toneRanksBreakageThenCapturedWorkThenKind() {
+        let base = WorktreeCheckpointSummary(
+            id: UUID(), kind: .automatic, label: "Before edit", createdAt: .now, byteCount: 0,
+            stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: nil
         )
-        #expect(CheckpointPresentation.statusLine(unavailable) == "Checkpoint data is missing.")
+        func variant(
+            kind: CheckpointKind = .automatic,
+            unstaged: Int = 0,
+            unavailable: String? = nil
+        ) -> WorktreeCheckpointSummary {
+            WorktreeCheckpointSummary(
+                id: base.id, kind: kind, label: base.label, createdAt: base.createdAt, byteCount: 0,
+                stagedFileCount: 0, unstagedFileCount: unstaged, untrackedFileCount: 0,
+                unavailableReason: unavailable
+            )
+        }
+        #expect(CheckpointPresentation.toneToken(base) == "fg-faint")
+        #expect(CheckpointPresentation.toneToken(variant(kind: .manual)) == "accent")
+        #expect(CheckpointPresentation.toneToken(variant(unstaged: 1)) == "mod")
+        // Captured work outranks a hand-made checkpoint; breakage outranks both.
+        #expect(CheckpointPresentation.toneToken(variant(kind: .manual, unstaged: 1)) == "mod")
+        #expect(CheckpointPresentation.toneToken(
+            variant(kind: .manual, unstaged: 1, unavailable: "blob missing")
+        ) == "del")
+    }
+
+    @Test func blockedReasonNamesTheOperationHoldingTheLock() {
+        #expect(CheckpointPresentation.mutationsBlockedReason(
+            operationInFlight: .restore, hasInterruptedRestore: false
+        ) == "A restore is already in progress.")
+        #expect(CheckpointPresentation.mutationsBlockedReason(
+            operationInFlight: .capture, hasInterruptedRestore: true
+        ) == "A checkpoint is being created.")
+        #expect(CheckpointPresentation.mutationsBlockedReason(
+            operationInFlight: nil, hasInterruptedRestore: true
+        ) == "Recover the interrupted restore first.")
+        #expect(CheckpointPresentation.mutationsBlockedReason(
+            operationInFlight: nil, hasInterruptedRestore: false
+        ) == "Checkpoint state is still loading.")
     }
 
     @Test func footerKeepsRetentionDetailsOutOfTheVisibleCopy() {

@@ -111,21 +111,27 @@ struct ChangesTabViewTests {
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: false
+            mutationsDisabled: false,
+            manifest: nil,
+            blockedReason: nil
         )
         let disabled = ChangesTabView.checkpointSummaryRowToken(
             summary: available,
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: true
+            mutationsDisabled: true,
+            manifest: nil,
+            blockedReason: "A restore is already in progress."
         )
         let nowUnavailable = ChangesTabView.checkpointSummaryRowToken(
             summary: unavailable,
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: false
+            mutationsDisabled: false,
+            manifest: nil,
+            blockedReason: nil
         )
 
         #expect(enabled != disabled)
