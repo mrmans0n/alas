@@ -219,8 +219,18 @@ pub struct ACPBrokerSnapshot {
     pub journal_tail: EventCursor,
     pub pending_requests: Vec<PendingClientRequest>,
     pub operations: Vec<OperationSnapshot>,
-    #[serde(default)]
-    pub cursor_todos_by_tool_call_id: BTreeMap<String, Value>,
+    /// `None` only when this snapshot came from a legacy supervisor whose
+    /// raw IPC response predates this field entirely — `#[serde(default)]`
+    /// lets that missing key decode to `None` here instead of a synthetic
+    /// empty map, and `skip_serializing_if` re-omits the key on the way out
+    /// so a client three hops away (e.g. Swift, adopting through `acp_open`'s
+    /// decode-then-reencode) still sees "absent" rather than "empty", which
+    /// is the only signal it has for detecting a legacy broker. A snapshot
+    /// built by `snapshot()` below always sets `Some(..)`, even when the map
+    /// is empty, because a current-build broker always knows its own
+    /// (possibly empty) todo state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_todos_by_tool_call_id: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -626,7 +636,7 @@ impl ACPBrokerState {
             journal_tail: self.journal_tail(),
             pending_requests,
             operations,
-            cursor_todos_by_tool_call_id: self.cursor_todos_by_tool_call_id.clone(),
+            cursor_todos_by_tool_call_id: Some(self.cursor_todos_by_tool_call_id.clone()),
         }
     }
 

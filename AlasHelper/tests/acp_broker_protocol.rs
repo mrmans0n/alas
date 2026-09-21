@@ -1,7 +1,7 @@
 use alas_helper::acp_broker::{
-    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, BrokerErrorKind, BrokerEventKind,
-    BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, JSONRPCErrorObject, OperationKey,
-    PendingClientRequestKind,
+    ACPBrokerMetadata, ACPBrokerSnapshot, ACPBrokerState, AdapterRPCOutcome, BrokerErrorKind,
+    BrokerEventKind, BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, JSONRPCErrorObject,
+    OperationKey, PendingClientRequestKind,
 };
 use alas_helper::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpBrokerMethod, AcpCloseParams, AcpDetachParams, AcpListResult,
@@ -9,6 +9,7 @@ use alas_helper::acp_broker_protocol::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 fn metadata() -> ACPBrokerMetadata {
     ACPBrokerMetadata {
@@ -439,11 +440,59 @@ fn cursor_todo_responses_are_preserved_in_snapshot() {
         broker
             .snapshot()
             .cursor_todos_by_tool_call_id
+            .expect("current-build snapshot always carries a todos map")
             .get("todo-call"),
         Some(&json!([
             {"id": "todo-1", "content": "Implement", "status": "pending"},
             {"id": "todo-2", "content": "Verify", "status": "completed"}
         ]))
+    );
+}
+
+#[test]
+fn current_snapshot_always_carries_a_present_todos_key_even_when_empty() {
+    let snapshot = broker().snapshot();
+    assert_eq!(snapshot.cursor_todos_by_tool_call_id, Some(BTreeMap::new()));
+
+    let wire = serde_json::to_value(AcpOpenResult {
+        snapshot,
+        adopted: false,
+    })
+    .unwrap();
+    assert_eq!(wire["snapshot"]["cursorTodosByToolCallId"], json!({}));
+}
+
+/// Regression test for a legacy broker's todo snapshot being masked by
+/// `acp_open`'s decode-then-reencode of an adopted broker's raw IPC
+/// response. A pre-todo-snapshot supervisor's raw "snapshot" reply simply
+/// has no `cursorTodosByToolCallId` key. If decoding that into
+/// `ACPBrokerSnapshot` silently filled in an empty map (rather than `None`),
+/// reencoding it into the `AcpOpenResult` sent to the client would put the
+/// key back with an empty object — indistinguishable from a current broker
+/// that genuinely has no todos yet, which is exactly the signal the client
+/// needs to detect and restart a legacy broker.
+#[test]
+fn legacy_snapshot_missing_todos_key_round_trips_as_absent_not_empty() {
+    let mut raw = serde_json::to_value(broker().snapshot()).unwrap();
+    raw.as_object_mut()
+        .unwrap()
+        .remove("cursorTodosByToolCallId");
+
+    let snapshot: ACPBrokerSnapshot = serde_json::from_value(raw)
+        .expect("a legacy snapshot missing the todos key must still decode");
+    assert_eq!(snapshot.cursor_todos_by_tool_call_id, None);
+
+    let wire = serde_json::to_value(AcpOpenResult {
+        snapshot,
+        adopted: true,
+    })
+    .unwrap();
+    assert!(
+        !wire["snapshot"]
+            .as_object()
+            .unwrap()
+            .contains_key("cursorTodosByToolCallId"),
+        "legacy 'missing key' must survive decode/reencode as absent, not {{}}: {wire}"
     );
 }
 
