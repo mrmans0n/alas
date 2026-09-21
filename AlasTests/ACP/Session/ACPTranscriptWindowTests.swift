@@ -158,6 +158,27 @@ struct ACPTranscriptWindowTests {
         #expect(head == 0) // one contiguous run costs a single unit
     }
 
+    /// Codex review finding: `collapsesFinishedToolCalls` is a UI-only
+    /// setting this model-layer computation cannot see, so with it off (the
+    /// default) every call in a run renders as its own row. An uncapped run
+    /// could otherwise leave an unbounded number of raw messages inside the
+    /// window regardless of `tailWindow` — reopening an unbounded-window
+    /// problem, and permanently exempting that run's messages from
+    /// `trimHiddenMessages`'s off-window content truncation. A single run
+    /// must therefore only ever absorb up to `tailWindow * maxVisibleRows`
+    /// raw messages for free.
+    @Test("a pathologically long tool-call run is still bounded by tailWindow * maxVisibleRows")
+    func tailWindowHeadCapsAPathologicallyLongRun() {
+        let runLength = ACPTranscript.tailWindow * ACPTranscript.maxVisibleRows + 300
+        let messages: [ACPMessage] = (0..<runLength).map { i in
+            .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+        }
+
+        let head = ACPTranscript.tailWindowHead(messages: messages)
+
+        #expect(head == 300)
+    }
+
     @Test("resetWindowToTail does not publish when head is already current")
     func resetDoesNotPublishWhenUnchanged() {
         let t = ACPTranscript()
