@@ -94,6 +94,24 @@ enum RunSchedulePresentation {
         return "Next: \(day), \(time.string(from: next))"
     }
 
+    /// Whether a scheduled prompt can be delivered to an agent on `host`.
+    ///
+    /// Only to agents on this Mac. A prompt is typed into the agent's
+    /// terminal and is sent only once the harness detector confirms the
+    /// agent owns that terminal, but a remote terminal runs `ssh` locally
+    /// and the detector classifies that local process. The agent itself
+    /// lives in the remote PTY, out of its reach, so readiness could never
+    /// be confirmed and every firing would wait out the timeout.
+    static func deliversPrompt(host: String?) -> Bool {
+        host == nil
+    }
+
+    /// Why a remote schedule's prompt was not sent. Said once per firing,
+    /// because the user configured a prompt that is not going to arrive.
+    static func remotePromptSkippedMessage(scheduleName: String, host: String) -> String {
+        "\(scheduleName): the agent runs on \(host), where Alas cannot tell when it is ready, so the prompt was not sent."
+    }
+
     /// What ticking "send automatically" changes, in one line under it.
     static func promptDeliveryHint(sendsAutomatically: Bool) -> String {
         sendsAutomatically

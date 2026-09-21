@@ -449,7 +449,8 @@ extension AppState {
                 sendsAutomatically: composition.sendsPromptAutomatically,
                 sessionID: terminal.root.firstLeaf().sessionId,
                 schedule: schedule,
-                worktree: worktree
+                worktree: worktree,
+                host: project.host
             )
         }
         return .succeeded
@@ -478,10 +479,25 @@ extension AppState {
         sendsAutomatically: Bool,
         sessionID: String,
         schedule: RunSchedule,
-        worktree: Worktree
+        worktree: Worktree,
+        host: String?
     ) async {
         let text = RunScheduleComposition.terminalText(for: prompt)
         guard !text.isEmpty else { return }
+        // Said and dropped immediately rather than waiting out the timeout:
+        // on a remote project the readiness signal can never arrive, so the
+        // wait would burn two minutes per firing to reach the same place.
+        guard RunSchedulePresentation.deliversPrompt(host: host) else {
+            inAppNotifications.post(
+                RunSchedulePresentation.remotePromptSkippedMessage(
+                    scheduleName: schedule.name,
+                    host: host ?? ""
+                ),
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
         guard await waitForScheduledAgent(sessionID: sessionID) else {
             inAppNotifications.post(
                 "\(schedule.name): the agent did not become ready in \(worktree.branch), so the prompt was not sent.",

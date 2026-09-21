@@ -272,6 +272,19 @@ struct RunSchedulePresentationTests {
         #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: withPrompt, agentName: "Claude") == "New worktree → Launch Claude with a prompt")
     }
 
+    /// A remote terminal runs `ssh` on this Mac, so the harness detector
+    /// classifies `ssh` and never the agent inside the remote PTY. Readiness
+    /// cannot be confirmed there, so the prompt is dropped at once rather
+    /// than after a two-minute wait that could only ever time out.
+    @Test func promptsAreOnlyDeliveredToAgentsOnThisMac() {
+        #expect(RunSchedulePresentation.deliversPrompt(host: nil))
+        #expect(!RunSchedulePresentation.deliversPrompt(host: "devbox"))
+        let message = RunSchedulePresentation.remotePromptSkippedMessage(scheduleName: "Nightly", host: "devbox")
+        #expect(message.contains("Nightly"))
+        #expect(message.contains("devbox"))
+        #expect(message.contains("not sent"))
+    }
+
     // MARK: - History
 
     @Test func historyHeadingCarriesItsCount() {
