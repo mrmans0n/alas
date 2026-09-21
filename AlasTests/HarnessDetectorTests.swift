@@ -2,6 +2,25 @@ import Testing
 @testable import Alas
 
 struct HarnessDetectorTests {
+    /// Every built-in agent has to resolve to the harness the detector will
+    /// report for it, or a scheduled prompt aimed at that agent is refused
+    /// before it is ever typed. Cursor is the reason this is not a plain
+    /// `AgentKind(rawValue:)`: it is registered as `cursor-agent`.
+    @Test func everyBuiltinAgentResolvesToItsHarness() {
+        #expect(HarnessKind.forAgentID("cursor-agent") == .cursor)
+        #expect(HarnessKind.forAgentID("claude") == .claudeCode)
+        #expect(HarnessKind.forAgentID("codex") == .codex)
+        for builtin in AgentBuiltins.catalog {
+            #expect(
+                HarnessKind.forAgentID(builtin.id) != nil,
+                "Built-in agent \(builtin.id) resolves to no harness, so it can never be confirmed ready"
+            )
+        }
+        // A custom agent is not recognisable in a terminal, and saying so is
+        // what keeps a prompt from being typed at whatever else is running.
+        #expect(HarnessKind.forAgentID("my-custom-agent") == nil)
+    }
+
     @Test func matchesClaudeProcess() {
         #expect(HarnessDetector.matchKind(processName: "claude") == .claudeCode)
         #expect(HarnessDetector.matchKind(processName: "claude-code") == .claudeCode)

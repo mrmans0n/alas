@@ -573,7 +573,7 @@ extension AppState {
         if let scheduledAgentReadiness {
             return await scheduledAgentReadiness(sessionID)
         }
-        guard let expected = AgentKind(rawValue: agentID)?.asHarnessKind else { return false }
+        guard let expected = HarnessKind.forAgentID(agentID) else { return false }
         let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
         while harness.activeHarnessBySession[sessionID] != expected {
             guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }

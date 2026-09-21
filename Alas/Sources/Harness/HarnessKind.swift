@@ -55,6 +55,25 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+extension HarnessKind {
+    /// The harness a registry agent id runs in a terminal, or nil when the
+    /// agent is not one the detector can recognise — a custom agent, whose
+    /// binary matches no `processNames`.
+    ///
+    /// Two lookups because the built-in ids do not all belong to one
+    /// vocabulary: most match `AgentKind`, but Cursor is registered as
+    /// `cursor-agent`, which is this enum's own raw value rather than
+    /// `AgentKind.cursor`'s. Falling through to the raw value covers that
+    /// without pinning a list that a new built-in would silently fall out
+    /// of.
+    static func forAgentID(_ agentID: String) -> HarnessKind? {
+        if let viaAgentKind = AgentKind(rawValue: agentID)?.asHarnessKind {
+            return viaAgentKind
+        }
+        return HarnessKind(rawValue: agentID)
+    }
+}
+
 extension AgentKind {
     var asHarnessKind: HarnessKind {
         switch self {
