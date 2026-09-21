@@ -371,12 +371,13 @@ private struct ScheduleCard: View {
         .accessibilityIdentifier("schedule-firing-\(firing.id)")
     }
 
-    /// A run whose report has since been purged is still named, but is not
-    /// offered as something to open: the history outlives the transcript.
+    /// A run whose report has been purged, or whose worktree has since been
+    /// archived, is still named but is not offered as something to open: the
+    /// history outlives both the transcript and the worktree.
     @ViewBuilder
     private func runLink(_ run: RunScheduleFiring.RunReference) -> some View {
         let label = RunSchedulePresentation.firingRunLabel(run)
-        if state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID) {
+        if state.canOpenScheduleFiringRun(run) {
             Button {
                 state.openScheduleFiringRun(run)
             } label: {

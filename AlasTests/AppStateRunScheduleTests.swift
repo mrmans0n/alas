@@ -348,13 +348,18 @@ struct AppStateRunScheduleTests {
 
         let run = Task { await fixture.state.runSchedule(schedule(target: .allProjects)).outcome }
         // Both projects must reach "running" even though neither can finish.
+        // Wait on both: the targets start as independent tasks, so waiting on
+        // only one of them and then asserting the other is a race the suite
+        // loses whenever the second one happens to win.
+        func isRunning(_ worktreeID: String) -> Bool {
+            fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: "repo:dev.sh")?.status == .running
+        }
         let deadline = Date().addingTimeInterval(5)
-        while fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status != .running,
-              Date() < deadline {
+        while !(isRunning("wt-1") && isRunning("wt-2")), Date() < deadline {
             await Task.yield()
         }
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(isRunning("wt-1"))
+        #expect(isRunning("wt-2"))
 
         await gate.open()
         #expect(await run.value == .succeeded)
@@ -559,6 +564,36 @@ struct AppStateRunScheduleTests {
             if case .runReport = tab { return true }
             return false
         })
+    }
+
+    /// Archiving a worktree keeps its run history on purpose, so the report
+    /// outlives the sidebar entry. The centre pane resolves only visible
+    /// worktrees, though, so the link has to stop being offered rather than
+    /// select an id that renders nothing.
+    @Test func anArchivedWorktreesRunIsNamedButNotOffered() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        let run = try #require(report.runs.first)
+        let created = try #require(
+            state.projectsManager.worktrees(projectId: project.id).first { $0.id == run.worktreeID }
+        )
+        #expect(state.canOpenScheduleFiringRun(run))
+
+        state.projectsManager.setWorktreeHidden(projectId: project.id, path: created.path, hidden: true)
+
+        // The report itself is deliberately still there...
+        #expect(state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID))
+        // ...but nothing can render it, so the row must not pretend otherwise.
+        #expect(!state.canOpenScheduleFiringRun(run))
     }
 
     /// A branch template need not vary per occurrence. A second run of the

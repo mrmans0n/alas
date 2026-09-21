@@ -86,6 +86,22 @@ extension AppState {
         return RunScheduleRunReport(outcome: .combined(outcomes), runs: references)
     }
 
+    /// Whether a firing's run can actually be opened.
+    ///
+    /// Two things have to hold. The report must still exist, and its worktree
+    /// must be one the centre pane can resolve. Archiving a worktree keeps its
+    /// run history on purpose (`cleanupWorktreeState(purgeRunHistory: false)`),
+    /// so the report outlives the worktree in the sidebar — but
+    /// `CenterSelectionState` only resolves through `visibleWorktrees`, so
+    /// selecting an archived id would empty the centre pane and strand the tab.
+    /// The entry is still named in that case; it is just not a link.
+    func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
+        guard hasRunReport(worktreeID: run.worktreeID, runID: run.runID) else { return false }
+        return projects.contains { project in
+            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == run.worktreeID }
+        }
+    }
+
     /// Opens the report of a run a firing started, selecting that run's
     /// worktree first.
     ///
