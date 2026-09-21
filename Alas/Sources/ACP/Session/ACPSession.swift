@@ -55,6 +55,10 @@ final class ACPSession: ObservableObject, Identifiable {
     let transcript = ACPTranscript()
     let composer = ACPComposerState()
     let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
+    /// Decoded `_meta.permission` facts awaiting a tool-call row that
+    /// hasn't landed yet (see `mergePermissionDecision`). Keyed by
+    /// toolCallId; consumed by `mergingPendingPermissionFacts`.
+    private var pendingPermissionFacts: [String: AnyCodable] = [:]
 
     @Published var title: String
     @Published var titleSource: ACPSessionTitleSource
@@ -590,7 +594,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 contentLanguage: Self.wrappingFenceLanguage(raw),
                 rawInput: Self.metadataString(payload.rawInput),
                 rawOutput: Self.metadataString(payload.rawOutput),
-                metadata: payload.metadata,
+                // `session/request_permission` can be handled before this
+                // row exists (separate async streams) — fold in any
+                // permission facts stashed for this id rather than
+                // dropping them.
+                metadata: mergingPendingPermissionFacts(payload.toolCallId, into: payload.metadata),
                 assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: terminalIds,
@@ -613,6 +621,9 @@ final class ACPSession: ObservableObject, Identifiable {
                    tc.executionFinishedAt == nil {
                     tc.executionFinishedAt = timestamp
                 }
+                // See the .toolCall case: fold in any permission facts
+                // stashed while this row didn't exist yet.
+                tc.metadata = mergingPendingPermissionFacts(u.toolCallId, into: tc.metadata)
             }
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
@@ -813,10 +824,17 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Merges the decoded `_meta.permission` presentation and the user's
     /// (or auto-run's) decision into the matching persisted tool call, so a
     /// rehydrated transcript still carries the title/reason/chosen-option
-    /// context that drove the now-resolved prompt. A no-op — returning
-    /// `nil` — when there is nothing worth persisting (no `_meta`, no MCP
-    /// server name, no recorded decision) or the tool call row hasn't
-    /// landed in the transcript yet.
+    /// context that drove the now-resolved prompt. Returns the touched
+    /// index for the caller to persist, or `nil` when there is nothing
+    /// worth persisting (no `_meta`, no MCP server name, no recorded
+    /// decision).
+    ///
+    /// `session/request_permission` and its `session/update` tool-call row
+    /// arrive on separate async streams (`ACPStdioClient`), so the request
+    /// can be handled before the row exists. When that happens the facts
+    /// are stashed in `pendingPermissionFacts` and merged in by
+    /// `apply(_:)`'s `.toolCall`/`.toolCallUpdate` cases the moment the row
+    /// is created or updated, instead of being silently dropped.
     @MainActor
     func mergePermissionDecision(
         toolCallId: String,
@@ -827,9 +845,22 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let facts = Self.permissionDecisionMetadata(
             presentation: presentation, chosenOption: chosenOption, mcpServerName: mcpServerName
         ) else { return nil }
-        return updateToolCall(id: toolCallId) { toolCall in
+        if let index = updateToolCall(id: toolCallId, { toolCall in
             toolCall.metadata = Self.mergeMetadata(toolCall.metadata, facts)
+        }) {
+            pendingPermissionFacts.removeValue(forKey: toolCallId)
+            return index
         }
+        pendingPermissionFacts[toolCallId] = facts
+        return nil
+    }
+
+    /// Folds any facts stashed by `mergePermissionDecision` for `toolCallId`
+    /// into `base`, consuming the stash. Returns `base` unchanged when
+    /// nothing is pending.
+    private func mergingPendingPermissionFacts(_ toolCallId: String, into base: AnyCodable?) -> AnyCodable? {
+        guard let facts = pendingPermissionFacts.removeValue(forKey: toolCallId) else { return base }
+        return Self.mergeMetadata(base, facts)
     }
 
     private static func permissionDecisionMetadata(

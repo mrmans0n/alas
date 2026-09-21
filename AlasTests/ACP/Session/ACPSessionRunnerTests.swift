@@ -1677,6 +1677,75 @@ struct ACPSessionRunnerTests {
         #expect(decision["description"]?.value as? String == "Run this command one time")
     }
 
+    @Test("retains _meta.permission facts and merges them once the tool-call row lands")
+    func retainsPermissionFactsUntilToolCallArrives() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = PermissionOrderingClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            incomingUpdateCoalesceNanos: 100_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        // Handle the permission request BEFORE its tool_call row exists —
+        // reproducing the race between ACPStdioClient's separate
+        // incomingUpdates/permissionRequests streams.
+        mock.emitPermission(
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+        try await waitUntil {
+            mock.permissionResponses[.number(11)] != nil
+        }
+
+        // The tool_call row lands only afterward.
+        mock.emit(.toolCall(.init(
+            toolCallId: "tc-permission",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil
+        )))
+        try await waitUntil {
+            session.transcript.messages.contains {
+                if case .toolCall = $0 { return true }
+                return false
+            }
+        }
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        let permission = try #require(persisted.metadata?.value as? [String: AnyCodable])
+        let facts = try #require(permission["permission"]?.value as? [String: AnyCodable])
+        #expect(facts["title"]?.value as? String == "Run command?")
+    }
+
     @Test("user cancel flushes buffered updates before appending interruption notice")
     func userCancelFlushesBufferedUpdatesBeforeAppendingInterruptionNotice() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

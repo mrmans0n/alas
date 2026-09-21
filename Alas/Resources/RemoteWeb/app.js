@@ -3232,7 +3232,11 @@ function showPermission(sessionId, payload) {
     box.appendChild(wrap);
   });
   $("permission").classList.remove("hidden");
-  if (defaultButton) defaultButton.focus();
+  // preventScroll: #perm-scroll is a scrollable ancestor now (see the
+  // scrollable-sheet fix) — a plain focus() would scroll a below-the-fold
+  // reject button into view, hiding the heading/tool name it was made
+  // scrollable to keep visible.
+  if (defaultButton) defaultButton.focus({ preventScroll: true });
 }
 function hidePermission() { $("permission").classList.add("hidden"); permState = null; }
 
