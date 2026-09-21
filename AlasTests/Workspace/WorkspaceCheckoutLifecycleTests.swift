@@ -901,6 +901,54 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("m=$(cd") == false)
     }
 
+    /// Regression: git's refusal to remove a worktree holding an
+    /// initialized submodule is structural, not a data-loss signal, so a
+    /// clean remote worktree must still delete without the caller having
+    /// pre-approved force. Matches the local `WorktreeService.remove` path.
+    @Test func concreteRemoteRemovalForcesCleanInitializedSubmoduleWithoutPriorApproval() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 128, stdout: "", stderr: "fatal: working trees containing submodules cannot be moved or removed"),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        try await lifecycle.removeWorktree(Self.sshCleanupPlan(), force: false, forceTwice: false)
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("--ignore-submodules=none"))
+        #expect(commands.contains("submodule foreach --quiet --recursive"))
+        #expect(commands.contains("worktree remove -f --"))
+        #expect(commands.contains("worktree remove -f -f --") == false)
+    }
+
+    /// Regression: a submodule with `submodule.<name>.ignore = all` hides its
+    /// dirty content from a plain superproject `git status`, and a submodule
+    /// with its own `status.showUntrackedFiles = no` hides untracked files
+    /// even from an unignored one — only an explicit `--ignore-submodules=none`
+    /// plus a recursive `submodule foreach` override sees either. Without
+    /// both, an auto-force retry would silently discard that content.
+    @Test func concreteRemoteRemovalRefusesSubmoduleWithContentHiddenFromPlainStatus() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 128, stdout: "", stderr: "fatal: working trees containing submodules cannot be moved or removed"),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "?? hidden.txt\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await lifecycle.removeWorktree(Self.sshCleanupPlan(), force: false, forceTwice: false)
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f --") == false)
+    }
+
     @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
         let temp = FileManager.default.temporaryDirectory
         let canonicalTemp = temp.path.hasPrefix("/var/")

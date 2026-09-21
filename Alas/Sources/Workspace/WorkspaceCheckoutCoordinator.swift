@@ -2573,12 +2573,29 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 // actually clean before supplying that force ourselves,
                 // rather than making "has a submodule" a user-facing
                 // force-delete prompt.
+                //
+                // `--ignore-submodules=none` is explicit, not redundant: a
+                // submodule that sets `submodule.<name>.ignore = all` in its
+                // own config makes the superproject's default status blind
+                // to its changes. The recursive `submodule foreach` pass
+                // catches a second gap on top of that — a submodule with
+                // its own `status.showUntrackedFiles = no` hides its
+                // untracked files even from an unignored superproject
+                // status, so only an explicit override from inside it sees
+                // them. Mirrors `WorktreeService.isRemovalClean` locally.
+                let quotedWorktreePath = SSHCommand.shellQuote(plan.worktreePath)
                 let statusCheck = try await remote.run(
                     host: host,
-                    command: "git -C \(SSHCommand.shellQuote(plan.worktreePath)) status --porcelain=v1 --untracked-files=normal"
+                    command: "git -C \(quotedWorktreePath) status --porcelain=v1 --ignore-submodules=none --untracked-files=normal"
+                )
+                let submoduleCheck = try await remote.run(
+                    host: host,
+                    command: "git -C \(quotedWorktreePath) submodule foreach --quiet --recursive 'git status --porcelain --ignore-submodules=none --untracked-files=all'"
                 )
                 guard statusCheck.exitCode == 0,
-                      statusCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      statusCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      submoduleCheck.exitCode == 0,
+                      submoduleCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 else {
                     throw WorktreeService.WorktreeError.gitFailed(result.stderr)
                 }
