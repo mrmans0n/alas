@@ -128,11 +128,8 @@ private struct ACPSubagentMessageRow: View {
             ACPSubagentTextRow(buffer: buffer, typography: typography)
         case .thought(_, _, let buffer):
             ACPThoughtView(buffer: buffer)
-        case .user(_, _, let text, _, _):
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(theme.color("fg-faint"))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        case .user(_, _, let text, let attachments, _):
+            ACPSubagentPromptRow(text: text, attachments: attachments)
         case .toolCall(let toolCall):
             ACPToolCallCard(toolCall: toolCall, trustedImageRoot: trustedImageRoot)
         case .fileEdit(_, let edit):
@@ -142,6 +139,56 @@ private struct ACPSubagentMessageRow: View {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
+    }
+}
+
+/// The prompt handed to a child. Compact by design — no bubble, no
+/// gutter — but it must still show what the child was given: an
+/// attachment-only prompt is a real shape (a screenshot with no words),
+/// and it would otherwise render as an empty row.
+private struct ACPSubagentPromptRow: View {
+    let text: String
+    let attachments: [ACPMessage.Attachment]
+    @Environment(\.theme) private var theme
+
+    private var visibleAttachments: [ACPMessage.Attachment] {
+        attachments.filter { !$0.isCheckpointReference }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            let images = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
+            let others = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
+            if !images.isEmpty {
+                HStack(spacing: 6) {
+                    // Keyed by index, not uri: the same image attached
+                    // twice shares a uri and duplicate ids collapse the row.
+                    ForEach(Array(images.enumerated()), id: \.offset) { index, attachment in
+                        if let url = URL(string: attachment.uri) {
+                            ACPImageThumbnail(
+                                fileURL: url,
+                                index: images.count > 1 ? index + 1 : nil)
+                        }
+                    }
+                }
+            }
+            if !others.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(others, id: \.uri) { attachment in
+                        FileChip(
+                            path: attachment.name ?? attachment.uri,
+                            lines: nil,
+                            iconSystemName: "at")
+                    }
+                }
+            }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

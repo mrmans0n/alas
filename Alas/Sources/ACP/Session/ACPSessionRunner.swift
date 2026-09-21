@@ -738,18 +738,45 @@ final class ACPSessionRunner {
             // the OpenCode variant already produces, where every
             // descendant is reported against the root regardless of depth.
             let dirty = session.apply(params.update)
-            persistIndices(
-                dirty,
-                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            if dirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+            } else {
+                persistIndices(
+                    dirty,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            }
         default:
             let dirty = session.applySubagentUpdate(
                 params.update,
                 subagentSessionId: params.sessionId)
-            persistSubagentIndices(
-                dirty,
-                subagentSessionId: params.sessionId,
-                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            if dirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+            } else {
+                persistSubagentIndices(
+                    dirty,
+                    subagentSessionId: params.sessionId,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            }
         }
+    }
+
+    /// Acknowledges a durable update that wrote nothing itself, but only
+    /// once everything already queued has been written.
+    ///
+    /// One OpenCode notification normalizes to SEVERAL updates and the
+    /// acknowledgement rides on the last of them (see
+    /// `ACPOpenCodeChildUpdate.normalized`). Persistence operations are
+    /// serialized through `enqueuePersistence`, so an acknowledgement that
+    /// follows a real write is safely ordered — but a last update with
+    /// nothing to write would otherwise complete synchronously and ack
+    /// while an earlier update's row (the synthetic spawn, typically) is
+    /// still in flight. A crash in that window would lose a row the broker
+    /// has been told we consumed.
+    private func acknowledgeAfterQueuedPersistence(
+        _ acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else { return }
+        enqueuePersistence({ _ in }, completion: { _ in acknowledgement() })
     }
 
     /// Persists the named rows of a child transcript.
