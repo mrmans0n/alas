@@ -568,16 +568,11 @@ extension AppState {
         } catch {
             return
         }
-        // Asked again rather than relying on the sleep having thrown:
-        // cancellation can land after the deadline passed but before this
-        // hops back onto the main actor, which bypasses the catch above and
-        // would submit for a schedule that is already gone.
-        guard !Task.isCancelled else { return }
         // The agent can also die inside that pause, leaving the shell to
         // reclaim the terminal. Enter would then run whatever of the prompt
         // the agent had not consumed as a command, so ownership is confirmed
         // once more before submitting.
-        guard scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) else {
+        guard await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) else {
             inAppNotifications.post(
                 "\(schedule.name): the agent stopped before the prompt could be submitted in \(worktree.branch).",
                 severity: .error,
@@ -585,6 +580,11 @@ extension AppState {
             )
             return
         }
+        // Last, so that nothing suspends between these two answers and the
+        // write they guard. Cancellation can otherwise land after the sleep
+        // returned or during the ownership hop, both of which bypass the
+        // catch above and would submit for a schedule already gone.
+        guard !Task.isCancelled else { return }
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
@@ -635,7 +635,7 @@ extension AppState {
         } catch {
             return false
         }
-        return scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID)
+        return await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID)
     }
 
     /// Whether the schedule's agent is, at this instant, the foreground
@@ -648,14 +648,19 @@ extension AppState {
     /// once a second, so it can be a whole second out of date — several
     /// times the pause before Enter, and the entire window this check
     /// exists to cover.
-    private func scheduledAgentOwnsTerminal(sessionID: String, agentID: String) -> Bool {
+    private func scheduledAgentOwnsTerminal(sessionID: String, agentID: String) async -> Bool {
         // The readiness seam replaces the detector wholesale in tests, whose
         // sessions have no process to observe.
         if scheduledAgentReadiness != nil { return true }
         guard let expected = expectedHarness(forAgentID: agentID),
               let pid = harness.detector.foregroundPid(sessionId: sessionID)
         else { return false }
-        return HarnessDetector.matchKind(pid: pid) == expected
+        // Resolving a pid to an executable is a syscall, and `HarnessDetector`
+        // keeps it off the main thread for exactly that reason. The hop costs
+        // far less than the second of staleness this replaced, so the answer
+        // is still current by the time the caller writes.
+        let detected = await Task.detached { HarnessDetector.matchKind(pid: pid) }.value
+        return detected == expected
     }
 
     /// Which harness the schedule's agent will appear as in its terminal, or

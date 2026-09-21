@@ -751,11 +751,17 @@ private struct DigitCell: View {
                     text = digits
                     return
                 }
-                // An emptied box reads as its lowest legal value rather than
-                // silently keeping the old one: the field would otherwise
-                // show nothing while the draft still carried, and saved, the
-                // number the user just deleted.
-                let typed = Int(digits) ?? range.lowerBound
+                guard let typed = Int(digits) else {
+                    // An emptied box is not a number, so it parks the value
+                    // just below the field's range. The draft's existing
+                    // validation rejects that, which disables Save and says
+                    // why, instead of the control showing nothing while a
+                    // number the user deleted is quietly saved. Writing a
+                    // value back into the box instead would fill it to its
+                    // digit limit and swallow the next keystroke.
+                    value = range.lowerBound - 1
+                    return
+                }
                 let clamped = min(max(typed, range.lowerBound), range.upperBound)
                 if clamped != typed {
                     text = formatted(clamped)
@@ -763,11 +769,20 @@ private struct DigitCell: View {
                 value = clamped
             }
             .onChange(of: isFocused) { _, focused in
-                if !focused { text = formatted(value) }
+                if !focused { commit() }
             }
-            .onSubmit { text = formatted(value) }
+            .onSubmit { commit() }
             .accessibilityLabel(accessibilityLabel)
             .accessibilityValue(formatted(value))
+    }
+
+    /// Settles the field once editing stops. An empty box has parked the
+    /// value below the range to keep the draft invalid while it is being
+    /// typed in; leaving it has to resolve that into something legal and
+    /// show it, rather than leaving the field blank and Save disabled.
+    private func commit() {
+        if value < range.lowerBound { value = range.lowerBound }
+        text = formatted(value)
     }
 
     private func formatted(_ number: Int) -> String {
