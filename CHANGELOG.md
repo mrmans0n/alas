@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-09-21
+
+### ✨ Features
+
+- Schedule scripts and agent launches by interval or time of day, with optional worktree creation, missed-run policies, and project-level pauses. The feature is available behind the Schedules preview flag (#1353).
+
+### 🐛 Fixes
+
+- Retry transient SQLite failures while saving run history and keep raw SQL out of user-facing alerts (#1355).
+- Keep filtered worktree branch-name fields editable without dropping or moving keystrokes (#1354).
+- Preserve short ACP conversation context during bursts of tool calls (#1357).
+- Mark the original position of attached images in ACP user messages (#1356).
+
 ## [0.19.1] - 2026-09-20
 
 ### ✨ Features
