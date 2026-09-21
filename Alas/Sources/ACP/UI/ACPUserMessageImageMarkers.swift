@@ -36,11 +36,29 @@ enum ACPUserMessageImageMarkers {
         var result = ""
         var cursor = 0
         for marker in ordered {
-            result += String(chars[cursor..<marker.offset])
-            result += "`\(marker.label)`"
+            append(String(chars[cursor..<marker.offset]), to: &result)
+            append("`\(marker.label)`", to: &result)
             cursor = marker.offset
         }
-        result += String(chars[cursor...])
+        append(String(chars[cursor...]), to: &result)
         return result
+    }
+
+    /// Appends `piece` to `result`, inserting a single separating space
+    /// first if `result` ends and `piece` begins with a backtick. Two
+    /// backtick-delimited spans placed directly against each other — a
+    /// marker next to pre-existing inline code in the original text, or two
+    /// markers sharing an offset — form one contiguous run of backticks.
+    /// Markdown's code-span rule matches a closer only to an opener of the
+    /// SAME run length, so a 2-backtick run in the middle doesn't close
+    /// either neighboring single-backtick span; the parser instead treats
+    /// the whole stretch as one merged/corrupted span. The separating space
+    /// keeps each backtick run isolated to its own span.
+    private static func append(_ piece: String, to result: inout String) {
+        guard !piece.isEmpty else { return }
+        if result.hasSuffix("`"), piece.hasPrefix("`") {
+            result += " "
+        }
+        result += piece
     }
 }

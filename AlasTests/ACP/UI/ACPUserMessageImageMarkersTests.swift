@@ -59,7 +59,7 @@ struct ACPUserMessageImageMarkersTests {
         #expect(text == "hi`🖼 image`")
     }
 
-    @Test("preserves attachment order when two images share the same offset")
+    @Test("separates two markers sharing an offset so their backticks don't merge")
     func sharedOffsetKeepsAttachmentOrder() {
         let text = ACPUserMessageImageMarkers.displayText(
             text: "x",
@@ -67,7 +67,28 @@ struct ACPUserMessageImageMarkersTests {
                 .init(uri: "file:///tmp/1.png", name: "1.png", mimeType: "image/png", textOffset: 0),
                 .init(uri: "file:///tmp/2.png", name: "2.png", mimeType: "image/png", textOffset: 0)
             ])
-        #expect(text == "`🖼 1``🖼 2`x")
+        // Without a separating space, "`🖼 1``🖼 2`" is a single run of two
+        // backticks between the labels, which Markdown parses as ONE merged
+        // code span instead of two.
+        #expect(text == "`🖼 1` `🖼 2`x")
+    }
+
+    @Test("separates a marker from adjacent pre-existing inline code so the spans don't merge")
+    func adjacentInlineCodeDoesNotMerge() {
+        // An image chip placed immediately before literal `foo` text: with
+        // no separator, "`🖼 image``foo`" is backtick, text, a RUN OF TWO
+        // backticks, text, backtick — Markdown looks for the next
+        // single-backtick run to close the first span and finds the
+        // trailing one after "foo", merging both into one corrupted span.
+        let before = ACPUserMessageImageMarkers.displayText(
+            text: "`foo`",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 0)])
+        #expect(before == "`🖼 image` `foo`")
+
+        let after = ACPUserMessageImageMarkers.displayText(
+            text: "`foo`",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 5)])
+        #expect(after == "`foo` `🖼 image`")
     }
 
     @Test("ignores non-image attachments entirely")
