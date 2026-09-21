@@ -188,6 +188,7 @@ struct ACPBrokerSnapshot: Codable, Equatable, Sendable {
     let journalTail: ACPBrokerEventCursor
     let pendingRequests: [ACPBrokerPendingRequest]
     let operations: [ACPBrokerOperationSnapshot]
+    var cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
 }
 
 struct ACPBrokerEvent: Codable, Equatable, Sendable {

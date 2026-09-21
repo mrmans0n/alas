@@ -1,14 +1,14 @@
 use alas_helper::acp_broker::{
-    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, AdapterRequestId, BrokerErrorKind,
-    BrokerEventKind, BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, JSONRPCErrorObject,
-    OperationKey, PendingClientRequestKind,
+    ACPBrokerMetadata, ACPBrokerState, AdapterRPCOutcome, BrokerErrorKind, BrokerEventKind,
+    BrokerGeneration, BrokerId, BrokerTurnState, EventCursor, JSONRPCErrorObject, OperationKey,
+    PendingClientRequestKind,
 };
 use alas_helper::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpBrokerMethod, AcpCloseParams, AcpDetachParams, AcpListResult,
     AcpOpenParams, AcpOpenResult, AcpRespondParams, AcpSendParams,
 };
-use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde::{de::DeserializeOwned, Serialize};
+use serde_json::{json, Value};
 
 fn metadata() -> ACPBrokerMetadata {
     ACPBrokerMetadata {
@@ -398,6 +398,52 @@ fn pending_request_variants_are_snapshotted_and_answered_once() {
             PendingClientRequestKind::Question,
             PendingClientRequestKind::Terminal
         ]
+    );
+}
+
+#[test]
+fn cursor_todo_responses_are_preserved_in_snapshot() {
+    let mut broker = broker();
+    broker
+        .add_pending_request(
+            "todo-1",
+            json!("todo-1"),
+            PendingClientRequestKind::CursorExtension,
+            json!({
+                "method": "cursor/update_todos",
+                "params": {
+                    "toolCallId": "todo-call",
+                    "todos": [{"id": "todo-2", "content": "Verify", "status": "completed"}],
+                    "merge": true
+                }
+            }),
+        )
+        .unwrap();
+
+    broker
+        .respond_to_pending_request(
+            "todo-1",
+            AdapterRPCOutcome::result(json!({
+                "outcome": {
+                    "outcome": "accepted",
+                    "todos": [
+                        {"id": "todo-1", "content": "Implement", "status": "pending"},
+                        {"id": "todo-2", "content": "Verify", "status": "completed"}
+                    ]
+                }
+            })),
+        )
+        .unwrap();
+
+    assert_eq!(
+        broker
+            .snapshot()
+            .cursor_todos_by_tool_call_id
+            .get("todo-call"),
+        Some(&json!([
+            {"id": "todo-1", "content": "Implement", "status": "pending"},
+            {"id": "todo-2", "content": "Verify", "status": "completed"}
+        ]))
     );
 }
 

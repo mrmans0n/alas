@@ -563,6 +563,63 @@ struct ACPBrokerClientTests {
         ]))
     }
 
+    @Test func brokerMergesCursorTodoUpdatesFromAdoptedSnapshot() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(
+            events: [
+                ACPBrokerEvent(
+                    cursor: ACPBrokerEventCursor(rawValue: 4),
+                    kind: .pendingRequest(ACPBrokerPendingRequest(
+                        requestId: "todo-2",
+                        adapterRequestId: .string("todo-2"),
+                        kind: .cursorExtension,
+                        payload: .object([
+                            "method": .string("cursor/update_todos"),
+                            "params": .object([
+                                "toolCallId": .string("todo-call"),
+                                "todos": .array([.object([
+                                    "id": .string("todo-2"),
+                                    "content": .string("Verify"),
+                                    "status": .string("completed")
+                                ])]),
+                                "merge": .bool(true)
+                            ])
+                        ])
+                    ))
+                )
+            ],
+            snapshotCursorTodosByToolCallId: [
+                "todo-call": [
+                    .init(id: "todo-1", content: "Implement", status: "pending"),
+                    .init(id: "todo-2", content: "Verify", status: "pending")
+                ]
+            ]
+        )
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count >= 1 }
+        let response = try await #require(service.responded.first { $0.requestId == .string("todo-2") })
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([
+                    .object([
+                        "id": .string("todo-1"),
+                        "content": .string("Implement"),
+                        "status": .string("pending")
+                    ]),
+                    .object([
+                        "id": .string("todo-2"),
+                        "content": .string("Verify"),
+                        "status": .string("completed")
+                    ])
+                ])
+            ])
+        ]))
+    }
+
     @Test func failedCursorExtensionResponseReportsErrorToAdapter() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -1774,6 +1831,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
+        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
         turnState: ACPBrokerTurnState = .idle,
         delayNanoseconds: UInt64 = 0,
         shouldThrow: Bool = false
@@ -1783,6 +1841,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: snapshotPendingRequests,
             snapshotJournalTail: snapshotJournalTail,
             snapshotOperations: snapshotOperations,
+            snapshotCursorTodosByToolCallId: snapshotCursorTodosByToolCallId,
             turnState: turnState,
             delayNanoseconds: delayNanoseconds,
             shouldThrow: shouldThrow
@@ -1839,7 +1898,8 @@ private actor MockBrokerService: ACPBrokerServicing {
                 acknowledgedCursor: params.acknowledgedCursor,
                 pendingRequests: reply.snapshotPendingRequests ?? pendingRequests(from: events),
                 operations: reply.snapshotOperations,
-                turnState: reply.turnState
+                turnState: reply.turnState,
+                cursorTodosByToolCallId: reply.snapshotCursorTodosByToolCallId
             ),
             events: events
         )
@@ -1895,7 +1955,8 @@ private actor MockBrokerService: ACPBrokerServicing {
         acknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         pendingRequests: [ACPBrokerPendingRequest] = [],
         operations: [ACPBrokerOperationSnapshot] = [],
-        turnState: ACPBrokerTurnState = .idle
+        turnState: ACPBrokerTurnState = .idle,
+        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
@@ -1914,7 +1975,8 @@ private actor MockBrokerService: ACPBrokerServicing {
             acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),
             pendingRequests: pendingRequests,
-            operations: operations
+            operations: operations,
+            cursorTodosByToolCallId: cursorTodosByToolCallId
         )
     }
 
@@ -1937,6 +1999,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         let events: [ACPBrokerEvent]
         let snapshotPendingRequests: [ACPBrokerPendingRequest]?
         let snapshotJournalTail: ACPBrokerEventCursor?
+        let snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]?
         let snapshotOperations: [ACPBrokerOperationSnapshot]
         let turnState: ACPBrokerTurnState
         let delayNanoseconds: UInt64
@@ -1947,6 +2010,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
+            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
             turnState: ACPBrokerTurnState = .idle,
             delayNanoseconds: UInt64 = 0,
             shouldThrow: Bool = false
@@ -1955,6 +2019,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             self.snapshotPendingRequests = snapshotPendingRequests
             self.snapshotJournalTail = snapshotJournalTail
             self.snapshotOperations = snapshotOperations
+            self.snapshotCursorTodosByToolCallId = snapshotCursorTodosByToolCallId
             self.turnState = turnState
             self.delayNanoseconds = delayNanoseconds
             self.shouldThrow = shouldThrow

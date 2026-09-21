@@ -998,6 +998,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         initializeResult = snapshot.initializeResult ?? initializeResult
         remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
+        if let snapshotTodos = snapshot.cursorTodosByToolCallId {
+            cursorTodosByToolCallId = snapshotTodos
+        }
         for operation in snapshot.operations {
             let id = operation.adapterRequestId.jsonRPCID
             if let terminalOutcome = operation.terminalOutcome {
