@@ -116,7 +116,7 @@ enum RunSchedulePlanner {
 
     /// Expands `{name}`, `{date}` and `{time}` and sanitizes the result into
     /// something git accepts as a branch name.
-    static func renderBranch(template: String, name: String, now: Date, calendar: Calendar = .current) -> String {
+    static func renderBranch(template: String, name: String, now: Date, calendar: Calendar = .autoupdatingCurrent) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = calendar
         dateFormatter.timeZone = calendar.timeZone

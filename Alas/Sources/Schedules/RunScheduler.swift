@@ -15,7 +15,7 @@ private let schedulerLogger = Logger(subsystem: "io.nlopez.alas", category: "Run
 @MainActor
 @Observable
 final class RunScheduler {
-    typealias Runner = @MainActor (RunSchedule) async -> RunScheduleOutcome
+    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleOutcome
 
     private(set) var schedules: [RunSchedule] = []
     private(set) var states: [String: RunScheduleState] = [:]
@@ -49,7 +49,10 @@ final class RunScheduler {
         store: any PersistenceStoreProtocol = PersistenceStore(),
         fileURL: URL = Paths.runSchedulesFile,
         now: @escaping () -> Date = { Date() },
-        calendar: Calendar = .current,
+        // Autoupdating on purpose: a time-of-day trigger is a local
+        // wall-clock time, so travelling or changing the system time zone has
+        // to move it without relaunching Alas.
+        calendar: Calendar = .autoupdatingCurrent,
         tickInterval: TimeInterval = 30,
         grace: TimeInterval = RunSchedulePlanner.defaultGrace,
         evaluationPersistInterval: TimeInterval = 5 * 60
@@ -113,10 +116,17 @@ final class RunScheduler {
         schedules.first { $0.id == id }
     }
 
+    /// Whether a schedule is paused *as a whole*. An `.allProjects` schedule
+    /// names no single project, so a per-project pause cannot silence it
+    /// here; it is applied per target when the run fans out.
     func isPaused(_ schedule: RunSchedule) -> Bool {
         if isPausedGlobally { return true }
         guard let projectID = schedule.target.projectID else { return false }
         return pausedProjectIDs.contains(projectID)
+    }
+
+    func isProjectPaused(_ projectID: String) -> Bool {
+        pausedProjectIDs.contains(projectID)
     }
 
     func isRunning(_ schedule: RunSchedule) -> Bool {
@@ -224,7 +234,7 @@ final class RunScheduler {
     /// still refuses to stack on a run that is already in progress.
     func runNow(id: String) {
         guard let schedule = schedule(id: id) else { return }
-        dispatch(schedule, at: now())
+        dispatch(schedule, at: now(), invocation: .manual)
     }
 
     // MARK: - Evaluation
@@ -285,7 +295,7 @@ final class RunScheduler {
                 }
                 states[schedule.id] = updated
                 changed = true
-                dispatch(schedule, at: current)
+                dispatch(schedule, at: current, invocation: .scheduled)
             }
         }
         evaluationGeneration += 1
@@ -325,7 +335,7 @@ final class RunScheduler {
         )
     }
 
-    private func dispatch(_ schedule: RunSchedule, at current: Date) {
+    private func dispatch(_ schedule: RunSchedule, at current: Date, invocation: RunScheduleInvocation) {
         guard runTasks[schedule.id] == nil else {
             var state = self.state(for: schedule.id)
             state.lastOutcome = .skipped(reason: "The previous run is still in progress.")
@@ -340,7 +350,7 @@ final class RunScheduler {
         }
         runningScheduleIDs.insert(schedule.id)
         runTasks[schedule.id] = Task { @MainActor [weak self] in
-            let outcome = await runner(schedule)
+            let outcome = await runner(schedule, invocation)
             guard let self else { return }
             var state = self.state(for: schedule.id)
             state.lastOutcome = outcome

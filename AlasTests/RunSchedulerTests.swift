@@ -38,6 +38,7 @@ struct RunSchedulerTests {
 
     private final class RunLog {
         var fired: [String] = []
+        var invocations: [RunScheduleInvocation] = []
         var outcome: RunScheduleOutcome = .succeeded
         var gate: CheckedContinuation<Void, Never>?
         var holdsRuns = false
@@ -59,8 +60,9 @@ struct RunSchedulerTests {
             tickInterval: 30,
             grace: 120
         )
-        scheduler.runner = { schedule in
+        scheduler.runner = { schedule, invocation in
             log.fired.append(schedule.id)
+            log.invocations.append(invocation)
             if log.holdsRuns {
                 await withCheckedContinuation { continuation in
                     log.gate = continuation
@@ -104,6 +106,28 @@ struct RunSchedulerTests {
         #expect(state.lastOutcome == .succeeded)
         #expect(state.lastFiredAt != nil)
         #expect(state.nextFireAt != nil)
+    }
+
+    /// A single entry a newer build wrote must not read as "no schedules" and
+    /// then be persisted over everything that still decodes.
+    @Test func oneUndecodableScheduleDoesNotDiscardTheRest() throws {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (first, _) = makeScheduler(store: store, clock: clock)
+        first.add(interval("keep-1", seconds: 600, at: clock.now))
+        first.add(interval("keep-2", seconds: 900, at: clock.now))
+
+        // Corrupt one entry the way an unknown trigger case would read.
+        var object = try #require(
+            JSONSerialization.jsonObject(with: try #require(store.files[fileURL])) as? [String: Any]
+        )
+        var schedules = try #require(object["schedules"] as? [[String: Any]])
+        schedules.insert(["id": "broken", "name": "Broken"], at: 1)
+        object["schedules"] = schedules
+        store.files[fileURL] = try JSONSerialization.data(withJSONObject: object)
+
+        let (second, _) = makeScheduler(store: store, clock: clock)
+        #expect(second.schedules.map(\.id) == ["keep-1", "keep-2"])
     }
 
     @Test func schedulesWithoutAnActionAreDroppedOnLoad() throws {
@@ -194,7 +218,35 @@ struct RunSchedulerTests {
         scheduler.runNow(id: "a")
         await scheduler.waitForRunsForTesting()
         #expect(log.fired == ["a"])
+        // Run Now is explicit, so it is marked as bypassing pauses; the
+        // timer's own firings are not.
+        #expect(log.invocations == [.manual])
         #expect(scheduler.state(for: "a").lastOutcome == .succeeded)
+    }
+
+    @Test func timerFiringsAreMarkedAsScheduled() async {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, log) = makeScheduler(store: store, clock: clock)
+        scheduler.add(interval("a", seconds: 600, at: clock.now))
+        clock.advance(605)
+        scheduler.evaluate()
+        await scheduler.waitForRunsForTesting()
+        #expect(log.invocations == [.scheduled])
+    }
+
+    @Test func projectPauseIsQueryableForFanOutTargets() {
+        let store = MemoryStore()
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let (scheduler, _) = makeScheduler(store: store, clock: clock)
+        scheduler.setProjectPaused(true, projectID: "p1")
+
+        #expect(scheduler.isProjectPaused("p1"))
+        #expect(!scheduler.isProjectPaused("p2"))
+        // An all-projects schedule names no project, so the whole-schedule
+        // pause check cannot see a per-project pause. The fan-out applies it.
+        let all = interval("all", seconds: 600, at: clock.now)
+        #expect(!scheduler.isPaused(all))
     }
 
     @Test func anInFlightRunIsNeverDoubled() async {

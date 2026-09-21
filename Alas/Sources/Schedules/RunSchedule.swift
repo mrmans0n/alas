@@ -33,6 +33,16 @@ enum RunScheduleTrigger: Codable, Equatable, Hashable, Sendable {
 
 /// What happens when occurrences were missed because the app was quit, the
 /// machine was asleep, or the schedule was otherwise not evaluated in time.
+/// Why a schedule is running right now. A per-project pause silences the
+/// clock but not an explicit Run Now, the same way it does for a schedule
+/// that names one project.
+enum RunScheduleInvocation: Equatable, Sendable {
+    case scheduled
+    case manual
+
+    var honorsProjectPauses: Bool { self == .scheduled }
+}
+
 enum RunScheduleMissedRunPolicy: String, Codable, CaseIterable, Sendable {
     /// Drop every missed occurrence and wait for the next one.
     case skip
@@ -203,10 +213,23 @@ struct RunSchedulesFile: Codable, Equatable, Sendable {
 
     init() {}
 
+    /// Decodes one schedule without letting its failure sink the array.
+    private struct LenientSchedule: Decodable {
+        let schedule: RunSchedule?
+
+        init(from decoder: Decoder) throws {
+            schedule = try? RunSchedule(from: decoder)
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decode(Int.self, forKey: .version)) ?? 1
-        schedules = (try? c.decode([RunSchedule].self, forKey: .schedules)) ?? []
+        // Per entry, not per array: one schedule written by a newer build (an
+        // unknown trigger case, say) must not read as "the user has no
+        // schedules" and then be persisted over the ones that still decode.
+        schedules = ((try? c.decode([LenientSchedule].self, forKey: .schedules)) ?? [])
+            .compactMap(\.schedule)
         states = (try? c.decode([String: RunScheduleState].self, forKey: .states)) ?? [:]
         pausedProjectIDs = (try? c.decode(Set<String>.self, forKey: .pausedProjectIDs)) ?? []
         isPausedGlobally = (try? c.decode(Bool.self, forKey: .isPausedGlobally)) ?? false

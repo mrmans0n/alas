@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import Alas
 
 /// Scheduled runs go through the manual run-script path: same records, same
@@ -48,7 +49,8 @@ struct AppStateRunScheduleTests {
         exitCode: Int32 = 0,
         host: String? = nil,
         scriptBody: String = "echo hi\n",
-        completionGate: Gate? = nil
+        completionGate: Gate? = nil,
+        terminalSessionOpener: AppState.TerminalSessionOpener? = nil
     ) throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("run-schedule-tests-\(UUID().uuidString)", isDirectory: true)
@@ -80,7 +82,7 @@ struct AppStateRunScheduleTests {
         let state = AppState(
             store: MemoryStore(),
             fileActionErrorHandler: { title, message in errors.append((title, message)) },
-            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+            terminalSessionOpener: terminalSessionOpener ?? { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
             },
@@ -232,6 +234,104 @@ struct AppStateRunScheduleTests {
         #expect(message.contains("zsh or bash"))
         #expect(fixture.errors().isEmpty)
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
+    }
+
+    /// A terminal that fails to open asynchronously — an unreachable SSH host,
+    /// say — must not put a modal alert in front of whoever is using the Mac
+    /// while a timer fires in the background.
+    @Test func asyncLaunchFailureOfAScheduledRunRaisesNoAlert() async throws {
+        struct TerminalOpenFailure: LocalizedError {
+            var errorDescription: String? { "Host is unreachable" }
+        }
+        let fixture = try makeFixture(terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+            throw TerminalOpenFailure()
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+
+        #expect(outcome == .launchFailed("Host is unreachable"))
+        #expect(fixture.errors().isEmpty)
+        // The same failure started from the Run tab still alerts.
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.errors().contains { $0.title == "Run Script Failed" })
+    }
+
+    /// "Pause <project>" has to stop an all-projects schedule from running in
+    /// that project, even though the schedule names no project itself.
+    @Test func pausedProjectsAreExcludedFromAnAllProjectsFanOut() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.state.runScheduler.setProjectPaused(true, projectID: "project")
+
+        let scheduled = await fixture.state.runSchedule(schedule(target: .allProjects))
+        #expect(scheduled == .skipped(reason: "Every project with a main worktree is paused."))
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
+
+        // Run Now is an explicit instruction, so it still runs.
+        let manual = await fixture.state.runSchedule(schedule(target: .allProjects), invocation: .manual)
+        #expect(manual == .succeeded)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
+    }
+
+    /// Run scripts may be servers that never exit. Fanning out must start
+    /// every project's run rather than waiting for the first to settle, or a
+    /// single long-running script starves every other project forever.
+    @Test func aLongRunningTargetDoesNotStarveTheOtherProjects() async throws {
+        let gate = Gate()
+        let fixture = try makeFixture(completionGate: gate)
+        defer {
+            Task { await gate.open() }
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        // A second project whose main worktree has the same script.
+        let second = ProjectConfig(
+            id: "project-2",
+            name: "Second",
+            path: fixture.directory.path,
+            color: "green",
+            addedAt: Date()
+        )
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [fixture.project, second])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+        fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: "wt-2",
+            projectId: second.id,
+            name: "main",
+            branch: "main",
+            path: fixture.directory,
+            isMainWorktree: true,
+            status: .clean,
+            lastActivity: Date()
+        ))
+
+        let run = Task { await fixture.state.runSchedule(schedule(target: .allProjects)) }
+        // Both projects must reach "running" even though neither can finish.
+        let deadline = Date().addingTimeInterval(5)
+        while fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status != .running,
+              Date() < deadline {
+            await Task.yield()
+        }
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status == .running)
+
+        await gate.open()
+        #expect(await run.value == .succeeded)
+    }
+
+    @Test func pausedProjectAlsoSkipsItsOwnTargetedSchedules() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.state.runScheduler.setProjectPaused(true, projectID: "project")
+
+        let byProject = await fixture.state.runSchedule(schedule(target: .project(id: "project")))
+        #expect(byProject == .skipped(reason: "Project is paused."))
+
+        let byWorktree = await fixture.state.runSchedule(
+            schedule(target: .worktree(projectId: "project", worktreeId: "wt-1"))
+        )
+        #expect(byWorktree == .skipped(reason: "Project is paused."))
     }
 
     /// The preview flag owns the clock: with it off nothing is evaluated, so
@@ -427,6 +527,47 @@ struct AppStateRunScheduleTests {
         }
         #expect(surface == .terminal(agentId: "claude"))
         #expect(state.inAppNotifications.notifications(in: created.id).contains { $0.severity == .error })
+    }
+
+    /// Composition failures happen while nobody is looking, so they have to
+    /// reach Notification Center, not just the in-app toast list.
+    @Test func compositionFailureRaisesASystemNotification() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: [])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let posted = NotificationBox()
+        state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+
+        guard case .launchFailed = outcome else {
+            Issue.record("Expected a launch failure, got \(outcome)")
+            return
+        }
+        let titles = posted.values.map(\.content.title)
+        #expect(titles.contains { $0.contains("Nightly") && $0.contains("did not run") })
+    }
+
+    private final class NotificationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [UNNotificationRequest] = []
+
+        var values: [UNNotificationRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+
+        func append(_ request: UNNotificationRequest) {
+            lock.lock()
+            defer { lock.unlock() }
+            storage.append(request)
+        }
     }
 
     @Test func failingScriptDoesNotLaunchTheAgent() async throws {

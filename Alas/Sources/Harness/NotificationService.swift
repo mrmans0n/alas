@@ -115,6 +115,27 @@ final class NotificationService {
         notificationAdder(UNNotificationRequest(identifier: "run-script-\(runID)", content: content, trigger: nil))
     }
 
+    /// A scheduled run that could not start, or could not finish composing
+    /// its worktree and agent. Scheduled work happens unattended, so a
+    /// failure that is only drawn inside the app can go unseen for hours.
+    func notifyScheduleFailed(scheduleName: String, reason: String,
+                              projectId: String, worktreeId: String,
+                              scheduleID: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(scheduleName) did not run"
+        content.body = reason
+        content.sound = .default
+        content.userInfo = [
+            "projectId": projectId,
+            "worktreeId": worktreeId,
+        ]
+        notificationAdder(UNNotificationRequest(
+            identifier: "run-schedule-\(scheduleID)-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        ))
+    }
+
     func notifyAlas(body: String, title: String?, agent: AgentKind,
                     projectId: String, worktreeId: String, sessionId: String,
                     owner: SessionOwnerID? = nil) {

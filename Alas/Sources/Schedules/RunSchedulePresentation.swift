@@ -5,7 +5,7 @@ import Foundation
 enum RunSchedulePresentation {
     static let notRunningNotice = "Schedules only fire while Alas is running. Nothing runs while the app is quit."
 
-    static func triggerLabel(_ trigger: RunScheduleTrigger, calendar: Calendar = .current) -> String {
+    static func triggerLabel(_ trigger: RunScheduleTrigger, calendar: Calendar = .autoupdatingCurrent) -> String {
         switch trigger {
         case .interval(let seconds):
             return "Every \(intervalLabel(seconds))"

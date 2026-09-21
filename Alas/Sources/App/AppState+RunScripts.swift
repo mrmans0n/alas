@@ -406,7 +406,7 @@ extension AppState {
     }
 
     private func launchScript(_ script: RunScript, in worktree: Worktree) {
-        switch startScriptLaunch(script, in: worktree) {
+        switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: true) {
         case .started, .alreadyStarting, .projectUnavailable:
             break
         case let .refused(title, message):
@@ -415,9 +415,20 @@ extension AppState {
     }
 
     /// Claims a run slot and starts the terminal launch, without presenting
-    /// anything. `launchScript` adds the alert for interactive callers; the
-    /// scheduler records the refusal as the run's outcome instead.
-    func startScriptLaunch(_ script: RunScript, in worktree: Worktree) -> RunScriptLaunchStart {
+    /// anything itself. `launchScript` adds the alert for interactive
+    /// callers; the scheduler records the refusal as the run's outcome
+    /// instead.
+    ///
+    /// `presentsLaunchFailure` also covers the *asynchronous* failure that
+    /// surfaces once the terminal actually fails to open — an unreachable SSH
+    /// host, say. A timer-started run must never put a modal alert in front
+    /// of whatever the user is doing; its settlement carries the message to
+    /// the schedule row instead.
+    func startScriptLaunch(
+        _ script: RunScript,
+        in worktree: Worktree,
+        presentsLaunchFailure: Bool = true
+    ) -> RunScriptLaunchStart {
         // The tab that would satisfy `runningScriptTab` isn't registered
         // until this launch's async Task finishes, so two invocations before
         // that (double-click, repeated Enter) would both see "not running"
@@ -542,7 +553,9 @@ extension AppState {
                 // the most recent thing we actually observed — put it back.
                 runRecords.rollback(runID: runID, to: displacedRecord)
                 resolveRunScriptSettlement(runID: runID, .launchFailed(error.localizedDescription))
-                showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
+                if presentsLaunchFailure {
+                    showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
+                }
             }
         }
         pendingScriptLaunchTasks[launchID] = launchTask

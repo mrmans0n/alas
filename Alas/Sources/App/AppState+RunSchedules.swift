@@ -15,9 +15,9 @@ extension AppState {
     // MARK: - Wiring
 
     func installRunScheduleRunner() {
-        runScheduler.runner = { [weak self] schedule in
+        runScheduler.runner = { [weak self] schedule, invocation in
             guard let self else { return .launchFailed("Alas is shutting down.") }
-            return await self.runSchedule(schedule)
+            return await self.runSchedule(schedule, invocation: invocation)
         }
     }
 
@@ -50,18 +50,30 @@ extension AppState {
     /// creation goes through `createWorktreeAndWait`, the script through the
     /// same launch used by the Run tab, and the agent through the worktree
     /// launch surface. The returned outcome is what the schedule row shows.
-    func runSchedule(_ schedule: RunSchedule) async -> RunScheduleOutcome {
+    func runSchedule(
+        _ schedule: RunSchedule,
+        invocation: RunScheduleInvocation = .scheduled
+    ) async -> RunScheduleOutcome {
         let targets: [(project: ProjectConfig, worktree: Worktree)]
-        switch resolveScheduleTargets(schedule.target) {
+        switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
             targets = resolved
         case .unavailable(let reason):
             return .skipped(reason: reason)
         }
+        // Start every target before waiting on any of them. Run scripts are
+        // allowed to be long-running servers that never exit, so awaiting one
+        // target's settlement before launching the next would let the first
+        // project starve all the others indefinitely. Each child suspends on
+        // its own run's settlement, which lets the next one start.
+        let runs = targets.map { target in
+            Task { @MainActor in
+                await self.runSchedule(schedule, project: target.project, worktree: target.worktree)
+            }
+        }
         var outcomes: [RunScheduleOutcome] = []
-        for target in targets {
-            let outcome = await runSchedule(schedule, project: target.project, worktree: target.worktree)
-            outcomes.append(outcome)
+        for run in runs {
+            outcomes.append(await run.value)
         }
         return RunScheduleOutcome.combined(outcomes)
     }
@@ -72,18 +84,32 @@ extension AppState {
         case unavailable(String)
     }
 
-    func resolveScheduleTargets(_ target: RunScheduleTarget) -> ScheduleTargetResolution {
+    func resolveScheduleTargets(
+        _ target: RunScheduleTarget,
+        invocation: RunScheduleInvocation = .scheduled
+    ) -> ScheduleTargetResolution {
         switch target {
         case .allProjects:
-            let resolved = projects.compactMap { project -> (project: ProjectConfig, worktree: Worktree)? in
+            let candidates = projects.compactMap { project -> (project: ProjectConfig, worktree: Worktree)? in
                 guard let main = projectsManager.visibleMainWorktree(projectId: project.id) else { return nil }
                 return (project, main)
             }
-            guard !resolved.isEmpty else { return .unavailable("No project has a main worktree to run in.") }
+            guard !candidates.isEmpty else { return .unavailable("No project has a main worktree to run in.") }
+            // A schedule that names no single project still has to respect
+            // "Pause <project>": without this the pause control would look
+            // like it worked while the fan-out kept running there anyway.
+            guard invocation.honorsProjectPauses else { return .targets(candidates) }
+            let resolved = candidates.filter { !runScheduler.isProjectPaused($0.project.id) }
+            guard !resolved.isEmpty else {
+                return .unavailable("Every project with a main worktree is paused.")
+            }
             return .targets(resolved)
         case .project(let id):
             guard let project = projects.first(where: { $0.id == id }) else {
                 return .unavailable("The project no longer exists.")
+            }
+            if invocation.honorsProjectPauses, runScheduler.isProjectPaused(id) {
+                return .unavailable("\(project.name) is paused.")
             }
             guard let main = projectsManager.visibleMainWorktree(projectId: id) else {
                 return .unavailable("\(project.name) has no main worktree.")
@@ -92,6 +118,9 @@ extension AppState {
         case let .worktree(projectId, worktreeId):
             guard let project = projects.first(where: { $0.id == projectId }) else {
                 return .unavailable("The project no longer exists.")
+            }
+            if invocation.honorsProjectPauses, runScheduler.isProjectPaused(projectId) {
+                return .unavailable("\(project.name) is paused.")
             }
             guard let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId }) else {
                 return .unavailable("The worktree no longer exists in \(project.name).")
@@ -111,10 +140,8 @@ extension AppState {
             case .success(let created):
                 worktree = created
             case .failure(let failure):
-                inAppNotifications.post(
-                    "\(schedule.name): \(failure.message)",
-                    severity: .error,
-                    worktreeID: originWorktree.id
+                reportScheduleFailure(
+                    schedule, reason: failure.message, project: project, worktree: originWorktree
                 )
                 return .launchFailed(failure.message)
             }
@@ -123,14 +150,22 @@ extension AppState {
         if let scriptKey = schedule.scriptKey {
             let scriptOutcome = await runScheduledScript(key: scriptKey, in: worktree, project: project)
             guard case .succeeded = scriptOutcome else {
-                if case .skipped = scriptOutcome {
+                switch scriptOutcome {
+                case .skipped:
                     // Nothing was launched, so there is nothing to compose on.
-                } else if schedule.composition != nil {
-                    inAppNotifications.post(
-                        "\(schedule.name): script did not succeed, agent not launched.",
-                        severity: .error,
-                        worktreeID: worktree.id
-                    )
+                    break
+                case .launchFailed(let message):
+                    // The command never started, so no run-script completion
+                    // notification will ever mention it.
+                    reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+                default:
+                    if schedule.composition != nil {
+                        inAppNotifications.post(
+                            "\(schedule.name): script did not succeed, agent not launched.",
+                            severity: .error,
+                            worktreeID: worktree.id
+                        )
+                    }
                 }
                 return scriptOutcome
             }
@@ -138,6 +173,27 @@ extension AppState {
 
         guard let composition = schedule.composition else { return .succeeded }
         return await launchScheduledAgent(for: schedule, composition: composition, worktree: worktree, project: project)
+    }
+
+    /// Announces a failure that no other channel will report. A scheduled
+    /// run's *script* outcome already reaches Notification Center through the
+    /// run-script monitor; the steps around it — creating the worktree,
+    /// starting the command, launching the agent — have nothing else, and the
+    /// user is by definition not watching.
+    private func reportScheduleFailure(
+        _ schedule: RunSchedule,
+        reason: String,
+        project: ProjectConfig,
+        worktree: Worktree
+    ) {
+        inAppNotifications.post("\(schedule.name): \(reason)", severity: .error, worktreeID: worktree.id)
+        harness.notifications.notifyScheduleFailed(
+            scheduleName: schedule.name,
+            reason: reason,
+            projectId: project.id,
+            worktreeId: worktree.id,
+            scheduleID: schedule.id
+        )
     }
 
     private func createScheduledWorktree(
@@ -200,7 +256,7 @@ extension AppState {
             return .skipped(reason: "\(script.displayName) is already running in \(worktree.branch).")
         }
         let settlement: RunScriptSettlement = await withCheckedContinuation { continuation in
-            switch startScriptLaunch(script, in: worktree) {
+            switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false) {
             case .started(let runID):
                 awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
                     continuation.resume(returning: $0)
@@ -230,7 +286,7 @@ extension AppState {
         let agentId = composition.agentId ?? defaultAgentID(projectId: project.id, worktreeRoot: worktree.path)
         guard let agentId else {
             let message = "No agent is configured to launch for \(project.name)."
-            inAppNotifications.post("\(schedule.name): \(message)", severity: .error, worktreeID: worktree.id)
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
             return .launchFailed(message)
         }
         let launchSurface = WorktreeLaunchSurface.terminal(agentId: agentId)
@@ -243,10 +299,8 @@ extension AppState {
                 error: error,
                 launchSurface: launchSurface
             )
-            inAppNotifications.post(
-                "\(schedule.name): \(error.localizedDescription)",
-                severity: .error,
-                worktreeID: worktree.id
+            reportScheduleFailure(
+                schedule, reason: error.localizedDescription, project: project, worktree: worktree
             )
             runScheduleLogger.error(
                 "Scheduled agent launch failed for \(schedule.id, privacy: .public): \(String(describing: error), privacy: .public)"
