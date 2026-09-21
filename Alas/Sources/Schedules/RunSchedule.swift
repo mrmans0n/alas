@@ -164,19 +164,25 @@ struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
     var lastOutcome: RunScheduleOutcome?
     var lastOutcomeAt: Date?
     var lastMissed: RunScheduleMissedOccurrences?
+    /// The zone `nextFireAt` was computed in. A time-of-day trigger is a
+    /// wall-clock time, so the stored instant stops meaning "09:00" once the
+    /// user changes time zone and has to be recomputed.
+    var timeZoneIdentifier: String?
 
     init(
         lastFiredAt: Date? = nil,
         nextFireAt: Date? = nil,
         lastOutcome: RunScheduleOutcome? = nil,
         lastOutcomeAt: Date? = nil,
-        lastMissed: RunScheduleMissedOccurrences? = nil
+        lastMissed: RunScheduleMissedOccurrences? = nil,
+        timeZoneIdentifier: String? = nil
     ) {
         self.lastFiredAt = lastFiredAt
         self.nextFireAt = nextFireAt
         self.lastOutcome = lastOutcome
         self.lastOutcomeAt = lastOutcomeAt
         self.lastMissed = lastMissed
+        self.timeZoneIdentifier = timeZoneIdentifier
     }
 }
 

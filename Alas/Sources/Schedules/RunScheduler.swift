@@ -159,6 +159,7 @@ final class RunScheduler {
             anchor: schedule.createdAt,
             calendar: calendar
         )
+        state.timeZoneIdentifier = calendar.timeZone.identifier
         states[schedule.id] = state
         persist()
     }
@@ -179,6 +180,7 @@ final class RunScheduler {
                 anchor: state.lastFiredAt ?? current,
                 calendar: calendar
             )
+            state.timeZoneIdentifier = calendar.timeZone.identifier
         }
         states[schedule.id] = state
         persist()
@@ -246,7 +248,22 @@ final class RunScheduler {
         noteGap(at: current)
         var changed = false
         for schedule in schedules {
-            let state = self.state(for: schedule.id)
+            var state = self.state(for: schedule.id)
+            // A wall-clock trigger whose stored instant was computed in
+            // another zone would otherwise fire at the old zone's time.
+            let zone = calendar.timeZone.identifier
+            if state.timeZoneIdentifier != zone {
+                if let retimed = RunSchedulePlanner.retimedFireDate(
+                    for: schedule.trigger,
+                    anchor: state.lastFiredAt ?? schedule.createdAt,
+                    calendar: calendar
+                ) {
+                    state.nextFireAt = retimed
+                }
+                state.timeZoneIdentifier = zone
+                states[schedule.id] = state
+                changed = true
+            }
             let decision = RunSchedulePlanner.decide(
                 schedule: schedule,
                 state: state,

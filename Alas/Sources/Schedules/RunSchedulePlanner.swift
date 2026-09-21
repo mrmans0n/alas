@@ -57,6 +57,20 @@ enum RunSchedulePlanner {
         }
     }
 
+    /// A time-of-day trigger names a wall-clock time, so a `nextFireAt`
+    /// computed in another zone points at the wrong instant — 09:00 Madrid is
+    /// 03:00 New York, which would fire early and then again at the local
+    /// 09:00. Recompute from the anchor in the current calendar; interval
+    /// triggers are durations and need no adjustment.
+    static func retimedFireDate(
+        for trigger: RunScheduleTrigger,
+        anchor: Date,
+        calendar: Calendar
+    ) -> Date? {
+        guard case .timeOfDay = trigger else { return nil }
+        return nextFireDate(for: trigger, after: anchor, anchor: anchor, calendar: calendar)
+    }
+
     /// Occurrences in `[due, now]` inclusive of `due`, capped.
     static func occurrenceCount(
         for trigger: RunScheduleTrigger,

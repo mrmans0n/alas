@@ -50,13 +50,14 @@ struct RunSchedulerTests {
     private func makeScheduler(
         store: MemoryStore,
         clock: Clock,
-        log: RunLog = RunLog()
+        log: RunLog = RunLog(),
+        calendar: Calendar? = nil
     ) -> (RunScheduler, RunLog) {
         let scheduler = RunScheduler(
             store: store,
             fileURL: fileURL,
             now: { clock.now },
-            calendar: calendar,
+            calendar: calendar ?? self.calendar,
             tickInterval: 30,
             grace: 120
         )
@@ -158,6 +159,55 @@ struct RunSchedulerTests {
         second.evaluate()
         await second.waitForRunsForTesting()
         #expect(!log.fired.contains("a"))
+    }
+
+    /// A time-of-day trigger is a wall-clock time. Carrying the laptop to
+    /// another zone must move it, not fire it at the old zone's hour and then
+    /// again at the new one's.
+    @Test func changingTimeZoneRetimesAWallClockSchedule() async throws {
+        func zoned(_ identifier: String) -> Calendar {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: identifier)!
+            return calendar
+        }
+        let madrid = zoned("Europe/Madrid")
+        let newYork = zoned("America/New_York")
+        // 2026-09-21 07:00 in Madrid, before that day's 09:00 occurrence.
+        let start = madrid.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 7))!
+        let store = MemoryStore()
+        let clock = Clock(start)
+        let (first, _) = makeScheduler(store: store, clock: clock, calendar: madrid)
+        let schedule = RunSchedule(
+            id: "morning",
+            name: "Morning",
+            target: .allProjects,
+            scriptKey: "repo:test.sh",
+            trigger: .timeOfDay(hour: 9, minute: 0, weekdays: []),
+            createdAt: start
+        )
+        first.add(schedule)
+        first.evaluate()
+        #expect(first.state(for: "morning").nextFireAt == madrid.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 9)))
+
+        // Same instant, now read in New York: 01:00 local, so the next 09:00
+        // is today in New York, not the stored Madrid instant.
+        let (second, log) = makeScheduler(store: store, clock: clock, calendar: newYork)
+        second.evaluate()
+        await second.waitForRunsForTesting()
+        let retimed = try #require(second.state(for: "morning").nextFireAt)
+        #expect(retimed == newYork.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 9)))
+        #expect(log.fired.isEmpty)
+
+        // Advancing to the old zone's instant must not fire it early.
+        clock.now = madrid.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 9))!
+        second.evaluate()
+        await second.waitForRunsForTesting()
+        #expect(log.fired.isEmpty)
+
+        clock.now = retimed
+        second.evaluate()
+        await second.waitForRunsForTesting()
+        #expect(log.fired == ["morning"])
     }
 
     @Test func schedulesWithoutAnActionAreDroppedOnLoad() throws {
