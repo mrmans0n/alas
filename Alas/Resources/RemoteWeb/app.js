@@ -3193,9 +3193,11 @@ function showPermission(sessionId, payload) {
     serverEl.hidden = !payload.mcpServerName;
   }
   const box = $("perm-options"); box.innerHTML = "";
-  // Default-button styling/focus normally goes to the once-only allow
-  // option; `defaultToNo` moves it to the once-only reject option instead.
-  const defaultKind = payload.defaultToNo ? "reject_once" : "allow_once";
+  // Only bind Enter/default-button styling when the adapter explicitly set
+  // `defaultToNo` — moving it to the once-only reject option. Untagged
+  // adapters (defaultToNo absent/false) get no default button at all, same
+  // as the native prompt: focusing Allow there would silently bind Enter
+  // to approve every legacy prompt.
   let defaultButton = null;
   payload.options.forEach(o => {
     const wrap = document.createElement("div");
@@ -3203,7 +3205,7 @@ function showPermission(sessionId, payload) {
     const b = document.createElement("button");
     b.textContent = o.name;
     b.className = o.kind.startsWith("allow") ? "btn-allow" : "btn-deny";
-    if (o.kind === defaultKind) { b.classList.add("is-default"); defaultButton = b; }
+    if (payload.defaultToNo && o.kind === "reject_once") { b.classList.add("is-default"); defaultButton = b; }
     b.onclick = () => {
       // "once" kinds send null so the server reproduces the local prompt's
       // mapping (once → don't persist / re-ask next time); only "*_always"
