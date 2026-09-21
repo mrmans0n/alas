@@ -86,6 +86,22 @@ extension AppState {
         return RunScheduleRunReport(outcome: .combined(outcomes), runs: references)
     }
 
+    /// Opens the report of a run a firing started, selecting that run's
+    /// worktree first.
+    ///
+    /// A composed schedule's run is never in the worktree whose card shows it,
+    /// and an `.allProjects` fan-out can land in another project entirely.
+    /// `openRunReport` activates a tab under the run's worktree but does not
+    /// move `selectedWorktreeId`, so without this the centre pane keeps
+    /// rendering the worktree the user was on and the link looks dead.
+    ///
+    /// Firing in the background still never steals the selection; only
+    /// following a link does, because that is an explicit request to go there.
+    func openScheduleFiringRun(_ run: RunScheduleFiring.RunReference) {
+        selectWorktree(id: run.worktreeID)
+        openRunReport(worktreeID: run.worktreeID, runID: run.runID)
+    }
+
     /// Loads the durable report ids for worktrees a schedule's history points
     /// at, so its links work without first visiting each worktree's Run tab.
     /// A schedule that composes its own worktree otherwise shows entries whose

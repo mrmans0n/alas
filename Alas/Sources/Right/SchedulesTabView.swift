@@ -378,7 +378,7 @@ private struct ScheduleCard: View {
         let label = RunSchedulePresentation.firingRunLabel(run)
         if state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID) {
             Button {
-                state.openRunReport(worktreeID: run.worktreeID, runID: run.runID)
+                state.openScheduleFiringRun(run)
             } label: {
                 HStack(spacing: 3) {
                     Icon(name: "doc.text", size: 8, color: theme.color("accent"))

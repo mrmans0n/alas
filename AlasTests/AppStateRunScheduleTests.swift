@@ -527,6 +527,40 @@ struct AppStateRunScheduleTests {
         #expect(state.selectedWorktreeId == main.id)
     }
 
+    /// A composed schedule's run lives in the worktree the schedule created,
+    /// never the one whose card shows the history. Opening its report has to
+    /// move the selection there too: activating a tab under another worktree
+    /// leaves the centre pane where it was, so the link would look dead.
+    @Test func openingAFiringRunSelectsThatRunsWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        state.selectWorktree(id: main.id)
+
+        let report = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(agentId: "claude")
+        ))
+        await state.flushRunHistoryPersistence()
+        #expect(report.outcome == .succeeded)
+        let run = try #require(report.runs.first)
+        #expect(run.worktreeID != main.id)
+        // Firing in the background left the selection alone.
+        #expect(state.selectedWorktreeId == main.id)
+
+        state.openScheduleFiringRun(run)
+
+        // Following the link is an explicit request to go there, so it moves.
+        #expect(state.selectedWorktreeId == run.worktreeID)
+        #expect(state.tabs.tabs(forWorktree: run.worktreeID).contains { tab in
+            if case .runReport = tab { return true }
+            return false
+        })
+    }
+
     /// A branch template need not vary per occurrence. A second run of the
     /// same schedule has to get its own worktree rather than failing forever
     /// on the name the first one took.
