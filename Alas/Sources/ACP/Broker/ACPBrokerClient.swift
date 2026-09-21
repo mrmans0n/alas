@@ -63,6 +63,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
@@ -71,6 +72,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
@@ -179,6 +181,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         questionRequests = AsyncStream { q = $0 }
         questionsCont = q
+
+        var plan: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        planRequests = AsyncStream { plan = $0 }
+        plansCont = plan
 
         var e: AsyncStream<ACPElicitationRequest>.Continuation!
         elicitationRequests = AsyncStream { e = $0 }
@@ -407,6 +413,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         respond(id: id, value: response)
     }
 
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        respond(id: id, value: response)
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -482,6 +492,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         updatesCont.finish()
         permsCont.finish()
         questionsCont.finish()
+        plansCont.finish()
         elicitationsCont.finish()
         elicitationCompletionsCont.finish()
         filesCont.finish()
@@ -704,6 +715,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             if let params = try? JSONDecoder().decode(ACPQuestionRequestParams.self, from: payload.data) {
                 questionsCont.yield(.init(id: id, params: params))
             }
+        case .plan:
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPCursorCreatePlanParams.self, from: payload.data) {
+                plansCont.yield(.init(id: id, params: params))
+            } else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+            }
+        case .cursorExtension:
+            dispatchCursorExtensionRequest(id: id, payload: request.payload)
         case .elicitation:
             let payload = pendingRequestParamsPayload(request.payload)
             if let params = try? JSONDecoder().decode(ACPElicitationRequestParams.self, from: payload.data) {
@@ -744,6 +764,44 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
         default:
             break
+        }
+    }
+
+    private func dispatchCursorExtensionRequest(id: JSONRPCID, payload: ACPBrokerJSONValue) {
+        guard
+            case .object(let object) = payload,
+            case .string(let method)? = object["method"],
+            let params = object["params"]
+        else {
+            respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+            return
+        }
+
+        switch method {
+        case "cursor/update_todos":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorUpdateTodosParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            respond(id: id, value: ACPCursorUpdateTodosResponse(outcome: .init(todos: decoded.todos)))
+        case "cursor/task":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorTaskParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            respond(id: id, value: ACPCursorTaskResponse(
+                outcome: .init(agentId: decoded.agentId, durationMs: decoded.durationMs)
+            ))
+        case "cursor/generate_image":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorGenerateImageParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            respond(id: id, value: ACPCursorGenerateImageResponse(
+                outcome: .init(filePath: decoded.filePath, imageData: "")
+            ))
+        default:
+            respond(id: id, error: .init(code: -32601, message: "Method not found", data: nil))
         }
     }
 

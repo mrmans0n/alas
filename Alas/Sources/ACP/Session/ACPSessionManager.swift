@@ -3522,7 +3522,10 @@ extension ACPSessionManager {
             },
             onPlanRejected: { [weak self, weak session] reason in
                 guard let self, let session else { return }
-                self.persistComposerDraft(.init(segments: [.text(reason)]), for: session)
+                self.persistComposerDraft(
+                    session.composerDraft.appending(.init(segments: [.text(reason)])),
+                    for: session
+                )
             }
         )
         elicitationCoordinators[sessionId] = elicitationCoordinator

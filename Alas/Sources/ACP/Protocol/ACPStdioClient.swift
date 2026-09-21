@@ -153,6 +153,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             updatesCont.finish()
             permsCont.finish()
             questionsCont.finish()
+            plansCont.finish()
             elicitationsCont.finish()
             elicitationCompletionsCont.finish()
             filesCont.finish()
@@ -301,22 +302,34 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         case "cursor/update_todos":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorUpdateTodosParams>.self, from: data),
                let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondToCursorUpdateTodos(id: id, params: params)
             } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
             }
         case "cursor/task":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorTaskParams>.self, from: data),
                let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondToCursorTask(id: id, params: params)
             } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
             }
         case "cursor/generate_image":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorGenerateImageParams>.self, from: data),
                let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondToCursorGenerateImage(id: id, params: params)
             } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
             }
         default:

@@ -140,6 +140,8 @@ enum ACPBrokerPendingRequestKind: String, Codable, Equatable, Sendable {
     case elicitation
     case file
     case terminal
+    case plan
+    case cursorExtension
 }
 
 struct ACPBrokerMetadata: Codable, Equatable, Sendable {

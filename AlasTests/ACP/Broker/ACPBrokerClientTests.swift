@@ -361,6 +361,133 @@ struct ACPBrokerClientTests {
         #expect(fallback.error != nil, "the adapter must be told, not left waiting")
     }
 
+    @Test func brokerDispatchesCursorPlanAndReturnsApproval() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "plan-1",
+                    adapterRequestId: .string("plan-1"),
+                    kind: .plan,
+                    payload: cursorPlanPayload()
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        var iterator = client.planRequests.makeAsyncIterator()
+
+        try await client.start()
+
+        let request = try #require(await iterator.next())
+        #expect(request.id == .string("plan-1"))
+        #expect(request.params.name == "Fix ACP")
+        client.respondToPlan(
+            id: request.id,
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { await service.responded.count == 1 }
+        let response = try await #require(service.responded.first)
+        #expect(response.requestId == .string("plan-1"))
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "planUri": .string("alas://plans/plan-call")
+            ])
+        ]))
+    }
+
+    @Test func brokerAcknowledgesCursorExtensionRequests() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([.object([
+                                "id": .string("todo"),
+                                "content": .string("Implement"),
+                                "status": .string("pending")
+                            ])]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "task-1",
+                    adapterRequestId: .string("task-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/task"),
+                        "params": .object([
+                            "toolCallId": .string("task-call"),
+                            "agentId": .string("agent-1"),
+                            "durationMs": .number(42)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 4),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "image-1",
+                    adapterRequestId: .string("image-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/generate_image"),
+                        "params": .object([
+                            "toolCallId": .string("image-call"),
+                            "filePath": .string("/tmp/image.png")
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count == 3 }
+        let responses = await service.responded
+        let todo = try #require(responses.first { $0.requestId == .string("todo-1") })
+        #expect(todo.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([.object([
+                    "id": .string("todo"),
+                    "content": .string("Implement"),
+                    "status": .string("pending")
+                ])])
+            ])
+        ]))
+        let task = try #require(responses.first { $0.requestId == .string("task-1") })
+        #expect(task.result == .object([
+            "outcome": .object([
+                "outcome": .string("completed"),
+                "agentId": .string("agent-1"),
+                "durationMs": .number(42)
+            ])
+        ]))
+        let image = try #require(responses.first { $0.requestId == .string("image-1") })
+        #expect(image.result == .object([
+            "outcome": .object([
+                "outcome": .string("generated"),
+                "filePath": .string("/tmp/image.png"),
+                "imageData": .string("")
+            ])
+        ]))
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -1369,6 +1496,25 @@ struct ACPBrokerClientTests {
         #expect(notified.method == "session/cancel")
         #expect(notified.params == .object(["sessionId": .string("remote-1")]))
         #expect(await service.attached.count == 2)
+    }
+
+    private func cursorPlanPayload() -> ACPBrokerJSONValue {
+        .object([
+            "method": .string("cursor/create_plan"),
+            "params": .object([
+                "toolCallId": .string("plan-call"),
+                "name": .string("Fix ACP"),
+                "overview": .string("Keep requests moving"),
+                "plan": .string("# Plan"),
+                "todos": .array([.object([
+                    "id": .string("todo-1"),
+                    "content": .string("Implement"),
+                    "status": .string("pending")
+                ])]),
+                "isProject": .bool(false),
+                "phases": .array([])
+            ])
+        ])
     }
 
     private func makeClient(

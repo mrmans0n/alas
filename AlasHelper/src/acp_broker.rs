@@ -126,6 +126,8 @@ pub enum PendingClientRequestKind {
     Elicitation,
     File,
     Terminal,
+    Plan,
+    CursorExtension,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

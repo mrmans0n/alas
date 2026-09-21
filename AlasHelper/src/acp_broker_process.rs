@@ -1775,20 +1775,21 @@ fn pending_kind_awaits_user(kind: PendingClientRequestKind) -> bool {
         PendingClientRequestKind::Permission
             | PendingClientRequestKind::Question
             | PendingClientRequestKind::Elicitation
+            | PendingClientRequestKind::Plan
     )
 }
 
 fn pending_kind(method: &str) -> PendingClientRequestKind {
-    if method.contains("permission") {
-        PendingClientRequestKind::Permission
-    } else if method.contains("question") {
-        PendingClientRequestKind::Question
-    } else if method.contains("elicitation") {
-        PendingClientRequestKind::Elicitation
-    } else if method.contains("file") {
-        PendingClientRequestKind::File
-    } else {
-        PendingClientRequestKind::Terminal
+    match method {
+        "cursor/create_plan" => PendingClientRequestKind::Plan,
+        "cursor/update_todos" | "cursor/task" | "cursor/generate_image" => {
+            PendingClientRequestKind::CursorExtension
+        }
+        _ if method.contains("permission") => PendingClientRequestKind::Permission,
+        _ if method.contains("question") => PendingClientRequestKind::Question,
+        _ if method.contains("elicitation") => PendingClientRequestKind::Elicitation,
+        _ if method.contains("file") => PendingClientRequestKind::File,
+        _ => PendingClientRequestKind::Terminal,
     }
 }
 
@@ -2356,6 +2357,24 @@ mod tests {
         assert!(!pending_kind_awaits_user(PendingClientRequestKind::File));
         assert!(!pending_kind_awaits_user(
             PendingClientRequestKind::Terminal
+        ));
+    }
+
+    #[test]
+    fn cursor_extension_requests_have_explicit_pending_kinds() {
+        assert_eq!(
+            pending_kind("cursor/create_plan"),
+            PendingClientRequestKind::Plan
+        );
+        for method in ["cursor/update_todos", "cursor/task", "cursor/generate_image"] {
+            assert_eq!(
+                pending_kind(method),
+                PendingClientRequestKind::CursorExtension
+            );
+        }
+        assert!(pending_kind_awaits_user(PendingClientRequestKind::Plan));
+        assert!(!pending_kind_awaits_user(
+            PendingClientRequestKind::CursorExtension
         ));
     }
 

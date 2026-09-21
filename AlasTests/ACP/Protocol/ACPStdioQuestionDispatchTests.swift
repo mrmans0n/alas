@@ -195,6 +195,24 @@ struct ACPStdioQuestionDispatchTests {
         #expect(outcome["planUri"] as? String == "alas://plans/plan-call")
     }
 
+    @Test("Cursor extension replies defer durable consumption until written")
+    func defersCursorExtensionConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferWriteCompletions = true
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"cursor/task","params":{"toolCallId":"task-call","agentId":"agent-1","durationMs":42}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        #expect(consumed.get() == nil)
+        transport.completePendingWrites()
+        #expect(consumed.get() == true)
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         _ predicate: @escaping @Sendable () -> Bool
@@ -206,6 +224,23 @@ struct ACPStdioQuestionDispatchTests {
                 return
             }
             try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: T?
+
+        func set(_ value: T) {
+            lock.lock()
+            self.value = value
+            lock.unlock()
+        }
+
+        func get() -> T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
         }
     }
 }
