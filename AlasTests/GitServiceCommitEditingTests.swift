@@ -29,6 +29,24 @@ struct GitServiceCommitEditingTests {
         return head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    @discardableResult
+    private func commitWithBody(
+        _ repo: URL,
+        subject: String,
+        body: String,
+        files: [String: String]
+    ) async throws -> String {
+        for (path, text) in files { try write(repo, path, text) }
+        _ = try await Process.git(["add", "--"] + Array(files.keys), cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", subject, "-m", body], cwd: repo)
+        return try await head(repo)
+    }
+
+    private func commitBody(_ repo: URL, _ sha: String) async throws -> String {
+        let result = try await Process.git(["show", "-s", "--format=%b", sha], cwd: repo)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func subjects(_ repo: URL) async throws -> [String] {
         let result = try await Process.git(["log", "--reverse", "--pretty=format:%s"], cwd: repo)
         return result.stdout.split(separator: "\n").map(String.init)
@@ -48,6 +66,443 @@ struct GitServiceCommitEditingTests {
         #expect(CommitEditError.dirtyWorktree.errorDescription == "Commit editing requires a clean worktree and index. Commit, stash, or discard current changes before editing history.")
         #expect(CommitEditError.operationInProgress.errorDescription == "Finish or abort the current merge, rebase, cherry-pick, or revert before editing a commit.")
         #expect(CommitEditError.targetNotAboveFold.errorDescription == "This commit is no longer above the comparison fold. Refresh and choose a local commit.")
+    }
+
+    @Test func protectedGGTrailersAreSeparatedFromEditableBody() {
+        let original = "Explain the change.\n\nGG-ID: c-stable\nGG-Parent: c-parent"
+        let message = CommitMessage.split(original)
+
+        #expect(message.body == "Explain the change.")
+        #expect(message.protectedTrailers.map(\.name) == ["GG-ID", "GG-Parent"])
+        #expect(message.protectedTrailers.map(\.value) == ["c-stable", "c-parent"])
+        #expect(
+            CommitMessage.compose(
+                body: "Edited explanation.\n\nGG-ID: c-replacement\nGG-Parent: c-replacement-parent",
+                preserving: message.protectedTrailers
+            ) == "Edited explanation.\n\nGG-ID: c-stable\nGG-Parent: c-parent"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailersEvenWhenTheEditedBodyReplacesThem() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\nGG-Parent: c-parent",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(
+                subject: "edited target",
+                body: "Edited explanation.\n\nGG-ID: c-replacement\nGG-Parent: c-replacement-parent"
+            )
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\nGG-Parent: c-parent"
+        )
+    }
+
+    @Test func rewordKeepsGGIDInsideFencedExample() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let body = "Example output:\n\n```\nGG-ID: generated-id\n```"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: body,
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: body)
+        )
+
+        #expect(try await commitBody(repo, result.currentSha) == body)
+    }
+
+    @Test func rewordPreservesGGTrailersBeforeCherryPickAnnotation() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let annotation = "(cherry picked from commit abc123)"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n\(annotation)",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(annotation)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\n\(annotation)"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailersBeforeCherryPickAnnotationAndSignoff() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let annotation = "(cherry picked from commit abc123)"
+        let signoff = "Signed-off-by: Developer <developer@example.com>"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n\(annotation)\n\(signoff)",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(annotation)\n\(signoff)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\n\(annotation)\n\(signoff)"
+        )
+    }
+
+    @Test func rewordKeepsGGTrailersInsideExistingTrailerBlock() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let signoff = "Signed-off-by: Developer <developer@example.com>"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\n\(signoff)\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(signoff)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\n\(signoff)\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailerContinuation() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let reviewer = "Reviewed-by: Developer <developer@example.com>\n  with context"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\n\(reviewer)\nGG-ID: c-stable\n  continuation",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(reviewer)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\n\(reviewer)\nGG-ID: c-stable\n  continuation"
+        )
+    }
+
+    @Test func rewordPreservesIndentedGGTrailer() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let signoff = "Signed-off-by: Developer <developer@example.com>"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\n\(signoff)\n  GG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(signoff)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\n\(signoff)\n  GG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailerAfterWhitespaceOnlySeparator() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n \nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailerBeforePatchDivider() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n---\npatch notes",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n---\npatch notes")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\n---\npatch notes"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailerBeforePatchDividerSeparatedByBlankLine() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n\n---\npatch notes",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n---\npatch notes")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\n---\npatch notes"
+        )
+    }
+
+    @Test func rewordPreservesGGTrailerBeforeVersionedPatchDivider() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let divider = "--- 2.43.0"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable\n\(divider)\npatch notes",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\n\(divider)\npatch notes")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-stable\n\(divider)\npatch notes"
+        )
+    }
+
+    @Test func rewordDoesNotTreatIndentedDividerAsPatchSuffix() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Example:\n\n    --- sample\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited example:\n\n    --- sample")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited example:\n\n    --- sample\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordDoesNotSplitEditedTrailerContinuation() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let signoff = "Signed-off-by: Developer <developer@example.com>"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\n\(signoff)\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(
+                subject: "edited target",
+                body: "Edited explanation.\n\n\(signoff)\n  with context"
+            )
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\n\(signoff)\n  with context\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordRemovesNonterminalReplacementGGTrailer() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(
+                subject: "edited target",
+                body: "Edited explanation.\n\nGG-ID: c-replacement\n\nMore detail."
+            )
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nMore detail.\n\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordRemovesShadowTrailerContinuation() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Original explanation.\n\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(
+                subject: "edited target",
+                body: "Edited explanation.\n\nGG-ID: c-replacement\n  extra context\n\nMore detail."
+            )
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nMore detail.\n\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordPreservesGGExampleWhenRestoringProtectedTrailer() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let example = "```\nGG-ID: generated-id\n```"
+        let target = try await commitWithBody(
+            repo,
+            subject: "target",
+            body: "Example:\n\n\(example)\n\nGG-ID: c-stable",
+            files: ["target.txt": "target\n"]
+        )
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Example:\n\n\(example)")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Example:\n\n\(example)\n\nGG-ID: c-stable"
+        )
+    }
+
+    @Test func rewordAllowsNewGGTrailerWhenNoMetadataIsProtected() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["target.txt": "target\n"])
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "edited target", body: "Edited explanation.\n\nGG-ID: c-new")
+        )
+
+        #expect(
+            try await commitBody(repo, result.currentSha)
+                == "Edited explanation.\n\nGG-ID: c-new"
+        )
     }
 
     @Test func rewordAboveFoldCommitPreservesDescendant() async throws {

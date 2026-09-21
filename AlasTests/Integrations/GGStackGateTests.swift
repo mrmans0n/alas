@@ -107,6 +107,24 @@ struct GGStackGateTests {
         #expect(GGCommitMetadata.ggID(in: body) == "c-first")
     }
 
+    @Test func ignoresGGIDInsideFencedCodeBlock() {
+        let body = "```\nGG-ID: generated-id\n```\n\nGG-ID: c-stable"
+
+        #expect(GGCommitMetadata.ggID(in: body) == "c-stable")
+    }
+
+    @Test func ignoresOtherFenceMarkerInsideFencedCodeBlock() {
+        let body = "```\n~~~\nGG-ID: generated-id\n```\n\nGG-ID: c-stable"
+
+        #expect(GGCommitMetadata.ggID(in: body) == "c-stable")
+    }
+
+    @Test func ignoresShortFenceMarkers() {
+        let body = "`\nGG-ID: c-stable"
+
+        #expect(GGCommitMetadata.ggID(in: body) == "c-stable")
+    }
+
     @Test func rejectsInvalidGGIDTrailerCandidates() {
         #expect(GGCommitMetadata.ggID(in: "mentions GG-ID: inline") == nil)
         #expect(GGCommitMetadata.ggID(in: "GG-ID:   ") == nil)
