@@ -813,6 +813,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             let params = object["params"]
         else { return }
         switch method {
+        case "cursor/create_plan":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorCreatePlanParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            plansCont.yield(.init(id: id, params: decoded))
+        case "cursor/update_todos", "cursor/task", "cursor/generate_image":
+            dispatchCursorExtensionRequest(id: id, payload: payload)
         case "terminal/create":
             if let decoded = try? JSONDecoder().decode(ACPTerminalCreateParams.self, from: params.data) {
                 terminalsCont.yield(.create(id: id, params: decoded))

@@ -338,6 +338,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             }
         default:
             if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 respondFile(
                     id: id,
                     result: .failure(.init(code: -32601, message: "Method not found", data: nil))
