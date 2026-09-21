@@ -912,6 +912,13 @@ final class ACPSession: ObservableObject, Identifiable {
             metadata: facts,
             assets: Self.mergeAssets(Self.extractAssets(items), Self.extractRawOutputAssets(toolCall.rawOutput)),
             locations: toolCall.locations?.map(\.path) ?? [],
+            // Matches the .toolCall creation path: without this, an
+            // adapter that reports the permission snapshot itself as
+            // already in_progress (and never sends a separate .toolCall)
+            // would reach a final .toolCallUpdate with executionStartedAt
+            // still nil — which refuses to set executionFinishedAt either,
+            // permanently losing the call's duration.
+            executionStartedAt: status == "in_progress" ? Date() : nil,
             name: toolCall.name)))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()

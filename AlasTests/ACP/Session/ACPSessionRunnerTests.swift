@@ -2501,6 +2501,71 @@ struct ACPSessionRunnerTests {
         #expect(facts?["title"]?.value as? String == "Run command?")
     }
 
+    @Test("a materialized in-progress row initializes executionStartedAt, matching the normal creation path")
+    func materializedInProgressRowInitializesTiming() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // The permission's own snapshot already reports in_progress — the
+        // adapter shape materialization exists for, where no separate
+        // .toolCall ever announces this id.
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        let requestId = JSONRPCID.number(9)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "in_progress")
+        #expect(toolCalls.first?.executionStartedAt != nil)
+    }
+
+    @Test("materializing a permission's row still waits for an already-queued session/update to land first")
+    func materializedRowPreservesUpdateOrdering() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.autoRunEnabled = true
+        runner.start()
+        defer { runner.stop() }
+
+        // Emit an agent message, then immediately (no await/sleep — this
+        // is the point) a permission for a different id that auto-run
+        // resolves with no suspension of its own. Without draining
+        // already-queued updates first, the materialized tool_call row
+        // could land in the transcript ahead of "before".
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("before"))))
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
+        mock.emitPermission(id: .number(9), params: params)
+
+        try await waitUntil { mock.permissionResponses[.number(9)] != nil }
+        try await waitUntil {
+            runner.session.transcript.messages.contains {
+                if case .toolCall = $0 { return true }
+                return false
+            }
+        }
+
+        let kinds = runner.session.transcript.messages.map(\.kind)
+        #expect(kinds == ["agent", "tool_call"])
+    }
+
     @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
     func cancelRequestCancelsPendingFileWrite() async throws {
         let (runner, mock) = try makeRunner()

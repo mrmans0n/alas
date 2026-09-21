@@ -313,14 +313,14 @@ final class ACPSessionRunner {
                     // before evaluate() even starts must still get the same
                     // treatment as one cancelled afterward, or its
                     // presentation is silently lost.
-                    self.persistPermissionDecision(params: params, response: response)
+                    await self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
                 self.connection.client.respondToPermission(id: id, response: response)
-                self.persistPermissionDecision(params: params, response: response)
+                await self.persistPermissionDecision(params: params, response: response)
             }
         }
 
@@ -605,8 +605,22 @@ final class ACPSessionRunner {
     /// call — without the guard, a detached/superseded runner could still
     /// mutate (and even materialize a new row into) the shared session
     /// transcript after losing write ownership during a takeover.
-    private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) {
+    private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) async {
         guard holdsLeaseForWrite() else { return }
+        // `session/update` and `session/request_permission` arrive on two
+        // independent async streams (ACPStdioClient). A fast decision
+        // (auto-run, or an early $/cancel_request) can reach here with no
+        // suspension of its own, while an update already yielded into the
+        // other stream hasn't been dequeued by updatesTask yet —
+        // flushPendingIncomingUpdates() only drains what updatesTask has
+        // already dequeued into its own buffer, so it can't see that
+        // update either. Give updatesTask a few scheduler turns to catch
+        // up so a materialized/merged tool-call row doesn't jump ahead of
+        // a preceding agent/thought message in the persisted transcript.
+        for _ in 0..<4 {
+            await Task.yield()
+            flushPendingIncomingUpdates()
+        }
         let chosenOption: ACPPermissionOption?
         let wasCancelled: Bool
         switch response.outcome {
