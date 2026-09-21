@@ -672,6 +672,41 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.first?.serverId == "srv-a")
     }
 
+    // Mirrors the initiator-side forgotten-during-flight fix, but for the
+    // RESPONDER: pairing back (redeeming the far side's counter-code) also
+    // awaits a network round trip, during which the user can forget the
+    // existing peer this re-pair concerns. The reply must not resurrect the
+    // outbound side of that relationship.
+    @Test func forgettingAPeerDuringOurOwnReciprocalPairBackDoesNotResurrectIt() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-b", name: "old", origins: ["http://10.0.0.2:8765"],
+                               lastOrigin: "http://10.0.0.2:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-b", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        var revoked: [String] = []
+        let delayedPairer = RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return (Data(#"{"token":"tokB","serverId":"srv-b","name":"Mac B"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairing: pairing, pairer: delayedPairer, links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        manager.connectAll()
+        Task {
+            while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+            manager.forget(peerId: "p1")
+        }
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CC",
+            localDeviceId: inbound.deviceId, redeemedCode: "ABC123"))
+        #expect(manager.peers.isEmpty)
+        #expect(revoked.contains(inbound.deviceId))
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
     // A confirmation that arrives with no addPeer attempt left waiting
     // for its counter-code (the attempt it belonged to already gave up, or
     // never existed) sits buffered until swept by expiry — the device it

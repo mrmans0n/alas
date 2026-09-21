@@ -284,6 +284,11 @@ final class RemotePeerManager {
     func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
         if let counterCode = request.counterCode {
             let me = localIdentity()
+            // Snapshot before the round trip below, mirroring addPeer's own
+            // protection on the initiator side: pairing back can take up to
+            // the full multi-origin timeout, and if the user forgets this
+            // peer while it's in flight, the reply must not resurrect it.
+            let priorServerIds = Set(peers.map(\.serverId))
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
@@ -292,6 +297,19 @@ final class RemotePeerManager {
                 // before this branch ran. Returning empty-handed would leave it
                 // standing access with no peer record to forget it by, so take
                 // the inbound grant back and let the exchange start over.
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
+            // This identity existed before the round trip started but is
+            // gone now: the user forgot it while this Mac was still pairing
+            // back. `forget` already revoked every device carrying this
+            // identity, `request.localDeviceId` included — revoked again
+            // here is a harmless no-op — but `upsert` would otherwise
+            // recreate the OUTBOUND side of the relationship from this
+            // now-unwanted reply, undoing the user's revocation just as
+            // surely as resurrecting the peer row itself would.
+            if priorServerIds.contains(request.peerServerId), !peers.contains(where: { $0.serverId == request.peerServerId }) {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
                 return
