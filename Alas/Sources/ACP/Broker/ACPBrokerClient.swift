@@ -269,14 +269,23 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
 
     @discardableResult
     func start() async throws -> ACPBrokerOpenResult {
-        let opened = try await service.open(ACPBrokerOpenParams(
+        let openParams = ACPBrokerOpenParams(
             brokerId: brokerId,
             sessionId: sessionId,
             command: command,
             args: args,
             cwd: cwd,
             env: env
-        ))
+        )
+        var opened = try await service.open(openParams)
+        if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
+            try await service.close(ACPBrokerCloseParams(
+                brokerId: brokerId,
+                generation: opened.snapshot.metadata.generation
+            ))
+            resetAcknowledgedCursor()
+            opened = try await service.open(openParams)
+        }
         if let initialBrokerGeneration,
            initialBrokerGeneration != opened.snapshot.metadata.generation {
             resetAcknowledgedCursor()
