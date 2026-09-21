@@ -2192,6 +2192,57 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission != nil)
     }
 
+    @Test("$/cancel_request arriving before the matching permission request cancels it once dequeued")
+    func cancelRequestArrivingBeforePermissionRequestIsRetained() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+
+        // Cancel arrives first — e.g. a buffered broker replay, or both
+        // notifications landing in one transport batch ahead of
+        // permissionsTask dequeuing the request.
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
+        #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
+    func cancelRequestCancelsPendingFileWrite() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let requestId = JSONRPCID.number(7)
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitFile(.write(id: requestId, params: .init(
+            sessionId: "s", path: "cancelled.txt", content: "should not be written")))
+
+        try await waitUntil { mock.fileResponses[requestId] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestId] else {
+            Issue.record("expected the cancelled write to fail")
+            return
+        }
+        #expect(error.code == -32800)
+        let target = URL(fileURLWithPath: FileManager.default.temporaryDirectory.path)
+            .appendingPathComponent("cancelled.txt")
+        #expect(FileManager.default.fileExists(atPath: target.path) == false)
+    }
+
     @Test("takeover flush excludes chunks received after lease loss")
     func takeoverFlushExcludesChunksReceivedAfterLeaseLoss() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

@@ -63,6 +63,13 @@ final class ACPSessionRunner {
     private var cancelRequestsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    /// `$/cancel_request` ids (OpenCode v2) that haven't yet matched a
+    /// dequeued permission or file request. A cancellation can arrive
+    /// before the request it targets — buffered broker replay, or both
+    /// delivered in one transport batch racing `permissionsTask`/`filesTask`
+    /// — so each consumer checks and drains this set before starting work
+    /// on a freshly dequeued id, instead of the id being silently dropped.
+    private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -298,6 +305,10 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
                 self.flushPendingIncomingUpdates()
+                if self.pendingCancelledRequestIDs.remove(id) != nil {
+                    self.connection.client.respondToPermission(id: id, response: .init(outcome: .cancelled))
+                    continue
+                }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
@@ -308,7 +319,8 @@ final class ACPSessionRunner {
         cancelRequestsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
-                self.policy.cancelRequest(id: id)
+                if self.policy.cancelRequest(id: id) { continue }
+                self.pendingCancelledRequestIDs.insert(id)
             }
         }
 
@@ -333,6 +345,12 @@ final class ACPSessionRunner {
                 self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        continue
+                    }
                     do {
                         if let remoteServer {
                             let target = try remoteServer.lexicallyResolveInsideWorktree(path: params.path)
@@ -417,6 +435,12 @@ final class ACPSessionRunner {
                         )
                     }
                 case .write(let id, let params):
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        break
+                    }
                     // Guard the actual disk write: if this runner has lost
                     // the session lease (takeover), deny the request rather
                     // than modifying the working tree on behalf of a session

@@ -60,17 +60,26 @@ final class ACPPermissionPolicy {
 
     /// Called when an inbound `$/cancel_request` (OpenCode v2) targets
     /// `id`. If a permission is already parked awaiting a user decision,
-    /// resolves it immediately as cancelled. Otherwise — `evaluate` is
-    /// still suspended in its auto-decision lookup — records the
+    /// resolves it immediately as cancelled. If `evaluate` is still
+    /// suspended in its auto-decision lookup for this same id, records the
     /// cancellation so `evaluate` returns `.cancelled` itself instead of
     /// parking a prompt nothing will ever dismiss.
-    func cancelRequest(id: JSONRPCID) {
-        guard id == pendingRequestID else { return }
+    ///
+    /// Returns whether `id` matched this policy's in-flight request. A
+    /// `$/cancel_request` can arrive before the corresponding
+    /// `session/request_permission` has even been dequeued (buffered
+    /// broker replay, or a batch delivered ahead of `evaluate` starting);
+    /// the caller is responsible for retaining an unmatched id until a
+    /// later request with that id actually registers.
+    @discardableResult
+    func cancelRequest(id: JSONRPCID) -> Bool {
+        guard id == pendingRequestID else { return false }
         if pendingContinuation != nil {
             userCancelled()
         } else {
             cancelledBeforeParked = true
         }
+        return true
     }
 
     /// Called by the UI when the user clicks a button. `persistScope` is
