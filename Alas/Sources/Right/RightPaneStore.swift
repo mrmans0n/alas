@@ -370,6 +370,15 @@ final class RightPaneStore {
         appState?.refreshGGSidebar()
     }
 
+    /// Moves any pane still showing a tab that is no longer offered back to
+    /// Changes. Used when a preview flag is switched off under a pane that is
+    /// currently displaying the feature it gates.
+    func retreatFromTab(_ tab: RightPaneTab) {
+        for state in states.values where state.activeTab == tab {
+            state.activeTab = .changes
+        }
+    }
+
     /// Branch-ref rewrites can change commits above the checked-out GG entry
     /// without changing HEAD or its reachable commit set. Force the active
     /// presentation to reload instead of letting its reachable-SHA cache key

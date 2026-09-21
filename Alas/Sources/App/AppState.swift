@@ -207,6 +207,19 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
+    /// Told exactly once when a run settles, keyed by run ID. Only the
+    /// scheduler registers here; manual runs are observed through `runRecords`.
+    /// The worktree is carried so a worktree teardown can settle every run it
+    /// owns, including ones that never produced an archivable record.
+    @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
+    /// Decides when scheduled runs start. Execution is delegated back here so
+    /// a scheduled run is a manual run with a different trigger.
+    let runScheduler: RunScheduler
+    /// Host-aware script discovery used by scheduled runs. Injectable so tests
+    /// can stand in for SSH discovery on a remote project.
+    @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
+        await RunScriptStore.discoverScripts(worktreeRoot: $0, remoteHost: $1)
+    }
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
@@ -1135,6 +1148,7 @@ final class AppState {
         ggStackCache: GGStackCache = .shared,
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        runScheduler: RunScheduler? = nil,
         tabsManager: TabsManager? = nil,
         lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
@@ -1178,6 +1192,7 @@ final class AppState {
         self.ggStackCache = ggStackCache
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runHistoryStore = runHistoryStore
+        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
@@ -1264,7 +1279,12 @@ final class AppState {
                 self?.rescanWorktreeStatuses()
             }
         }
+        self.runScheduler.persistenceErrorHandler = { [weak self] message in
+            self?.persistenceErrorHandler("Schedules Save Failed", message)
+        }
+        installRunScheduleRunner()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
@@ -1505,7 +1525,7 @@ final class AppState {
     }
 
     func acceptsRightPaneTabShortcut(_ tab: RightPaneTab) -> Bool {
-        RightPaneTab.available().contains(tab)
+        RightPaneTab.available(schedulesEnabled: config.schedulesEnabled).contains(tab)
     }
 
     func toggleSidebarVisibility() {
@@ -4106,7 +4126,7 @@ final class AppState {
         }
     }
 
-    private func launchWorktreeSurface(
+    func launchWorktreeSurface(
         _ launchSurface: WorktreeLaunchSurface,
         worktree: Worktree,
         project: ProjectConfig,
@@ -4145,7 +4165,7 @@ final class AppState {
         }
     }
 
-    private func markWorktreeLaunchFailed(
+    func markWorktreeLaunchFailed(
         worktree: Worktree,
         projectId: String,
         error: Error,
@@ -4539,6 +4559,7 @@ final class AppState {
         unpersistedGGWorktreeModes.removeValue(forKey: id)
         projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
         spacesManager.removeProjectEverywhere(id)
+        runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
         saveSpaces()
         let afterIds = allWorktreeIds()

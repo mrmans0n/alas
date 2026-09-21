@@ -63,6 +63,10 @@ struct RightPaneLoadingSkeletonView: View {
             AgentSkeletonView()
         case .run:
             RunSkeletonView()
+        case .schedules:
+            // Schedules are cards like agent sessions, so the same shape fits.
+            AgentSkeletonView()
+                .accessibilityLabel("Loading schedules")
         }
     }
 }

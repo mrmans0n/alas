@@ -8,6 +8,18 @@ struct RunScriptCapturePaths: Equatable, Sendable {
     let completion: String
 }
 
+/// What `startScriptLaunch` did with a request.
+enum RunScriptLaunchStart: Equatable, Sendable {
+    /// A run slot was claimed under this run ID; the terminal is opening.
+    case started(runID: String)
+    /// A launch for the same (worktree, script) is already in flight.
+    case alreadyStarting
+    /// The worktree's project is gone; nothing to run against.
+    case projectUnavailable
+    /// The launch cannot proceed; `message` explains why to the user.
+    case refused(title: String, message: String)
+}
+
 extension AppState {
     // MARK: - Launch
 
@@ -394,13 +406,36 @@ extension AppState {
     }
 
     private func launchScript(_ script: RunScript, in worktree: Worktree) {
+        switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: true) {
+        case .started, .alreadyStarting, .projectUnavailable:
+            break
+        case let .refused(title, message):
+            showFileActionError(title: title, message: message)
+        }
+    }
+
+    /// Claims a run slot and starts the terminal launch, without presenting
+    /// anything itself. `launchScript` adds the alert for interactive
+    /// callers; the scheduler records the refusal as the run's outcome
+    /// instead.
+    ///
+    /// `presentsLaunchFailure` also covers the *asynchronous* failure that
+    /// surfaces once the terminal actually fails to open — an unreachable SSH
+    /// host, say. A timer-started run must never put a modal alert in front
+    /// of whatever the user is doing; its settlement carries the message to
+    /// the schedule row instead.
+    func startScriptLaunch(
+        _ script: RunScript,
+        in worktree: Worktree,
+        presentsLaunchFailure: Bool = true
+    ) -> RunScriptLaunchStart {
         // The tab that would satisfy `runningScriptTab` isn't registered
         // until this launch's async Task finishes, so two invocations before
         // that (double-click, repeated Enter) would both see "not running"
         // and both launch. Close that window with a synchronous in-flight
         // guard instead.
         let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
-        guard pendingScriptLaunches[launchKey] == nil else { return }
+        guard pendingScriptLaunches[launchKey] == nil else { return .alreadyStarting }
 
         // Global scripts live in local Application Support and are read by
         // path, not content — launching one into a remote worktree would ship
@@ -409,19 +444,17 @@ extension AppState {
         // so their absolute path is intentionally not local-file-system
         // reachable here.
         if script.scope == .global, worktree.path.isRemoteAlasPath {
-            showFileActionError(
+            return .refused(
                 title: "Run Script Failed",
                 message: "Global scripts run on your Mac and can't be launched on a remote worktree yet."
             )
-            return
         }
         let requiresLocalScriptPath = !(script.scope == .repo && worktree.path.isRemoteAlasPath)
         guard !requiresLocalScriptPath || FileManager.default.fileExists(atPath: script.fileURL.path) else {
-            showFileActionError(
+            return .refused(
                 title: "Run Script Failed",
                 message: "\(script.fileName) no longer exists on disk."
             )
-            return
         }
         // The run command only ever reaches the shell via the same rc-file
         // injection StartupScriptInstaller uses for every other startup
@@ -429,13 +462,12 @@ extension AppState {
         // silently drops the script and just opens a bare login shell. Fail
         // loudly here instead of leaving the user staring at an empty pane.
         guard StartupScriptInstaller.supportsStartupScriptInjection(shell: config.terminal.shell) else {
-            showFileActionError(
+            return .refused(
                 title: "Run Script Failed",
                 message: "Run scripts require zsh or bash as your configured terminal shell (currently \((config.terminal.shell as NSString).lastPathComponent))."
             )
-            return
         }
-        guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return }
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return .projectUnavailable }
         // Claim the slot synchronously, alongside `pendingScriptLaunches`, so
         // the row flips to "Starting" on the same turn the user clicked and a
         // second click can't open a second run behind the first one's back.
@@ -520,10 +552,42 @@ extension AppState {
                 // The command never started, so the previous outcome is still
                 // the most recent thing we actually observed — put it back.
                 runRecords.rollback(runID: runID, to: displacedRecord)
-                showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
+                resolveRunScriptSettlement(runID: runID, .launchFailed(error.localizedDescription))
+                if presentsLaunchFailure {
+                    showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
+                }
             }
         }
         pendingScriptLaunchTasks[launchID] = launchTask
+        return .started(runID: runID)
+    }
+
+    // MARK: - Settlement
+
+    /// Registers interest in how one run ends. The handler fires exactly once
+    /// and is then dropped.
+    func awaitRunScriptSettlement(
+        runID: String,
+        worktreeID: String,
+        notify: @escaping (RunScriptSettlement) -> Void
+    ) {
+        runScriptSettlementHandlers[runID] = (worktreeID: worktreeID, notify: notify)
+    }
+
+    /// Hands a waiting caller the run's final state. A no-op when nobody is
+    /// waiting, so every teardown path can call it unconditionally.
+    func resolveRunScriptSettlement(runID: String, _ settlement: RunScriptSettlement) {
+        runScriptSettlementHandlers.removeValue(forKey: runID)?.notify(settlement)
+    }
+
+    /// Settles every run a worktree owns. The last line of defense for
+    /// teardown paths that discard runs wholesale instead of finishing them —
+    /// without it, a scheduled run in a deleted worktree would wait forever
+    /// and its schedule would never fire again.
+    private func resolveRunScriptSettlements(worktreeID: String, _ settlement: RunScriptSettlement) {
+        for (runID, entry) in runScriptSettlementHandlers where entry.worktreeID == worktreeID {
+            resolveRunScriptSettlement(runID: runID, settlement)
+        }
     }
 
     func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {
@@ -691,6 +755,14 @@ extension AppState {
     }
 
     private func archiveFinalizedRun(_ record: RunRecord?, capture: RunHistoryCapture) {
+        // Every run that settles a record funnels through here exactly once,
+        // which makes it the main place a waiting scheduler learns how the
+        // command ended. Paths that end observation *without* settling a
+        // record resolve the same handler themselves — see
+        // `resolveRunScriptSettlement`.
+        if let record, case .finished(let outcome) = record.status {
+            resolveRunScriptSettlement(runID: record.id, .finished(outcome))
+        }
         guard let record,
               let entry = Self.runHistoryEntry(for: record, output: .unavailable),
               let runHistoryStore
@@ -819,7 +891,13 @@ extension AppState {
                         runID: runID,
                         worktreeID: worktree.id,
                         scriptKey: script.key
-                    ) else { return }
+                    ) else {
+                        // Something replaced this run's slot while it was in
+                        // flight, so its exit status no longer describes what
+                        // the row holds. Nobody waiting can be told a result.
+                        resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+                        return
+                    }
                     harness.notifications.notifyRunScriptFinished(
                         scriptName: script.displayName,
                         exitCode: completion.exitCode,
@@ -875,8 +953,11 @@ extension AppState {
                     let capture = runHistoryCapture(for: error, location: location)
                     if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
                         archiveFinalizedRun(finalized, capture: capture)
-                    } else if runHistoryPersistenceTasks[runID] == nil {
-                        releaseRunHistoryCaptureInBackground(capture)
+                    } else {
+                        resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+                        if runHistoryPersistenceTasks[runID] == nil {
+                            releaseRunHistoryCaptureInBackground(capture)
+                        }
                     }
                     runScriptLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
@@ -890,8 +971,11 @@ extension AppState {
         runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
             archiveFinalizedRun(finalized, capture: capture)
-        } else if runHistoryPersistenceTasks[runID] == nil {
-            releaseRunHistoryCaptureInBackground(.location(location))
+        } else {
+            resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+            if runHistoryPersistenceTasks[runID] == nil {
+                releaseRunHistoryCaptureInBackground(.location(location))
+            }
         }
     }
 
@@ -904,8 +988,11 @@ extension AppState {
         entry.task.cancel()
         if let finalized = runRecords.markLostObservation(runID: runID, at: Date()) {
             archiveFinalizedRun(finalized, capture: capture)
-        } else if runHistoryPersistenceTasks[runID] == nil {
-            releaseRunHistoryCaptureInBackground(.location(entry.location))
+        } else {
+            resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+            if runHistoryPersistenceTasks[runID] == nil {
+                releaseRunHistoryCaptureInBackground(.location(entry.location))
+            }
         }
     }
 
@@ -1025,6 +1112,10 @@ extension AppState {
                 archiveFinalizedRun(finalized, capture: .unavailable)
             }
         }
+        // Purging discards runs instead of finishing them, so anything still
+        // waiting on one has to be released here rather than by a record
+        // transition that will now never happen.
+        resolveRunScriptSettlements(worktreeID: worktreeID, .finished(.unknown))
         return historyPurgeTask
     }
 
@@ -1037,8 +1128,14 @@ extension AppState {
         for key in pendingKeys {
             guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
+            let runID = runRecords.record(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey)?.id
             let finalized = runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
             archiveFinalizedRun(finalized, capture: .unavailable)
+            // The cancelled launch task will never reach its own error path,
+            // so a waiting caller is told here that the command never ran.
+            if finalized == nil, let runID {
+                resolveRunScriptSettlement(runID: runID, .finished(.stopped))
+            }
         }
     }
 
@@ -1049,8 +1146,15 @@ extension AppState {
             entry.task.cancel()
             let finalized = runRecords.markLostObservation(runID: runID, at: now)
             archiveFinalizedRun(finalized, capture: capture)
+            if finalized == nil {
+                resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+            }
         }
         runScriptCompletionTasks.removeAll()
+        // Quitting ends every observation there will ever be.
+        for runID in runScriptSettlementHandlers.keys {
+            resolveRunScriptSettlement(runID: runID, .finished(.unknown))
+        }
     }
 
     private func cleanupCaptureLocation(_ location: RunScriptCaptureLocation) {

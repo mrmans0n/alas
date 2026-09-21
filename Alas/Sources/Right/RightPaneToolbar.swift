@@ -10,6 +10,8 @@ struct RightPaneToolbar: View {
     var activeAgentCount: Int = 0
     var waitingAgentCount: Int = 0
     var runningScriptNames: [String] = []
+    var scheduleCount: Int = 0
+    var schedulesPaused: Bool = false
     var showIgnored: Bool = false
     var onToggleShowIgnored: () -> Void = {}
     var onSearch: () -> Void = {}
@@ -68,7 +70,9 @@ struct RightPaneToolbar: View {
                 branch: branch,
                 activeAgentCount: activeAgentCount,
                 waitingAgentCount: waitingAgentCount,
-                runningScriptNames: runningScriptNames
+                runningScriptNames: runningScriptNames,
+                scheduleCount: scheduleCount,
+                schedulesPaused: schedulesPaused
             ))
             .font(.system(size: 10.5, design: .monospaced))
             .foregroundColor(theme.color("fg-muted"))

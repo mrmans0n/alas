@@ -289,6 +289,13 @@ struct AlasApp: App {
                                                 object: RightPaneTab.run.rawValue)
             }
             .keyboardShortcut(state.shortcut(for: .rightPaneRunTab))
+            if state.config.schedulesEnabled {
+                Button("Right Sidebar: Schedules") {
+                    NotificationCenter.default.post(name: .alasSelectRightPaneTab,
+                                                    object: RightPaneTab.schedules.rawValue)
+                }
+                .keyboardShortcut(state.shortcut(for: .rightPaneSchedulesTab))
+            }
             Button("New Terminal Tab") {
                 NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
             }

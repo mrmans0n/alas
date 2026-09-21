@@ -4,10 +4,13 @@ import Observation
 import os
 
 enum RightPaneTab: String {
-    case changes, files, agent, run
+    case changes, files, agent, run, schedules
 
-    static func available() -> [Self] {
-        [.changes, .files, .agent, .run]
+    /// Schedules are behind a preview flag, so the rail only offers the tab
+    /// when it is on. Defaulting to off keeps every caller that has no
+    /// configuration at hand on the shipped set.
+    static func available(schedulesEnabled: Bool = false) -> [Self] {
+        [.changes, .files, .agent, .run] + (schedulesEnabled ? [.schedules] : [])
     }
 }
 
