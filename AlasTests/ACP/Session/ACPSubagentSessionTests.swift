@@ -185,6 +185,35 @@ struct ACPSubagentSessionTests {
         #expect(session.subagentRun("child-1")?.messages.isEmpty == true)
     }
 
+    @Test("a replayed terminal state reconciles a child left running by a crash")
+    func replayReconcilesTerminalState() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        // `session/load` replays the state the previous process never
+        // committed. Replay side effects are the only path that runs here.
+        let dirty = session.applySuppressedReplaySideEffects(
+            .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .completed)))
+
+        #expect(dirty == [0])
+        #expect(session.subagentRun("child-1")?.state == .completed)
+    }
+
+    @Test("a replayed spawn re-registers a child whose row never reached disk")
+    func replayRegistersMissingChild() {
+        let session = makeSession()
+        let dirty = session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        #expect(dirty == [0])
+        #expect(session.subagentRun("child-1")?.name == "Explore")
+
+        // Replaying it again merges instead of duplicating the row.
+        #expect(session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))).isEmpty)
+        #expect(session.transcript.messages.count == 1)
+    }
+
     // MARK: - Row projection
 
     @Test("a subagent row is never folded into a tool-call bundle")

@@ -842,6 +842,18 @@ final class ACPSession: ObservableObject, Identifiable {
             }) else { return [] }
             applyToolCallMetadata(update.metadata, replaying: true)
             return [touched]
+        case .subagentSpawned(let spawn):
+            // Registration is keyed by child session id, so a replayed
+            // spawn for a child already restored from SQLite merges into
+            // it rather than duplicating its row — and a child whose row
+            // never made it to disk is genuinely missing, so adding it
+            // here is what keeps its later updates routable.
+            return registerSubagent(spawn, flushingReplayCandidates: false)
+        case .subagentStateUpdate(let update):
+            // A terminal state that the previous process never committed
+            // arrives only in this replay. Dropping it would leave the row
+            // spinning against a child that finished long ago.
+            return applySubagentState(update)
         default:
             return []
         }
@@ -1483,7 +1495,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Returns the transcript indices to persist, or an empty set when the
     /// spawn told us nothing new.
     @discardableResult
-    func registerSubagent(_ spawn: ACPSubagentSpawn, at timestamp: Date = Date()) -> Set<Int> {
+    func registerSubagent(
+        _ spawn: ACPSubagentSpawn,
+        at timestamp: Date = Date(),
+        flushingReplayCandidates: Bool = true
+    ) -> Set<Int> {
         let id = spawn.subagentSessionId
         guard !id.isEmpty else { return [] }
         if let existing = subagents[id] {
@@ -1503,8 +1519,12 @@ final class ACPSession: ObservableObject, Identifiable {
         subagentOrder.append(id)
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
-        // call does, so held replay candidates must land ahead of it.
-        flushPendingReplayCandidates()
+        // call does, so held replay candidates must land ahead of it —
+        // except while replay is being suppressed, where materialising a
+        // candidate is exactly what suppression exists to prevent.
+        if flushingReplayCandidates {
+            flushPendingReplayCandidates()
+        }
         transcript.appendMessage(
             .toolCall(descriptor(for: run).toolCall(
                 executionStartedAt: timestamp,
@@ -1535,7 +1555,23 @@ final class ACPSession: ObservableObject, Identifiable {
         at timestamp: Date = Date()
     ) -> Set<Int> {
         guard let run = subagents[subagentSessionId] else { return [] }
-        return run.apply(update, at: timestamp)
+        let dirty = run.apply(update, at: timestamp)
+        // Terminal side effects are NOT part of building the card: an
+        // agent that streams a terminal through `_meta` (Codex's shape)
+        // feeds `terminalHost` from here, and the child's card reads that
+        // same host. Without this a child's terminal card would render an
+        // id and no output. Mirrors the parent's `.toolCall` /
+        // `.toolCallUpdate` handling, including only applying an update's
+        // metadata when it actually touched a row.
+        switch update {
+        case .toolCall(let payload):
+            applyToolCallMetadata(payload.metadata)
+        case .toolCallUpdate(let update) where !dirty.isEmpty:
+            applyToolCallMetadata(update.metadata)
+        default:
+            break
+        }
+        return dirty
     }
 
     func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {
