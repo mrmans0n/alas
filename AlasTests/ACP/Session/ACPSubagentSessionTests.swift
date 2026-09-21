@@ -18,7 +18,7 @@ struct ACPSubagentSessionTests {
 
         #expect(dirty == [0])
         #expect(session.transcript.messages.count == 1)
-        let descriptor = try? #require(descriptor(in: session, at: 0))
+        let descriptor = try? #require(subagentRowDescriptor(in: session, at: 0))
         #expect(descriptor?.subagentSessionId == "child-1")
         #expect(descriptor?.name == "Explore")
         #expect(descriptor?.task == "Find the router")
@@ -48,7 +48,7 @@ struct ACPSubagentSessionTests {
 
         #expect(dirty == [0])
         #expect(session.subagentRun("child-1")?.isRunning == false)
-        let descriptor = try? #require(descriptor(in: session, at: 0))
+        let descriptor = try? #require(subagentRowDescriptor(in: session, at: 0))
         #expect(descriptor?.state == .failed)
         #expect(ACPSubagentRowPolicy.showsSpinner(state: .failed) == false)
         guard case .toolCall(let row) = session.transcript.messages[0] else {
@@ -67,7 +67,7 @@ struct ACPSubagentSessionTests {
             subagentSessionId: "child-1", state: .failed, error: "rate limited")))
 
         #expect(session.subagentRun("child-1")?.lastError == "rate limited")
-        let descriptor = try #require(descriptor(in: session, at: 0))
+        let descriptor = try #require(subagentRowDescriptor(in: session, at: 0))
         #expect(descriptor.lastError == "rate limited")
 
         // Round-trips through the same metadata encode/decode the row
@@ -259,6 +259,25 @@ struct ACPSubagentSessionTests {
         #expect(text == "Review this file")
         #expect(attachments.count == 1)
         #expect(attachments.first?.uri == "file:///tmp/a.swift")
+    }
+
+    @Test("a live prompt closed by agent output does not reopen when its id is reused")
+    func liveReusedMessageIdDoesNotReopenClosedPrompt() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
+        run.apply(.agentMessageChunk(.text("reply")))
+        // A second turn reusing the SAME id as the first — `userIndex` must
+        // not skip past the agent's reply and reopen the closed bubble.
+        run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
+
+        #expect(run.messages.count == 3)
+        guard case .user(_, "p1", let firstText, _, _) = run.messages[0],
+              case .user(_, "p1", let secondText, _, _) = run.messages[2] else {
+            Issue.record("expected two separate prompt bubbles, not one concatenated row")
+            return
+        }
+        #expect(firstText == "first task")
+        #expect(secondText == "second task")
     }
 
     @Test("a second turn's plan starts a new row instead of overwriting the first turn's")
@@ -727,7 +746,7 @@ struct ACPSubagentSessionTests {
         ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
     }
 
-    private func descriptor(in session: ACPSession, at index: Int) -> ACPSubagentRowDescriptor? {
+    private func subagentRowDescriptor(in session: ACPSession, at index: Int) -> ACPSubagentRowDescriptor? {
         guard case .toolCall(let toolCall) = session.transcript.messages[index] else { return nil }
         return ACPSubagentRowDescriptor(toolCall: toolCall)
     }

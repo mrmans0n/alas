@@ -1124,6 +1124,27 @@ final class ACPSessionRunner {
             try await persistence.persistSubagentMessages(subagentRows, fence: fence)
         }, completion: { [weak self] persisted in
             guard let self else { return }
+            // Mirrors learn about new rows through this notifier — gated on
+            // THIS write's own outcome alone, not the batch-combined
+            // `succeeded` below: for a direct (non-broker) connection
+            // `completion` is always nil, so `succeeded` can stay
+            // permanently poisoned by one earlier transient failure, and
+            // gating the notifier on it too would leave every later
+            // successful write's mirror notification silently dropped for
+            // the rest of the runner's lifetime. A child that streams
+            // without touching its synthetic parent row would otherwise
+            // stay invisible to another instance until the next parent-row
+            // write (its terminal state, at the earliest).
+            //
+            // Deliberately NOT `onMessageActivity`: that moves the recents
+            // ordering by bumping `updatedAt` in memory, while
+            // `upsertSubagentMessages` — unlike `upsertMessages` — does not
+            // bump it in SQLite, so the two would disagree. The spawn and
+            // the terminal state both write parent rows, so a subagent run
+            // still registers as activity at both ends.
+            if persisted == true {
+                self.onPersist?()
+            }
             // Combine with the PRECEDING queued write's outcome (read
             // before this overwrites it) rather than record only this
             // write's own result: an OpenCode batch's spawn write can fail
@@ -1139,23 +1160,7 @@ final class ACPSessionRunner {
             // this write's outcome must propagate forward to it rather
             // than being cleared here.
             self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
-            guard succeeded else {
-                completion?(false)
-                return
-            }
-            // Mirrors learn about new rows through this notifier. A child
-            // that streams without touching its synthetic parent row would
-            // otherwise stay invisible to another instance until the next
-            // parent-row write (its terminal state, at the earliest).
-            //
-            // Deliberately NOT `onMessageActivity`: that moves the recents
-            // ordering by bumping `updatedAt` in memory, while
-            // `upsertSubagentMessages` — unlike `upsertMessages` — does not
-            // bump it in SQLite, so the two would disagree. The spawn and
-            // the terminal state both write parent rows, so a subagent run
-            // still registers as activity at both ends.
-            self.onPersist?()
-            completion?(true)
+            completion?(succeeded)
         })
         return true
     }
@@ -3065,6 +3070,19 @@ extension ACPSessionRunner {
                 try await persistence.persistMessages(messageRows, fence: fence)
             }, completion: { [weak self] persisted in
                 guard let self else { return }
+                // This write's own bookkeeping — what Alas now believes is
+                // actually on disk — reflects ONLY this write's own outcome.
+                // An unrelated earlier write's failure combined into
+                // `succeeded` below must not make it forget that THIS row
+                // really did land in SQLite: for a direct (non-broker)
+                // connection, `completion` is always nil, so `succeeded`
+                // below can stay permanently poisoned by one transient
+                // failure — gating bookkeeping on it too would leave every
+                // later successful write's rows unrecorded for the rest of
+                // the runner's lifetime, even though they DID persist.
+                if persisted == true {
+                    self.commitPersistedMessageRows(messageRows)
+                }
                 // See the matching comment in `persistSubagentIndices`:
                 // combine with the preceding write's outcome rather than
                 // record only this one, so a batch's earlier failure isn't
@@ -3074,12 +3092,7 @@ extension ACPSessionRunner {
                 // failure can't block every later, unrelated batch forever.
                 let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
                 self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
-                guard succeeded else {
-                    completion?(false)
-                    return
-                }
-                self.commitPersistedMessageRows(messageRows)
-                completion?(true)
+                completion?(succeeded)
             })
         } else {
             completion?(true)

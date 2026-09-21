@@ -11,22 +11,30 @@ struct ACPImageThumbnail: View {
     /// image — nothing to disambiguate, so no badge.
     var index: Int? = nil
 
+    /// `fileURL.lastPathComponent` for a `data:` URI is meaningless (no
+    /// path component), so those fall back to a generic label instead.
+    private var displayName: String {
+        fileURL.scheme?.lowercased() == "data" ? "Image" : fileURL.lastPathComponent
+    }
+
     var body: some View {
         Button {
-            ACPImagePreview.shared.show(fileURL)
+            if let image = Self.loadImage(from: fileURL) {
+                ACPImagePreview.shared.show(image, title: displayName)
+            }
         } label: {
             thumbnail
         }
         .buttonStyle(.plain)
         // Make the entire 96×96 frame hit-testable, not just opaque pixels.
         .contentShape(Rectangle())
-        .help(fileURL.lastPathComponent)
+        .help(displayName)
     }
 
     @ViewBuilder private var thumbnail: some View {
         ACPCachedThumbnail(
-            cacheKey: ACPThumbnailImageCache.fileCacheKey(for: fileURL),
-            loadImage: { NSImage(contentsOf: fileURL) }
+            cacheKey: Self.cacheKey(for: fileURL),
+            loadImage: { Self.loadImage(from: fileURL) }
         ) { image in
             Image(nsImage: image)
                 .resizable()
@@ -54,6 +62,29 @@ struct ACPImageThumbnail: View {
                 .padding(4)
         }
     }
+
+    /// Loads an image from either a regular file URL or an inline `data:`
+    /// URI — a child prompt's data-only image (no staged file, no `uri` on
+    /// the wire) is persisted as a `data:` attachment, which
+    /// `NSImage(contentsOf:)` alone cannot read.
+    nonisolated static func loadImage(from url: URL) -> NSImage? {
+        guard url.scheme?.lowercased() == "data" else { return NSImage(contentsOf: url) }
+        guard let decoded = decodeDataURI(url.absoluteString) else { return nil }
+        return NSImage(data: decoded)
+    }
+
+    nonisolated static func cacheKey(for url: URL) -> String {
+        guard url.scheme?.lowercased() == "data" else {
+            return ACPThumbnailImageCache.fileCacheKey(for: url)
+        }
+        return "data-uri:\(url.absoluteString.hashValue)"
+    }
+
+    nonisolated private static func decodeDataURI(_ value: String) -> Data? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = trimmed.range(of: "base64,", options: .caseInsensitive) else { return nil }
+        return Data(base64Encoded: String(trimmed[marker.upperBound...]), options: .ignoreUnknownCharacters)
+    }
 }
 
 /// Floating image preview owned entirely by Alas. We deliberately avoid
@@ -67,8 +98,7 @@ final class ACPImagePreview {
     static let shared = ACPImagePreview()
     private var panel: NSPanel?
 
-    func show(_ url: URL) {
-        guard let image = NSImage(contentsOf: url) else { return }
+    func show(_ image: NSImage, title: String) {
         panel?.close()
 
         let screen = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1280, height: 800)
@@ -83,7 +113,7 @@ final class ACPImagePreview {
         )
         panel.isFloatingPanel = true
         panel.titlebarAppearsTransparent = true
-        panel.title = url.lastPathComponent
+        panel.title = title
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
 

@@ -424,14 +424,14 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     }
 
     /// The child's prompt bubble carrying `messageId`, if it is still the
-    /// open one. Bounded by the newest row so a later prompt reusing an id
-    /// cannot reopen an older bubble.
+    /// open one. Bounded to the LAST row overall (not merely the newest
+    /// `.user` row) — a live turn is closed by ANY agent or tool-call
+    /// output that follows it, so a later prompt reusing the same id must
+    /// not skip past that intervening content and reopen the earlier
+    /// bubble, concatenating both turns' text into one row.
     private func userIndex(messageId: String) -> Int? {
-        for index in stride(from: messages.count - 1, through: 0, by: -1) {
-            guard case .user(_, let id, _, _, _) = messages[index] else { continue }
-            return id == messageId ? index : nil
-        }
-        return nil
+        guard case .user(_, let id, _, _, _) = messages.last, id == messageId else { return nil }
+        return messages.count - 1
     }
 
     /// Replay of an agent/thought chunk. NOT delegated to `apply(_:at:)`
