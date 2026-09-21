@@ -608,7 +608,9 @@ extension AppState {
             guard let self else { return }
             await self.flushRunHistoryPersistence(worktreeID: worktreeID)
             do {
-                try await runHistoryStore.clear(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                try await RunHistoryPersistenceRetry.attempt {
+                    try await runHistoryStore.clear(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                }
                 self.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
                 self.durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
                 self.transientRunReports = self.transientRunReports.filter { $0.value.worktreeID != worktreeID }
@@ -701,7 +703,7 @@ extension AppState {
             let output = await Self.runHistoryOutput(for: capture)
             let entry = Self.runHistoryEntry(for: record, output: output) ?? entry
             do {
-                let inserted = try await runHistoryStore.append(entry)
+                let inserted = try await RunHistoryPersistenceRetry.attempt { try await runHistoryStore.append(entry) }
                 if inserted {
                     self?.durableRunReportIDsByWorktreeID[record.worktreeID] = try await runHistoryStore.ids(worktreeID: record.worktreeID)
                     self?.noteRunHistoryChanged(worktreeID: record.worktreeID)
@@ -1005,7 +1007,9 @@ extension AppState {
                 historyPurgeTask = Task { @MainActor [weak self, runHistoryStore] in
                     await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
                     do {
-                        try await runHistoryStore.purge(worktreeID: worktreeID)
+                        try await RunHistoryPersistenceRetry.attempt {
+                            try await runHistoryStore.purge(worktreeID: worktreeID)
+                        }
                         self?.noteRunHistoryChanged(worktreeID: worktreeID)
                     } catch {
                         let message = "Could not purge run history: \(error.localizedDescription)"
