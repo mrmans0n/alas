@@ -239,6 +239,69 @@ struct ACPSubagentSessionTests {
         #expect(session.subagents.isEmpty)
     }
 
+    @Test("forking carries the inherited children's transcripts to the target")
+    func forkCopiesChildTranscripts() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-fork-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "source", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let inheritedRow = ACPSubagentRowDescriptor(
+            subagentSessionId: "child-1",
+            name: "Explore",
+            task: nil,
+            state: .completed,
+            capabilities: .init()
+        ).toolCall(executionStartedAt: nil, executionFinishedAt: nil)
+        let rowPayload = try JSONEncoder().encode(inheritedRow)
+
+        // `child-2` stands for a subagent the fork boundary leaves behind:
+        // its rows exist in the source but no copied message references it.
+        try store.upsertSubagentMessages([
+            .init(
+                id: ACPStoredSubagentMessage.rowId(
+                    sessionId: "source", subagentSessionId: "child-1", seq: 0),
+                sessionId: "source", subagentSessionId: "child-1",
+                kind: "agent", seq: 0,
+                payload: Data(#"{"text":"inherited output"}"#.utf8), createdAt: 10),
+            .init(
+                id: ACPStoredSubagentMessage.rowId(
+                    sessionId: "source", subagentSessionId: "child-2", seq: 0),
+                sessionId: "source", subagentSessionId: "child-2",
+                kind: "agent", seq: 0,
+                payload: Data(#"{"text":"not inherited"}"#.utf8), createdAt: 20)
+        ])
+
+        try store.createFork(
+            session: .init(
+                id: "fork", agentId: "claude", title: "t",
+                currentModel: nil, currentMode: nil, autoRun: false,
+                createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false),
+            messages: [.init(
+                id: "msg-fork-0", sessionId: "fork", kind: "tool_call",
+                seq: 0, payload: rowPayload, createdAt: 10)],
+            record: .init(
+                targetSessionID: "fork",
+                sourceSessionID: "source",
+                sourceAgentID: "claude",
+                sourceBoundarySequence: 0,
+                inheritedMessageCount: 1,
+                phase: .ready,
+                mechanism: .transcriptTransfer,
+                contextDeliveryPending: false))
+
+        let copied = try store.loadSubagentMessages(sessionId: "fork")
+        #expect(copied.count == 1)
+        #expect(copied.first?.subagentSessionId == "child-1")
+        #expect(copied.first?.payload == Data(#"{"text":"inherited output"}"#.utf8))
+        // The source keeps its own rows, and the child left behind by the
+        // boundary is not dragged into the fork.
+        #expect(try store.loadSubagentMessages(sessionId: "source").count == 2)
+    }
+
     // MARK: - Helpers
 
     private func makeSession() -> ACPSession {

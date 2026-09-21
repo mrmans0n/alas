@@ -221,6 +221,12 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     onCancel: onCancelSubagent.map { cancel in
                         { cancel(descriptor.subagentSessionId) }
                     })
+                    // A child's terminal-backed tool calls are served by the
+                    // same host as the parent's — terminals belong to the
+                    // connection, not to the session that asked for one — so
+                    // the expanded child card needs it in the environment
+                    // exactly like the ordinary tool-call path below.
+                    .environment(\.acpTerminalHost, session.terminalHost)
             } else {
                 ACPToolCallCard(
                     toolCall: tc,
