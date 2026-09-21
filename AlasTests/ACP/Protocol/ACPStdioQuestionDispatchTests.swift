@@ -165,6 +165,28 @@ struct ACPStdioQuestionDispatchTests {
         #expect(imageError["message"] as? String == "cursor/generate_image is not supported")
     }
 
+    @Test("Cursor todo updates merge by tool call")
+    func mergesCursorTodoUpdatesByToolCall() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"cursor/update_todos","params":{"toolCallId":"todo-call","todos":[{"id":"todo-1","content":"Implement","status":"pending"},{"id":"todo-2","content":"Verify","status":"pending"}],"merge":false}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"method":"cursor/update_todos","params":{"toolCallId":"todo-call","todos":[{"id":"todo-2","content":"Verify","status":"completed"}],"merge":true}}"#.utf8))
+
+        try await waitUntil { transport.sentFrames.count == 2 }
+        let responses = try transport.sentFrames.map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+        let response = try #require(responses.first { $0["id"] as? Int == 2 })
+        let result = try #require(response["result"] as? [String: Any])
+        let outcome = try #require(result["outcome"] as? [String: Any])
+        let todos = try #require(outcome["todos"] as? [[String: Any]])
+
+        #expect(todos.map { $0["id"] as? String } == ["todo-1", "todo-2"])
+        #expect(todos.map { $0["status"] as? String } == ["pending", "completed"])
+    }
+
     @Test("Cursor create plan is dispatched and responds with the selected outcome")
     func dispatchesCursorCreatePlan() async throws {
         let transport = FakeJSONRPCTransport()

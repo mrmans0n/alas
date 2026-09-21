@@ -85,6 +85,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var remoteSessionResult: ACPBrokerJSONValue?
     private var nextOperationIndex = 0
     private var _yieldedUpdateCount = 0
+    private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
     private var pendingOutboundRequestIds: Set<JSONRPCID> = []
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
@@ -783,7 +784,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
                 return
             }
-            respond(id: id, value: ACPCursorUpdateTodosResponse(outcome: .init(todos: decoded.todos)))
+            respond(id: id, value: ACPCursorUpdateTodosResponse(outcome: .init(todos: mergedCursorTodos(for: decoded))))
         case "cursor/task":
             guard let decoded = try? JSONDecoder().decode(ACPCursorTaskParams.self, from: params.data) else {
                 respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
@@ -804,6 +805,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         default:
             respond(id: id, error: .init(code: -32601, message: "Method not found", data: nil))
         }
+    }
+
+    private func mergedCursorTodos(for params: ACPCursorUpdateTodosParams) -> [ACPCursorTodo] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let todos = params.mergedTodos(with: cursorTodosByToolCallId[params.toolCallId] ?? [])
+        cursorTodosByToolCallId[params.toolCallId] = todos
+        return todos
     }
 
     private func dispatchTerminalRequest(id: JSONRPCID, payload: ACPBrokerJSONValue) {

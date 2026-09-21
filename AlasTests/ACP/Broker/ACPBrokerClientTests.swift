@@ -487,6 +487,82 @@ struct ACPBrokerClientTests {
         ))
     }
 
+    @Test func brokerMergesCursorTodoUpdatesByToolCall() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([
+                                .object([
+                                    "id": .string("todo-1"),
+                                    "content": .string("Implement"),
+                                    "status": .string("pending")
+                                ]),
+                                .object([
+                                    "id": .string("todo-2"),
+                                    "content": .string("Verify"),
+                                    "status": .string("pending")
+                                ])
+                            ]),
+                            "merge": .bool(false)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-2",
+                    adapterRequestId: .string("todo-2"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([.object([
+                                "id": .string("todo-2"),
+                                "content": .string("Verify"),
+                                "status": .string("completed")
+                            ])]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count >= 2 }
+        let response = try await #require(service.responded.first { $0.requestId == .string("todo-2") })
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([
+                    .object([
+                        "id": .string("todo-1"),
+                        "content": .string("Implement"),
+                        "status": .string("pending")
+                    ]),
+                    .object([
+                        "id": .string("todo-2"),
+                        "content": .string("Verify"),
+                        "status": .string("completed")
+                    ])
+                ])
+            ])
+        ]))
+    }
+
     @Test func failedCursorExtensionResponseReportsErrorToAdapter() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

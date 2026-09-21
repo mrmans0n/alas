@@ -32,6 +32,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private var _yieldedUpdateCount = 0
     private var pending: [JSONRPCID: CheckedContinuation<ACPResponse, Error>] = [:]
     private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
+    private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
     private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
@@ -468,10 +469,19 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
 
     private func respondToCursorUpdateTodos(id: JSONRPCID, params: ACPCursorUpdateTodosParams) {
+        let todos = mergedCursorTodos(for: params)
         respondCursorExtension(
             id: id,
-            response: ACPCursorUpdateTodosResponse(outcome: .init(todos: params.todos))
+            response: ACPCursorUpdateTodosResponse(outcome: .init(todos: todos))
         )
+    }
+
+    private func mergedCursorTodos(for params: ACPCursorUpdateTodosParams) -> [ACPCursorTodo] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let todos = params.mergedTodos(with: cursorTodosByToolCallId[params.toolCallId] ?? [])
+        cursorTodosByToolCallId[params.toolCallId] = todos
+        return todos
     }
 
     private func respondToCursorTask(id: JSONRPCID, params: ACPCursorTaskParams) {

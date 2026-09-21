@@ -162,6 +162,22 @@ struct ACPCursorUpdateTodosParams: Codable, Equatable {
     let merge: Bool
 }
 
+extension ACPCursorUpdateTodosParams {
+    func mergedTodos(with current: [ACPCursorTodo]) -> [ACPCursorTodo] {
+        guard merge else { return todos }
+
+        var merged = current
+        for todo in todos {
+            if let index = merged.firstIndex(where: { $0.id == todo.id }) {
+                merged[index] = todo
+            } else {
+                merged.append(todo)
+            }
+        }
+        return merged
+    }
+}
+
 struct ACPCursorUpdateTodosResponse: Codable, Equatable {
     let outcome: Outcome
 
