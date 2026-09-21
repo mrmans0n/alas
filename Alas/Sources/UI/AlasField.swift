@@ -297,7 +297,13 @@ final class GitRefNameFieldEditor: NSTextView {
         guard sanitized != proposed else {
             return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
         }
-        guard sanitized != string else { return false }
+        let proposedCaret = affectedCharRange.location + replacementString.utf16.count
+        let prefixBeforeCaret = (proposed as NSString).substring(to: proposedCaret)
+        let caret = min(inputFilter.sanitize(prefixBeforeCaret, mode: .editing).utf16.count, sanitized.utf16.count)
+        guard sanitized != string else {
+            setSelectedRange(NSRange(location: caret, length: 0))
+            return false
+        }
 
         // Preserve the unchanged prefix/suffix so undo and selection operate on
         // the actual edit, including when a paste contains forbidden characters.
@@ -307,9 +313,6 @@ final class GitRefNameFieldEditor: NSTextView {
         let suffixCount = zip(oldTail.reversed(), newTail.reversed()).prefix { $0 == $1 }.count
         let replacement = String(newTail.dropLast(suffixCount))
         let range = NSRange(location: prefix.utf16.count, length: oldTail.dropLast(suffixCount).utf16.count)
-        let proposedCaret = affectedCharRange.location + replacementString.utf16.count
-        let prefixBeforeCaret = (proposed as NSString).substring(to: proposedCaret)
-        let caret = min(inputFilter.sanitize(prefixBeforeCaret, mode: .editing).utf16.count, sanitized.utf16.count)
 
         applyingFilteredEdit = true
         defer { applyingFilteredEdit = false }

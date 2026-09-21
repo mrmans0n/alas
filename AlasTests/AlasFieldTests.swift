@@ -120,7 +120,7 @@ struct AlasFieldTests {
 
     private struct TypingHost {
         var initialText = "nacho/"
-        var body: some View { Inner(text: initialText) }
+        @MainActor var body: some View { Inner(text: initialText) }
 
         private struct Inner: View {
             @State var text: String
@@ -170,6 +170,12 @@ struct AlasFieldTests {
         editor.insertText("old", replacementRange: editor.selectedRange())
         #expect(editor.string == "nacho/oldnameê")
         #expect(editor.selectedRange() == NSRange(location: 9, length: 0))
+
+        editor.string = "feature"
+        editor.setSelectedRange(NSRange(location: 0, length: 7))
+        editor.insertText("fea ture", replacementRange: editor.selectedRange())
+        #expect(editor.string == "feature")
+        #expect(editor.selectedRange() == NSRange(location: 7, length: 0))
     }
 
     @Test func rejectingCharacterInMiddleKeepsNextInsertionAtCaret() throws {
