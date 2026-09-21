@@ -1468,11 +1468,14 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Stores a `session/prompt` response's decoded `_meta.quota` as the
     /// last turn's usage and folds it into the running session total. A nil
-    /// quota (agent doesn't send the extension, or decode failed) is a
-    /// no-op — both properties keep their previous values.
+    /// quota (agent doesn't send the extension on this turn, or decode
+    /// failed) still clears `lastTurnQuota` — an earlier turn's usage must
+    /// not linger under "Last turn" once it no longer describes the most
+    /// recent one — but `sessionQuotaTotal` is untouched, since it's a
+    /// valid cumulative total regardless of any single turn's quota.
     func recordPromptQuota(_ quota: ACPPromptQuota?) {
-        guard let quota else { return }
         lastTurnQuota = quota
+        guard let quota else { return }
         sessionQuotaTotal = ACPPromptQuota.accumulating(sessionQuotaTotal, with: quota)
     }
 
@@ -1840,20 +1843,25 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Correlates adapter-supplied diff statistics (AIR extension,
     /// `_meta.jetbrains.air.diffStats` on a `diff` content block) into the
-    /// most recent `.fileEdit` transcript row for the same path.
+    /// most recent `.fileEdit` transcript row for the same path *and* the
+    /// same before/after text.
     ///
     /// `fs/write_text_file` only sees before/after text and falls back to
     /// `ACPFileWriter`'s crude line-set heuristic; when the same edit's
     /// tool call later reports the adapter's real patch counts, prefer
-    /// those. A diff item without stats, or with no matching file edit yet
-    /// (the write hasn't landed, or this is a preview-only diff with no
-    /// corresponding write), is a no-op — the heuristic count stands.
+    /// those. Matching on content as well as path (not path alone) keeps a
+    /// same-path-but-different-content diff — a stale preview, or a later
+    /// unrelated edit to the same file — from clobbering an earlier row's
+    /// counts; a diff item without stats, or with no matching file edit,
+    /// is a no-op and the heuristic count stands.
     private func applyDiffStatsFromToolCallContent(_ items: [ACPToolCallContent]) -> Set<Int> {
         var touched: Set<Int> = []
         for item in items {
-            guard case .diff(let path, _, _, _, let diffStats?) = item else { continue }
+            guard case .diff(let path, let oldText, let newText, _, let diffStats?) = item else { continue }
             guard let index = transcript.messages.lastIndex(where: {
-                if case .fileEdit(_, let edit) = $0 { return edit.path == path }
+                if case .fileEdit(_, let edit) = $0 {
+                    return edit.path == path && edit.oldText == oldText && edit.newText == newText
+                }
                 return false
             }), case .fileEdit(let id, var edit) = transcript.messages[index] else { continue }
             guard edit.added != diffStats.added || edit.removed != diffStats.removed else { continue }

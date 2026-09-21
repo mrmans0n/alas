@@ -63,4 +63,42 @@ struct ACPContextRingTests {
         let view = ACPContextRing(ratio: 0.5)
         _ = view.body
     }
+
+    @Test("context usage button renders with usage alone")
+    func hasContentWithUsageOnly() {
+        let button = ACPContextUsageButton(
+            usage: .init(used: 100, size: 1000, cost: nil), modelName: nil)
+        #expect(button.hasContent)
+    }
+
+    @Test("context usage button renders with quota alone (no usage_update yet)")
+    func hasContentWithQuotaOnlyNoUsage() {
+        let quota = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 10, inputTokens: 10, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 10, inputTokens: 10, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0))])
+        let button = ACPContextUsageButton(
+            usage: nil, modelName: nil, lastTurnQuota: quota, sessionQuotaTotal: quota)
+        #expect(button.hasContent)
+    }
+
+    @Test("context usage button renders nothing with no data at all")
+    func hasContentWithNothing() {
+        let button = ACPContextUsageButton(usage: nil, modelName: nil)
+        #expect(!button.hasContent)
+    }
+
+    @Test("context usage button body evaluates on the main actor with quota only")
+    @MainActor
+    func quotaOnlyBodyEvaluates() {
+        let quota = ACPPromptQuota(
+            tokenCount: nil,
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 5, inputTokens: 5, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0))])
+        let view = ACPContextUsageButton(usage: nil, modelName: nil, lastTurnQuota: quota)
+        _ = view.body
+    }
 }

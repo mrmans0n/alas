@@ -262,6 +262,24 @@ struct ACPSessionTests {
         #expect(session.sessionQuotaTotal == nil)
     }
 
+    @Test("recordPromptQuota clears lastTurnQuota when a later turn omits quota, but keeps the session total")
+    func recordPromptQuotaClearsLastTurnOnNilButKeepsTotal() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let turn1 = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
+                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
+
+        session.recordPromptQuota(turn1)
+        #expect(session.lastTurnQuota == turn1)
+
+        session.recordPromptQuota(nil)
+        #expect(session.lastTurnQuota == nil)
+        #expect(session.sessionQuotaTotal == turn1)
+    }
+
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -983,7 +1001,8 @@ struct ACPSessionTests {
                 kind: "update", diffStats: .init(added: 4, removed: 2))])))
 
         guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
-            if case .fileEdit = $0 { return true }; return false
+            if case .fileEdit = $0 { return true }
+            return false
         }) else {
             Issue.record("expected a fileEdit message")
             return
@@ -1005,7 +1024,8 @@ struct ACPSessionTests {
                 kind: nil, diffStats: nil)])))
 
         guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
-            if case .fileEdit = $0 { return true }; return false
+            if case .fileEdit = $0 { return true }
+            return false
         }) else {
             Issue.record("expected a fileEdit message")
             return
@@ -1025,7 +1045,38 @@ struct ACPSessionTests {
                 kind: "update", diffStats: .init(added: 1, removed: 1))])))
 
         #expect(touched == [0])
-        #expect(session.transcript.messages.contains { if case .fileEdit = $0 { return true }; return false } == false)
+        let hasFileEdit = session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        }
+        #expect(!hasFileEdit)
+    }
+
+    @Test("diffStats for a same-path but different-content diff does not clobber an unrelated earlier edit")
+    func diffStatsWithMismatchedContentIsNoOp() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // An earlier, unrelated edit to the same path (e.g. a prior turn).
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        // A later diff for the same path, but with different before/after
+        // text — a preview-only diff or an edit that hasn't landed via
+        // fs/write_text_file must not overwrite the earlier, unrelated row.
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-2", title: "Preview x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "x.swift", oldText: "z\n", newText: "z\nq\n",
+                kind: "update", diffStats: .init(added: 99, removed: 99))])))
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 1)
+        #expect(edit.removed == 1)
     }
 
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
