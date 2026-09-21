@@ -2816,6 +2816,6 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func advanceRenderWindowIfFollowingTail() {
         guard followsTranscriptTail else { return }
-        transcript.setVisibleHead(max(0, transcript.messages.count - ACPTranscript.tailWindow))
+        transcript.setVisibleHead(ACPTranscript.tailWindowHead(messages: transcript.messages))
     }
 }
