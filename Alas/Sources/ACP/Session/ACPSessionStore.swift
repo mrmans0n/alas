@@ -447,58 +447,14 @@ extension ACPSessionStore {
                     createdAt: message.createdAt
                 )
             }
-            // Inherited subagent rows would otherwise point at child
-            // transcripts stored under the SOURCE session id, which
-            // hydration never queries for the fork — the row would come
-            // back reading "No output." once reopened.
-            try copySubagentMessages(
-                from: record.sourceSessionID,
-                to: record.targetSessionID,
-                subagentSessionIds: Self.subagentSessionIds(in: messages)
-            )
+            // No subagent rows are copied with a fork: a fork's transcript
+            // is rebuilt from `ACPSessionForkSnapshot`, which keeps only
+            // user/agent conversation text (`ACPSessionForkSnapshotResolver`
+            // maps every tool call to nil). Copying child transcripts here
+            // would strand rows in `subagent_messages` that the target has
+            // no row to render them from.
             try upsertFork(record)
         }
-    }
-
-    /// Child session ids referenced by the subagent rows among `messages`.
-    private static func subagentSessionIds(in messages: [ACPStoredMessage]) -> Set<String> {
-        let decoder = JSONDecoder()
-        var ids: Set<String> = []
-        for message in messages where message.kind == "tool_call" {
-            guard let toolCall = try? decoder.decode(ACPMessage.ToolCall.self, from: message.payload),
-                  let descriptor = ACPSubagentRowDescriptor(toolCall: toolCall)
-            else { continue }
-            ids.insert(descriptor.subagentSessionId)
-        }
-        return ids
-    }
-
-    /// Re-keys the named children's transcripts onto `target`. The child
-    /// session ids themselves are preserved: they identify the agent-side
-    /// session the rows came from, and the fork's own row metadata still
-    /// refers to them.
-    private func copySubagentMessages(
-        from source: String,
-        to target: String,
-        subagentSessionIds: Set<String>
-    ) throws {
-        guard !subagentSessionIds.isEmpty else { return }
-        let inherited = try loadSubagentMessages(sessionId: source)
-            .filter { subagentSessionIds.contains($0.subagentSessionId) }
-        guard !inherited.isEmpty else { return }
-        try upsertSubagentMessages(inherited.map { message in
-            ACPStoredSubagentMessage(
-                id: ACPStoredSubagentMessage.rowId(
-                    sessionId: target,
-                    subagentSessionId: message.subagentSessionId,
-                    seq: message.seq),
-                sessionId: target,
-                subagentSessionId: message.subagentSessionId,
-                kind: message.kind,
-                seq: message.seq,
-                payload: message.payload,
-                createdAt: message.createdAt)
-        })
     }
 
     func upsertFork(_ record: ACPSessionForkRecord) throws {

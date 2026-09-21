@@ -587,7 +587,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ),
-                    inToolCallGroup: inToolCallGroup
+                    inToolCallGroup: inToolCallGroup,
+                    canCancelSubagent: host.onCancelSubagent != nil
                 ),
                 host: host
             )
@@ -618,6 +619,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// Part of the token so a row that moves into or out of a
             /// bundle re-renders with (or without) the accent lane.
             let inToolCallGroup: Bool
+            /// Whether this host can cancel a subagent. The key above
+            /// covers the message, not the callbacks, so a mirror taking
+            /// over a session with a running child would otherwise keep
+            /// its mounted row — and its hidden Cancel — until some
+            /// unrelated field of that message happened to change.
+            let canCancelSubagent: Bool
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {

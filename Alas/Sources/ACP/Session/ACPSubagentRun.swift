@@ -205,19 +205,39 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         return [append(message, at: timestamp)]
     }
 
-    /// The row a chunk extends: the matching `messageId` when the agent
-    /// supplies one, otherwise the trailing row of that kind — but only
-    /// while nothing else has closed the run (a tool call or a new prompt
-    /// starts a fresh bubble, exactly as in the parent transcript).
+    /// The row a chunk extends.
+    ///
+    /// With a `messageId` the whole child transcript is searched for that
+    /// id, exactly as the parent transcript's message-id index does:
+    /// agents interleave ids (a commentary stream resuming after a final
+    /// answer chunk, say), so stopping at the newest non-matching row
+    /// would split one logical message across several rows.
+    ///
+    /// Without one there is no identity to match on, so the chunk extends
+    /// the trailing row of its kind — and only while nothing has closed
+    /// the run, since a tool call or a new prompt starts a fresh bubble.
     private func trailingIndex(of kind: StreamKind, messageId: String?) -> Int? {
+        guard let messageId else { return legacyTrailingIndex(of: kind) }
         for index in stride(from: messages.count - 1, through: 0, by: -1) {
             switch messages[index] {
-            case .agent(_, let id, _):
-                if kind == .agent, messageId == nil || id == messageId { return index }
-                return nil
-            case .thought(_, let id, _):
-                if kind == .thought, messageId == nil || id == messageId { return index }
-                return nil
+            case .agent(_, let id, _) where kind == .agent && id == messageId:
+                return index
+            case .thought(_, let id, _) where kind == .thought && id == messageId:
+                return index
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func legacyTrailingIndex(of kind: StreamKind) -> Int? {
+        for index in stride(from: messages.count - 1, through: 0, by: -1) {
+            switch messages[index] {
+            case .agent:
+                return kind == .agent ? index : nil
+            case .thought:
+                return kind == .thought ? index : nil
             case .toolCall, .user, .fileEdit:
                 return nil
             case .plan, .systemNotice:
