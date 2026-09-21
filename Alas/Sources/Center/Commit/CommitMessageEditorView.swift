@@ -51,6 +51,7 @@ struct CommitMessageEditorView: View {
     let onRetryAgentAvailability: () -> Void
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
+    var protectedTrailers: [ProtectedCommitTrailer] = []
     var alternateAction: CommitPrimaryAction? = nil
     var preferredActionPosition: CommitComposerActionPosition = .leading
     var iconName: String = "commit"
@@ -88,6 +89,9 @@ struct CommitMessageEditorView: View {
             }
             subjectField
             bodyField
+            if !protectedTrailers.isEmpty {
+                protectedTrailersSection
+            }
             if let error {
                 InlineErrorStrip(message: error, onDismiss: onDismissError)
             }
@@ -294,6 +298,29 @@ struct CommitMessageEditorView: View {
                     .padding(-2)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var protectedTrailersSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("GG metadata")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.color("fg-faint"))
+            ForEach(Array(protectedTrailers.enumerated()), id: \.offset) { _, trailer in
+                HStack(spacing: 6) {
+                    Text(trailer.name)
+                        .foregroundStyle(theme.color("fg-faint"))
+                    Text(trailer.value)
+                        .foregroundStyle(theme.color("fg-dim"))
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(theme.color("field-bg").opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Render the modifier + key glyphs of a `KeyboardShortcut` for display
