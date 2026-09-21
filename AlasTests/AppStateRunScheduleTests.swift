@@ -14,32 +14,14 @@ struct AppStateRunScheduleTests {
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
-    private final class LocationBox: @unchecked Sendable {
-        var locations: [RunScriptCaptureLocation] = []
-    }
-
-    private final class ErrorBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var storage: [(title: String, message: String)] = []
-
-        var values: [(title: String, message: String)] {
-            lock.lock()
-            defer { lock.unlock() }
-            return storage
-        }
-
-        func append(_ entry: (title: String, message: String)) {
-            lock.lock()
-            defer { lock.unlock() }
-            storage.append(entry)
-        }
-    }
-
     private struct Fixture {
         let state: AppState
         let history: RunHistoryStore
         let project: ProjectConfig
         let worktree: Worktree
+        /// The same script the schedules target, for tests that also need to
+        /// start it the way the Run tab would.
+        let script: RunScript
         let directory: URL
         let locations: LocationBox
         var errors: () -> [(title: String, message: String)]
@@ -111,11 +93,21 @@ struct AppStateRunScheduleTests {
         state.runScheduleScriptDiscovery = { root, _ in
             .scripts(RunScriptStore.scripts(worktreeRoot: root, globalDir: directory.appendingPathComponent("no-globals")))
         }
+        let script = RunScript(
+            scope: .repo,
+            fileName: "dev.sh",
+            fileURL: scripts.appendingPathComponent("dev.sh"),
+            displayName: "dev",
+            onExit: .keep,
+            cwd: nil,
+            isExecutable: false
+        )
         return Fixture(
             state: state,
             history: history,
             project: project,
             worktree: worktree,
+            script: script,
             directory: directory,
             locations: locations,
             errors: { errors.values }
@@ -255,7 +247,7 @@ struct AppStateRunScheduleTests {
         // The same failure started from the Run tab still alerts.
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
-        #expect(fixture.errors().contains { $0.title == "Run Script Failed" })
+        #expect(fixture.errors().contains(where: { $0.title == "Run Script Failed" }))
     }
 
     /// "Pause <project>" has to stop an all-projects schedule from running in
@@ -384,22 +376,6 @@ struct AppStateRunScheduleTests {
         #expect(fixture.state.runScriptSettlementHandlers.isEmpty)
     }
 
-    private actor Gate {
-        private var isOpen = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-
-        func open() {
-            isOpen = true
-            for waiter in waiters { waiter.resume() }
-            waiters.removeAll()
-        }
-
-        func wait() async {
-            guard !isOpen else { return }
-            await withCheckedContinuation { waiters.append($0) }
-        }
-    }
-
     // MARK: - Composition
 
     private func makeRepo() async throws -> URL {
@@ -511,6 +487,8 @@ struct AppStateRunScheduleTests {
         let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: [])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let posted = NotificationBox()
+        state.harness.notifications.notificationAdder = { posted.append($0) }
 
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
@@ -526,48 +504,11 @@ struct AppStateRunScheduleTests {
             return
         }
         #expect(surface == .terminal(agentId: "claude"))
-        #expect(state.inAppNotifications.notifications(in: created.id).contains { $0.severity == .error })
-    }
-
-    /// Composition failures happen while nobody is looking, so they have to
-    /// reach Notification Center, not just the in-app toast list.
-    @Test func compositionFailureRaisesASystemNotification() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: [])
-        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
-        let posted = NotificationBox()
-        state.harness.notifications.notificationAdder = { posted.append($0) }
-
-        let outcome = await state.runSchedule(schedule(
-            target: .project(id: project.id),
-            scriptKey: nil,
-            composition: RunScheduleComposition(agentId: "claude")
-        ))
-
-        guard case .launchFailed = outcome else {
-            Issue.record("Expected a launch failure, got \(outcome)")
-            return
-        }
+        #expect(state.inAppNotifications.notifications(in: created.id).contains(where: { $0.severity == .error }))
+        // Unattended failures also have to reach Notification Center, not
+        // just the in-app toast list nobody is looking at.
         let titles = posted.values.map(\.content.title)
-        #expect(titles.contains { $0.contains("Nightly") && $0.contains("did not run") })
-    }
-
-    private final class NotificationBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var storage: [UNNotificationRequest] = []
-
-        var values: [UNNotificationRequest] {
-            lock.lock()
-            defer { lock.unlock() }
-            return storage
-        }
-
-        func append(_ request: UNNotificationRequest) {
-            lock.lock()
-            defer { lock.unlock() }
-            storage.append(request)
-        }
+        #expect(titles.contains(where: { $0.contains("Nightly") && $0.contains("did not run") }))
     }
 
     @Test func failingScriptDoesNotLaunchTheAgent() async throws {
@@ -579,6 +520,10 @@ struct AppStateRunScheduleTests {
         // made to fail at launch instead: an unsupported shell refuses it.
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.config.terminal.shell = "/bin/fish"
+        // Keep the failure notification away from the real notification
+        // centre; no test should post to the user's Notification Center.
+        let posted = NotificationBox()
+        state.harness.notifications.notificationAdder = { posted.append($0) }
 
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
@@ -591,5 +536,63 @@ struct AppStateRunScheduleTests {
         }
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(state.tabs.tabs(forWorktree: created.id).isEmpty)
+    }
+}
+
+// Helpers live at file scope: a global actor attribute on the suite would
+// otherwise propagate into nested types, which an `actor` cannot accept.
+
+private final class LocationBox: @unchecked Sendable {
+    var locations: [RunScriptCaptureLocation] = []
+}
+
+private final class ErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(title: String, message: String)] = []
+
+    var values: [(title: String, message: String)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ entry: (title: String, message: String)) {
+        lock.lock()
+        defer { lock.unlock() }
+        storage.append(entry)
+    }
+}
+
+private final class NotificationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [UNNotificationRequest] = []
+
+    var values: [UNNotificationRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ request: UNNotificationRequest) {
+        lock.lock()
+        defer { lock.unlock() }
+        storage.append(request)
+    }
+}
+
+/// Holds a fake run open until the test lets it finish.
+private actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }

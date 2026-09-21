@@ -118,9 +118,8 @@ struct RunSchedulerTests {
         first.add(interval("keep-2", seconds: 900, at: clock.now))
 
         // Corrupt one entry the way an unknown trigger case would read.
-        var object = try #require(
-            JSONSerialization.jsonObject(with: try #require(store.files[fileURL])) as? [String: Any]
-        )
+        let persisted = try #require(store.files[fileURL])
+        var object = try #require(JSONSerialization.jsonObject(with: persisted) as? [String: Any])
         var schedules = try #require(object["schedules"] as? [[String: Any]])
         schedules.insert(["id": "broken", "name": "Broken"], at: 1)
         object["schedules"] = schedules
@@ -143,9 +142,8 @@ struct RunSchedulerTests {
         first.evaluate()
         await first.waitForRunsForTesting()
 
-        var object = try #require(
-            JSONSerialization.jsonObject(with: try #require(store.files[fileURL])) as? [String: Any]
-        )
+        let persisted = try #require(store.files[fileURL])
+        var object = try #require(JSONSerialization.jsonObject(with: persisted) as? [String: Any])
         var states = try #require(object["states"] as? [String: Any])
         states["b"] = ["lastFiredAt": "not-a-date"]
         object["states"] = states
