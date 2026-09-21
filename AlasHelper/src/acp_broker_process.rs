@@ -390,10 +390,14 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpOpenParams = decode(params)?;
     validate_broker_id(params.broker_id.as_str())?;
     let dir = broker_dir(params.broker_id.as_str())?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|error| broker_error(-32070, format!("broker dir failed: {error}")))?;
-    set_restrictive_dir_permissions(&dir)?;
 
+    // Deliberately not created here: try_adopt_running_broker only reads
+    // pid.json (broker_is_running reports "not running", not an error,
+    // when it's absent) and never writes into `dir`, so it needs nothing
+    // to exist yet. Creating it this early, unprotected by the lock below,
+    // raced a concurrent acp_close's now-also-lock-protected removal —
+    // create_dir_all would win, then set_restrictive_dir_permissions would
+    // fail with ENOENT once the close's removal landed in between the two.
     if let Some(adopted) = try_adopt_running_broker(&dir, &params)? {
         return Ok(adopted);
     }
@@ -426,6 +430,15 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     // (now-unlinked) old one. `broker_root()` is never removed, so a lock
     // there survives every `dir` removal in between.
     let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
+
+    // Create (or recreate) `dir` now that this call actually needs to write
+    // into it, entirely under the lock: acp_close takes this same lock
+    // around its own remove_broker_dir (see there), so from here on a
+    // concurrent close cannot delete `dir` out from under the
+    // write-launch-json-then-spawn sequence below.
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| broker_error(-32070, format!("broker dir failed: {error}")))?;
+    set_restrictive_dir_permissions(&dir)?;
 
     // Someone else may have spawned a replacement while this call waited
     // for the lock above.
@@ -601,6 +614,15 @@ fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
             serde_json::to_value(&params).expect("close params serialize"),
         )?;
     }
+    // Coordinate with acp_open's own use of this same lock (see there): a
+    // concurrent opener that already holds it — writing launch.json, about
+    // to spawn — must finish and either see this removal on its next
+    // attempt or be the one this call waits behind, not have its own
+    // half-written directory deleted out from under it. Held only around
+    // the removal itself, not the close IPC above, so this call isn't
+    // blocked waiting on a slow supervisor round trip that never touches
+    // the directory's files.
+    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
     remove_broker_dir(&dir)?;
     Ok(json!({ "ok": true }))
 }

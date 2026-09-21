@@ -259,6 +259,78 @@ fn the_open_lock_file_survives_broker_close_and_removal() {
     );
 }
 
+/// Moving the lock outside the removable directory (previous test) only
+/// helps if `acp_close`'s removal and `acp_open`'s spawn sequence actually
+/// take the same lock. Without that, a close racing a concurrent reopen can
+/// delete the directory while the reopen is mid-write (`launch.json`,
+/// spawning) — failing the reopen with `ENOENT`, or deleting the
+/// newly-spawned broker's own files, even though each side individually
+/// held (or would have held) the lock at some point.
+///
+/// Both sides here close-then-reopen, matching `ACPBrokerClient.start()`'s
+/// actual pattern (a close failure is best-effort and always followed by a
+/// reopen) — a bare close racing an unrelated open is not the scenario this
+/// guards: adopting a broker a moment before an unrelated legitimate close
+/// removes it is expected behavior with or without this fix, not a bug, so
+/// asserting a survivor after *that* race would be asserting the wrong
+/// thing. Here, every participant unconditionally reopens, so at least one
+/// of them is guaranteed to observe (and if needed, restore) a replacement.
+///
+/// As with the concurrent-open test above, the assertions hold regardless
+/// of how the race actually interleaves — this is the regression case, not
+/// a proof the race is exercised on every run.
+#[test]
+fn concurrent_close_then_reopen_pairs_do_not_corrupt_the_broker_directory() {
+    let fixture = Fixture::new("close-then-reopen-race");
+    let mut setup = Helper::start(&fixture.home);
+    let opened = setup.request("acp/open", fixture.open_params("broker-close-reopen", 0));
+    let generation = opened["snapshot"]["metadata"]["generation"].clone();
+    drop(setup);
+
+    let mut helper_a = Helper::start(&fixture.home);
+    let mut helper_b = Helper::start(&fixture.home);
+    let close_params_a = json!({ "brokerId": "broker-close-reopen", "generation": generation });
+    let close_params_b = close_params_a.clone();
+    let reopen_params_a = fixture.open_params("broker-close-reopen", 0);
+    let reopen_params_b = reopen_params_a.clone();
+
+    let a = std::thread::spawn(move || {
+        // Best-effort, like ACPBrokerClient.start(): ignore whether this
+        // side's own close won the race, and always reopen after.
+        let _ = helper_a.raw_request("acp/close", close_params_a);
+        helper_a.request("acp/open", reopen_params_a)
+    });
+    let b = std::thread::spawn(move || {
+        let _ = helper_b.raw_request("acp/close", close_params_b);
+        helper_b.request("acp/open", reopen_params_b)
+    });
+    let open_a = a.join().expect("closer/reopener a");
+    let open_b = b.join().expect("closer/reopener b");
+
+    assert!(
+        open_a["snapshot"]["metadata"]["generation"].is_u64(),
+        "a's reopen must not fail even when its own close races b's: {open_a}"
+    );
+    assert!(
+        open_b["snapshot"]["metadata"]["generation"].is_u64(),
+        "b's reopen must not fail even when its own close races a's: {open_b}"
+    );
+
+    // Whichever way the race actually went, the broker must land in a
+    // single, fully consistent, queryable state afterward — not a
+    // half-removed or half-written directory, and not two independently
+    // spawned supervisors for the same broker id.
+    let mut verify = Helper::start(&fixture.home);
+    let list = verify.request("acp/list", json!({}));
+    assert_eq!(
+        list["brokers"].as_array().map(Vec::len),
+        Some(1),
+        "exactly one broker must remain after the race: {list}"
+    );
+    let adopted = verify.request("acp/open", fixture.open_params("broker-close-reopen", 0));
+    assert_eq!(adopted["adopted"], true, "the survivor must be adoptable: {adopted}");
+}
+
 #[cfg(unix)]
 #[test]
 fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {
