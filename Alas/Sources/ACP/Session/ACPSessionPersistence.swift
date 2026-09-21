@@ -288,6 +288,19 @@ actor ACPSessionPersistence {
     }
 
     @discardableResult
+    func setAuthStatus(
+        sessionId: String,
+        status: ACPAuthStatus?,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.setAuthStatus(sessionId: sessionId, status: status) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try operation()
+        return true
+    }
+
+    @discardableResult
     func setMCPPreamble(
         sessionId: String,
         pendingText: String?,

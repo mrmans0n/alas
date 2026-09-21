@@ -69,7 +69,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
-    private let authStatusCont: AsyncStream<ACPAuthStatus>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
@@ -80,7 +80,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
-    let authStatusUpdates: AsyncStream<ACPAuthStatus>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     private let stateLock = NSLock()
     private var generation: ACPBrokerGeneration?
@@ -211,7 +211,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         terminalRequests = AsyncStream { t = $0 }
         terminalsCont = t
 
-        var a: AsyncStream<ACPAuthStatus>.Continuation!
+        var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         authStatusUpdates = AsyncStream { a = $0 }
         authStatusCont = a
     }
@@ -707,7 +707,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
         case "_auth/status_update":
             if let decoded = try? JSONDecoder().decode(ACPAuthStatusUpdateParams.self, from: params.data) {
-                authStatusCont.yield(decoded.authStatus)
+                stateLock.lock()
+                unacknowledgedDurableEventCursors.insert(cursor)
+                stateLock.unlock()
+                authStatusCont.yield(.init(
+                    status: decoded.authStatus,
+                    durableConsumptionAcknowledgement: { [weak self] in
+                        self?.ackDurableEvent(cursor: cursor)
+                    }
+                ))
             }
         case "adapter/exit":
             cancelBackgroundPolling()

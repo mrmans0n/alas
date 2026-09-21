@@ -308,9 +308,13 @@ struct ACPBrokerClientTests {
 
         try await client.start()
 
-        let status = try await statusTask.value
-        #expect(status.kind == .none)
-        #expect(status.label == "Not logged in")
+        let event = try await statusTask.value
+        #expect(event.status.kind == .none)
+        #expect(event.status.label == "Not logged in")
+
+        #expect(await service.acks.isEmpty)
+        event.durableConsumptionAcknowledgement?()
+        try await waitUntil { await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)] }
     }
 
     @Test func adapterExitNotificationFinishesUpdateStream() async throws {

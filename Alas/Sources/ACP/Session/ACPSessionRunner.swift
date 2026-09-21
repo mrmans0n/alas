@@ -327,8 +327,11 @@ final class ACPSessionRunner {
 
         authStatusTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            for await status in self.connection.client.authStatusUpdates {
-                self.applyAuthStatus(status)
+            for await event in self.connection.client.authStatusUpdates {
+                self.applyAuthStatus(
+                    event.status,
+                    acknowledging: event.durableConsumptionAcknowledgement
+                )
             }
         }
 
@@ -538,7 +541,10 @@ final class ACPSessionRunner {
     /// reporting it has no signed-in credentials yet — so this shows the
     /// existing sign-in banner without tearing the runner/connection down.
     /// A later update reporting a signed-in kind clears the banner again.
-    private func applyAuthStatus(_ status: ACPAuthStatus) {
+    private func applyAuthStatus(
+        _ status: ACPAuthStatus,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
         session.authStatus = status
         if status.kind == .none {
             session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
@@ -548,9 +554,32 @@ final class ACPSessionRunner {
         // Persisted so an app restart can restore it before any attach
         // happens: a broker-adopted reattach serves a cached `initialize`
         // and never re-emits this notification for that attach.
+        //
+        // Fenced like every other runner-owned mutation: during a
+        // cross-window takeover this runner can still be draining a
+        // buffered status after its lease was replaced. Without the fence,
+        // that stale write could land after the new owner already
+        // persisted a newer status and silently overwrite it.
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
         let sessionId = sessionId
-        enqueuePersistence { persistence in
-            try await persistence.setAuthStatus(sessionId: sessionId, status: status)
+        if let acknowledgement {
+            // Hold the broker's replay cursor back — via `acknowledgement`,
+            // called only once this write actually lands — until the
+            // status is durable, so a crash between delivery and
+            // persistence doesn't cause the next process's replay to skip
+            // this notification and restore a stale or nil status.
+            enqueuePersistence({ persistence in
+                try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
+            }
         }
     }
 

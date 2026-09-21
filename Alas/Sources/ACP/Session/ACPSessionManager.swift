@@ -3245,6 +3245,17 @@ extension ACPSessionManager {
         session.currentModel = row.currentModel
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
+        session.authStatus = row.authStatus
+        // Mirrors never run their own attach/runner, so nothing else ever
+        // re-applies the `.needsAuth` semantics the writer's attach derives
+        // from a signed-out status — do it here too, or a mirror keeps
+        // showing whatever banner state it opened with even as the writer
+        // persists a real change.
+        if row.authStatus?.kind == ACPAuthStatus.Kind.none {
+            session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
+        } else if case .needsAuth = session.setupState {
+            session.setupState = .ready
+        }
         if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
             session.remoteSessionId = row.remoteSessionId
         }

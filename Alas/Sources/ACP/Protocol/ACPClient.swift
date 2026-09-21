@@ -92,7 +92,7 @@ protocol ACPClient: AnyObject {
     /// extension. Sent once right after `initialize` and again whenever the
     /// agent's auth state changes. Agents that don't support the extension
     /// simply never yield anything on this stream.
-    var authStatusUpdates: AsyncStream<ACPAuthStatus> { get }
+    var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> { get }
 
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
@@ -138,7 +138,7 @@ extension ACPClient {
         AsyncStream { $0.finish() }
     }
 
-    var authStatusUpdates: AsyncStream<ACPAuthStatus> {
+    var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> {
         AsyncStream { $0.finish() }
     }
 

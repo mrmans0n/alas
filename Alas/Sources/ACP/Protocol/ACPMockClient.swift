@@ -18,7 +18,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private let completionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
-    private let authStatusCont: AsyncStream<ACPAuthStatus>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
     private(set) var shutdownCount = 0
@@ -37,7 +37,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
-    let authStatusUpdates: AsyncStream<ACPAuthStatus>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
@@ -71,7 +71,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var t: AsyncStream<ACPTerminalRequest>.Continuation!
         self.terminalRequests = AsyncStream { t = $0 }
         self.terminalsCont = t
-        var a: AsyncStream<ACPAuthStatus>.Continuation!
+        var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { a = $0 }
         self.authStatusCont = a
     }
@@ -122,7 +122,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
     func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
-    func emitAuthStatus(_ status: ACPAuthStatus) { authStatusCont.yield(status) }
+    func emitAuthStatus(
+        _ status: ACPAuthStatus,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        authStatusCont.yield(.init(
+            status: status,
+            durableConsumptionAcknowledgement: durableConsumptionAcknowledgement
+        ))
+    }
 
     var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {

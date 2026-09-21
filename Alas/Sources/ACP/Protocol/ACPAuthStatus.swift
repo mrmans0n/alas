@@ -90,3 +90,19 @@ extension ACPAuthStatus.Kind: Codable {
 struct ACPAuthStatusUpdateParams: Codable, Equatable {
     let authStatus: ACPAuthStatus
 }
+
+/// A single `_auth/status_update` delivery, paired with an optional durable
+/// acknowledgement. On a broker connection, the broker replays this
+/// notification (and holds its acknowledged-cursor back) until the
+/// consumer calls this closure — normally once the status has actually
+/// been persisted, so a crash between delivery and persistence doesn't
+/// silently drop the notification for the next process's replay.
+struct ACPAuthStatusEvent {
+    let status: ACPAuthStatus
+    let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+
+    init(status: ACPAuthStatus, durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
+        self.status = status
+        self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
+    }
+}

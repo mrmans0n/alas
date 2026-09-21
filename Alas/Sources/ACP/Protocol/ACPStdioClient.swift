@@ -12,7 +12,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
-    private let authStatusCont: AsyncStream<ACPAuthStatus>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     var yieldedUpdateCount: Int {
@@ -29,7 +29,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
-    let authStatusUpdates: AsyncStream<ACPAuthStatus>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     private let stateLock = NSLock()
     private var nextId: Int = 0
@@ -93,7 +93,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
 
-        var asC: AsyncStream<ACPAuthStatus>.Continuation!
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { asC = $0 }
         self.authStatusCont = asC
     }
@@ -143,7 +143,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
 
-        var asC: AsyncStream<ACPAuthStatus>.Continuation!
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { asC = $0 }
         self.authStatusCont = asC
     }
@@ -274,7 +274,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 JSONRPCEnvelope<ACPAuthStatusUpdateParams>.self,
                 from: data
             ), let p = env.params {
-                authStatusCont.yield(p.authStatus)
+                acknowledgeAfterDispatch = false
+                authStatusCont.yield(.init(
+                    status: p.authStatus,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
             }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),

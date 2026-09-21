@@ -101,15 +101,22 @@ struct ACPStdioClientTests {
         let transport = FakeJSONRPCTransport()
         let client = ACPStdioClient.makeForTesting(transport: transport)
         try client.start()
+        let consumed = ResultBox<Bool>()
 
         transport.send(frame: Data(#"""
         {"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"none","label":"Not logged in"}}}
-        """#.utf8))
+        """#.utf8)) {
+            consumed.set(true)
+        }
 
         var iterator = client.authStatusUpdates.makeAsyncIterator()
-        let status = try #require(await iterator.next())
-        #expect(status.kind == .none)
-        #expect(status.label == "Not logged in")
+        let event = try #require(await iterator.next())
+        #expect(event.status.kind == .none)
+        #expect(event.status.label == "Not logged in")
+        #expect(consumed.get() == nil)
+
+        event.durableConsumptionAcknowledgement?()
+        #expect(consumed.get() == true)
         await client.shutdown()
     }
 
