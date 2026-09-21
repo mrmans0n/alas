@@ -401,6 +401,30 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.streamingState == .streaming)
     }
 
+    @Test("queued Cursor plans preserve the original turn state")
+    func queuedPlanResponsesRestoreOriginalTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        client.emitPlan(id: .string("plan-2"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-2") }
+        #expect(session.transcript.streamingState == .awaitingInput)
+
+        coordinator.respondToPlan(
+            id: .string("plan-2"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+        try await waitUntil { client.planResponses[.string("plan-2")] != nil }
+        #expect(session.transcript.streamingState == .idle)
+    }
+
     @Test("Cursor plan awaiting notifies the input owner")
     func planAwaitingNotifiesInputOwner() async throws {
         var notified: ACPCursorPlanRequest?

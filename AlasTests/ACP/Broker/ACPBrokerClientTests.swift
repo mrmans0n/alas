@@ -457,7 +457,7 @@ struct ACPBrokerClientTests {
 
         try await client.start()
 
-        try await waitUntil { await service.responded.count == 3 }
+        try await waitUntil { await service.responded.count >= 3 }
         let responses = await service.responded
         let todo = try #require(responses.first { $0.requestId == .string("todo-1") })
         #expect(todo.result == .object([

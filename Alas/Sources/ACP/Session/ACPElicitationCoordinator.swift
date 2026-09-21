@@ -293,7 +293,7 @@ final class ACPElicitationCoordinator {
 
         session.transcript.pendingPlan = .init(id: request.id, params: request.params)
         if session.transcript.streamingState == .awaitingInput {
-            pendingPlanPreviousStreamingState = .streaming
+            pendingPlanPreviousStreamingState = pendingPlanPreviousStreamingState ?? .streaming
         } else {
             pendingPlanPreviousStreamingState = session.transcript.streamingState
             session.transcript.streamingState = .awaitingInput
