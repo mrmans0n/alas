@@ -143,6 +143,16 @@ final class RemotePeerManager {
     private func forgetGeneration(for serverId: String) -> Int {
         forgetGenerationByServerId[serverId] ?? 0
     }
+    /// The last real wall-clock time `forget` removed a peer for a given
+    /// `serverId`. `addPeer` cannot snapshot a per-identity generation
+    /// before its own network round trip the way `handleInboundPeer` can —
+    /// it does not learn which identity it is even talking to until the
+    /// reply names it — so it instead records when IT started and, once
+    /// the identity is known, checks whether that identity was forgotten
+    /// at or after that time. This also catches a peer created by a
+    /// completely unrelated, concurrent INBOUND pairing for the same
+    /// identity that this attempt could never have known about in advance.
+    @ObservationIgnored private var lastForgottenAt: [String: Date] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -200,14 +210,17 @@ final class RemotePeerManager {
         // moments later on "revoked" would blame the wrong machine, so refuse
         // before minting a code and point the user at their own settings.
         guard !me.origins.isEmpty else { return .noLocalAddress }
-        // Every peer identity known before the network round trip below, so
-        // a Forget landing while it's in flight can still be detected once
-        // the far side's real `serverId` comes back — matched by identity,
-        // not by origin: a link's own `hosts` param includes every address
-        // this Mac advertises, localhost among them, so unrelated peers
-        // commonly share an origin and a match on that alone could name the
-        // wrong one.
-        let priorServerIds = Set(peers.map(\.serverId))
+        // The far side's real identity is not known until the reply names
+        // it, so unlike `handleInboundPeer` this cannot snapshot a
+        // per-identity generation before the round trip below — there is
+        // no identity yet to key it by. Recording when THIS attempt itself
+        // started, compared against `lastForgottenAt` once the identity is
+        // known, catches the same race anyway: a Forget landing while this
+        // round trip is in flight, whether for a peer this same attempt
+        // would have re-paired or one a completely unrelated, concurrent
+        // INBOUND pairing created for the identity this reply turns out to
+        // name.
+        let startedAt = Date()
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
         switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
@@ -223,16 +236,18 @@ final class RemotePeerManager {
                 endAttempt(counterCode: counterCode)
                 return .unreachable
             }
-            // This identity existed before the round trip started but is
-            // gone now: the user forgot it while this attempt's network
-            // round trip was still in flight. `previousState` below would
-            // find nothing and `upsert` would happily recreate the peer
-            // from this now-unwanted reply, silently undoing that Forget.
-            // Bail out before touching `peers` at all; any reciprocal
-            // confirmation that still arrives for this counter-code is
-            // caught by `endAttempt`'s own orphan check, since no peer row
-            // exists for this identity anymore.
-            if priorServerIds.contains(serverId), !peers.contains(where: { $0.serverId == serverId }) {
+            // This identity was forgotten at or after this attempt's own
+            // start: either the user forgot a peer this attempt would have
+            // re-paired, or a peer a concurrent INBOUND pairing created for
+            // it while this attempt's own round trip was in flight.
+            // `previousState` below would find nothing and `upsert` would
+            // happily recreate the peer from this now-unwanted reply,
+            // silently undoing that Forget. Bail out before touching
+            // `peers` at all; any reciprocal confirmation that still
+            // arrives for this counter-code is caught by `endAttempt`'s
+            // own orphan check, since no peer row exists for this identity
+            // anymore.
+            if let forgottenAt = lastForgottenAt[serverId], forgottenAt >= startedAt {
                 endAttempt(counterCode: counterCode)
                 return .cancelled
             }
@@ -442,6 +457,9 @@ final class RemotePeerManager {
         // whichever attempt just created the row being forgotten here —
         // can tell its own result is now stale and must not upsert it back.
         forgetGenerationByServerId[peer.serverId, default: 0] += 1
+        // Real wall-clock time — never `now()`, which tests freeze — so
+        // `addPeer`'s own comparison against when it started is meaningful.
+        lastForgottenAt[peer.serverId] = Date()
         // Revoke by the peer's identity rather than by the stored
         // `localDeviceId`. That id is a snapshot taken before an HTTP round
         // trip, and a peer redeem adds a device row without removing earlier

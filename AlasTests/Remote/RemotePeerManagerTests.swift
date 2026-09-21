@@ -605,6 +605,42 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
     }
 
+    // addPeer cannot snapshot a per-identity generation before its own
+    // network round trip the way handleInboundPeer can — it does not learn
+    // which identity it is even talking to until the reply names it. A
+    // peer created by a completely unrelated, CONCURRENT inbound pairing
+    // for that same identity — one this attempt could never have known
+    // about in advance — must still not be resurrected if the user forgets
+    // it while this attempt's own round trip is still in flight.
+    @Test func addPeerDoesNotResurrectAPeerForgottenFromAConcurrentInboundPairing() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        // Delays only addPeer's own outbound leg (redeeming "ABC123", from
+        // linkFromA) — the concurrent inbound pairing's own reciprocal leg
+        // (redeeming "CC") resolves immediately, so it and its Forget both
+        // land well before addPeer's own reply comes back.
+        let pairer = RemotePeerPairer(fetch: { req in
+            let body = req.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if (body?["code"] as? String) == "ABC123" {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+            return (Data(#"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(pairing: pairing, pairer: pairer, links: Links())
+        manager.connectAll()
+        Task {
+            guard let inbound = try? pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a") else { return }
+            await manager.handleInboundPeer(RemotePeerPairingRequest(
+                peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "CC",
+                localDeviceId: inbound.deviceId, redeemedCode: "XYZ"))
+            guard let peer = manager.peers.first(where: { $0.serverId == "srv-a" }) else { return }
+            manager.forget(peerId: peer.id)
+        }
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .cancelled)
+        #expect(manager.peers.isEmpty)
+    }
+
     // The same in-flight-Forget race, but the far side's reciprocal call
     // also lands — proving it is revoked rather than silently
     // re-authorizing the peer the user just removed.
