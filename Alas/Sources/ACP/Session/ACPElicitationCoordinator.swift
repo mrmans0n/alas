@@ -10,6 +10,7 @@ final class ACPElicitationCoordinator {
     private let onInputAwaiting: (ACPSession, ACPUserInputRequest) -> Void
     private let onInputResolved: () -> Void
     private let onPlanRejected: (String) -> Void
+    private let onPlanAwaiting: (ACPSession, ACPCursorPlanRequest) -> Void
     private var questionsTask: Task<Void, Never>?
     private var plansTask: Task<Void, Never>?
     private var elicitationsTask: Task<Void, Never>?
@@ -40,6 +41,7 @@ final class ACPElicitationCoordinator {
         navigateURL: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
+        onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
         onPlanRejected: @escaping (String) -> Void = { _ in }
     ) {
         self.session = session
@@ -48,6 +50,7 @@ final class ACPElicitationCoordinator {
         self.navigateURL = navigateURL
         self.onInputAwaiting = onInputAwaiting
         self.onInputResolved = onInputResolved
+        self.onPlanAwaiting = onPlanAwaiting
         self.onPlanRejected = onPlanRejected
     }
 
@@ -157,6 +160,7 @@ final class ACPElicitationCoordinator {
             onPlanRejected(reason)
         }
         presentNextPlan()
+        notifiedRequestIds.remove(id)
         restoreStreamingStateIfResolved()
     }
 
@@ -275,6 +279,9 @@ final class ACPElicitationCoordinator {
             return
         }
         pendingPlans.append(request)
+        if notifiedRequestIds.insert(request.id).inserted {
+            onPlanAwaiting(session, request)
+        }
         presentNextPlan()
     }
 
@@ -285,8 +292,8 @@ final class ACPElicitationCoordinator {
         else { return }
 
         session.transcript.pendingPlan = .init(id: request.id, params: request.params)
-        if session.transcript.streamingState == .idle {
-            pendingPlanPreviousStreamingState = .idle
+        if session.transcript.streamingState != .awaitingInput {
+            pendingPlanPreviousStreamingState = session.transcript.streamingState
             session.transcript.streamingState = .awaitingInput
         }
     }
@@ -297,6 +304,7 @@ final class ACPElicitationCoordinator {
         session.transcript.pendingPlan = nil
         restoreStreamingStateIfResolved()
         for request in pending {
+            notifiedRequestIds.remove(request.id)
             client.respondToPlan(id: request.id, response: .init(outcome: .cancelled))
         }
     }

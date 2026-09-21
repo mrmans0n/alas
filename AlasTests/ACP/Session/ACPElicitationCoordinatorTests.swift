@@ -364,6 +364,40 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    @Test("Cursor plan preserves the active turn state after response")
+    func planResponseRestoresActiveTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.transcript.streamingState = .streaming
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+        #expect(session.transcript.streamingState == .awaitingInput)
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(session.transcript.streamingState == .streaming)
+    }
+
+    @Test("Cursor plan awaiting notifies the input owner")
+    func planAwaitingNotifiesInputOwner() async throws {
+        var notified: ACPCursorPlanRequest?
+        let (coordinator, session, client) = makeCoordinator(onPlanAwaiting: { _, request in
+            notified = request
+        })
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        #expect(notified?.id == .string("plan-1"))
+        #expect(notified?.params.toolCallId == "plan-call")
+    }
+
     @Test("Cursor plan rejection preserves the supplied composer reason")
     func rejectsCursorPlan() async throws {
         var rejectionReason: String?
@@ -405,6 +439,7 @@ struct ACPElicitationCoordinatorTests {
         navigateURL: @escaping (URL) -> Void = { _ in },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
+        onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
         onPlanRejected: @escaping (String) -> Void = { _ in }
     ) -> (ACPElicitationCoordinator, ACPSession, ACPMockClient) {
         let session = ACPSession(id: "local", agentId: "codex", worktreeId: "wt", title: "Test")
@@ -417,6 +452,7 @@ struct ACPElicitationCoordinatorTests {
                 navigateURL: navigateURL,
                 onInputAwaiting: onInputAwaiting,
                 onInputResolved: onInputResolved,
+                onPlanAwaiting: onPlanAwaiting,
                 onPlanRejected: onPlanRejected
             ),
             session,

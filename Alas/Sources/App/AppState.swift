@@ -8604,6 +8604,15 @@ final class AppState {
         }
     }
 
+    private func acpPlanNotificationBody(from request: ACPCursorPlanRequest) -> String? {
+        let name = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        let overview = request.params.overview.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !overview.isEmpty { return overview }
+        let plan = request.params.plan.trimmingCharacters(in: .whitespacesAndNewlines)
+        return plan.isEmpty ? nil : plan
+    }
+
     private func notificationRequestId(for request: ACPUserInputRequest) -> String {
         switch request.source {
         case .cursor(let id, _), .elicitation(let id, _):
@@ -11091,6 +11100,20 @@ final class AppState {
                     requestId: self.notificationRequestId(for: request)
                 )
             },
+            onPlanAwaiting: { [weak self] session, request in
+                guard let self,
+                      self.config.harness.notifyOnAwaiting,
+                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id)
+                else { return }
+                self.harness.notifications.notifyACPQuestion(
+                    agent: ACPHarnessBridge.agentKind(for: session.agentId),
+                    body: self.acpPlanNotificationBody(from: request),
+                    projectId: resolved.project.id,
+                    worktreeId: resolved.worktree.id,
+                    sessionId: session.id,
+                    requestId: self.notificationRequestId(for: request.id)
+                )
+            },
             onDelegatedMessageAvailable: { [weak self] sessionId in
                 Task { @MainActor [weak self] in
                     guard let self, let manager = self.acpManagers[owner] else { return }
@@ -11489,6 +11512,20 @@ final class AppState {
                     worktreeId: owner.storageKey,
                     sessionId: session.id,
                     requestId: self.notificationRequestId(for: request),
+                    owner: owner
+                )
+            },
+            onPlanAwaiting: { [weak self] session, request in
+                guard let self,
+                      self.config.harness.notifyOnAwaiting
+                else { return }
+                self.harness.notifications.notifyACPQuestion(
+                    agent: ACPHarnessBridge.agentKind(for: session.agentId),
+                    body: self.acpPlanNotificationBody(from: request),
+                    projectId: checkout.id.uuidString,
+                    worktreeId: owner.storageKey,
+                    sessionId: session.id,
+                    requestId: self.notificationRequestId(for: request.id),
                     owner: owner
                 )
             },
