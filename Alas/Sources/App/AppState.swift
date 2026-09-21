@@ -469,8 +469,13 @@ final class AppState {
                 RemotePeerManager.LocalIdentity(
                     serverId: self?.config.remote.serverId ?? "",
                     name: self?.remoteDisplayName ?? "Alas",
-                    // Loopback is meaningless to another Mac; everything else is in rank order.
-                    origins: self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url) ?? [])
+                    // Loopback is meaningless to another Mac; everything else is
+                    // in rank order, best first. Capped to the same bound the
+                    // receiving Mac enforces on any advertisement — sending
+                    // more than that would have it reject a genuine peer with
+                    // `originRejected`, since it can never tell "too many
+                    // legitimate addresses" apart from a hostile advertisement.
+                    origins: Array(self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url).prefix(RemotePairingLink.maxOrigins) ?? []))
             })
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)

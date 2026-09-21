@@ -355,7 +355,10 @@ struct RemotePeerManagerTests {
         #expect(peer.id == "p1")
         #expect(peer.token == "tokA")
         #expect(peer.name == "Mac A")
-        #expect(peer.origins == ["http://10.0.0.1:8765", "http://10.0.0.9:8765"])
+        // The fresh advertisement's origins come first — see
+        // rePairingCapsTheAccumulatedOriginsList for why — with the
+        // previous record's origin backfilled after.
+        #expect(peer.origins == ["http://10.0.0.9:8765", "http://10.0.0.1:8765"])
         #expect(peer.lastOrigin == "http://10.0.0.9:8765")
         #expect(peer.localDeviceId == "dev-a")
         #expect(store.saved == manager.peers)
@@ -705,6 +708,65 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
         #expect(revoked.contains(inbound.deviceId))
         #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
+    // A Mac with more advertised addresses than the shared bound (several
+    // interfaces plus configured allowed hosts) would otherwise have the
+    // receiving Mac reject the advertisement outright — it can never tell
+    // "too many legitimate addresses" apart from a hostile one.
+    @Test func addPeerCapsAdvertisedOriginsToTheSharedMaximum() async throws {
+        let manyOrigins = (1...12).map { "http://10.0.0.\($0):8765" }
+        let identity = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "Mac B", origins: manyOrigins)
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: Links(), identity: identity)
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        let sent = try body(of: try #require(requests.seen.first))
+        let ad = try #require(sent["peer"] as? [String: Any])
+        #expect(ad["origins"] as? [String] == Array(manyOrigins.prefix(RemotePairingLink.maxOrigins)))
+    }
+
+    // Mirrors the initiator-side origin cap, but for the responder pairing
+    // back to redeem the far side's counter-code.
+    @Test func handleInboundPeerCapsAdvertisedOriginsWhenPairingBack() async throws {
+        let manyOrigins = (1...12).map { "http://10.0.0.\($0):8765" }
+        let identity = RemotePeerManager.LocalIdentity(serverId: "srv-a", name: "Mac A", origins: manyOrigins)
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokB","serverId":"srv-b","name":"Mac B"}"#)], requests: requests),
+                                  links: Links(), identity: identity)
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.9:8765"], counterCode: "CC",
+            localDeviceId: "dev-b", redeemedCode: "ABC123"))
+        let sent = try body(of: try #require(requests.seen.first))
+        let ad = try #require(sent["peer"] as? [String: Any])
+        #expect(ad["origins"] as? [String] == Array(manyOrigins.prefix(RemotePairingLink.maxOrigins)))
+    }
+
+    // Each individual advertisement is capped, but repeated re-pairs across
+    // network changes append to the stored record without any overall
+    // bound. The fresh advertisement — already bounded, and including
+    // whatever address this exchange just confirmed works — is prioritized,
+    // with only the remaining capacity backfilled from the previous record.
+    @Test func rePairingCapsTheAccumulatedOriginsList() async throws {
+        let staleOrigins = (1...7).map { "http://old-\($0).example:8765" }
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: staleOrigins,
+                               lastOrigin: staleOrigins[0], token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-a", addedAt: Date(timeIntervalSince1970: 1))])
+        let freshOrigins = (1...5).map { "http://10.0.0.\($0):8765" }
+        let requests = Requests()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: Links())
+        manager.connectAll()
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
+        let hosts = freshOrigins.map(RemotePairingLink.encodeOrigin).joined(separator: ",")
+        let link = "http://10.0.0.1:8765/?code=ABC123&hosts=\(hosts)"
+        #expect(await manager.addPeer(link: link) == nil)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.origins.count == RemotePairingLink.maxOrigins)
+        #expect(Array(peer.origins.prefix(freshOrigins.count)) == freshOrigins)
     }
 
     // A confirmation that arrives with no addPeer attempt left waiting

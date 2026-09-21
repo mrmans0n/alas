@@ -146,11 +146,23 @@ final class RemotePeerManager {
 
     // MARK: - Pairing
 
+    /// `localIdentity()`, with its origins capped to `RemotePairingLink.maxOrigins`.
+    /// A Mac with more advertised addresses than that (several interfaces
+    /// plus configured allowed hosts) would otherwise send an advertisement
+    /// the receiving Mac rejects outright — it can never tell "too many
+    /// legitimate addresses" apart from a hostile one, so it enforces the
+    /// same bound on every advertisement it receives.
+    private func boundedIdentity() -> LocalIdentity {
+        let me = localIdentity()
+        return LocalIdentity(serverId: me.serverId, name: me.name,
+                             origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)))
+    }
+
     /// Pastes another Mac's pairing link: redeems its code there while
     /// offering a counter-code so that Mac pairs back with us.
     func addPeer(link: String) async -> AddError? {
         guard let parts = RemotePairingLink.parse(link) else { return .invalidLink }
-        let me = localIdentity()
+        let me = boundedIdentity()
         // With no advertisable address the counter-code is unusable: the far
         // side's pair-back finds nothing to dial, gives up, and revokes the
         // device it just minted for us. Reporting success here and failing
@@ -283,7 +295,7 @@ final class RemotePeerManager {
     /// only learn which local device record represents the peer.
     func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
         if let counterCode = request.counterCode {
-            let me = localIdentity()
+            let me = boundedIdentity()
             // Snapshot before the round trip below, mirroring addPeer's own
             // protection on the initiator side: pairing back can take up to
             // the full multi-origin timeout, and if the user forgets this
@@ -507,8 +519,21 @@ final class RemotePeerManager {
         // earned it — not applied here.)
         let peer: RemotePeer
         if let index = peers.firstIndex(where: { $0.serverId == serverId }) {
-            var merged = peers[index].origins
-            for origin in origins where !merged.contains(origin) { merged.append(origin) }
+            // The fresh advertisement goes first — it is already bounded to
+            // `RemotePairingLink.maxOrigins` upstream and always includes
+            // `lastOrigin`, the address this very exchange just confirmed
+            // works — and only the remaining capacity is backfilled with
+            // addresses from the PREVIOUS record, oldest fallbacks trimmed
+            // first. Without an overall cap, repeated re-pairs across
+            // network changes could accumulate an unbounded list even
+            // though each individual advertisement is capped, and
+            // `RemotePeerConnection` dials every one of them sequentially,
+            // each with its own timeout, before ever reaching a current
+            // address if the preferred one stops answering.
+            var merged = origins
+            for origin in peers[index].origins where !merged.contains(origin) && merged.count < RemotePairingLink.maxOrigins {
+                merged.append(origin)
+            }
             peers[index].name = name
             peers[index].origins = merged
             peers[index].lastOrigin = lastOrigin
