@@ -627,25 +627,35 @@ extension AppState {
         // The agent can still exit while the TUI is settling, and the
         // terminal outlives it. Re-ask rather than trusting the earlier
         // sighting: typing into the shell that took the session back would,
-        // with auto-send, run the prompt as a command.
+        // with auto-send, run the prompt as a command. Asked live, because
+        // the poll behind the loop above only refreshes once a second and
+        // the caller writes the moment this returns.
         do {
             try await Task.sleep(for: Self.scheduledPromptSettleDelay)
         } catch {
             return false
         }
-        return harness.activeHarnessBySession[sessionID] == expected
+        return scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID)
     }
 
-    /// Whether the schedule's agent is, right now, the process the detector
-    /// sees in that terminal. Asked again between typing and submitting,
-    /// because the gap between them is long enough for the agent to die and
+    /// Whether the schedule's agent is, at this instant, the foreground
+    /// process of that terminal. Asked immediately before each write,
+    /// because the gap around them is long enough for the agent to die and
     /// the shell to take the session back.
+    ///
+    /// The session's pid is read and classified here rather than reading
+    /// `activeHarnessBySession`. That map is refreshed by a poll that runs
+    /// once a second, so it can be a whole second out of date — several
+    /// times the pause before Enter, and the entire window this check
+    /// exists to cover.
     private func scheduledAgentOwnsTerminal(sessionID: String, agentID: String) -> Bool {
         // The readiness seam replaces the detector wholesale in tests, whose
         // sessions have no process to observe.
         if scheduledAgentReadiness != nil { return true }
-        guard let expected = expectedHarness(forAgentID: agentID) else { return false }
-        return harness.activeHarnessBySession[sessionID] == expected
+        guard let expected = expectedHarness(forAgentID: agentID),
+              let pid = harness.detector.foregroundPid(sessionId: sessionID)
+        else { return false }
+        return HarnessDetector.matchKind(pid: pid) == expected
     }
 
     /// Which harness the schedule's agent will appear as in its terminal, or

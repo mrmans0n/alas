@@ -21,10 +21,13 @@ struct RunScheduleEditorView: View {
     /// What the preview is measured from. It has to keep up with the clock,
     /// because saving anchors on the moment you press the button: a dialog
     /// left open at 09:00 would otherwise promise an hourly schedule at
-    /// 10:00 and then create one at 10:20. Coarse enough not to draw the
-    /// eye, fine enough to stay right to the displayed minute.
+    /// 10:00 and then create one at 10:20.
+    ///
+    /// Every second, so the displayed minute is the one saving would use.
+    /// The label only redraws when that minute changes, so this is not the
+    /// flicker a fast tick sounds like.
     @State private var now = Date()
-    @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @Environment(\.theme) private var theme
 
     private let calendar = Calendar.autoupdatingCurrent
