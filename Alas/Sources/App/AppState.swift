@@ -220,6 +220,14 @@ final class AppState {
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
         await RunScriptStore.discoverScripts(worktreeRoot: $0, remoteHost: $1)
     }
+    /// Whether the destination a scheduled composition is about to claim is
+    /// already taken. A remote project's worktree lives on its host's
+    /// filesystem, which `FileManager` cannot see, so the question has to go
+    /// to the host that will actually run `git worktree add`. Injectable so
+    /// tests can stand in for that host.
+    @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
+        await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
+    }
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
