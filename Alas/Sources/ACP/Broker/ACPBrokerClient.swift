@@ -62,6 +62,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
 
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
@@ -70,6 +71,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
@@ -175,6 +177,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         var p: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         permissionRequests = AsyncStream { p = $0 }
         permsCont = p
+
+        var cr: AsyncStream<JSONRPCID>.Continuation!
+        cancelRequests = AsyncStream { cr = $0 }
+        cancelRequestsCont = cr
 
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         questionRequests = AsyncStream { q = $0 }
@@ -481,6 +487,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         markTerminated()
         updatesCont.finish()
         permsCont.finish()
+        cancelRequestsCont.finish()
         questionsCont.finish()
         elicitationsCont.finish()
         elicitationCompletionsCont.finish()
@@ -674,6 +681,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case "elicitation/complete":
             if let decoded = try? JSONDecoder().decode(ACPElicitationCompleteParams.self, from: params.data) {
                 elicitationCompletionsCont.yield(decoded)
+            }
+        case "$/cancel_request":
+            if let decoded = try? JSONDecoder().decode(ACPCancelRequestParams.self, from: params.data) {
+                cancelRequestsCont.yield(decoded.id)
             }
         case "adapter/exit":
             cancelBackgroundPolling()

@@ -2126,7 +2126,8 @@ struct ACPSessionRunnerTests {
         async let decision = runner.policy.evaluate(
             scopeKey: "scope",
             options: params.options,
-            params: params)
+            params: params,
+            requestID: .number(1))
 
         // Give evaluate() a beat to register its continuation.
         try? await Task.sleep(for: .milliseconds(100))

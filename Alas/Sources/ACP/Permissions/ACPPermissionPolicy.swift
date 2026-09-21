@@ -13,13 +13,23 @@ final class ACPPermissionPolicy {
     /// Decides how to respond to a permission request. If the UI must be
     /// involved, `pendingPermission` is set on the session and the caller's
     /// continuation resumes once the user clicks. Returns the response to send.
+    ///
+    /// `requestID` is the real JSON-RPC id of this `session/request_permission`
+    /// call. It's recorded synchronously (before any `await`) so an inbound
+    /// `$/cancel_request` targeting it — via `cancelRequest(id:)` — is never
+    /// missed, even if it arrives while this call is still suspended in
+    /// `log.lookup` and hasn't parked a UI continuation yet.
     func evaluate(scopeKey: String,
                   options: [ACPPermissionOption],
-                  params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
+                  params: ACPPermissionRequestParams,
+                  requestID: JSONRPCID) async -> ACPPermissionResponse {
+        pendingRequestID = requestID
+        cancelledBeforeParked = false
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }
         if let logged = try? await log.lookup(sessionId: session.id, scopeKey: scopeKey) {
+            if cancelledBeforeParked { return .init(outcome: .cancelled) }
             switch logged {
             case .allow:
                 if let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
@@ -31,17 +41,35 @@ final class ACPPermissionPolicy {
                 }
             }
         }
+        if cancelledBeforeParked { return .init(outcome: .cancelled) }
         // No auto-decision — bind to UI.
         return await awaitUserDecision(scopeKey: scopeKey, params: params)
     }
 
     private var pendingContinuation: CheckedContinuation<ACPPermissionResponse, Never>?
+    private var pendingRequestID: JSONRPCID?
+    private var cancelledBeforeParked = false
 
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
         return await withCheckedContinuation { (c: CheckedContinuation<ACPPermissionResponse, Never>) in
             pendingContinuation = c
+        }
+    }
+
+    /// Called when an inbound `$/cancel_request` (OpenCode v2) targets
+    /// `id`. If a permission is already parked awaiting a user decision,
+    /// resolves it immediately as cancelled. Otherwise — `evaluate` is
+    /// still suspended in its auto-decision lookup — records the
+    /// cancellation so `evaluate` returns `.cancelled` itself instead of
+    /// parking a prompt nothing will ever dismiss.
+    func cancelRequest(id: JSONRPCID) {
+        guard id == pendingRequestID else { return }
+        if pendingContinuation != nil {
+            userCancelled()
+        } else {
+            cancelledBeforeParked = true
         }
     }
 
