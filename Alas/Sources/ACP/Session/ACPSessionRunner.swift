@@ -314,6 +314,7 @@ final class ACPSessionRunner {
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
                 self.connection.client.respondToPermission(id: id, response: response)
+                self.persistPermissionDecision(params: params, response: response)
             }
         }
 
@@ -581,6 +582,27 @@ final class ACPSessionRunner {
                 _ = try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
             }
         }
+    }
+
+    /// Folds the decoded `_meta.permission` presentation and the outcome
+    /// (auto-run, remembered decision, or user click — `evaluate` already
+    /// resolved all three the same way) into the matching persisted tool
+    /// call, so a later hydration of this transcript still shows the same
+    /// title/reason/chosen-option context. A no-op when there is nothing
+    /// to persist or the tool call row hasn't landed yet.
+    private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) {
+        let chosenOption: ACPPermissionOption?
+        switch response.outcome {
+        case .selected(let optionId): chosenOption = params.options.first { $0.optionId == optionId }
+        case .cancelled: chosenOption = nil
+        }
+        guard let index = session.mergePermissionDecision(
+            toolCallId: params.toolCall.toolCallId,
+            presentation: ACPPermissionPresentation(metadata: params.metadata),
+            chosenOption: chosenOption,
+            mcpServerName: params.toolCall.mcpServerName
+        ) else { return }
+        persistIndices([index], requiresLease: true)
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {

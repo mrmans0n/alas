@@ -810,6 +810,55 @@ final class ACPSession: ObservableObject, Identifiable {
         return AnyCodable(["contextCompaction": AnyCodable(facts)])
     }
 
+    /// Merges the decoded `_meta.permission` presentation and the user's
+    /// (or auto-run's) decision into the matching persisted tool call, so a
+    /// rehydrated transcript still carries the title/reason/chosen-option
+    /// context that drove the now-resolved prompt. A no-op — returning
+    /// `nil` — when there is nothing worth persisting (no `_meta`, no MCP
+    /// server name, no recorded decision) or the tool call row hasn't
+    /// landed in the transcript yet.
+    @MainActor
+    func mergePermissionDecision(
+        toolCallId: String,
+        presentation: ACPPermissionPresentation?,
+        chosenOption: ACPPermissionOption?,
+        mcpServerName: String?
+    ) -> Int? {
+        guard let facts = Self.permissionDecisionMetadata(
+            presentation: presentation, chosenOption: chosenOption, mcpServerName: mcpServerName
+        ) else { return nil }
+        return updateToolCall(id: toolCallId) { toolCall in
+            toolCall.metadata = Self.mergeMetadata(toolCall.metadata, facts)
+        }
+    }
+
+    private static func permissionDecisionMetadata(
+        presentation: ACPPermissionPresentation?,
+        chosenOption: ACPPermissionOption?,
+        mcpServerName: String?
+    ) -> AnyCodable? {
+        var facts: [String: AnyCodable] = [:]
+        if let presentation {
+            facts["version"] = AnyCodable(1)
+            if let title = presentation.title { facts["title"] = AnyCodable(title) }
+            if let description = presentation.description { facts["description"] = AnyCodable(description) }
+            facts["defaultToNo"] = AnyCodable(presentation.defaultToNo)
+        }
+        if let mcpServerName { facts["mcpServerName"] = AnyCodable(mcpServerName) }
+        if let chosenOption {
+            var decision: [String: AnyCodable] = [
+                "optionId": AnyCodable(chosenOption.optionId),
+                "kind": AnyCodable(chosenOption.kind),
+            ]
+            if let description = chosenOption.presentationDescription {
+                decision["description"] = AnyCodable(description)
+            }
+            facts["decision"] = AnyCodable(decision)
+        }
+        guard !facts.isEmpty else { return nil }
+        return AnyCodable(["permission": AnyCodable(facts)])
+    }
+
     /// Materialise held replay candidates of the given `kinds` as new rows
     /// (in a stable order), removing them from the buffer. Returns the
     /// indices appended so the caller can persist them. Called when the

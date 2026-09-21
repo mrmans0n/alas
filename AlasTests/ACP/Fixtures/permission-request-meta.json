@@ -1,0 +1,14 @@
+{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{
+  "sessionId":"sess-abc",
+  "toolCall":{"toolCallId":"tc-9","title":"bash","kind":"execute","name":"Bash","status":"pending",
+    "content":[{"type":"text","text":"swift build"}],
+    "_meta":{"claudeCode":{"mcpServer":{"name":"github","source":"user"}}}},
+  "options":[
+    {"optionId":"allow-once","name":"Allow once","kind":"allow_once",
+      "_meta":{"permission":{"version":1,"description":"Run this command one time"}}},
+    {"optionId":"allow-with-updates","name":"Always for this tool","kind":"allow_always"},
+    {"optionId":"reject","name":"Deny","kind":"reject_once",
+      "_meta":{"permission":{"version":1,"description":"Don't run this command"}}}
+  ],
+  "_meta":{"permission":{"version":1,"title":"Run command?","description":"Reason: needs shell access to build the project","defaultToNo":true}}
+}}

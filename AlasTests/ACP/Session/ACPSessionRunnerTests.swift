@@ -1604,6 +1604,79 @@ struct ACPSessionRunnerTests {
         #expect(mock.permissionResponses[.number(11)]?.outcome == .selected(optionId: "allow"))
     }
 
+    @Test("persists decoded _meta.permission presentation onto the resolved tool call")
+    func persistsPermissionPresentationOntoResolvedToolCall() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = PermissionOrderingClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.autoRunEnabled = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            incomingUpdateCoalesceNanos: 100_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.toolCall(.init(
+            toolCallId: "tc-permission",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil
+        )))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(
+            metadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "title": AnyCodable("Run command?"),
+                    "description": AnyCodable("Reason: needs shell access"),
+                    "defaultToNo": AnyCodable(true),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable]),
+            optionMetadata: AnyCodable([
+                "permission": AnyCodable([
+                    "version": AnyCodable(1),
+                    "description": AnyCodable("Run this command one time"),
+                ] as [String: AnyCodable]),
+            ] as [String: AnyCodable])
+        )
+
+        try await waitUntil {
+            mock.permissionResponses[.number(11)] != nil
+        }
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        let permission = try #require(persisted.metadata?.value as? [String: AnyCodable])
+        let facts = try #require(permission["permission"]?.value as? [String: AnyCodable])
+        #expect(facts["title"]?.value as? String == "Run command?")
+        #expect(facts["description"]?.value as? String == "Reason: needs shell access")
+        #expect(facts["defaultToNo"]?.value as? Bool == true)
+        let decision = try #require(facts["decision"]?.value as? [String: AnyCodable])
+        #expect(decision["optionId"]?.value as? String == "allow")
+        #expect(decision["description"]?.value as? String == "Run this command one time")
+    }
+
     @Test("user cancel flushes buffered updates before appending interruption notice")
     func userCancelFlushesBufferedUpdatesBeforeAppendingInterruptionNotice() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -3765,7 +3838,7 @@ private final class PermissionOrderingClient: ACPClient {
         updatesCont.yield(.init(sessionId: "s", update: update))
     }
 
-    func emitPermission() {
+    func emitPermission(metadata: AnyCodable? = nil, optionMetadata: AnyCodable? = nil) {
         let params = ACPPermissionRequestParams(
             sessionId: "s",
             toolCall: .init(
@@ -3779,9 +3852,10 @@ private final class PermissionOrderingClient: ACPClient {
                 rawOutput: nil
             ),
             options: [
-                .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+                .init(optionId: "allow", name: "Allow", kind: "allow_once", metadata: optionMetadata),
                 .init(optionId: "reject", name: "Reject", kind: "reject_once")
-            ]
+            ],
+            metadata: metadata
         )
         permissionsCont.yield((id: .number(11), params: params))
     }

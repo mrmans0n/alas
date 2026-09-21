@@ -761,6 +761,7 @@
 		62055BD147E504C658B93E20 /* ACPFirstRunConnectingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737A9A3D11EA28582CA5D061 /* ACPFirstRunConnectingView.swift */; };
 		6256EAEB315812ED4F4E9107 /* StageChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1874031C788ADB4398151FF1 /* StageChip.swift */; };
 		625DD4666D7788F537A3E853 /* ACPTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F84BC1A10866A165EA321719 /* ACPTranscriptTests.swift */; };
+		6278D485248274DF8DF03259 /* permission-request-meta.json in Resources */ = {isa = PBXBuildFile; fileRef = BA3763292E781FCA2AB207F1 /* permission-request-meta.json */; };
 		6291072E82FC282625FD1617 /* GitServiceCommitEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3AB3D6DF4A23648F0C45AC5 /* GitServiceCommitEditingTests.swift */; };
 		6294D44BE2DC7F96933F7C4B /* ACPMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99CD81CC540ACCF1132E62A8 /* ACPMCPServer.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
@@ -3369,6 +3370,7 @@
 		B9A252BAD78A56343D68E782 /* RemoteFileAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileAccessTests.swift; sourceTree = "<group>"; };
 		BA073916BEAD99DEB25DECB1 /* RemotePeer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePeer.swift; sourceTree = "<group>"; };
 		BA229AAD313284B119581F3D /* RepoConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoConfigStore.swift; sourceTree = "<group>"; };
+		BA3763292E781FCA2AB207F1 /* permission-request-meta.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "permission-request-meta.json"; sourceTree = "<group>"; };
 		BA5820BB012E55F3A0C1272B /* RightPaneGGStackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneGGStackTests.swift; sourceTree = "<group>"; };
 		BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingServiceTests.swift; sourceTree = "<group>"; };
 		BA6B1D3B6A09D9298B55F76B /* TabBarToolbarPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarToolbarPresentationTests.swift; sourceTree = "<group>"; };
@@ -5875,6 +5877,7 @@
 				8526C9DB63760BDD2CE998BD /* fs-write.json */,
 				3253B229B757C725B7747249 /* initialize-request.json */,
 				2463B784210156F489A13FAC /* initialize-response.json */,
+				BA3763292E781FCA2AB207F1 /* permission-request-meta.json */,
 				C48DB0098D71F26ABF594615 /* permission-request.json */,
 				22677ECD3E098EBE6389D776 /* session-new-request.json */,
 				E8A63557B4F06AA00761B547 /* session-new-response-with-config-options.json */,
@@ -7183,6 +7186,7 @@
 				4896E5C8D1D4A5C0EC7473BF /* fs-write.json in Resources */,
 				D76AE9874386832FF4C89E6E /* initialize-request.json in Resources */,
 				5C86AEAEA5497DBF5FD7D604 /* initialize-response.json in Resources */,
+				6278D485248274DF8DF03259 /* permission-request-meta.json in Resources */,
 				10190501C79554DA17FBC5F7 /* permission-request.json in Resources */,
 				E867128A3FF1EFD04C2D65E4 /* session-new-request.json in Resources */,
 				3C8FAA4464E4D928F1DC6C91 /* session-new-response-with-config-options.json in Resources */,
