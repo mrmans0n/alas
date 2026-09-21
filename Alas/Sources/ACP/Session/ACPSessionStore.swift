@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 15
+    static let targetSchemaVersion = 16
     let path: String
     let db: SQLiteDatabase
 
@@ -42,6 +42,7 @@ final class ACPSessionStore {
         if current < 13 { try migrate_to_v13() }
         if current < 14 { try migrate_to_v14() }
         if current < 15 { try migrate_to_v15() }
+        if current < 16 { try migrate_to_v16() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -252,6 +253,27 @@ final class ACPSessionStore {
         )
         """)
     }
+
+    /// Transcripts of native subagents (child ACP sessions). Kept out of
+    /// `messages` because a child has no `sessions` row of its own — the
+    /// parent's row is what it lives and dies with.
+    private func migrate_to_v16() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS subagent_messages (
+          id                   TEXT PRIMARY KEY,
+          session_id           TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          subagent_session_id  TEXT NOT NULL,
+          kind                 TEXT NOT NULL,
+          seq                  INTEGER NOT NULL,
+          payload              BLOB NOT NULL,
+          created_at           INTEGER NOT NULL
+        )
+        """)
+        try db.exec("""
+        CREATE INDEX IF NOT EXISTS subagent_messages_session_idx
+        ON subagent_messages(session_id, subagent_session_id, seq)
+        """)
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -306,6 +328,64 @@ struct ACPStoredMessage: Equatable, Sendable {
     let seq: Int64
     let payload: Data
     let createdAt: Int64
+}
+
+/// One row of a native subagent's transcript. `seq` is the child-local
+/// index, so a row is identified by (parent session, child session, seq).
+struct ACPStoredSubagentMessage: Equatable, Sendable {
+    let id: String
+    let sessionId: String
+    let subagentSessionId: String
+    let kind: String
+    let seq: Int64
+    let payload: Data
+    let createdAt: Int64
+
+    static func rowId(sessionId: String, subagentSessionId: String, seq: Int64) -> String {
+        "sub-\(sessionId)-\(subagentSessionId)-\(seq)"
+    }
+}
+
+extension ACPSessionStore {
+    func upsertSubagentMessages(_ messages: [ACPStoredSubagentMessage]) throws {
+        for message in messages {
+            try db.exec("""
+            INSERT INTO subagent_messages
+              (id, session_id, subagent_session_id, kind, seq, payload, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                seq = excluded.seq,
+                payload = excluded.payload
+            """, bindings: [
+                message.id,
+                message.sessionId,
+                message.subagentSessionId,
+                message.kind,
+                message.seq,
+                message.payload,
+                message.createdAt
+            ])
+        }
+    }
+
+    func loadSubagentMessages(sessionId: String) throws -> [ACPStoredSubagentMessage] {
+        let rows = try db.query("""
+        SELECT id, session_id, subagent_session_id, kind, seq, payload, created_at
+        FROM subagent_messages WHERE session_id = ?
+        ORDER BY subagent_session_id ASC, seq ASC
+        """, bindings: [sessionId])
+        return rows.map { r in
+            ACPStoredSubagentMessage(
+                id: r["id"] as? String ?? "",
+                sessionId: r["session_id"] as? String ?? "",
+                subagentSessionId: r["subagent_session_id"] as? String ?? "",
+                kind: r["kind"] as? String ?? "",
+                seq: (r["seq"] as? Int64) ?? 0,
+                payload: (r["payload"] as? Data) ?? Data(),
+                createdAt: (r["created_at"] as? Int64) ?? 0)
+        }
+    }
 }
 
 struct ACPStoredComposerDraft: Equatable, Sendable {

@@ -99,13 +99,27 @@ actor ACPSessionHydrator {
         }
         let recent = (try? store.recentSessions()) ?? []
 
+        // Child transcripts, in child-local order. A session that never
+        // spawned a subagent reads an empty table and pays one query.
+        var subagentMessages: [ACPHydratedSubagentMessage] = []
+        for stored in (try? store.loadSubagentMessages(sessionId: sessionId)) ?? [] {
+            guard let wire = try? ACPMessageWire.decode(
+                kind: stored.kind, payload: stored.payload, decoder: decoder)
+            else { continue }
+            subagentMessages.append(.init(
+                subagentSessionId: stored.subagentSessionId,
+                wire: wire,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(stored.createdAt))))
+        }
+
         return HydrationResult(
             row: row,
             messages: messages,
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
-            recent: recent)
+            recent: recent,
+            subagentMessages: subagentMessages)
     }
 }
 
@@ -119,6 +133,27 @@ struct HydrationResult: Sendable {
     let draft: ACPComposerDraft?
     let forkRecord: ACPSessionForkRecord?
     let recent: [ACPSessionRow]
+    /// Child transcripts of the session's native subagents, flattened and
+    /// tagged with their child session id.
+    let subagentMessages: [ACPHydratedSubagentMessage]
+
+    init(
+        row: ACPSessionRow,
+        messages: [ACPHydratedMessage],
+        queue: [QueuedPrompt],
+        draft: ACPComposerDraft?,
+        forkRecord: ACPSessionForkRecord?,
+        recent: [ACPSessionRow],
+        subagentMessages: [ACPHydratedSubagentMessage] = []
+    ) {
+        self.row = row
+        self.messages = messages
+        self.queue = queue
+        self.draft = draft
+        self.forkRecord = forkRecord
+        self.recent = recent
+        self.subagentMessages = subagentMessages
+    }
 
     var wireMessages: [ACPMessageWire] { messages.map(\.wire) }
 
@@ -141,7 +176,8 @@ struct HydrationResult: Sendable {
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
-            recent: recent)
+            recent: recent,
+            subagentMessages: subagentMessages)
     }
 
     func replacingRecent(_ recent: [ACPSessionRow]) -> HydrationResult {
@@ -151,8 +187,16 @@ struct HydrationResult: Sendable {
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
-            recent: recent)
+            recent: recent,
+            subagentMessages: subagentMessages)
     }
+}
+
+/// One persisted child-transcript row, decoded into its Sendable wire form.
+struct ACPHydratedSubagentMessage: Sendable {
+    let subagentSessionId: String
+    let wire: ACPMessageWire
+    let createdAt: Date
 }
 
 struct ACPMirrorMessageFingerprint: Sendable, Equatable {

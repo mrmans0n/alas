@@ -1,0 +1,159 @@
+import SwiftUI
+
+/// A native subagent in the parent transcript: one collapsible row showing
+/// the child's name, task and live state, expanding to its transcript
+/// inline.
+///
+/// The child transcript is rendered nested rather than tiled as sibling
+/// rows (the way an expanded tool-call bundle is). A bundle's members are
+/// the parent's own messages, so the scroller needs real per-message rows
+/// for them; a child session's messages are not parent rows at all, and
+/// giving them transcript indices would corrupt every anchor, fork
+/// boundary and window calculation that maps an index to a parent message.
+struct ACPSubagentRowView: View {
+    let descriptor: ACPSubagentRowDescriptor
+    /// The live child transcript. Nil while the run has not been restored
+    /// (a mirror snapshot, or a row from a session whose child rows were
+    /// pruned) — the header still renders from the persisted descriptor.
+    @ObservedObject var run: ACPSubagentRun
+    let typography: ACPChatTypography
+    let trustedImageRoot: URL?
+    var onCancel: (() -> Void)?
+
+    @State private var expanded = false
+    @Environment(\.theme) private var theme
+
+    private var state: ACPSubagentState { run.state }
+
+    var body: some View {
+        ACPToolCallGroupLane {
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                if expanded {
+                    childTranscript
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    Text(run.displayName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-muted"))
+                    Text(ACPSubagentRowPolicy.stateLabel(for: state))
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    if let summary = ACPSubagentRowPolicy.summary(
+                        task: run.task,
+                        messageCount: run.messages.count
+                    ) {
+                        Text(summary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-faint"))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    if ACPSubagentRowPolicy.showsSpinner(state: state) {
+                        Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ACPSubagentRowPolicy.disclosureLabel(
+                expanded: expanded,
+                messageCount: run.messages.count))
+            Spacer(minLength: 6)
+            if let onCancel, ACPSubagentRowPolicy.showsCancel(
+                state: state,
+                capabilities: run.capabilities
+            ) {
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .accessibilityLabel("Cancel subagent")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var childTranscript: some View {
+        if run.messages.isEmpty {
+            Text(state.isTerminal ? "No output." : "Waiting for output…")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-faint"))
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(run.messages.enumerated()), id: \.offset) { index, message in
+                    ACPSubagentMessageRow(
+                        stableId: "\(descriptor.subagentSessionId)#\(index)",
+                        message: message,
+                        typography: typography,
+                        trustedImageRoot: trustedImageRoot)
+                }
+            }
+            .padding(.leading, 2)
+        }
+    }
+}
+
+/// One row of a child transcript. Reuses the parent's row views so a
+/// child's tool calls, thoughts and prose are rendered by exactly the same
+/// code, minus the affordances that only make sense on a parent message
+/// (fork, quote, checkpoint restore, timestamps gutter).
+private struct ACPSubagentMessageRow: View {
+    let stableId: String
+    let message: ACPMessage
+    let typography: ACPChatTypography
+    let trustedImageRoot: URL?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        switch message {
+        case .agent(_, _, let buffer):
+            ACPSubagentTextRow(buffer: buffer, typography: typography)
+        case .thought(_, _, let buffer):
+            ACPThoughtView(buffer: buffer)
+        case .user(_, _, let text, _, _):
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-faint"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .toolCall(let toolCall):
+            ACPToolCallCard(toolCall: toolCall, trustedImageRoot: trustedImageRoot)
+        case .fileEdit(_, let edit):
+            ACPFileEditCard(edit: edit, onOpenDiff: { _ in })
+        case .plan(_, let items):
+            ACPPlanChecklist(items: items)
+        case .systemNotice(_, let text):
+            ACPSystemNoticeView(text: text)
+        }
+    }
+}
+
+/// A child's prose. Rendered without the parent's markdown block cache:
+/// the cache is keyed per parent message and a child row has no entry of
+/// its own, so it renders straight from the buffer.
+private struct ACPSubagentTextRow: View {
+    @ObservedObject var buffer: StreamingText
+    let typography: ACPChatTypography
+
+    var body: some View {
+        ACPMarkdownText(raw: buffer.value, typography: typography)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}

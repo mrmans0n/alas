@@ -17,6 +17,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
+    /// Cancels a native subagent by child session id.
+    var onCancelSubagent: ((String) -> Void)?
     let rememberedScrollAnchor: () -> String?
     let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
     // Remaining ACPMessageList host inputs (ACPMessageList.swift:5-36),
@@ -779,7 +781,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 forkTargets: host.forkTargets,
                 onQuote: host.onQuote,
                 onFork: host.onFork,
-                onRestoreCheckpoint: host.onRestoreCheckpoint
+                onRestoreCheckpoint: host.onRestoreCheckpoint,
+                onCancelSubagent: host.onCancelSubagent
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —

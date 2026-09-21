@@ -554,6 +554,15 @@ private struct ACPSessionView: View {
                     }
                 }
             },
+            onCancelSubagent: { subagentSessionId in
+                Task {
+                    await state.cancelSubagent(
+                        for: sessionId,
+                        worktreeID: worktree.id,
+                        subagentSessionId: subagentSessionId
+                    )
+                }
+            },
             onOpenForkSource: { sourceSessionID in
                 Task {
                     if let owner {

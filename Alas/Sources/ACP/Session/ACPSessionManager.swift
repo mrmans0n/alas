@@ -343,6 +343,14 @@ final class ACPSessionManager: ObservableObject {
         await runner.userCancel()
     }
 
+    /// Cancel one native subagent without touching the parent turn. Only
+    /// offered when the spawn advertised `capabilities.cancel`; the agent
+    /// reports the outcome back as a `subagent_state_update`.
+    func cancelSubagent(for id: ACPSession.ID, subagentSessionId: String) async {
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return }
+        await runner.cancelSubagent(subagentSessionId: subagentSessionId)
+    }
+
     /// Remote-web emergency brake: cancel this instance's in-flight turn
     /// WITHOUT confirming the writer lease. `session/cancel` is idempotent
     /// and only reaches this instance's own adapter — if another instance
@@ -1048,6 +1056,7 @@ final class ACPSessionManager: ObservableObject {
         let messages = result.messages
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
+        Self.restoreSubagents(from: result, in: session)
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
@@ -1134,6 +1143,30 @@ final class ACPSessionManager: ObservableObject {
             session.markCompletedOutputBoundary()
         }
         return tailStart
+    }
+
+    /// Rebuilds the session's native subagents from a hydration snapshot.
+    /// Reads the FULL wire transcript rather than the hydrated tail so a
+    /// subagent row revealed by later backfill still finds its child
+    /// transcript in memory.
+    private static func restoreSubagents(from result: HydrationResult, in session: ACPSession) {
+        var rows: [ACPMessage.ToolCall] = []
+        for message in result.messages {
+            guard case .toolCall(let toolCall) = message.wire,
+                  ACPSubagentRowDescriptor(toolCall: toolCall) != nil
+            else { continue }
+            rows.append(toolCall)
+        }
+        guard !rows.isEmpty || !result.subagentMessages.isEmpty else {
+            session.restoreSubagents(rows: [], messages: [:])
+            return
+        }
+        var restored: [String: [(message: ACPMessage, createdAt: Date)]] = [:]
+        for stored in result.subagentMessages {
+            restored[stored.subagentSessionId, default: []]
+                .append((stored.wire.toMessage(), stored.createdAt))
+        }
+        session.restoreSubagents(rows: rows, messages: restored)
     }
 
     /// Mirror of `ACPSession.hasConversationTranscript` that operates on the
@@ -3139,6 +3172,9 @@ extension ACPSessionManager {
         // transcript rows, so this must run before any early-return below.
         session.restoreQueue(result.queue)
         scheduleScheduledQueueReconnect(sessionId: sessionId)
+        // Before the early returns below: a mirror's child transcripts come
+        // only from the store, so every refresh has to carry them.
+        Self.restoreSubagents(from: result, in: session)
         mirrorMessageSnapshots[sessionId] = comparison.snapshot
         guard !result.wireMessages.isEmpty else { return }
         if applyMirrorSnapshotToHydratedTranscript(result.messages, delta: comparison.delta, in: session) {

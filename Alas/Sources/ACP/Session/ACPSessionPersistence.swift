@@ -495,6 +495,22 @@ actor ACPSessionPersistence {
         return true
     }
 
+    /// Child-session transcript rows. Fenced exactly like parent rows so a
+    /// process that lost the lease can't keep writing a child's output.
+    func persistSubagentMessages(
+        _ messages: [ACPStoredSubagentMessage],
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        if let fence {
+            return try store.withLeaseFence(fence) {
+                try store.upsertSubagentMessages(messages)
+            } != nil
+        }
+        try store.upsertSubagentMessages(messages)
+        return true
+    }
+
     @discardableResult
     func insertMessageIfMissing(_ message: ACPStoredMessage) throws -> Bool {
         try openedStore().insertMessageIfMissing(message)

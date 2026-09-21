@@ -7,6 +7,28 @@ struct ACPInitializeOutcome: Equatable {
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
     let mcpCapabilities: ACPMCPServerCapabilities
     let providerCapabilities: EmptyObject?
+    /// True when the agent answered our subagent opt-in — either with the
+    /// standard `sessionCapabilities.subagents` or with OpenCode's
+    /// `_meta["opencode/child-session-updates"]`.
+    let supportsSubagents: Bool
+
+    init(
+        promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
+        authMethods: [ACPInitializeResult.ACPAuthMethod],
+        loadSession: Bool,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
+        mcpCapabilities: ACPMCPServerCapabilities,
+        providerCapabilities: EmptyObject?,
+        supportsSubagents: Bool = false
+    ) {
+        self.promptCapabilities = promptCapabilities
+        self.authMethods = authMethods
+        self.loadSession = loadSession
+        self.sessionCapabilities = sessionCapabilities
+        self.mcpCapabilities = mcpCapabilities
+        self.providerCapabilities = providerCapabilities
+        self.supportsSubagents = supportsSubagents
+    }
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -32,13 +54,16 @@ final class ACPConnection: @unchecked Sendable {
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
+        let capabilities = result.agentCapabilities
         return ACPInitializeOutcome(
-            promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
+            promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
-            loadSession: result.agentCapabilities?.loadSession ?? false,
-            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init(),
-            mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init(),
-            providerCapabilities: result.agentCapabilities?.providerCapabilities
+            loadSession: capabilities?.loadSession ?? false,
+            sessionCapabilities: capabilities?.sessionCapabilities ?? .init(),
+            mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
+            providerCapabilities: capabilities?.providerCapabilities,
+            supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
+                || capabilities?.meta.openCodeChildSessionUpdates == true
         )
     }
 

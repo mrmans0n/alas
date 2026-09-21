@@ -283,6 +283,9 @@ final class ACPSessionRunner {
                 let startedRecovery = self.session.beginConnectionRecovery()
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
+                // A child session cannot outlive the connection that
+                // carried it; stop its row spinning.
+                self.persistIndices(self.session.markSubagentsDisconnected())
                 // No flushQueueIfIdle() here: the connection is dead, so
                 // the next prompt would just fail. The queue stays put
                 // and drains naturally on the next successful reattach.
@@ -494,7 +497,10 @@ final class ACPSessionRunner {
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
         let receivedWhileHoldingLease = holdsLeaseForWrite()
-        if receivedWhileHoldingLease {
+        // A child session's update never touches a parent row, so it must
+        // not capture a compare-and-swap base for one (its tool-call ids
+        // live in the child's own transcript).
+        if receivedWhileHoldingLease, !isSubagentUpdate(update) {
             capturePersistedBasesForIncomingUpdate(update.update)
         }
         pendingIncomingUpdates.append(.init(
@@ -551,7 +557,7 @@ final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
             return []
         }
     }
@@ -584,6 +590,12 @@ final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
+        if isSubagentUpdate(params) {
+            applySubagentUpdate(
+                params,
+                durableConsumptionAcknowledgement: durableConsumptionAcknowledgement)
+            return
+        }
         let preAppliedSessionInfoDirty: Set<Int>?
         if case .sessionInfoUpdate(let info) = params.update {
             flushStreamingPersist()
@@ -681,6 +693,92 @@ final class ACPSessionRunner {
         if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
             flushQueueIfIdle()
         }
+    }
+
+    /// Whether an incoming update belongs to a native subagent rather than
+    /// to this session.
+    ///
+    /// An ALLOWLIST on purpose: only a session id Alas has already seen
+    /// announced by `subagent_spawned` counts as a child. The runner has
+    /// never filtered on `sessionId`, and agents that ignore the subagent
+    /// capability must keep behaving exactly as before, so anything
+    /// unrecognized still flows into the parent transcript.
+    private func isSubagentUpdate(_ params: ACPSessionUpdateParams) -> Bool {
+        session.subagentRun(params.sessionId) != nil
+    }
+
+    /// Applies a child-scoped update to its own transcript. Child rows are
+    /// deliberately kept out of the parent's streaming-persist machinery:
+    /// they have their own table, their own row ids, and they can never be
+    /// the row a prompt's completion boundary is waiting on.
+    private func applySubagentUpdate(
+        _ params: ACPSessionUpdateParams,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        defer {
+            if suppressingLoadReplay,
+               let target = loadReplaySuppressionTarget,
+               observedUpdateCount >= target {
+                finishLoadReplaySuppression()
+            }
+        }
+        guard !suppressingLoadReplay else {
+            // The child transcript was restored from SQLite at hydration;
+            // a `session/load` replay of it would only duplicate rows.
+            durableConsumptionAcknowledgement?()
+            return
+        }
+        let dirty = session.applySubagentUpdate(
+            params.update,
+            subagentSessionId: params.sessionId)
+        persistSubagentIndices(
+            dirty,
+            subagentSessionId: params.sessionId,
+            completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+    }
+
+    /// Persists the named rows of a child transcript.
+    @discardableResult
+    func persistSubagentIndices(
+        _ indices: Set<Int>,
+        subagentSessionId: String,
+        completion: ((Bool) -> Void)? = nil
+    ) -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        guard let run = session.subagentRun(subagentSessionId), !indices.isEmpty else {
+            completion?(true)
+            return true
+        }
+        let messages = run.messages
+        var rows: [ACPStoredSubagentMessage] = []
+        for index in indices.sorted() {
+            guard index >= 0, index < messages.count else { continue }
+            let message = messages[index]
+            guard let payload = try? ACPMessageCodec.encode(message) else { continue }
+            rows.append(ACPStoredSubagentMessage(
+                id: ACPStoredSubagentMessage.rowId(
+                    sessionId: sessionId,
+                    subagentSessionId: subagentSessionId,
+                    seq: Int64(index)),
+                sessionId: sessionId,
+                subagentSessionId: subagentSessionId,
+                kind: message.kind,
+                seq: Int64(index),
+                payload: payload,
+                createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970)))
+        }
+        guard !rows.isEmpty else {
+            completion?(true)
+            return true
+        }
+        let fence = leaseFenceProvider()
+        let subagentRows = rows
+        enqueuePersistence({ persistence in
+            _ = try await persistence.persistSubagentMessages(subagentRows, fence: fence)
+        }, completion: { persisted in
+            completion?(persisted != nil)
+        })
+        return true
     }
 
     private func persistenceCompletion(
@@ -1217,6 +1315,22 @@ final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// Cancels one native subagent. `session/cancel` addressed to the CHILD
+    /// session id, so the parent turn keeps running — that is the whole
+    /// point of the row's Cancel action.
+    ///
+    /// The child's terminal state comes back as a `subagent_state_update`;
+    /// nothing is assumed locally, because an agent may finish the child
+    /// normally in the window before the cancel lands.
+    func cancelSubagent(subagentSessionId: String) async {
+        guard let run = session.subagentRun(subagentSessionId),
+              run.capabilities.supportsCancel,
+              run.isRunning
+        else { return }
+        guard await hasConfirmedLeaseForSideEffect() else { return }
+        try? await connection.cancel(sessionId: subagentSessionId)
+    }
+
     /// Legacy callsite shim: defaults to `.auto` intent (immediate send
     /// when idle, queue when busy).
     func send(text: String, attachments: [ACPMessage.Attachment]) {
@@ -2266,7 +2380,7 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
             return false
         }
     }

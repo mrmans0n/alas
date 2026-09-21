@@ -147,6 +147,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// This is never persisted; restored sessions derive their UI from
     /// persisted session fields instead.
     @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
+    /// Native subagents (child ACP sessions) spawned during this session,
+    /// keyed by child session id. Each parent-transcript subagent row reads
+    /// its live child transcript from here; `subagentOrder` keeps spawn
+    /// order for the rare consumer that wants the list rather than a row.
+    @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
+    private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
@@ -468,7 +474,8 @@ final class ACPSession: ObservableObject, Identifiable {
             kindsToFlush = [.agent, .thought]
         } else {
             switch update {
-            case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk:
+            case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk,
+                 .subagentSpawned:
                 kindsToFlush = [.agent, .thought]
             default:
                 kindsToFlush = []
@@ -544,30 +551,8 @@ final class ACPSession: ObservableObject, Identifiable {
             return flushedForThought.union([i])
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
-            let items = payload.content ?? []
-            let raw = Self.flatten(items)
-            let full = Self.stripWrappingFence(raw,
-                                               isFinal: Self.isFinalStatus(payload.status))
-            let terminalIds = Self.mergeTerminalIds(
-                Self.extractTerminalIds(items),
-                Self.extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
-            let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
-            transcript.appendMessage(.toolCall(.init(
-                toolCallId: payload.toolCallId,
-                title: payload.title,
-                kind: payload.kind,
-                status: payload.status,
-                content: full,
-                preview: Self.previewLine(full),
-                contentLanguage: Self.wrappingFenceLanguage(raw),
-                rawInput: Self.metadataString(payload.rawInput),
-                rawOutput: Self.metadataString(payload.rawOutput),
-                metadata: payload.metadata,
-                assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
-                locations: payload.locations?.map(\.path) ?? [],
-                terminalIds: terminalIds,
-                executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
-                name: payload.name)),
+            transcript.appendMessage(
+                .toolCall(Self.makeToolCall(from: payload, at: timestamp)),
                 createdAt: timestamp)
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -576,14 +561,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
-                Self.applyToolCallUpdateFields(u, to: &tc)
-                if tc.status == "in_progress", tc.executionStartedAt == nil {
-                    tc.executionStartedAt = timestamp
-                }
-                if Self.isFinalStatus(tc.status), tc.executionStartedAt != nil,
-                   tc.executionFinishedAt == nil {
-                    tc.executionFinishedAt = timestamp
-                }
+                Self.applyToolCallUpdate(u, to: &tc, at: timestamp)
             }
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
@@ -645,6 +623,10 @@ final class ACPSession: ObservableObject, Identifiable {
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
             return []
+        case .subagentSpawned(let spawn):
+            return registerSubagent(spawn, at: timestamp)
+        case .subagentStateUpdate(let update):
+            return applySubagentState(update, at: timestamp)
         case .unknown:
             return []
         }
@@ -1365,6 +1347,52 @@ final class ACPSession: ObservableObject, Identifiable {
         return lines.joined(separator: "\n")
     }
 
+    /// Projects a `tool_call` payload into a transcript row. Shared with
+    /// `ACPSubagentRun`, which renders a child session's tool calls with
+    /// exactly the same fence stripping, asset and terminal-id extraction
+    /// as the parent transcript — the two must never drift.
+    static func makeToolCall(from payload: ACPToolCallPayload, at timestamp: Date) -> ACPMessage.ToolCall {
+        let items = payload.content ?? []
+        let raw = flatten(items)
+        let full = stripWrappingFence(raw, isFinal: isFinalStatus(payload.status))
+        let terminalIds = mergeTerminalIds(
+            extractTerminalIds(items),
+            extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
+        let rawOutputAssets = extractRawOutputAssets(payload.rawOutput)
+        return .init(
+            toolCallId: payload.toolCallId,
+            title: payload.title,
+            kind: payload.kind,
+            status: payload.status,
+            content: full,
+            preview: previewLine(full),
+            contentLanguage: wrappingFenceLanguage(raw),
+            rawInput: metadataString(payload.rawInput),
+            rawOutput: metadataString(payload.rawOutput),
+            metadata: payload.metadata,
+            assets: mergeAssets(extractAssets(items), rawOutputAssets),
+            locations: payload.locations?.map(\.path) ?? [],
+            terminalIds: terminalIds,
+            executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
+            name: payload.name)
+    }
+
+    /// Applies a `tool_call_update` to an existing row, including the
+    /// execution-timing bookkeeping. Companion to `makeToolCall`.
+    static func applyToolCallUpdate(
+        _ update: ACPToolCallUpdate,
+        to tc: inout ACPMessage.ToolCall,
+        at timestamp: Date
+    ) {
+        applyToolCallUpdateFields(update, to: &tc)
+        if tc.status == "in_progress", tc.executionStartedAt == nil {
+            tc.executionStartedAt = timestamp
+        }
+        if isFinalStatus(tc.status), tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+            tc.executionFinishedAt = timestamp
+        }
+    }
+
     private static func applyToolCallUpdateFields(
         _ update: ACPToolCallUpdate,
         to tc: inout ACPMessage.ToolCall,
@@ -1444,6 +1472,155 @@ final class ACPSession: ObservableObject, Identifiable {
         flushPendingReplayCandidates()
         transcript.appendMessage(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
+    }
+
+    // MARK: - Native subagents
+
+    /// Registers (or refreshes) a child session and makes sure the parent
+    /// transcript carries its row. Idempotent: OpenCode has no explicit
+    /// spawn notification, so Alas synthesizes one per child update.
+    ///
+    /// Returns the transcript indices to persist, or an empty set when the
+    /// spawn told us nothing new.
+    @discardableResult
+    func registerSubagent(_ spawn: ACPSubagentSpawn, at timestamp: Date = Date()) -> Set<Int> {
+        let id = spawn.subagentSessionId
+        guard !id.isEmpty else { return [] }
+        if let existing = subagents[id] {
+            let before = descriptor(for: existing)
+            existing.merge(spawn: spawn)
+            let after = descriptor(for: existing)
+            guard before != after else { return [] }
+            return refreshSubagentRow(for: existing, at: timestamp)
+        }
+        let run = ACPSubagentRun(
+            subagentSessionId: id,
+            name: spawn.name,
+            task: spawn.task,
+            capabilities: spawn.capabilities,
+            startedAt: timestamp)
+        subagents[id] = run
+        subagentOrder.append(id)
+        clearRestoredContextRecoveryStatus()
+        // A subagent row closes the current output run the same way a tool
+        // call does, so held replay candidates must land ahead of it.
+        flushPendingReplayCandidates()
+        transcript.appendMessage(
+            .toolCall(descriptor(for: run).toolCall(
+                executionStartedAt: timestamp,
+                executionFinishedAt: nil)),
+            createdAt: timestamp)
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return [transcript.messages.count - 1]
+    }
+
+    /// Applies a child's lifecycle transition, updating its row.
+    @discardableResult
+    func applySubagentState(
+        _ update: ACPSubagentStateUpdate,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        guard let run = subagents[update.subagentSessionId] else { return [] }
+        run.apply(state: update.state, at: timestamp)
+        return refreshSubagentRow(for: run, at: timestamp)
+    }
+
+    /// Routes one child-scoped `session/update` into its child transcript.
+    /// Returns the child row indices that changed, for persistence.
+    @discardableResult
+    func applySubagentUpdate(
+        _ update: ACPSessionUpdate,
+        subagentSessionId: String,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        guard let run = subagents[subagentSessionId] else { return [] }
+        return run.apply(update, at: timestamp)
+    }
+
+    func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {
+        subagents[subagentSessionId]
+    }
+
+    var orderedSubagents: [ACPSubagentRun] {
+        subagentOrder.compactMap { subagents[$0] }
+    }
+
+    /// Rebuilds subagents from persisted state after hydration.
+    ///
+    /// `rows` must be every subagent row of the WHOLE persisted transcript,
+    /// not just the hydrated tail: tail-first hydration leaves older rows
+    /// behind the render window, and a row that scrolls into view later
+    /// still has to find its child transcript already loaded (a SwiftUI body
+    /// cannot materialise one without mutating state mid-render).
+    func restoreSubagents(
+        rows: [ACPMessage.ToolCall],
+        messages restored: [String: [(message: ACPMessage, createdAt: Date)]]
+    ) {
+        var rebuilt: [String: ACPSubagentRun] = [:]
+        var order: [String] = []
+        for toolCall in rows {
+            guard let descriptor = ACPSubagentRowDescriptor(toolCall: toolCall),
+                  rebuilt[descriptor.subagentSessionId] == nil
+            else { continue }
+            // Reuse the existing run when there is one: a read-only mirror
+            // re-hydrates on every refresh, and replacing the object would
+            // collapse the row the reader had expanded.
+            let run = subagents[descriptor.subagentSessionId]
+                ?? ACPSubagentRun(
+                    subagentSessionId: descriptor.subagentSessionId,
+                    startedAt: toolCall.executionStartedAt ?? Date())
+            run.adopt(descriptor, startedAt: toolCall.executionStartedAt)
+            if let rows = restored[descriptor.subagentSessionId] {
+                run.restore(
+                    messages: rows.map(\.message),
+                    createdAts: rows.map(\.createdAt))
+            }
+            rebuilt[descriptor.subagentSessionId] = run
+            order.append(descriptor.subagentSessionId)
+        }
+        subagents = rebuilt
+        subagentOrder = order
+    }
+
+    /// Marks every still-running child as disconnected when the agent
+    /// connection drops. Without this the row would spin forever against a
+    /// child that can no longer produce output. Returns the parent rows to
+    /// persist.
+    @discardableResult
+    func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
+        var dirty: Set<Int> = []
+        for run in orderedSubagents where run.isRunning {
+            run.apply(state: .disconnected, at: timestamp)
+            dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
+        }
+        return dirty
+    }
+
+    private func descriptor(for run: ACPSubagentRun) -> ACPSubagentRowDescriptor {
+        .init(
+            subagentSessionId: run.subagentSessionId,
+            name: run.name,
+            task: run.task,
+            state: run.state,
+            capabilities: run.capabilities)
+    }
+
+    private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        let toolCallId = ACPSubagentRowDescriptor.toolCallId(
+            subagentSessionId: run.subagentSessionId)
+        guard let index = transcript.toolCallIndex(toolCallId: toolCallId),
+              case .toolCall(let existing) = transcript.messages[index]
+        else { return [] }
+        let refreshed = descriptor(for: run).toolCall(
+            executionStartedAt: existing.executionStartedAt ?? run.startedAt,
+            executionFinishedAt: run.finishedAt ?? existing.executionFinishedAt)
+        guard refreshed != existing else { return [] }
+        replaceTranscriptMessage(
+            at: index,
+            with: .toolCall(refreshed),
+            createdAt: transcript.createdAt(forMessageAt: index) ?? timestamp)
+        return [index]
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {

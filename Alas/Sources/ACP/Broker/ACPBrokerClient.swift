@@ -671,6 +671,27 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                     self?.ackDurableEvent(cursor: cursor)
                 }
             ))
+        case ACPOpenCodeChildUpdate.method:
+            // Normalized into the standard shapes so downstream routing only
+            // knows one wire format; the cursor is acked by the last of them.
+            guard let payload = try? params.data else { return }
+            let normalized = ACPOpenCodeChildUpdate.normalize(params: payload)
+            guard !normalized.isEmpty else { return }
+            stateLock.lock()
+            _yieldedUpdateCount += normalized.count
+            unacknowledgedDurableEventCursors.insert(cursor)
+            stateLock.unlock()
+            let ack: ACPDurableConsumptionAcknowledgement = { [weak self] in
+                self?.ackDurableEvent(cursor: cursor)
+            }
+            for (offset, update) in normalized.enumerated() {
+                let isLast = offset == normalized.count - 1
+                updatesCont.yield(.init(
+                    sessionId: update.sessionId,
+                    update: update.update,
+                    durableConsumptionAcknowledgement: isLast ? ack : nil
+                ))
+            }
         case "elicitation/complete":
             if let decoded = try? JSONDecoder().decode(ACPElicitationCompleteParams.self, from: params.data) {
                 elicitationCompletionsCont.yield(decoded)

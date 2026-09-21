@@ -60,6 +60,10 @@ struct ACPClientCapabilities: Codable, Equatable {
     let auth: ACPAuthCapabilities
     let session: ACPSessionCapabilities
     let elicitation: ACPElicitationCapabilities?
+    /// Native subagent (child session) support. `{}` opts in; agents that
+    /// don't know the key ignore it and keep folding subagents into an
+    /// opaque tool call, exactly as before.
+    let subagents: EmptyObject?
     let meta: ACPClientCapabilitiesMeta
 
     init(
@@ -68,6 +72,7 @@ struct ACPClientCapabilities: Codable, Equatable {
         auth: ACPAuthCapabilities = .init(terminal: true),
         session: ACPSessionCapabilities = .booleanConfigOptions,
         elicitation: ACPElicitationCapabilities? = .full,
+        subagents: EmptyObject? = .init(),
         meta: ACPClientCapabilitiesMeta = .terminalAuth
     ) {
         self.fs = fs
@@ -75,11 +80,12 @@ struct ACPClientCapabilities: Codable, Equatable {
         self.auth = auth
         self.session = session
         self.elicitation = elicitation
+        self.subagents = subagents
         self.meta = meta
     }
 
     enum CodingKeys: String, CodingKey {
-        case fs, terminal, auth, session, elicitation
+        case fs, terminal, auth, session, elicitation, subagents
         case meta = "_meta"
     }
 
@@ -92,6 +98,7 @@ struct ACPClientCapabilities: Codable, Equatable {
         session = try c.decodeIfPresent(ACPSessionCapabilities.self, forKey: .session)
             ?? .init(configOptions: .init(boolean: nil))
         elicitation = try c.decodeIfPresent(ACPElicitationCapabilities.self, forKey: .elicitation)
+        subagents = try? c.decodeIfPresent(EmptyObject.self, forKey: .subagents)
         meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
             ?? .init(terminalAuth: false)
     }
@@ -161,25 +168,38 @@ struct ACPAuthCapabilities: Codable, Equatable {
 struct ACPClientCapabilitiesMeta: Codable, Equatable {
     static let terminalAuth = ACPClientCapabilitiesMeta(
         terminalAuth: true,
-        parameterizedModelPicker: true)
+        parameterizedModelPicker: true,
+        openCodeChildSessionUpdates: true)
 
     let terminalAuth: Bool
     let parameterizedModelPicker: Bool
+    /// OpenCode v2's own spelling of the subagent opt-in. Without it OpenCode
+    /// projects a child's updates into the parent session instead of sending
+    /// `opencode/session/child_update`.
+    let openCodeChildSessionUpdates: Bool
 
-    init(terminalAuth: Bool, parameterizedModelPicker: Bool = false) {
+    init(
+        terminalAuth: Bool,
+        parameterizedModelPicker: Bool = false,
+        openCodeChildSessionUpdates: Bool = false
+    ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
+        self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
     }
 
     enum CodingKeys: String, CodingKey {
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
+        case openCodeChildSessionUpdates = "opencode/child-session-updates"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         terminalAuth = try c.decodeIfPresent(Bool.self, forKey: .terminalAuth) ?? false
         parameterizedModelPicker = try c.decodeIfPresent(Bool.self, forKey: .parameterizedModelPicker) ?? false
+        openCodeChildSessionUpdates = try c.decodeIfPresent(
+            Bool.self, forKey: .openCodeChildSessionUpdates) ?? false
     }
 }
 
@@ -221,24 +241,28 @@ struct ACPInitializeResult: Codable, Equatable {
         let sessionCapabilities: ACPAgentSessionCapabilities
         let mcpCapabilities: ACPMCPServerCapabilities
         let providerCapabilities: EmptyObject?
+        let meta: Meta
 
         init(
             promptCapabilities: ACPPromptCapabilities? = nil,
             loadSession: Bool = false,
             sessionCapabilities: ACPAgentSessionCapabilities = .init(),
             mcpCapabilities: ACPMCPServerCapabilities = .init(),
-            providerCapabilities: EmptyObject? = nil
+            providerCapabilities: EmptyObject? = nil,
+            meta: Meta = .init()
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
             self.sessionCapabilities = sessionCapabilities
             self.mcpCapabilities = mcpCapabilities
             self.providerCapabilities = providerCapabilities
+            self.meta = meta
         }
 
         enum CodingKeys: String, CodingKey {
             case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities
             case providerCapabilities = "providers"
+            case meta = "_meta"
         }
 
         init(from decoder: Decoder) throws {
@@ -251,6 +275,27 @@ struct ACPInitializeResult: Codable, Equatable {
             ) ?? .init()
             mcpCapabilities = try c.decodeIfPresent(ACPMCPServerCapabilities.self, forKey: .mcpCapabilities) ?? .init()
             providerCapabilities = try? c.decodeIfPresent(EmptyObject.self, forKey: .providerCapabilities)
+            meta = (try? c.decodeIfPresent(Meta.self, forKey: .meta)) ?? .init()
+        }
+
+        /// Agent-side `_meta`. Only the keys Alas acts on are modelled;
+        /// everything else is ignored rather than failing the handshake.
+        struct Meta: Codable, Equatable {
+            let openCodeChildSessionUpdates: Bool
+
+            init(openCodeChildSessionUpdates: Bool = false) {
+                self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case openCodeChildSessionUpdates = "opencode/child-session-updates"
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                let flag = try? c.decodeIfPresent(Bool.self, forKey: .openCodeChildSessionUpdates)
+                openCodeChildSessionUpdates = (flag ?? nil) ?? false
+            }
         }
     }
 
@@ -260,19 +305,24 @@ struct ACPInitializeResult: Codable, Equatable {
         let fork: EmptyObject?
         let delete: EmptyObject?
         let close: EmptyObject?
+        /// Native child sessions (`subagent_spawned` + child-scoped
+        /// `session/update`), advertised by claude-agent-acp and codex-acp.
+        let subagents: EmptyObject?
 
         init(
             list: EmptyObject? = nil,
             resume: EmptyObject? = nil,
             fork: EmptyObject? = nil,
             delete: EmptyObject? = nil,
-            close: EmptyObject? = nil
+            close: EmptyObject? = nil,
+            subagents: EmptyObject? = nil
         ) {
             self.list = list
             self.resume = resume
             self.fork = fork
             self.delete = delete
             self.close = close
+            self.subagents = subagents
         }
 
         var supportsList: Bool { list != nil }
@@ -280,6 +330,7 @@ struct ACPInitializeResult: Codable, Equatable {
         var supportsFork: Bool { fork != nil }
         var supportsDelete: Bool { delete != nil }
         var supportsClose: Bool { close != nil }
+        var supportsSubagents: Bool { subagents != nil }
     }
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool
