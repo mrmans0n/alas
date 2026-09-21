@@ -171,6 +171,66 @@ struct ACPToolCallPresentationTests {
         }
     }
 
+    @Test("stable tool name drives icon selection regardless of retitled text")
+    func stableNamePresentation() {
+        let cases: [(name: String, title: String, label: String, icon: String)] = [
+            ("Bash", "Run some tests", "Ran", "terminal"),
+            ("exec_command", "Custom retitled label", "Ran", "terminal"),
+            ("write_stdin", "Custom retitled label", "Ran", "terminal"),
+            ("Edit", "Custom retitled label", "Edit", "pencil"),
+            ("MultiEdit", "Custom retitled label", "Edit", "pencil"),
+            ("Write", "Custom retitled label", "Edit", "pencil"),
+            ("Read", "Custom retitled label", "Read", "doc.text")
+        ]
+
+        for item in cases {
+            let presentation = ACPToolCallPresentation.resolve(toolCall(
+                title: item.title,
+                name: item.name
+            ))
+
+            #expect(presentation.label == item.label, "name \(item.name)")
+            #expect(presentation.iconSystemName == item.icon, "name \(item.name)")
+            #expect(presentation.style == .generic, "name \(item.name)")
+        }
+    }
+
+    @Test("view_image name maps to viewed image presentation independent of title")
+    func viewImageNamePresentation() {
+        let presentation = ACPToolCallPresentation.resolve(toolCall(
+            title: "Custom retitled label",
+            name: "view_image"
+        ))
+
+        #expect(presentation.label == "Viewed Image")
+        #expect(presentation.iconSystemName == "photo.on.rectangle")
+        #expect(presentation.style == .image)
+    }
+
+    @Test("mcp__ name prefix maps to MCP presentation independent of title")
+    func mcpNamePresentation() {
+        let presentation = ACPToolCallPresentation.resolve(toolCall(
+            title: "Custom retitled label",
+            name: "mcp__filesystem__read_file"
+        ))
+
+        #expect(presentation.label == "MCP")
+        #expect(presentation.iconSystemName == "point.3.connected.trianglepath.dotted")
+        #expect(presentation.style == .mcp)
+    }
+
+    @Test("missing name falls back to existing kind/title heuristics unchanged")
+    func missingNameFallsBackToKindHeuristics() {
+        let presentation = ACPToolCallPresentation.resolve(toolCall(
+            title: "bash",
+            kind: "execute"
+        ))
+
+        #expect(presentation.label == "Ran")
+        #expect(presentation.iconSystemName == "terminal")
+        #expect(presentation.style == .generic)
+    }
+
     @Test("relative image resource loads under trusted root")
     func relativeImageResourceLoadsUnderTrustedRoot() throws {
         let root = FileManager.default.temporaryDirectory
@@ -201,7 +261,8 @@ struct ACPToolCallPresentationTests {
         kind: String? = nil,
         rawOutput: String? = nil,
         metadata: AnyCodable? = nil,
-        assets: [ACPMessage.ToolCallAsset] = []
+        assets: [ACPMessage.ToolCallAsset] = [],
+        name: String? = nil
     ) -> ACPMessage.ToolCall {
         ACPMessage.ToolCall(
             toolCallId: UUID().uuidString,
@@ -210,7 +271,8 @@ struct ACPToolCallPresentationTests {
             status: "completed",
             rawOutput: rawOutput,
             metadata: metadata,
-            assets: assets
+            assets: assets,
+            name: name
         )
     }
 

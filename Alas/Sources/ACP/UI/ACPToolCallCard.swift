@@ -192,6 +192,12 @@ struct ACPToolCallCard: View {
                     }
                 }
             }
+            if let name = toolCall.nonEmptyName {
+                Text("name: \(name)")
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 8)
+            }
         }
     }
 

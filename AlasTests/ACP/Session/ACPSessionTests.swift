@@ -48,6 +48,40 @@ struct ACPSessionTests {
         #expect(compaction.durationMs == 300)
     }
 
+    @Test("tool_call name is stored, and a later update without name leaves it untouched")
+    func toolCallNamePersistsAcrossUpdateWithoutName() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Bash", kind: "execute", status: "in_progress",
+            name: "Bash")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "Bash")
+        #expect(toolCall.status == "completed")
+    }
+
+    @Test("tool_call_update name replaces the stored name when present")
+    func toolCallUpdateReplacesName() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "in_progress")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed", name: "exec_command")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "exec_command")
+    }
+
     @Test("compaction summary chunks append to the normalized row")
     func compactionSummaryChunksAppend() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -2314,6 +2348,66 @@ struct ACPSessionTests {
             #expect(metadata["terminal_output_delta"] != nil)
             #expect(tc.rawOutput == nil)
             #expect(tc.assets == [])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("suppressed initial tool replay applies a newly available name even onto a completed snapshot")
+    func suppressedInitialToolReplayAppliesNameOntoCompletedSnapshot() async {
+        // Regression: a call persisted by an older build (no stored `name`)
+        // is loaded, then session/load replay resends its initial tool_call
+        // — now carrying `name` because the adapter/build was upgraded.
+        // Content fields stay locked by canReplaceSnapshot (see the
+        // "does not downgrade completed output" tests above), but `name`
+        // is pure presentation metadata and must still apply.
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "tc-replay-name",
+            title: "Initial command",
+            kind: "execute",
+            status: "in_progress",
+            name: "Bash")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "Bash")
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("suppressed tool update replay applies a newly available name even onto a completed snapshot")
+    func suppressedToolUpdateReplayAppliesNameOntoCompletedSnapshot() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-update-replay-name",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))])))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc-update-replay-name",
+            status: "in_progress",
+            name: "exec_command")))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.status == "completed")
+            #expect(tc.name == "exec_command")
         } else {
             Issue.record("expected toolCall message")
         }
