@@ -45,8 +45,22 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private var replayTouchedIdentities: Set<ReplayIdentity> = []
     private enum ReplayIdentity: Hashable {
         case text(StreamKind, String)
-        case user(String)
     }
+    /// The identified prompt row CURRENTLY open for replay continuation
+    /// (further blocks of the SAME message), if any — mirrors
+    /// `legacyOpenRun`/`legacyOpenUserRun` for id-less rows, except keyed
+    /// by the id itself rather than "trailing row of this kind", since two
+    /// DIFFERENT turns can reuse the same `messageId` and must not collapse
+    /// into the same row just because the id matches. Closed by
+    /// `closeLegacyRuns` whenever anything else (a different id, an id-less
+    /// prompt, a tool call, a text chunk) closes the turn boundary.
+    private var openIdentifiedUserRun: (messageId: String, index: Int)?
+    /// How many separate turns reusing the SAME `messageId` have been
+    /// STARTED so far this replay window — indexes into that id's own
+    /// chronological list of existing rows (`identifiedUserCandidates`)
+    /// when a NEW (non-continuation) turn needs a target, exactly like
+    /// `legacyRunOrdinal` does for id-less rows.
+    private var replayIdentifiedUserOrdinal: [String: Int] = [:]
     /// Array position replay reconciliation has reached, in chronological
     /// order — a row recovered because it's genuinely missing (never
     /// reached storage) is INSERTED here rather than appended, so it lands
@@ -181,7 +195,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             // a new one each time, and an image or resource block carries
             // its attachment instead of vanishing as empty text.
             let text = Self.text(of: chunk.content)
-            let attachments = ACPSessionRunner.attachments(of: [chunk.content])
+            let attachments = Self.attachments(of: chunk.content)
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
             if let messageId = chunk.messageId,
                let index = userIndex(messageId: messageId),
@@ -289,18 +303,8 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             let index = insertRecovered(
                 .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)), at: timestamp)
             return [index]
-        case .plan:
-            // A per-turn plan has no stable identity to reconcile against,
-            // only a turn-boundary position — and that position is only
-            // meaningful relative to the CURRENT state, not to a replay
-            // resending the whole history out of its original increments.
-            // Reconciling it here would overwrite whichever plan is newest
-            // in the fully-hydrated transcript instead of the turn the
-            // replayed update actually belongs to. Dropped here exactly
-            // like the parent transcript's own `applySuppressedReplaySideEffects`
-            // already drops it — the live path persisted it correctly
-            // before any crash.
-            return []
+        case .plan(let entries):
+            return applyReplayedPlan(entries, at: timestamp)
         default:
             return apply(update, at: timestamp)
         }
@@ -312,6 +316,8 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// in this one.
     func beginReplayReconciliation() {
         replayTouchedIdentities.removeAll()
+        openIdentifiedUserRun = nil
+        replayIdentifiedUserOrdinal.removeAll()
         replayCursor = 0
         legacyOpenRun.removeAll()
         legacyRunOrdinal.removeAll()
@@ -536,33 +542,57 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
     }
 
-    /// Replay of a child prompt. Mirrors `applyReplayedTextChunk`'s split:
-    /// identified prompts reconcile by id at ANY position (unlike the live
-    /// path's `userIndex`, bounded to the newest row so a later prompt
-    /// reusing an id can't reopen an older bubble — replay has no such
-    /// concern, since it resends every prompt exactly once, in order);
-    /// id-less prompts use the same open-run/ordinal tracking id-less text
-    /// rows do, via `legacyOpenUserRun`/`legacyUserRunOrdinal`.
+    /// Replay of a child prompt. An identified prompt uses the SAME
+    /// open-run/ordinal tracking id-less rows do (mirroring
+    /// `applyReplayedTextChunk`), except keyed by the id itself rather than
+    /// "trailing row of this kind": `openIdentifiedUserRun` extends further
+    /// blocks of the SAME message, and `identifiedUserCandidates`/
+    /// `replayIdentifiedUserOrdinal` pick the NEXT unconsumed occurrence of
+    /// that id for a new (non-continuation) turn — a plain backward search
+    /// would resolve two DIFFERENT turns reusing the same id to the same
+    /// (newest) row every time. Id-less prompts use the equivalent
+    /// `legacyOpenUserRun`/`legacyUserRunOrdinal` tracking.
     private func applyReplayedUserChunk(_ chunk: ACPTextChunk, at timestamp: Date) -> Set<Int> {
         let text = Self.text(of: chunk.content)
-        let attachments = ACPSessionRunner.attachments(of: [chunk.content])
+        let attachments = Self.attachments(of: chunk.content)
         guard !text.isEmpty || !attachments.isEmpty else { return [] }
-        closeLegacyRuns(keepingUserRun: true)
         if let messageId = chunk.messageId {
-            let isFirstTouch = replayTouchedIdentities.insert(.user(messageId)).inserted
-            if let index = anyUserIndex(messageId: messageId) {
-                if isFirstTouch, case .user(let id, _, _, _, let source) = messages[index] {
+            closeLegacyRuns(keepingIdentifiedUserRun: messageId)
+            if let open = openIdentifiedUserRun, open.messageId == messageId, open.index < messages.count {
+                appendToUserRow(at: open.index, messageId: messageId, text: text, attachments: attachments)
+                replayCursor = max(replayCursor, open.index + 1)
+                return [open.index]
+            }
+            // Not a continuation of the currently open row (a different,
+            // or no, identity was open) — pick the NEXT unconsumed
+            // occurrence of this specific id, chronologically, rather than
+            // an unconditional backward search for the array's overall
+            // newest match. Two turns can reuse the same `messageId`; an
+            // unconditional search would resolve BOTH replayed occurrences
+            // to the same (newest) row, combining both turns' prompts and
+            // leaving the earlier row stale — exactly the bug
+            // `legacyUserCandidates`/`legacyUserRunOrdinal` already avoid
+            // for id-less rows, mirrored here for a reused id.
+            let candidates = identifiedUserCandidates(withId: messageId)
+            let ordinal = replayIdentifiedUserOrdinal[messageId, default: 0]
+            replayIdentifiedUserOrdinal[messageId] = ordinal + 1
+            if ordinal < candidates.count {
+                let index = candidates[ordinal]
+                if case .user(let id, _, _, _, let source) = messages[index] {
                     messages[index] = .user(
                         id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
                 }
                 appendToUserRow(at: index, messageId: messageId, text: text, attachments: attachments)
+                openIdentifiedUserRun = (messageId, index)
                 replayCursor = max(replayCursor, index + 1)
                 return [index]
             }
             let index = insertRecovered(
                 .user(id: UUID(), messageId: messageId, text: text, attachments: attachments), at: timestamp)
+            openIdentifiedUserRun = (messageId, index)
             return [index]
         }
+        closeLegacyRuns(keepingUserRun: true)
         if let openIndex = legacyOpenUserRun, openIndex < messages.count {
             appendToUserRow(at: openIndex, messageId: nil, text: text, attachments: attachments)
             replayCursor = max(replayCursor, openIndex + 1)
@@ -599,14 +629,14 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             delegatedSource: source)
     }
 
-    /// A user-prompt row for `messageId`, at ANY position — unlike
-    /// `userIndex` above, replay reconciliation must find and extend a
-    /// HISTORICAL prompt, not only the current/open one.
-    private func anyUserIndex(messageId: String) -> Int? {
-        for index in stride(from: messages.count - 1, through: 0, by: -1) {
-            if case .user(_, let id, _, _, _) = messages[index], id == messageId { return index }
+    /// Every `.user` row carrying `messageId`, in chronological (ascending)
+    /// order — the candidate list a NEW (non-continuation) replay touch of
+    /// that id picks its target from. See `openIdentifiedUserRun`.
+    private func identifiedUserCandidates(withId messageId: String) -> [Int] {
+        messages.indices.filter { index in
+            if case .user(_, let id, _, _, _) = messages[index] { return id == messageId }
+            return false
         }
-        return nil
     }
 
     /// Every id-less `.user` row, in chronological (ascending) order.
@@ -631,6 +661,45 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
     }
 
+    /// Replay of a per-turn plan. A plan has no stable identity to match
+    /// on — only a turn-boundary position, exactly like the live path's own
+    /// `apply(_:at:)` bound (`lastPlanIndex()` after `lastUserIndex()`) —
+    /// but that live bound is relative to the array's OVERALL newest rows,
+    /// which during replay can already include turns chronologically AFTER
+    /// the one being replayed right now. So instead this finds the plan
+    /// row (if any) belonging to the turn that STARTED most recently at or
+    /// before the current replay position: the nearest `.user` row at or
+    /// before `replayCursor`, then the first `.plan` row after it and
+    /// before the next `.user` row (if any) — reconciling in place when
+    /// found, or recovering a plan that never reached storage at all via
+    /// `insertRecovered`, exactly like every other row kind already does.
+    private func applyReplayedPlan(_ entries: [ACPPlanEntry], at timestamp: Date) -> Set<Int> {
+        let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
+        let turnStart = (lastUserIndex(before: replayCursor) ?? -1) + 1
+        for index in turnStart..<messages.count {
+            switch messages[index] {
+            case .user:
+                return [insertRecovered(.plan(id: UUID(), items), at: timestamp)]
+            case .plan(let existingId, _):
+                messages[index] = .plan(id: existingId, items)
+                replayCursor = max(replayCursor, index + 1)
+                return [index]
+            default:
+                continue
+            }
+        }
+        return [insertRecovered(.plan(id: UUID(), items), at: timestamp)]
+    }
+
+    /// The nearest `.user` row strictly before `limit`, if any.
+    private func lastUserIndex(before limit: Int) -> Int? {
+        let upper = min(max(limit, 0), messages.count)
+        for index in stride(from: upper - 1, through: 0, by: -1) {
+            if case .user = messages[index] { return index }
+        }
+        return nil
+    }
+
     /// A tool-call row for `id`, at any position — unlike the merge lookups
     /// above, a replayed (or updated) tool call must be found regardless of
     /// what has been appended after it.
@@ -641,17 +710,23 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
     }
 
-    /// Closes every id-less run boundary-closed by replaying an update of
-    /// the given shape, mirroring `legacyTrailingIndex`'s own boundary set:
-    /// a tool call, a user chunk, and — for a text run — the OTHER text
-    /// kind's chunk (an agent chunk closes an open thought run live, and
-    /// vice versa). Called at the top of every replay handler with
-    /// whichever run (if any) that update itself might continue.
-    private func closeLegacyRuns(keepingTextRun kind: StreamKind? = nil, keepingUserRun: Bool = false) {
+    /// Closes every id-less (and identified-user) run boundary-closed by
+    /// replaying an update of the given shape, mirroring
+    /// `legacyTrailingIndex`'s own boundary set: a tool call, a user chunk,
+    /// and — for a text run — the OTHER text kind's chunk (an agent chunk
+    /// closes an open thought run live, and vice versa). Called at the top
+    /// of every replay handler with whichever run (if any) that update
+    /// itself might continue.
+    private func closeLegacyRuns(
+        keepingTextRun kind: StreamKind? = nil,
+        keepingUserRun: Bool = false,
+        keepingIdentifiedUserRun messageId: String? = nil
+    ) {
         for candidate: StreamKind in [.agent, .thought] where candidate != kind {
             legacyOpenRun[candidate] = nil
         }
         if !keepingUserRun { legacyOpenUserRun = nil }
+        if openIdentifiedUserRun?.messageId != messageId { openIdentifiedUserRun = nil }
     }
 
     /// Inserts a row recovered because it's genuinely missing from what
@@ -682,6 +757,9 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             if let open = legacyOpenRun[kind], open >= index { legacyOpenRun[kind] = open + 1 }
         }
         if let open = legacyOpenUserRun, open >= index { legacyOpenUserRun = open + 1 }
+        if let open = openIdentifiedUserRun, open.index >= index {
+            openIdentifiedUserRun = (open.messageId, open.index + 1)
+        }
         replayCursor = index + 1
         return index
     }
@@ -713,5 +791,21 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private static func text(of block: ACPContentBlock) -> String {
         if case .text(let value) = block { return value }
         return ""
+    }
+
+    /// `ACPSessionRunner.attachments(of:)` only materializes an image block
+    /// with a `uri` — right for the parent composer, which always resolves
+    /// an image to a file/resource link before it reaches a content block,
+    /// but a child prompt can carry an inline base64 `data` payload with no
+    /// `uri` at all. Without this, such a block has neither text nor a
+    /// matched attachment and the whole prompt update is silently dropped.
+    private static func attachments(of block: ACPContentBlock) -> [ACPMessage.Attachment] {
+        var attachments = ACPSessionRunner.attachments(of: [block])
+        if case .image(let data, let uri, let mimeType) = block, uri == nil,
+           let data, !data.isEmpty {
+            let mime = mimeType ?? "image/png"
+            attachments.append(.init(uri: "data:\(mime);base64,\(data)", name: nil, mimeType: mime))
+        }
+        return attachments
     }
 }

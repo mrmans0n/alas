@@ -289,31 +289,112 @@ struct ACPSubagentSessionTests {
         #expect(refinedPlan.first?.status == "completed")
     }
 
-    @Test("a replayed plan does not overwrite the newest already-persisted plan")
-    func replayedPlanIsANoOp() {
+    @Test("a replayed historical plan reconciles its own turn, not the newest one")
+    func replayedPlanTargetsItsOwnTurn() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
         // Hydrated with two turns already persisted correctly.
         run.restore(
             messages: [
                 .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
-                .plan(id: UUID(), [.init(content: "step one", status: "completed")]),
+                .plan(id: UUID(), [.init(content: "step one", status: "pending")]),
                 .user(id: UUID(), messageId: "p2", text: "second task", attachments: []),
                 .plan(id: UUID(), [.init(content: "step two", status: "pending")])
             ],
             createdAts: [Date(), Date(), Date(), Date()])
 
-        // `session/load` resends the FIRST turn's plan chronologically —
-        // it has no stable identity to reconcile against, so it must not
-        // clobber the newest (second turn's) already-correct plan row.
+        // `session/load` resends the FIRST turn's prompt, then its plan,
+        // chronologically — a plan has no stable identity to reconcile
+        // against, only a turn-boundary position, so it must land on ITS
+        // OWN turn's row and not clobber the newest (second turn's) one.
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
         let dirty = run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "completed")]))
 
-        #expect(dirty.isEmpty)
+        #expect(dirty == [1])
         #expect(run.messages.count == 4)
-        guard case .plan(_, let secondPlan) = run.messages[3] else {
-            Issue.record("expected the second turn's plan row to be untouched")
+        guard case .plan(_, let firstPlan) = run.messages[1],
+              case .plan(_, let secondPlan) = run.messages[3] else {
+            Issue.record("expected both turns' plan rows to still be in place")
             return
         }
+        #expect(firstPlan.map(\.status) == ["completed"])
         #expect(secondPlan.map(\.content) == ["step two"])
+    }
+
+    @Test("replay recovers a plan that never reached storage")
+    func replayRecoversMissingPlan() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Only the prompt made it to SQLite before the crash — its plan
+        // update never flushed.
+        run.restore(
+            messages: [.user(id: UUID(), messageId: "p1", text: "first task", attachments: [])],
+            createdAts: [Date()])
+
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
+        let dirty = run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+
+        #expect(dirty == [1])
+        #expect(run.messages.count == 2)
+        guard case .plan(_, let plan) = run.messages[1] else {
+            Issue.record("expected the missing plan to be recovered right after its prompt")
+            return
+        }
+        #expect(plan.map(\.content) == ["step one"])
+    }
+
+    @Test("replay of a reused prompt id matches the turn at the replay cursor, not the newest one")
+    func replayMatchesReusedMessageIdByPosition() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Two turns that happen to reuse the same `messageId`, with the
+        // first turn's reply between them — as in real usage, where a
+        // reused id is only ever separated by the PREVIOUS turn's agent
+        // activity, never immediately adjacent to its own reuse.
+        run.restore(
+            messages: [
+                .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
+                .agent(id: UUID(), StreamingText("reply")),
+                .user(id: UUID(), messageId: "p1", text: "second task", attachments: [])
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        // `session/load` resends everything chronologically. The FIRST
+        // replayed occurrence must resolve to the FIRST (oldest) row, not
+        // a backward search's globally-newest match — otherwise it would
+        // reset and extend row 2, then the second occurrence would find
+        // that same now-cached row and append to it too, combining both
+        // turns' text into one row while row 0 goes stale.
+        let firstDirty = run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
+        run.applyReplayed(.agentMessageChunk(.text("reply")))
+        let secondDirty = run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
+
+        #expect(firstDirty == [0])
+        #expect(secondDirty == [2])
+        #expect(run.messages.count == 3)
+        guard case .user(_, _, let firstText, _, _) = run.messages[0],
+              case .user(_, _, let secondText, _, _) = run.messages[2] else {
+            Issue.record("expected both reused-id prompts to stay in their own rows")
+            return
+        }
+        #expect(firstText == "first task")
+        #expect(secondText == "second task")
+    }
+
+    @Test("a data-only inline image is preserved in a child prompt")
+    func childPromptPreservesDataOnlyImage() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        let payload = "aGVsbG8=" // "hello", arbitrary base64 payload
+        run.apply(.userMessageChunk(.init(
+            messageId: "p1",
+            content: .image(data: payload, uri: nil, mimeType: "image/png"))))
+
+        #expect(run.messages.count == 1)
+        guard case .user(_, "p1", let text, let attachments, _) = run.messages[0] else {
+            Issue.record("expected one prompt bubble, not a dropped update")
+            return
+        }
+        #expect(text.isEmpty)
+        #expect(attachments.count == 1)
+        #expect(attachments.first?.uri == "data:image/png;base64,\(payload)")
+        #expect(attachments.first?.mimeType == "image/png")
     }
 
     @Test("an id-less chunk still extends only the trailing row of its kind")
