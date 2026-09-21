@@ -742,6 +742,49 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    // Two concurrent reciprocal exchanges for the SAME, previously-unknown
+    // identity — e.g. a retried pair-back — can each observe "nothing
+    // exists yet" at their own start, since neither has upserted anything
+    // yet. A before/after existence check alone would never catch the
+    // second one resurrecting a peer the FIRST one's own success let the
+    // user forget, because the second never itself observed the peer
+    // existing — only the shared forget-generation, bumped regardless of
+    // which sibling's row is being forgotten, can catch this.
+    @Test func aConcurrentSiblingExchangeDoesNotResurrectAPeerForgottenByTheOther() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let device1 = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        let device2 = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        // The request redeeming "CC1" resolves quickly; the one redeeming
+        // "CC2" resolves later, after the first has already upserted and
+        // been forgotten. Keyed by the request body — not by arrival order
+        // at this closure — so the outcome does not depend on how the two
+        // concurrent calls happen to get scheduled.
+        let pairer = RemotePeerPairer(fetch: { req in
+            let body = req.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let isFirst = (body?["code"] as? String) == "CC1"
+            try? await Task.sleep(nanoseconds: (isFirst ? 5 : 40) * 1_000_000)
+            return (Data(#"{"token":"tok","serverId":"srv-b","name":"Mac B"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(pairing: pairing, pairer: pairer, links: Links())
+        manager.connectAll()
+
+        async let first: Void = manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CC1",
+            localDeviceId: device1.deviceId, redeemedCode: "CODE1"))
+        async let second: Void = manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CC2",
+            localDeviceId: device2.deviceId, redeemedCode: "CODE2"))
+        _ = await first
+        let peer = try #require(manager.peers.first)
+        #expect(peer.localDeviceId == device1.deviceId)
+        manager.forget(peerId: peer.id)
+        _ = await second
+
+        #expect(manager.peers.isEmpty)
+        #expect(pairing.validate(token: device2.token) == nil)
+    }
+
     // A Mac with more advertised addresses than the shared bound (several
     // interfaces plus configured allowed hosts) would otherwise have the
     // receiving Mac reject the advertisement outright — it can never tell

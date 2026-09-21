@@ -112,13 +112,30 @@ final class RemotePeerManager {
     /// counter-code for as long as it stays valid there, well after this
     /// attempt's own wait gave up.
     @ObservationIgnored private var endedCounterCodes: [String: Date] = [:]
-    /// Whether a peer existed for a given `serverId`, captured synchronously
+    /// Bumped by `forget` for the identity it just removed. `addPeer` and
+    /// `handleInboundPeer` each capture this count for their target
+    /// identity before their own network round trip, then compare again
+    /// right before `upsert` — if it changed, something happened to this
+    /// identity while this attempt was in flight, so its own now-stale
+    /// result must not clobber whatever the current, more current state is.
+    /// This covers more than "the peer THIS attempt itself created was
+    /// forgotten": two concurrent exchanges for the SAME previously-unknown
+    /// identity (e.g. a doubled add, or a retried pair-back) can each
+    /// observe "nothing exists yet" at their own start, so neither's own
+    /// before/after existence check alone would ever catch one of them
+    /// resurrecting a peer the OTHER sibling's success let the user forget.
+    @ObservationIgnored private var forgetGenerationByServerId: [String: Int] = [:]
+    /// The forget-generation for a given `serverId`, captured synchronously
     /// by `notePeerPairingArrived` at the moment a `/pair` redemption for it
     /// fires — before the `onPeerPaired` → `Task { @MainActor in ... }` hop
     /// that schedules `handleInboundPeer` introduces an arbitrary delay.
     /// Consumed (and removed) the first time `handleInboundPeer` runs for
     /// that identity.
-    @ObservationIgnored private var priorExistenceAtRedeem: [String: Bool] = [:]
+    @ObservationIgnored private var startGenerationAtRedeem: [String: Int] = [:]
+
+    private func forgetGeneration(for serverId: String) -> Int {
+        forgetGenerationByServerId[serverId] ?? 0
+    }
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -297,17 +314,18 @@ final class RemotePeerManager {
         onRevokeDevice?(localDeviceId)
     }
 
-    /// Records, synchronously, whether a peer already exists for `serverId`
+    /// Records, synchronously, the current forget-generation for `serverId`
     /// at the moment a `/pair` redemption for it fires — the earliest point
     /// this can be observed, on the same call stack as the redeem itself,
     /// before the `onPeerPaired` → `Task { @MainActor in ... }` hop that
     /// schedules `handleInboundPeer`'s own body introduces an arbitrary
-    /// delay. A Forget landing in exactly that gap would otherwise vanish
-    /// before `handleInboundPeer` ever got a chance to observe "existed
-    /// before" for itself, since its own in-body snapshot only sees the
-    /// world as of whenever it happens to actually start running.
+    /// delay. A Forget (or a concurrent sibling exchange for this same
+    /// identity completing first) landing in exactly that gap would
+    /// otherwise go unnoticed by `handleInboundPeer`'s own in-body snapshot,
+    /// which only sees the world as of whenever it happens to actually
+    /// start running.
     func notePeerPairingArrived(serverId: String) {
-        priorExistenceAtRedeem[serverId] = peers.contains(where: { $0.serverId == serverId })
+        startGenerationAtRedeem[serverId] = forgetGeneration(for: serverId)
     }
 
     /// The server saw another Mac redeem a code here. With a counter-code we
@@ -316,18 +334,14 @@ final class RemotePeerManager {
     func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
         if let counterCode = request.counterCode {
             let me = boundedIdentity()
-            // Snapshot before the round trip below, mirroring addPeer's own
-            // protection on the initiator side: pairing back can take up to
-            // the full multi-origin timeout, and if the user forgets this
-            // peer while it's in flight, the reply must not resurrect it.
-            // `priorExistenceAtRedeem`, captured synchronously at redemption
-            // time by `notePeerPairingArrived`, is authoritative when
-            // present — it predates even the scheduling gap before this
-            // function's own body started; this in-body snapshot is only a
-            // fallback for callers (direct test invocations) that skip it.
-            let priorServerIds = Set(peers.map(\.serverId))
-            let existedBeforeThisExchange = priorExistenceAtRedeem.removeValue(forKey: request.peerServerId)
-                ?? priorServerIds.contains(request.peerServerId)
+            // `startGenerationAtRedeem`, captured synchronously at
+            // redemption time by `notePeerPairingArrived`, is authoritative
+            // when present — it predates even the scheduling gap before
+            // this function's own body started; capturing it here too is
+            // only a fallback for callers (direct test invocations) that
+            // skip that earlier hook.
+            let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.peerServerId)
+                ?? forgetGeneration(for: request.peerServerId)
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
@@ -340,15 +354,18 @@ final class RemotePeerManager {
                 onRevokeDevice?(request.localDeviceId)
                 return
             }
-            // This identity existed before the round trip started but is
-            // gone now: the user forgot it while this Mac was still pairing
-            // back. `forget` already revoked every device carrying this
-            // identity, `request.localDeviceId` included — revoked again
-            // here is a harmless no-op — but `upsert` would otherwise
-            // recreate the OUTBOUND side of the relationship from this
-            // now-unwanted reply, undoing the user's revocation just as
-            // surely as resurrecting the peer row itself would.
-            if existedBeforeThisExchange, !peers.contains(where: { $0.serverId == request.peerServerId }) {
+            // The generation changed since this exchange started: either
+            // the user forgot this peer (this SAME attempt's own, or a
+            // concurrent sibling's — e.g. a doubled add, or a retried
+            // pair-back, for the same previously-unknown identity) while
+            // this Mac was still pairing back. `forget` already revoked
+            // every device carrying this identity, `request.localDeviceId`
+            // included — revoked again here is a harmless no-op — but
+            // `upsert` would otherwise recreate the OUTBOUND side of the
+            // relationship from this now-stale reply, undoing the user's
+            // revocation just as surely as resurrecting the peer row
+            // itself would.
+            guard forgetGeneration(for: request.peerServerId) == startGeneration else {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
                 return
@@ -412,6 +429,12 @@ final class RemotePeerManager {
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
+        // Bumped so any addPeer/handleInboundPeer exchange for this same
+        // identity that is still in flight — including one that never
+        // itself observed a peer existing, a concurrent sibling of
+        // whichever attempt just created the row being forgotten here —
+        // can tell its own result is now stale and must not upsert it back.
+        forgetGenerationByServerId[peer.serverId, default: 0] += 1
         // Revoke by the peer's identity rather than by the stored
         // `localDeviceId`. That id is a snapshot taken before an HTTP round
         // trip, and a peer redeem adds a device row without removing earlier
