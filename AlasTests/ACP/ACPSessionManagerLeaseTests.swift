@@ -316,6 +316,38 @@ import Foundation
         #expect(!mgrB.mirrorPollActiveForTest(sessionId: sessionA.id))
     }
 
+    @Test("mirror refresh applies the writer's persisted authStatus and needsAuth semantics")
+    func mirrorRefreshAppliesAuthStatus() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-auth-status-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let sessionA = mgrA.createSession(agentId: "claude")
+        #expect(await mgrA.acquireWriterLease(sessionId: sessionA.id) == true)
+        await mgrA.flushAllPersistence()
+        try storeA.setAuthStatus(sessionId: sessionA.id, status: .init(kind: .none, label: "Not logged in"))
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(await mgrB.acquireWriterLease(sessionId: sessionA.id) == false)
+        guard let mirrorSession = mgrB.placeholderSession(id: sessionA.id) else {
+            Issue.record("expected a placeholder session for the mirrored id")
+            return
+        }
+        mgrB.beginMirroring(sessionId: sessionA.id)
+
+        await mgrB.refreshMirror(sessionId: sessionA.id)
+
+        // Mirrors never run their own attach/runner, so nothing else would
+        // otherwise re-apply the `.needsAuth` semantics a live attach
+        // derives from a signed-out status.
+        #expect(mirrorSession.authStatus?.kind == ACPAuthStatus.Kind.none)
+        guard case .needsAuth = mirrorSession.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(mirrorSession.setupState)")
+            return
+        }
+    }
+
     @Test("shutdownBackgroundTasks cancels mirror pollers")
     func disposeStopsMirrorPoll() async throws {
         let url = FileManager.default.temporaryDirectory

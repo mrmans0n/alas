@@ -221,24 +221,34 @@ struct ACPInitializeResult: Codable, Equatable {
         let sessionCapabilities: ACPAgentSessionCapabilities
         let mcpCapabilities: ACPMCPServerCapabilities
         let providerCapabilities: EmptyObject?
+        /// `true` when `_meta.authStatus` was present on `initialize`, i.e.
+        /// the agent will push `_auth/status_update` notifications.
+        let advertisesAuthStatus: Bool
 
         init(
             promptCapabilities: ACPPromptCapabilities? = nil,
             loadSession: Bool = false,
             sessionCapabilities: ACPAgentSessionCapabilities = .init(),
             mcpCapabilities: ACPMCPServerCapabilities = .init(),
-            providerCapabilities: EmptyObject? = nil
+            providerCapabilities: EmptyObject? = nil,
+            advertisesAuthStatus: Bool = false
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
             self.sessionCapabilities = sessionCapabilities
             self.mcpCapabilities = mcpCapabilities
             self.providerCapabilities = providerCapabilities
+            self.advertisesAuthStatus = advertisesAuthStatus
         }
 
         enum CodingKeys: String, CodingKey {
             case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities
             case providerCapabilities = "providers"
+            case meta = "_meta"
+        }
+
+        private enum MetaCodingKeys: String, CodingKey {
+            case authStatus
         }
 
         init(from decoder: Decoder) throws {
@@ -251,6 +261,24 @@ struct ACPInitializeResult: Codable, Equatable {
             ) ?? .init()
             mcpCapabilities = try c.decodeIfPresent(ACPMCPServerCapabilities.self, forKey: .mcpCapabilities) ?? .init()
             providerCapabilities = try? c.decodeIfPresent(EmptyObject.self, forKey: .providerCapabilities)
+            if let meta = try? c.nestedContainer(keyedBy: MetaCodingKeys.self, forKey: .meta) {
+                advertisesAuthStatus = (try? meta.decodeIfPresent(EmptyObject.self, forKey: .authStatus)) != nil
+            } else {
+                advertisesAuthStatus = false
+            }
+        }
+
+        // `advertisesAuthStatus` is inbound-only (derived from whether
+        // `_meta.authStatus` was present on the wire); Alas never re-encodes
+        // an agent's own `agentCapabilities`, so there's nothing meaningful
+        // to write back for `_meta` and it's intentionally omitted here.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(promptCapabilities, forKey: .promptCapabilities)
+            try c.encode(loadSession, forKey: .loadSession)
+            try c.encode(sessionCapabilities, forKey: .sessionCapabilities)
+            try c.encode(mcpCapabilities, forKey: .mcpCapabilities)
+            try c.encodeIfPresent(providerCapabilities, forKey: .providerCapabilities)
         }
     }
 

@@ -312,6 +312,27 @@ struct ACPInitializeTests {
         #expect(method.terminalAuth?.label == "Claude Login")
     }
 
+    @Test("decodes the _meta.authStatus marker")
+    func decodesAuthStatusMarker() throws {
+        let advertised = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": { "_meta": { "authStatus": {} } }
+        }
+        """.utf8))
+        #expect(advertised.agentCapabilities?.advertisesAuthStatus == true)
+
+        let omitted = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": {} }
+        """.utf8))
+        #expect(omitted.agentCapabilities?.advertisesAuthStatus == false)
+
+        let noMeta = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": { "_meta": {} } }
+        """.utf8))
+        #expect(noMeta.agentCapabilities?.advertisesAuthStatus == false)
+    }
+
     @Test("decodes auth method type variants")
     func decodesAuthMethodTypeVariants() throws {
         let data = Data("""

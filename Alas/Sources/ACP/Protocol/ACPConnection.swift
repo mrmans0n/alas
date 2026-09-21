@@ -7,6 +7,8 @@ struct ACPInitializeOutcome: Equatable {
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
     let mcpCapabilities: ACPMCPServerCapabilities
     let providerCapabilities: EmptyObject?
+    /// Whether the agent advertised the `_auth/status_update` extension marker.
+    let advertisesAuthStatus: Bool
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -38,7 +40,8 @@ final class ACPConnection: @unchecked Sendable {
             loadSession: result.agentCapabilities?.loadSession ?? false,
             sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init(),
             mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init(),
-            providerCapabilities: result.agentCapabilities?.providerCapabilities
+            providerCapabilities: result.agentCapabilities?.providerCapabilities,
+            advertisesAuthStatus: result.agentCapabilities?.advertisesAuthStatus ?? false
         )
     }
 

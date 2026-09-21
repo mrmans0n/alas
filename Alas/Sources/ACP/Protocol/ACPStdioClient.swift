@@ -12,6 +12,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     var yieldedUpdateCount: Int {
@@ -28,6 +29,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     private let stateLock = NSLock()
     private var nextId: Int = 0
@@ -90,6 +92,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
     }
 
     /// Test-only initialiser: accepts a pre-built transport directly,
@@ -136,6 +142,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
     }
 
     /// Convenience factory for tests — wraps `init(transport:)`.
@@ -171,6 +181,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             filesCont.finish()
             terminalsCont.finish()
             stderrCont.finish()
+            authStatusCont.finish()
         }
     }
 
@@ -257,6 +268,17 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 from: data
             ), let p = env.params {
                 elicitationCompletionsCont.yield(p)
+            }
+        case "_auth/status_update":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPAuthStatusUpdateParams>.self,
+                from: data
+            ), let p = env.params {
+                acknowledgeAfterDispatch = false
+                authStatusCont.yield(.init(
+                    status: p.authStatus,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
             }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),

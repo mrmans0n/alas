@@ -284,6 +284,39 @@ struct ACPBrokerClientTests {
         #expect(try await #require(cancelTask.value) == .number(7))
     }
 
+    @Test func authStatusUpdateNotificationIsYielded() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: "_auth/status_update",
+                    params: .object([
+                        "authStatus": .object([
+                            "kind": .string("none"),
+                            "label": .string("Not logged in")
+                        ])
+                    ])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+        let statusTask = Task {
+            var iterator = client.authStatusUpdates.makeAsyncIterator()
+            return try #require(await iterator.next())
+        }
+
+        try await client.start()
+
+        let event = try await statusTask.value
+        #expect(event.status.kind == .none)
+        #expect(event.status.label == "Not logged in")
+
+        #expect(await service.acks.isEmpty)
+        event.durableConsumptionAcknowledgement?()
+        try await waitUntil { await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)] }
+    }
+
     @Test func adapterExitNotificationFinishesUpdateStream() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [

@@ -89,6 +89,41 @@ struct ACPConnectionTests {
         #expect(initialized.mcpCapabilities == .init(http: true, sse: true))
     }
 
+    @Test("initialize reports whether the agent advertises the auth status marker")
+    func initializeReportsAuthStatusMarker() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            """
+            {
+              "protocolVersion": 1,
+              "agentCapabilities": { "_meta": { "authStatus": {} } }
+            }
+            """.data(using: .utf8)!
+        }
+
+        let conn = ACPConnection(client: mock)
+        let initialized = try await conn.initialize()
+
+        #expect(initialized.advertisesAuthStatus == true)
+    }
+
+    @Test("initialize defaults advertisesAuthStatus to false when the marker is absent")
+    func initializeDefaultsAuthStatusMarkerToFalse() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        let initialized = try await conn.initialize()
+
+        #expect(initialized.advertisesAuthStatus == false)
+    }
+
     @Test("initialize can suppress terminal capability")
     func initializeSuppressesTerminalCapability() async throws {
         let mock = ACPMockClient()
