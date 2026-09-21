@@ -96,11 +96,71 @@ struct ACPSessionUpdateTests {
             #expect(tc.title == "read_file")
             #expect(tc.status == "in_progress")
             #expect(tc.metadata == nil)
+            #expect(tc.name == nil)
             #expect(tc.content?.count == 1)
             if case .content(.text(let s)) = tc.content?.first {
                 #expect(s == "reading…")
             } else { Issue.record("expected wrapped text content") }
         } else { Issue.record("expected toolCall") }
+    }
+
+    @Test("decodes the stable tool-call name field")
+    func toolCallName() throws {
+        let json = """
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "s1",
+            "update": {
+              "sessionUpdate": "tool_call",
+              "toolCallId": "tc-name",
+              "title": "Reading file",
+              "kind": "read",
+              "status": "in_progress",
+              "name": "Read"
+            }
+          }
+        }
+        """
+        let env = try JSONDecoder().decode(
+            JSONRPCEnvelope<ACPSessionUpdateParams>.self,
+            from: Data(json.utf8))
+        if case .toolCall(let tc) = env.params!.update {
+            #expect(tc.name == "Read")
+        } else { Issue.record("expected toolCall") }
+    }
+
+    @Test("tool_call_update name replaces when present and stays nil when absent or null")
+    func toolCallUpdateName() throws {
+        func decodeUpdate(_ nameField: String) throws -> ACPToolCallUpdate {
+            let json = """
+            {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "s1",
+                "update": {
+                  "sessionUpdate": "tool_call_update",
+                  "toolCallId": "tc-name",
+                  "status": "completed"\(nameField)
+                }
+              }
+            }
+            """
+            let env = try JSONDecoder().decode(
+                JSONRPCEnvelope<ACPSessionUpdateParams>.self,
+                from: Data(json.utf8))
+            guard case .toolCallUpdate(let update) = env.params!.update else {
+                Issue.record("expected toolCallUpdate")
+                throw CocoaError(.coderInvalidValue)
+            }
+            return update
+        }
+
+        #expect(try decodeUpdate(", \"name\": \"exec_command\"").name == "exec_command")
+        #expect(try decodeUpdate(", \"name\": null").name == nil)
+        #expect(try decodeUpdate("").name == nil)
     }
 
     @Test("decodes session_info_update with metadata")
@@ -187,6 +247,7 @@ struct ACPSessionUpdateTests {
         #expect(update.rawInput != nil)
         #expect(update.rawOutput != nil)
         #expect(update.metadata == nil)
+        #expect(update.name == nil)
     }
 
     @Test("decodes plan update")

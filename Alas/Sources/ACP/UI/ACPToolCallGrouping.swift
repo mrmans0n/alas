@@ -141,6 +141,16 @@ enum ACPToolCallGrouping {
                    first.index <= boundary, row.index > boundary {
                     flushRun()
                 }
+                // A run only breaks on a stable-name MISMATCH — both sides
+                // must actually carry a `name` for this to fire. Adapters
+                // that omit it (nil on both sides) keep today's permissive
+                // behavior: any consecutive finished calls fold together.
+                if let last = run.last,
+                   let lastName = toolCallName(for: last, in: messages),
+                   let candidateName = toolCallName(for: row, in: messages),
+                   lastName != candidateName {
+                    flushRun()
+                }
                 run.append(row)
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
@@ -150,6 +160,13 @@ enum ACPToolCallGrouping {
         }
         flushRun()
         return result
+    }
+
+    private static func toolCallName(for row: ACPTranscriptVisibleRow, in messages: [ACPMessage]) -> String? {
+        guard messages.indices.contains(row.index), case .toolCall(let toolCall) = messages[row.index] else {
+            return nil
+        }
+        return toolCall.nonEmptyName
     }
 }
 

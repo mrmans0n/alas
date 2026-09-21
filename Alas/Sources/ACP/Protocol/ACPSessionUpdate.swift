@@ -370,9 +370,13 @@ struct ACPToolCallPayload: Codable, Equatable {
     let rawInput: AnyCodable?
     let rawOutput: AnyCodable?
     let metadata: AnyCodable?
+    /// Stable, opaque tool identifier (ACP 1.22+), distinct from the
+    /// per-invocation `title` and the coarse `kind` — e.g. `Bash`, `Read`,
+    /// `exec_command`. Presentation metadata only; grants no capability.
+    let name: String?
 
     private enum CodingKeys: String, CodingKey {
-        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput, name
         case metadata = "_meta"
     }
 
@@ -385,7 +389,8 @@ struct ACPToolCallPayload: Codable, Equatable {
         locations: [ACPToolLocation]? = nil,
         rawInput: AnyCodable? = nil,
         rawOutput: AnyCodable? = nil,
-        metadata: AnyCodable? = nil
+        metadata: AnyCodable? = nil,
+        name: String? = nil
     ) {
         self.toolCallId = toolCallId
         self.title = title
@@ -396,6 +401,7 @@ struct ACPToolCallPayload: Codable, Equatable {
         self.rawInput = rawInput
         self.rawOutput = rawOutput
         self.metadata = metadata
+        self.name = name
     }
 }
 
@@ -408,9 +414,12 @@ struct ACPToolCallUpdate: Codable, Equatable {
     let rawOutput: AnyCodable?
     let rawInput: AnyCodable?
     let metadata: AnyCodable?
+    /// Stable tool identifier. Per spec, omitted or `null` means unchanged
+    /// (v1 cannot clear a name once set); a present string replaces.
+    let name: String?
 
     private enum CodingKeys: String, CodingKey {
-        case toolCallId, title, status, locations, content, rawInput, rawOutput
+        case toolCallId, title, status, locations, content, rawInput, rawOutput, name
         case metadata = "_meta"
     }
 
@@ -422,7 +431,8 @@ struct ACPToolCallUpdate: Codable, Equatable {
         title: String? = nil,
         locations: [ACPToolLocation]? = nil,
         rawInput: AnyCodable? = nil,
-        metadata: AnyCodable? = nil
+        metadata: AnyCodable? = nil,
+        name: String? = nil
     ) {
         self.toolCallId = toolCallId
         self.title = title
@@ -432,6 +442,7 @@ struct ACPToolCallUpdate: Codable, Equatable {
         self.rawOutput = rawOutput
         self.rawInput = rawInput
         self.metadata = metadata
+        self.name = name
     }
 }
 

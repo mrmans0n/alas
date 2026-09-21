@@ -48,6 +48,40 @@ struct ACPSessionTests {
         #expect(compaction.durationMs == 300)
     }
 
+    @Test("tool_call name is stored, and a later update without name leaves it untouched")
+    func toolCallNamePersistsAcrossUpdateWithoutName() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Bash", kind: "execute", status: "in_progress",
+            name: "Bash")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "Bash")
+        #expect(toolCall.status == "completed")
+    }
+
+    @Test("tool_call_update name replaces the stored name when present")
+    func toolCallUpdateReplacesName() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "in_progress")))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1", status: "completed", name: "exec_command")))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(toolCall.name == "exec_command")
+    }
+
     @Test("compaction summary chunks append to the normalized row")
     func compactionSummaryChunksAppend() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

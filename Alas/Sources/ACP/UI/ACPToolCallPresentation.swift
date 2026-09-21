@@ -17,6 +17,7 @@ struct ACPToolCallPresentation: Equatable, Sendable {
         let title = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowerTitle = title.lowercased()
         let kind = toolCall.kind?.lowercased()
+        let name = toolCall.nonEmptyName
 
         if kind == "search" {
             if lowerTitle.hasPrefix("web search") {
@@ -35,11 +36,12 @@ struct ACPToolCallPresentation: Equatable, Sendable {
             return .init(label: "Image", iconSystemName: "photo", style: .image)
         }
 
-        if kind == "read", toolCall.referencesImage {
+        if name == "view_image" || (kind == "read" && toolCall.referencesImage) {
             return .init(label: "Viewed Image", iconSystemName: "photo.on.rectangle", style: .image)
         }
 
-        if toolCall.isMCPToolCall || lowerTitle.hasPrefix("mcp.") || lowerTitle.hasPrefix("mcp__") {
+        if toolCall.isMCPToolCall || name?.hasPrefix("mcp__") == true
+            || lowerTitle.hasPrefix("mcp.") || lowerTitle.hasPrefix("mcp__") {
             return .init(
                 label: "MCP",
                 iconSystemName: "point.3.connected.trianglepath.dotted",
@@ -49,6 +51,21 @@ struct ACPToolCallPresentation: Equatable, Sendable {
 
         if kind == "think" || lowerTitle == "guardian review" {
             return .init(label: "Review", iconSystemName: "checkmark.shield", style: .review)
+        }
+
+        // Stable tool identifiers (ACP 1.22+) take priority over the
+        // kind/title heuristics below: they're the SDK/adapter's own tool
+        // names and don't drift when a title is reformatted. Adapters that
+        // omit `name` (nil here) fall straight through unchanged.
+        switch name {
+        case "Bash", "exec_command", "write_stdin":
+            return .init(label: "Ran", iconSystemName: "terminal", style: .generic)
+        case "Edit", "MultiEdit", "Write":
+            return .init(label: "Edit", iconSystemName: "pencil", style: .generic)
+        case "Read":
+            return .init(label: "Read", iconSystemName: "doc.text", style: .generic)
+        default:
+            break
         }
 
         switch kind {
