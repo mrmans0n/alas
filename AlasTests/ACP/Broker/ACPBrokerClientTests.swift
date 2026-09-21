@@ -135,28 +135,35 @@ struct ACPBrokerClientTests {
     /// the old supervisor's listener drops, surfacing as a generic
     /// transport error with no recognizable code at all. `start()` treats
     /// closing the legacy broker as best-effort — any close failure, not
-    /// just a recognized one, still falls through to reopen and adopt
-    /// whatever is running now, the same way `shutdown()` already treats
-    /// its own close as advisory.
-    @Test func adoptedLegacyBrokerRestartToleratesAnyCloseFailure() async throws {
+    /// just a recognized one, still falls through to reopen, the same way
+    /// `shutdown()` already treats its own close as advisory.
+    ///
+    /// That tolerance only holds because the reopen actually landed on a
+    /// current-build broker (see the race test above, where the mock
+    /// updates its state as if a concurrent racing client had won). If the
+    /// close failed because it never reached the broker at all — leaving it
+    /// alive, unchanged, still legacy — the reopen below just re-adopts the
+    /// exact same broker `start()` was trying to get rid of. Silently
+    /// proceeding from there would replay without todo history: the data
+    /// loss this whole restart exists to prevent, reached by a different
+    /// path than the one it already guards against. `start()` must fail
+    /// loudly instead of guessing.
+    @Test func adoptedLegacyBrokerRestartFailsWhenReopenIsStillLegacy() async throws {
         let service = MockBrokerService()
         await service.setOpenAdopted(true)
         await service.setOpenSnapshotCursorTodosByToolCallId(nil)
         await service.setCloseShouldThrow(MockBrokerServiceError.injected)
-        await service.enqueueAttach(events: [])
         let client = makeClient(
             service: service,
             initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
         )
 
-        // The mock's thrown close (unlike the generation-mismatch case
-        // above) leaves the broker's adopted/legacy state untouched, so the
-        // reopen below sees the same still-legacy snapshot. That's fine:
-        // start() makes one recovery attempt, not a loop, and the point
-        // under test is that the close failure alone doesn't fail start().
-        let opened = try await client.start()
-
-        #expect(opened.adopted == true)
+        // The mock's thrown close leaves the broker's adopted/legacy state
+        // untouched (unlike the generation-mismatch case above), so the
+        // reopen sees the same still-legacy snapshot.
+        await #expect(throws: ACPBrokerLegacyRestartFailedError.self) {
+            try await client.start()
+        }
         #expect(await service.opened.count == 2)
         #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
     }

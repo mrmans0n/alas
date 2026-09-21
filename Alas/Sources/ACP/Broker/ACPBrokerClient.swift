@@ -28,6 +28,20 @@ struct ACPBrokerDurableCompletionReplayError: LocalizedError {
     }
 }
 
+/// A legacy broker's best-effort close (see `start()`) can fail before ever
+/// reaching the supervisor — a transient connect/write failure, say — which
+/// leaves that broker alive and unchanged. The reopen that follows then just
+/// re-adopts the same still-legacy broker, snapshot and all. Silently
+/// proceeding from there would replay this pull-only broker's backlog with
+/// no todo merge history: exactly the data loss this restart exists to
+/// prevent, just reached by a different path than the one it already
+/// guards against.
+struct ACPBrokerLegacyRestartFailedError: LocalizedError {
+    var errorDescription: String? {
+        "Restarting a legacy ACP broker did not produce a broker with a todo snapshot."
+    }
+}
+
 struct ACPBrokerReplayedOperationCompletion {
     let outcome: ACPBrokerRPCOutcome
     private let acknowledgement: @Sendable () -> Void
@@ -298,6 +312,17 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             ))
             resetAcknowledgedCursor()
             opened = try await service.open(openParams)
+            if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
+                // The close above may never have reached the broker at all,
+                // leaving it alive and unchanged — the reopen just adopted
+                // that same still-legacy broker again. Fail loudly instead
+                // of replaying without todo history; the caller's normal
+                // retry/reconnect path gets another chance, and a
+                // concurrent racing client's own close (which this
+                // call's best-effort attempt doesn't depend on) may well
+                // have already fixed it by then.
+                throw ACPBrokerLegacyRestartFailedError()
+            }
         }
         if let initialBrokerGeneration,
            initialBrokerGeneration != opened.snapshot.metadata.generation {
