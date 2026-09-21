@@ -139,18 +139,21 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 first = message
             case .failed:
                 if Task.isCancelled { return }
-                // A dropped receive here can mean either the upgrade was
-                // refused outright, or that it actually succeeded (a genuine
-                // 101 reply) and the connection then closed before any frame
-                // arrived — a server restart, a transient network blip, or a
-                // proxy interruption mid-handshake. Only the former is
-                // evidence the credential was specifically rejected; a
-                // confirmed 101 means the token was fine, so treat this
-                // exactly like `.noUsableFrame` — an ordinary retryable
-                // disconnect — rather than probing `/health` at all, since a
-                // reachable peer there would otherwise be misread as having
-                // revoked a token it never actually refused.
-                if (candidate.response as? HTTPURLResponse)?.statusCode == 101 {
+                // A dropped receive here carries no information about the
+                // credential unless the response actually confirms a
+                // rejection. A genuine 101 means the upgrade succeeded and
+                // the token was fine — whatever closed the connection
+                // afterward (a restart, a network blip, a proxy
+                // interruption) is an ordinary transport disconnect. A
+                // MISSING response — the connection reset before any HTTP
+                // reply arrived at all, e.g. the peer restarting mid-
+                // handshake — carries just as little evidence: probing
+                // `/health` here would let a peer merely coming back online
+                // right after turn a transient reset into the same terminal
+                // state as an actual revocation. Only an explicit rejection
+                // status is grounds to ask `/health` at all.
+                let responseStatus = (candidate.response as? HTTPURLResponse)?.statusCode
+                guard let responseStatus, responseStatus != 101 else {
                     continue
                 }
                 let peerFederationEnabled = await healthCheck(origin)

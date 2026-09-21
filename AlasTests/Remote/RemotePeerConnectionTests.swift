@@ -19,6 +19,16 @@ struct RemotePeerConnectionTests {
         private(set) var port: UInt16?
         private var listener: NWListener?
         private let queue = DispatchQueue(label: "io.alas.tests.remote.handshake-then-drop")
+        /// When false, an upgrade attempt is reset without sending a single
+        /// byte back — the client never sees any HTTP response at all,
+        /// simulating a connection reset before any reply arrives (e.g. the
+        /// peer restarting mid-handshake), as distinct from an accepted
+        /// upgrade that drops before `hello`.
+        private let respondsToUpgrade: Bool
+
+        init(respondsToUpgrade: Bool = true) {
+            self.respondsToUpgrade = respondsToUpgrade
+        }
 
         func start() throws {
             let listener = try NWListener(using: .tcp, on: .any)
@@ -31,7 +41,7 @@ struct RemotePeerConnectionTests {
                     self.port = assigned
                 }
             }
-            listener.newConnectionHandler = { [queue] conn in
+            listener.newConnectionHandler = { [queue, respondsToUpgrade] conn in
                 conn.start(queue: queue)
                 var buffer = Data()
                 func receiveLoop() {
@@ -41,7 +51,9 @@ struct RemotePeerConnectionTests {
                             let headerText = String(data: buffer[..<range.lowerBound], encoding: .utf8) ?? ""
                             let lines = headerText.split(separator: "\r\n")
                             let isUpgrade = lines.contains { $0.lowercased().hasPrefix("upgrade:") && $0.lowercased().contains("websocket") }
-                            if isUpgrade {
+                            if isUpgrade, !respondsToUpgrade {
+                                conn.cancel()   // reset without sending anything back at all
+                            } else if isUpgrade {
                                 let key = lines
                                     .first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
                                     .split(separator: ":", maxSplits: 1)
@@ -185,6 +197,28 @@ struct RemotePeerConnectionTests {
     // produces.
     @Test func aConnectionThatDropsAfterTheUpgradeButBeforeHelloStaysRetryable() async throws {
         let server = HandshakeThenDropServer()
+        try server.start()
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        let origin = "http://127.0.0.1:\(port)"
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: "t", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .offline }
+        #expect(!events.states.contains(.unauthorized))
+    }
+
+    // A connection reset before any HTTP response arrives at all — the peer
+    // restarting mid-handshake, for instance — carries no more evidence
+    // against the credential than a confirmed 101 does. `/health` answering
+    // normally right after must not turn this into the terminal state a
+    // genuine rejection produces.
+    @Test func aConnectionResetBeforeAnyResponseStaysRetryable() async throws {
+        let server = HandshakeThenDropServer(respondsToUpgrade: false)
         try server.start()
         defer { server.stop() }
         for _ in 0..<50 where server.port == nil {
