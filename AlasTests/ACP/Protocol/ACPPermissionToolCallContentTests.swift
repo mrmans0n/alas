@@ -18,7 +18,7 @@ struct ACPPermissionToolCallContentTests {
         let toolCall = try JSONDecoder().decode(ACPPermissionToolCall.self, from: json)
         let blocks = try #require(toolCall.content)
         #expect(blocks.count == 2)
-        guard case .diff(let path, _, let newText) = blocks[0] else {
+        guard case .diff(let path, _, let newText, _, _) = blocks[0] else {
             Issue.record("expected first block to decode as .diff")
             return
         }
