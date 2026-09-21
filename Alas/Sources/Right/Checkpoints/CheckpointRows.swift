@@ -135,13 +135,15 @@ struct CheckpointCard: View {
     let manifestError: String?
     let mutationsDisabled: Bool
     let blockedReason: String?
-    /// Number of manifest groups this expanded card will render inline. Bounded
-    /// by `RightPaneState.checkpointVisibleFileGroupLimit`: one capped page by
-    /// default, one more `maxInlineFileGroups` chunk per "Show more" click —
-    /// never the full remainder in a single render.
-    let visibleFileGroupLimit: Int
+    /// 0-based page of manifest groups this expanded card is currently
+    /// showing. Only this page's groups render — navigating never
+    /// accumulates previously shown groups — so the card renders at most
+    /// `CheckpointPresentation.maxInlineFileGroups` file rows regardless of
+    /// how many pages a huge checkpoint has.
+    let fileListPageIndex: Int
     let onToggle: () -> Void
-    let onShowMoreFiles: () -> Void
+    let onPreviousFilePage: () -> Void
+    let onNextFilePage: () -> Void
     let onRestore: () -> Void
     let onDelete: () -> Void
     let onInspect: (CheckpointFileGroup) -> Void
@@ -281,22 +283,38 @@ struct CheckpointCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
             let pathIndex = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
-            let visibleGroups = manifest.groups.prefix(visibleFileGroupLimit)
-            ForEach(Array(visibleGroups)) { group in
+            let cap = CheckpointPresentation.maxInlineFileGroups
+            let total = manifest.groups.count
+            let pageStart = total == 0 ? 0 : min(fileListPageIndex * cap, total - 1)
+            let pageEnd = min(pageStart + cap, total)
+            let windowGroups = total == 0 ? [] : Array(manifest.groups[pageStart..<pageEnd])
+            ForEach(windowGroups) { group in
                 CheckpointFileGroupRow(
                     group: group,
                     badges: CheckpointPresentation.fileBadges(for: group, pathIndex: pathIndex)
                 ) { onInspect(group) }
                 .id(CheckpointPresentation.groupRowID(checkpointID: checkpoint.id, groupID: group.id))
             }
-            let overflow = manifest.groups.count - visibleGroups.count
-            if overflow > 0 {
-                let nextPage = min(overflow, CheckpointPresentation.maxInlineFileGroups)
-                Button("Show \(nextPage) more file\(nextPage == 1 ? "" : "s")", action: onShowMoreFiles)
+            if total > cap {
+                HStack(spacing: 6) {
+                    Text("\(pageStart + 1)–\(pageEnd) of \(total) files")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-faint"))
+                    Spacer(minLength: 6)
+                    Button(action: onPreviousFilePage) {
+                        Icon(name: "chevron.left", size: 9, color: theme.color(pageStart == 0 ? "fg-faint" : "fg-muted"))
+                    }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.color("accent"))
-                    .padding(.vertical, 2)
+                    .disabled(pageStart == 0)
+                    .accessibilityLabel("Previous files")
+                    Button(action: onNextFilePage) {
+                        Icon(name: "chevron.right", size: 9, color: theme.color(pageEnd >= total ? "fg-faint" : "fg-muted"))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(pageEnd >= total)
+                    .accessibilityLabel("Next files")
+                }
+                .padding(.vertical, 2)
             }
             if !manifest.exclusions.isEmpty {
                 CheckpointExclusionsRow(exclusions: manifest.exclusions)
