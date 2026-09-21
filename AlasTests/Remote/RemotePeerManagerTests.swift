@@ -172,6 +172,25 @@ struct RemotePeerManagerTests {
         #expect(links.byPeerId.values.first?.disconnectCalls == 1)
     }
 
+    // `Task.sleep` throws immediately on a cancelled task rather than
+    // actually sleeping, and a bare `try?` around it discards that signal.
+    // Without an explicit cancellation check, the wait loop would busy-spin
+    // this MainActor-isolated method with no real delay between iterations
+    // until the real-time deadline elapsed, freezing the UI for the whole
+    // window instead of returning promptly.
+    @Test func addPeerExitsPromptlyWhenItsOwnTaskIsCancelledWhileWaiting() async throws {
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: Links(), reciprocalConfirmationTimeout: 2)
+        manager.connectAll()
+        let task = Task { await manager.addPeer(link: linkFromA) }
+        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+        task.cancel()
+        let start = Date()
+        _ = await task.value
+        #expect(Date().timeIntervalSince(start) < 1.0, "cancellation must interrupt the wait promptly, not busy-spin until the real-time deadline")
+    }
+
     // A completely separate, concurrent exchange for the SAME identity
     // (e.g. an inbound pairing) can succeed and update this same row while
     // this attempt's own wait is still running. When this attempt's own

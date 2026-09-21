@@ -531,6 +531,13 @@ final class RemotePeerManager {
     private func waitForReciprocalRedemption(peerId: String, counterCode: String) async -> Bool {
         let deadline = Date().addingTimeInterval(reciprocalConfirmationTimeout)
         while true {
+            // `Task.sleep` throws immediately on a cancelled task rather
+            // than actually sleeping, and `try?` below discards that
+            // signal — without this check, a cancelled attempt would
+            // busy-spin this MainActor-isolated loop with no real delay
+            // between iterations until the real-time deadline elapses,
+            // freezing the UI for up to `reciprocalConfirmationTimeout`.
+            if Task.isCancelled { return false }
             if let buffered = pendingReciprocalConfirmations.removeValue(forKey: counterCode) {
                 guard let index = peers.firstIndex(where: { $0.id == peerId }) else {
                     // The peer was forgotten (e.g. the user clicked Forget)
