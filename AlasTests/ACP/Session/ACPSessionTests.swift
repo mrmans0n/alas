@@ -180,6 +180,42 @@ struct ACPSessionTests {
         #expect(session.activeNotice == nil)
     }
 
+    @Test("a different notice arriving while a pinned notice is active queues instead of replacing it")
+    func differentNoticeQueuesBehindPinnedNotice() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let warning = ACPSessionNotice(severity: .warning, title: "MCP server unavailable")
+        let info = ACPSessionNotice(severity: .info, title: "Model fallback")
+
+        session.apply(.notice(warning))
+        session.apply(.notice(info))
+
+        // The pinned warning must stay visible until dismissed, not get
+        // silently replaced (and then vanish when info auto-dismisses).
+        #expect(session.activeNotice == warning)
+
+        session.dismissActiveNotice()
+
+        // Dismissing the pinned notice promotes the one that queued up.
+        #expect(session.activeNotice == info)
+    }
+
+    @Test("a queued notice replaces an older queued one instead of stacking")
+    func queuedNoticeIsLatestWins() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let warning = ACPSessionNotice(severity: .warning, title: "MCP server unavailable")
+        let firstQueued = ACPSessionNotice(severity: .info, title: "First")
+        let secondQueued = ACPSessionNotice(severity: .info, title: "Second")
+
+        session.apply(.notice(warning))
+        session.apply(.notice(firstQueued))
+        session.apply(.notice(secondQueued))
+        #expect(session.activeNotice == warning)
+
+        session.dismissActiveNotice()
+
+        #expect(session.activeNotice == secondQueued)
+    }
+
     @Test("notices arriving during load-replay suppression are ignored")
     func noticesIgnoredDuringLoadReplay() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

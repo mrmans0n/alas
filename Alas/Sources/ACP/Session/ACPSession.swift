@@ -151,6 +151,10 @@ final class ACPSession: ObservableObject, Identifiable {
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
     private var noticeAutoDismissTask: Task<Void, Never>?
+    /// Single-slot queue for a notice that arrived while a pinned
+    /// `warning`/`error` notice was active and undismissed. See
+    /// `applyNotice`/`advanceNoticeQueue`.
+    private var pendingNotice: ACPSessionNotice?
 
     /// When false, `appendStreaming` discards chunks that would cross a
     /// completed-output boundary (i.e. create a duplicate agent message bubble).
@@ -707,20 +711,43 @@ final class ACPSession: ObservableObject, Identifiable {
     /// consecutive notice (same severity/title/description — `_meta` is
     /// excluded, since it carries no displayed content) into a no-op so a
     /// chatty agent re-sending the same event with a bumped timestamp
-    /// doesn't restart its auto-dismiss timer or flash the banner. `info`
-    /// (and any unrecognized severity, which renders generically as info)
-    /// auto-dismisses after a delay; `warning`/`error` stay until the user
-    /// dismisses them.
+    /// doesn't restart its auto-dismiss timer or flash the banner.
+    ///
+    /// A pinned `warning`/`error` notice stays visible until the user
+    /// dismisses it, so a different notice arriving in the meantime queues
+    /// behind it (latest arrival wins the single slot) instead of silently
+    /// clobbering something the user hasn't acknowledged — there's no id/ack
+    /// to recover a dropped notice with. The queued notice takes over once
+    /// the pinned one clears, either by dismissal or its own auto-dismiss.
     private func applyNotice(_ notice: ACPSessionNotice) {
         if let active = activeNotice, active.isVisuallyIdentical(to: notice) { return }
+        if let active = activeNotice, !active.severity.behavesAsInfo {
+            pendingNotice = notice
+            return
+        }
+        pendingNotice = nil
+        showNotice(notice)
+    }
+
+    private func showNotice(_ notice: ACPSessionNotice) {
         noticeAutoDismissTask?.cancel()
         activeNotice = notice
         guard notice.severity.behavesAsInfo else { return }
         noticeAutoDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard !Task.isCancelled, self?.activeNotice == notice else { return }
-            self?.activeNotice = nil
+            self?.advanceNoticeQueue()
         }
+    }
+
+    /// Clears the active notice and, if one queued up behind it, promotes
+    /// it through the normal `showNotice` path (so it gets its own
+    /// auto-dismiss timer if it's info-like).
+    private func advanceNoticeQueue() {
+        activeNotice = nil
+        guard let queued = pendingNotice else { return }
+        pendingNotice = nil
+        showNotice(queued)
     }
 
     /// User-initiated dismissal of the active notice (the composer banner's
@@ -728,7 +755,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func dismissActiveNotice() {
         noticeAutoDismissTask?.cancel()
         noticeAutoDismissTask = nil
-        activeNotice = nil
+        advanceNoticeQueue()
     }
 
     static func contextCompactionToolCallId(_ id: String) -> String {
