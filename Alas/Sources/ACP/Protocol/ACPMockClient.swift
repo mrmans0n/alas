@@ -13,6 +13,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let completionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
@@ -30,6 +31,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
@@ -52,6 +54,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { q = $0 }
         self.questionsCont = q
+        var plan: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { plan = $0 }
+        self.plansCont = plan
         var e: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { e = $0 }
         self.elicitationsCont = e
@@ -101,6 +106,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     func emitQuestion(id: JSONRPCID, params: ACPQuestionRequestParams) {
         questionsCont.yield(.init(id: id, params: params))
     }
+    func emitPlan(id: JSONRPCID, params: ACPCursorCreatePlanParams) {
+        plansCont.yield(.init(id: id, params: params))
+    }
     func emitElicitation(id: JSONRPCID, params: ACPElicitationRequestParams) {
         elicitationsCont.yield(.init(id: id, params: params))
     }
@@ -117,6 +125,10 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     var questionResponses: [JSONRPCID: ACPQuestionResponse] = [:]
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
         questionResponses[id] = response
+    }
+    var planResponses: [JSONRPCID: ACPCursorPlanResponse] = [:]
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        planResponses[id] = response
     }
     var elicitationResponses: [JSONRPCID: Result<ACPElicitationResponse, JSONRPCError>] = [:]
     func respondToElicitation(
@@ -155,6 +167,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         permsCont.finish()
         cancelRequestsCont.finish()
         questionsCont.finish()
+        plansCont.finish()
         elicitationsCont.finish()
         completionsCont.finish()
         filesCont.finish()

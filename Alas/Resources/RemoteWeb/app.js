@@ -389,6 +389,8 @@ function handle(msg) {
     case "permissionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("permission", msg.sessionId); hidePermission(); } break;
     case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("question", msg.sessionId); dismissedQuestion = null; hideQuestion(); } break;
+    case "planRequest": handlePromptRequest("plan", msg.sessionId, msg.payload); break;
+    case "planResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("plan", msg.sessionId); hidePlan(); } break;
     case "elicitationRequest": handlePromptRequest("elicitation", msg.sessionId, msg.payload); break;
     case "elicitationResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("elicitation", msg.sessionId); hideElicitation(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
@@ -1292,6 +1294,7 @@ function clearSessionSheetsForOpen() {
   hidePermission();
   hideQuestion();
   hideElicitation();
+  hidePlan();
   hideConfig();
   hideRenameSheet();
   hideCreateSheet(true);
@@ -1302,7 +1305,7 @@ function showSessions() {
   currentSession = null; canDrive = false; canDriveKnown = false;
   messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
-  hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
+  hidePermission(); hideQuestion(); hidePlan(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("bar").classList.remove("is-detail");
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("detail-title-block").classList.add("hidden"); $("detail-rename").classList.add("hidden");
@@ -1557,6 +1560,8 @@ function showPromptRequest(kind, sessionId, payload) {
     showPermission(sessionId, payload);
   } else if (kind === "question") {
     showQuestion(sessionId, payload);
+  } else if (kind === "plan") {
+    showPlan(sessionId, payload);
   } else {
     showElicitation(sessionId, payload);
   }
@@ -3288,6 +3293,54 @@ function dismissQuestion() {
   hideQuestion();
 }
 
+// --- Cursor plan approval sheet ---
+let planState = null;
+
+function showPlan(sessionId, payload) {
+  planState = { sessionId, payload };
+  $("plan-title").textContent = payload.name || "Review plan";
+  $("plan-overview").textContent = payload.overview || "";
+  $("plan-overview").classList.toggle("hidden", !(payload.overview || "").trim());
+  $("plan-body").textContent = payload.plan || "";
+  const todos = $("plan-todos");
+  todos.innerHTML = "";
+  (payload.todos || []).forEach(item => {
+    const row = el("div", "plan-todo");
+    row.append(el("span", "plan-todo-status", item.status || "pending"));
+    row.append(el("span", "plan-todo-content", item.content || ""));
+    todos.appendChild(row);
+  });
+  todos.classList.toggle("hidden", todos.children.length === 0);
+  $("plan-reason").value = "";
+  updatePlanRejectState();
+  $("plan").classList.remove("hidden");
+}
+
+function updatePlanRejectState() {
+  $("plan-reject").disabled = $("plan-reason").value.trim().length === 0;
+}
+
+function acceptPlan() {
+  if (!planState) return;
+  const { sessionId, payload } = planState;
+  send({ type: "planResponse", sessionId, requestId: payload.requestId, action: "accept" });
+  hidePlan();
+}
+
+function rejectPlan() {
+  if (!planState) return;
+  const reason = $("plan-reason").value.trim();
+  if (!reason) return;
+  const { sessionId, payload } = planState;
+  send({ type: "planResponse", sessionId, requestId: payload.requestId, action: "reject", reason });
+  hidePlan();
+}
+
+function hidePlan() {
+  $("plan").classList.add("hidden");
+  planState = null;
+}
+
 // --- Standard ACP elicitation sheet ---
 let elicitationState = null;
 let elicitationInputs = new Map();
@@ -3808,12 +3861,17 @@ $("question-submit").onclick = submitQuestion;
 // Explicit Close + backdrop tap — a sheet can always be dismissed, and a closed
 // question stays closed even if the server keeps re-sending it.
 $("question-close").onclick = dismissQuestion;
+$("plan-reason").oninput = updatePlanRejectState;
+$("plan-accept").onclick = acceptPlan;
+$("plan-reject").onclick = rejectPlan;
+$("plan-close").onclick = hidePlan;
 $("perm-close").onclick = hidePermission;
 $("elicitation-submit").onclick = submitElicitation;
 $("elicitation-decline").onclick = () => resolveElicitation("decline");
 $("elicitation-cancel").onclick = () => resolveElicitation("cancel");
 $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion(); };
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
+$("plan").onclick = (e) => { if (e.target.id === "plan") hidePlan(); };
 $("elicitation").onclick = (e) => { if (e.target.id === "elicitation") resolveElicitation("cancel"); };
 
 $("back").onclick = () => {

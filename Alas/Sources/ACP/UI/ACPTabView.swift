@@ -423,6 +423,9 @@ private struct ACPSessionView: View {
             onUserInputResponse: { token, action in
                 manager.respondToUserInput(for: sessionId, token: token, action: action)
             },
+            onPlanResponse: { requestId, response in
+                manager.respondToPlan(for: sessionId, requestId: requestId, response)
+            },
             onOpenElicitationURL: { token in
                 await manager.openElicitationURL(for: sessionId, token: token)
             },

@@ -18,6 +18,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
     var lastQuestionResponse: (id: String, requestId: JSONRPCID, response: ACPQuestionResponse)?
+    var lastPlanResponse: (id: String, requestId: JSONRPCID, response: ACPCursorPlanResponse)?
     var lastUserInputResponse: (id: String, token: UUID, action: ACPUserInputAction)?
     var writers: Set<String> = []
     var tookOver: [String] = []
@@ -215,6 +216,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse) {
         lastQuestionResponse = (id, requestId, response)
     }
+    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {
+        lastPlanResponse = (id, requestId, response)
+    }
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {
         lastUserInputResponse = (id, token, action)
     }
@@ -344,6 +348,27 @@ extension ACPQuestionRequestParams {
                     ],
                     allowMultiple: false)
             ])
+    }
+}
+
+extension ACPCursorCreatePlanParams {
+    static func stub() -> ACPCursorCreatePlanParams {
+        ACPCursorCreatePlanParams(
+            toolCallId: "tc-plan",
+            name: "Implementation plan",
+            overview: "Review before coding.",
+            plan: "Build the small remote approval path.",
+            todos: [
+                ACPCursorTodo(id: "todo-1", content: "Add wire message", status: "pending")
+            ],
+            isProject: false,
+            phases: [
+                ACPCursorPlanPhase(
+                    name: "Remote",
+                    todos: [ACPCursorTodo(id: "todo-2", content: "Render the sheet", status: "pending")]
+                )
+            ]
+        )
     }
 }
 #endif
@@ -1035,6 +1060,78 @@ struct RemoteSessionGatewayTests {
         ])))
         #expect(sent.contains { if case .questionResolved(_, 0) = $0 { return true }
         return false })
+    }
+
+    @Test func subscribeEmitsPlanRequest() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        session.transcript.pendingPlan = .init(id: .string("plan-1"), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+
+        let payload = try #require(sent.compactMap { message -> RemotePlanPayload? in
+            if case .planRequest(_, let payload) = message { return payload }
+            return nil
+        }.first)
+        #expect(payload.requestId == .string("plan-1"))
+        #expect(payload.toolCallId == "tc-plan")
+        #expect(payload.name == "Implementation plan")
+        #expect(payload.todos == [
+            RemotePlanTodo(id: "todo-1", content: "Add wire message", status: "pending")
+        ])
+        #expect(payload.phases == [
+            RemotePlanPhase(
+                name: "Remote",
+                todos: [RemotePlanTodo(id: "todo-2", content: "Render the sheet", status: "pending")]
+            )
+        ])
+    }
+
+    @Test func planResponseCallsProviderWhenRequestMatches() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        session.transcript.pendingPlan = .init(id: .string("plan-1"), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        await gateway.handle(.planResponse(
+            sessionId: "s1",
+            requestId: .string("plan-1"),
+            action: "accept",
+            reason: nil
+        ))
+
+        let response = try #require(provider.lastPlanResponse)
+        #expect(response.id == "s1")
+        #expect(response.requestId == .string("plan-1"))
+        #expect(response.response == .init(outcome: .accepted(planUri: "alas://plans/tc-plan")))
+        #expect(sent.contains {
+            if case .planResolved(_, .string("plan-1")) = $0 { return true }
+            return false
+        })
+    }
+
+    @Test func stalePlanResponseIsNoOp() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        session.transcript.pendingPlan = .init(id: .string("plan-2"), params: .stub())
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        await gateway.handle(.planResponse(
+            sessionId: "s1",
+            requestId: .string("plan-1"),
+            action: "accept",
+            reason: nil
+        ))
+
+        #expect(provider.lastPlanResponse == nil)
     }
 
     @Test func staleQuestionAnswerIsNoOp() async throws {

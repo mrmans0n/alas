@@ -343,11 +343,146 @@ struct ACPElicitationCoordinatorTests {
         #expect(resolutionCount == 1)
     }
 
+    @Test("Cursor plans are accepted through the active approval prompt")
+    func acceptsCursorPlan() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(client.planResponses[.string("plan-1")] == .init(
+            outcome: .accepted(planUri: "alas://plans/plan-call")
+        ))
+        #expect(session.transcript.pendingPlan == nil)
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("Cursor plan preserves the active turn state after response")
+    func planResponseRestoresActiveTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.transcript.streamingState = .streaming
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+        #expect(session.transcript.streamingState == .awaitingInput)
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(session.transcript.streamingState == .streaming)
+    }
+
+    @Test("broker-delivered Cursor plan preserves active state from awaiting input snapshot")
+    func brokerPlanResponseRestoresActiveTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.transcript.streamingState = .awaitingInput
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(session.transcript.streamingState == .streaming)
+    }
+
+    @Test("queued Cursor plans preserve the original turn state")
+    func queuedPlanResponsesRestoreOriginalTurnState() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        client.emitPlan(id: .string("plan-2"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-2") }
+        #expect(session.transcript.streamingState == .awaitingInput)
+
+        coordinator.respondToPlan(
+            id: .string("plan-2"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+        try await waitUntil { client.planResponses[.string("plan-2")] != nil }
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("Cursor plan awaiting notifies the input owner")
+    func planAwaitingNotifiesInputOwner() async throws {
+        var notified: ACPCursorPlanRequest?
+        let (coordinator, session, client) = makeCoordinator(onPlanAwaiting: { _, request in
+            notified = request
+        })
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        #expect(notified?.id == .string("plan-1"))
+        #expect(notified?.params.toolCallId == "plan-call")
+    }
+
+    @Test("Cursor plan rejection preserves the supplied composer reason")
+    func rejectsCursorPlan() async throws {
+        var rejectionReason: String?
+        let (coordinator, session, client) = makeCoordinator(onPlanRejected: { rejectionReason = $0 })
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan != nil }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .rejected(reason: "Use the existing queue"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(rejectionReason == "Use the existing queue")
+        #expect(client.planResponses[.string("plan-1")] == .init(
+            outcome: .rejected(reason: "Use the existing queue")
+        ))
+    }
+
+    @Test("cancelling input cancels the pending Cursor plan")
+    func cancelsCursorPlan() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan != nil }
+
+        coordinator.cancelPendingInputs()
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(client.planResponses[.string("plan-1")] == .init(outcome: .cancelled))
+        #expect(session.transcript.pendingPlan == nil)
+    }
+
     private func makeCoordinator(
+        launchBrowser: @escaping (URL) async -> Bool = { _ in true },
+        navigateURL: @escaping (URL) -> Void = { _ in },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
-        launchBrowser: @escaping (URL) async -> Bool = { _ in true },
-        navigateURL: @escaping (URL) -> Void = { _ in }
+        onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
+        onPlanRejected: @escaping (String) -> Void = { _ in }
     ) -> (ACPElicitationCoordinator, ACPSession, ACPMockClient) {
         let session = ACPSession(id: "local", agentId: "codex", worktreeId: "wt", title: "Test")
         let client = ACPMockClient()
@@ -358,10 +493,24 @@ struct ACPElicitationCoordinatorTests {
                 launchBrowser: launchBrowser,
                 navigateURL: navigateURL,
                 onInputAwaiting: onInputAwaiting,
-                onInputResolved: onInputResolved
+                onInputResolved: onInputResolved,
+                onPlanAwaiting: onPlanAwaiting,
+                onPlanRejected: onPlanRejected
             ),
             session,
             client
+        )
+    }
+
+    private func planParams() -> ACPCursorCreatePlanParams {
+        .init(
+            toolCallId: "plan-call",
+            name: "Fix ACP",
+            overview: "Keep requests moving",
+            plan: "# Plan",
+            todos: [.init(id: "todo-1", content: "Implement", status: "pending")],
+            isProject: false,
+            phases: []
         )
     }
 

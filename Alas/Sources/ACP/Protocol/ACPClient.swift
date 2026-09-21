@@ -81,6 +81,9 @@ protocol ACPClient: AnyObject {
     /// per emitted request.
     var questionRequests: AsyncStream<ACPQuestionRequest> { get }
 
+    /// Plan-approval requests from Cursor's ACP extension.
+    var planRequests: AsyncStream<ACPCursorPlanRequest> { get }
+
     /// Standard ACP elicitation requests and URL completion notifications.
     var elicitationRequests: AsyncStream<ACPElicitationRequest> { get }
     var elicitationCompletions: AsyncStream<ACPElicitationCompleteParams> { get }
@@ -95,6 +98,7 @@ protocol ACPClient: AnyObject {
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse)
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -124,10 +128,15 @@ extension ACPClient {
         AsyncStream { $0.finish() }
     }
 
+    var planRequests: AsyncStream<ACPCursorPlanRequest> {
+        AsyncStream { $0.finish() }
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
     ) {}
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {}
 
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool { true }
 

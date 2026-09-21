@@ -64,6 +64,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
@@ -73,6 +74,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
@@ -85,6 +87,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var remoteSessionResult: ACPBrokerJSONValue?
     private var nextOperationIndex = 0
     private var _yieldedUpdateCount = 0
+    private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
     private var pendingInboundCursors: [JSONRPCID: ACPBrokerEventCursor] = [:]
     private var pendingOutboundRequestIds: Set<JSONRPCID> = []
     private var operationCompletionCursors: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
@@ -185,6 +188,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         questionRequests = AsyncStream { q = $0 }
         questionsCont = q
+
+        var plan: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        planRequests = AsyncStream { plan = $0 }
+        plansCont = plan
 
         var e: AsyncStream<ACPElicitationRequest>.Continuation!
         elicitationRequests = AsyncStream { e = $0 }
@@ -413,6 +420,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         respond(id: id, value: response)
     }
 
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        respond(id: id, value: response)
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -489,6 +500,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         permsCont.finish()
         cancelRequestsCont.finish()
         questionsCont.finish()
+        plansCont.finish()
         elicitationsCont.finish()
         elicitationCompletionsCont.finish()
         filesCont.finish()
@@ -715,6 +727,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             if let params = try? JSONDecoder().decode(ACPQuestionRequestParams.self, from: payload.data) {
                 questionsCont.yield(.init(id: id, params: params))
             }
+        case .plan:
+            let payload = pendingRequestParamsPayload(request.payload)
+            if let params = try? JSONDecoder().decode(ACPCursorCreatePlanParams.self, from: payload.data) {
+                plansCont.yield(.init(id: id, params: params))
+            } else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+            }
+        case .cursorExtension:
+            dispatchCursorExtensionRequest(id: id, payload: request.payload)
         case .elicitation:
             let payload = pendingRequestParamsPayload(request.payload)
             if let params = try? JSONDecoder().decode(ACPElicitationRequestParams.self, from: payload.data) {
@@ -758,6 +779,53 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    private func dispatchCursorExtensionRequest(id: JSONRPCID, payload: ACPBrokerJSONValue) {
+        guard
+            case .object(let object) = payload,
+            case .string(let method)? = object["method"],
+            let params = object["params"]
+        else {
+            respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+            return
+        }
+
+        switch method {
+        case "cursor/update_todos":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorUpdateTodosParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            respond(id: id, value: ACPCursorUpdateTodosResponse(outcome: .init(todos: mergedCursorTodos(for: decoded))))
+        case "cursor/task":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorTaskParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            respond(id: id, value: ACPCursorTaskResponse(
+                outcome: .init(agentId: decoded.agentId, durationMs: decoded.durationMs)
+            ))
+        case "cursor/generate_image":
+            respond(
+                id: id,
+                error: .init(
+                    code: -32000,
+                    message: "cursor/generate_image is not supported",
+                    data: nil
+                )
+            )
+        default:
+            respond(id: id, error: .init(code: -32601, message: "Method not found", data: nil))
+        }
+    }
+
+    private func mergedCursorTodos(for params: ACPCursorUpdateTodosParams) -> [ACPCursorTodo] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let todos = params.mergedTodos(with: cursorTodosByToolCallId[params.toolCallId] ?? [])
+        cursorTodosByToolCallId[params.toolCallId] = todos
+        return todos
+    }
+
     private func dispatchTerminalRequest(id: JSONRPCID, payload: ACPBrokerJSONValue) {
         guard
             case .object(let object) = payload,
@@ -765,6 +833,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             let params = object["params"]
         else { return }
         switch method {
+        case "cursor/create_plan":
+            guard let decoded = try? JSONDecoder().decode(ACPCursorCreatePlanParams.self, from: params.data) else {
+                respond(id: id, error: .init(code: -32602, message: "Invalid params", data: nil))
+                return
+            }
+            plansCont.yield(.init(id: id, params: decoded))
+        case "cursor/update_todos", "cursor/task", "cursor/generate_image":
+            dispatchCursorExtensionRequest(id: id, payload: payload)
         case "terminal/create":
             if let decoded = try? JSONDecoder().decode(ACPTerminalCreateParams.self, from: params.data) {
                 terminalsCont.yield(.create(id: id, params: decoded))
@@ -791,11 +867,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func respond<T: Encodable & Sendable>(id: JSONRPCID, value: T) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.respond(id: id, result: ACPBrokerJSONValue(encodable: value), error: nil)
-            } catch {}
+        do {
+            respondToRawResult(id: id, result: .success(try JSONEncoder().encode(value)))
+        } catch {
+            respondToRawResult(id: id, result: .failure(.init(
+                code: -32603,
+                message: "response could not be encoded: \(error.localizedDescription)",
+                data: nil
+            )))
         }
     }
 
@@ -831,12 +910,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     private func respond(id: JSONRPCID, error: JSONRPCError) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.respond(id: id, result: nil, error: error)
-            } catch {}
-        }
+        respondToRawResult(id: id, result: .failure(error))
     }
 
     private func respond(id: JSONRPCID, result: ACPBrokerJSONValue?, error: JSONRPCError?) async throws {
@@ -935,6 +1009,9 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         initializeResult = snapshot.initializeResult ?? initializeResult
         remoteSessionResult = snapshot.remoteSessionResult ?? remoteSessionResult
+        if let snapshotTodos = snapshot.cursorTodosByToolCallId {
+            cursorTodosByToolCallId = snapshotTodos
+        }
         for operation in snapshot.operations {
             let id = operation.adapterRequestId.jsonRPCID
             if let terminalOutcome = operation.terminalOutcome {

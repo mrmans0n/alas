@@ -387,6 +387,296 @@ struct ACPBrokerClientTests {
         #expect(fallback.error != nil, "the adapter must be told, not left waiting")
     }
 
+    @Test func brokerDispatchesCursorPlanAndReturnsApproval() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "plan-1",
+                    adapterRequestId: .string("plan-1"),
+                    kind: .plan,
+                    payload: cursorPlanPayload()
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        var iterator = client.planRequests.makeAsyncIterator()
+
+        try await client.start()
+
+        let request = try #require(await iterator.next())
+        #expect(request.id == .string("plan-1"))
+        #expect(request.params.name == "Fix ACP")
+        client.respondToPlan(
+            id: request.id,
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { await service.responded.count == 1 }
+        let response = try await #require(service.responded.first)
+        #expect(response.requestId == .string("plan-1"))
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "planUri": .string("alas://plans/plan-call")
+            ])
+        ]))
+    }
+
+    @Test func brokerAcknowledgesCursorExtensionRequests() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([.object([
+                                "id": .string("todo"),
+                                "content": .string("Implement"),
+                                "status": .string("pending")
+                            ])]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "task-1",
+                    adapterRequestId: .string("task-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/task"),
+                        "params": .object([
+                            "toolCallId": .string("task-call"),
+                            "agentId": .string("agent-1"),
+                            "durationMs": .number(42)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 4),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "image-1",
+                    adapterRequestId: .string("image-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/generate_image"),
+                        "params": .object([
+                            "toolCallId": .string("image-call"),
+                            "filePath": .string("/tmp/image.png")
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count >= 3 }
+        let responses = await service.responded
+        let todo = try #require(responses.first { $0.requestId == .string("todo-1") })
+        #expect(todo.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([.object([
+                    "id": .string("todo"),
+                    "content": .string("Implement"),
+                    "status": .string("pending")
+                ])])
+            ])
+        ]))
+        let task = try #require(responses.first { $0.requestId == .string("task-1") })
+        #expect(task.result == .object([
+            "outcome": .object([
+                "outcome": .string("completed"),
+                "agentId": .string("agent-1"),
+                "durationMs": .number(42)
+            ])
+        ]))
+        let image = try #require(responses.first { $0.requestId == .string("image-1") })
+        #expect(image.result == nil)
+        #expect(image.error == .init(
+            code: -32000,
+            message: "cursor/generate_image is not supported",
+            data: nil
+        ))
+    }
+
+    @Test func brokerMergesCursorTodoUpdatesByToolCall() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([
+                                .object([
+                                    "id": .string("todo-1"),
+                                    "content": .string("Implement"),
+                                    "status": .string("pending")
+                                ]),
+                                .object([
+                                    "id": .string("todo-2"),
+                                    "content": .string("Verify"),
+                                    "status": .string("pending")
+                                ])
+                            ]),
+                            "merge": .bool(false)
+                        ])
+                    ])
+                ))
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-2",
+                    adapterRequestId: .string("todo-2"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([.object([
+                                "id": .string("todo-2"),
+                                "content": .string("Verify"),
+                                "status": .string("completed")
+                            ])]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count >= 2 }
+        let response = try await #require(service.responded.first { $0.requestId == .string("todo-2") })
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([
+                    .object([
+                        "id": .string("todo-1"),
+                        "content": .string("Implement"),
+                        "status": .string("pending")
+                    ]),
+                    .object([
+                        "id": .string("todo-2"),
+                        "content": .string("Verify"),
+                        "status": .string("completed")
+                    ])
+                ])
+            ])
+        ]))
+    }
+
+    @Test func brokerMergesCursorTodoUpdatesFromAdoptedSnapshot() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(
+            events: [
+                ACPBrokerEvent(
+                    cursor: ACPBrokerEventCursor(rawValue: 4),
+                    kind: .pendingRequest(ACPBrokerPendingRequest(
+                        requestId: "todo-2",
+                        adapterRequestId: .string("todo-2"),
+                        kind: .cursorExtension,
+                        payload: .object([
+                            "method": .string("cursor/update_todos"),
+                            "params": .object([
+                                "toolCallId": .string("todo-call"),
+                                "todos": .array([.object([
+                                    "id": .string("todo-2"),
+                                    "content": .string("Verify"),
+                                    "status": .string("completed")
+                                ])]),
+                                "merge": .bool(true)
+                            ])
+                        ])
+                    ))
+                )
+            ],
+            snapshotCursorTodosByToolCallId: [
+                "todo-call": [
+                    .init(id: "todo-1", content: "Implement", status: "pending"),
+                    .init(id: "todo-2", content: "Verify", status: "pending")
+                ]
+            ]
+        )
+        let client = makeClient(service: service)
+
+        try await client.start()
+
+        try await waitUntil { await service.responded.count >= 1 }
+        let response = try await #require(service.responded.first { $0.requestId == .string("todo-2") })
+        #expect(response.result == .object([
+            "outcome": .object([
+                "outcome": .string("accepted"),
+                "todos": .array([
+                    .object([
+                        "id": .string("todo-1"),
+                        "content": .string("Implement"),
+                        "status": .string("pending")
+                    ]),
+                    .object([
+                        "id": .string("todo-2"),
+                        "content": .string("Verify"),
+                        "status": .string("completed")
+                    ])
+                ])
+            ])
+        ]))
+    }
+
+    @Test func failedCursorExtensionResponseReportsErrorToAdapter() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .pendingRequest(ACPBrokerPendingRequest(
+                    requestId: "todo-1",
+                    adapterRequestId: .string("todo-1"),
+                    kind: .cursorExtension,
+                    payload: .object([
+                        "method": .string("cursor/update_todos"),
+                        "params": .object([
+                            "toolCallId": .string("todo-call"),
+                            "todos": .array([]),
+                            "merge": .bool(true)
+                        ])
+                    ])
+                ))
+            )
+        ])
+        let client = makeClient(service: service)
+        await service.failNextResponds(1)
+        try await client.start()
+
+        try await waitUntil { await service.responded.count == 2 }
+        let fallback = try await #require(service.responded.last)
+        #expect(fallback.requestId == .string("todo-1"))
+        #expect(fallback.result == nil)
+        #expect(fallback.error != nil)
+    }
+
     @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
@@ -1397,6 +1687,25 @@ struct ACPBrokerClientTests {
         #expect(await service.attached.count == 2)
     }
 
+    private func cursorPlanPayload() -> ACPBrokerJSONValue {
+        .object([
+            "method": .string("cursor/create_plan"),
+            "params": .object([
+                "toolCallId": .string("plan-call"),
+                "name": .string("Fix ACP"),
+                "overview": .string("Keep requests moving"),
+                "plan": .string("# Plan"),
+                "todos": .array([.object([
+                    "id": .string("todo-1"),
+                    "content": .string("Implement"),
+                    "status": .string("pending")
+                ])]),
+                "isProject": .bool(false),
+                "phases": .array([])
+            ])
+        ])
+    }
+
     private func makeClient(
         service: MockBrokerService,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
@@ -1548,6 +1857,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
+        snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
         turnState: ACPBrokerTurnState = .idle,
         delayNanoseconds: UInt64 = 0,
         shouldThrow: Bool = false
@@ -1557,6 +1867,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: snapshotPendingRequests,
             snapshotJournalTail: snapshotJournalTail,
             snapshotOperations: snapshotOperations,
+            snapshotCursorTodosByToolCallId: snapshotCursorTodosByToolCallId,
             turnState: turnState,
             delayNanoseconds: delayNanoseconds,
             shouldThrow: shouldThrow
@@ -1613,7 +1924,8 @@ private actor MockBrokerService: ACPBrokerServicing {
                 acknowledgedCursor: params.acknowledgedCursor,
                 pendingRequests: reply.snapshotPendingRequests ?? pendingRequests(from: events),
                 operations: reply.snapshotOperations,
-                turnState: reply.turnState
+                turnState: reply.turnState,
+                cursorTodosByToolCallId: reply.snapshotCursorTodosByToolCallId
             ),
             events: events
         )
@@ -1669,7 +1981,8 @@ private actor MockBrokerService: ACPBrokerServicing {
         acknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         pendingRequests: [ACPBrokerPendingRequest] = [],
         operations: [ACPBrokerOperationSnapshot] = [],
-        turnState: ACPBrokerTurnState = .idle
+        turnState: ACPBrokerTurnState = .idle,
+        cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
     ) -> ACPBrokerSnapshot {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
@@ -1688,7 +2001,8 @@ private actor MockBrokerService: ACPBrokerServicing {
             acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: journalTail),
             pendingRequests: pendingRequests,
-            operations: operations
+            operations: operations,
+            cursorTodosByToolCallId: cursorTodosByToolCallId
         )
     }
 
@@ -1711,6 +2025,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         let events: [ACPBrokerEvent]
         let snapshotPendingRequests: [ACPBrokerPendingRequest]?
         let snapshotJournalTail: ACPBrokerEventCursor?
+        let snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]?
         let snapshotOperations: [ACPBrokerOperationSnapshot]
         let turnState: ACPBrokerTurnState
         let delayNanoseconds: UInt64
@@ -1721,6 +2036,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
+            snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil,
             turnState: ACPBrokerTurnState = .idle,
             delayNanoseconds: UInt64 = 0,
             shouldThrow: Bool = false
@@ -1729,6 +2045,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             self.snapshotPendingRequests = snapshotPendingRequests
             self.snapshotJournalTail = snapshotJournalTail
             self.snapshotOperations = snapshotOperations
+            self.snapshotCursorTodosByToolCallId = snapshotCursorTodosByToolCallId
             self.turnState = turnState
             self.delayNanoseconds = delayNanoseconds
             self.shouldThrow = shouldThrow

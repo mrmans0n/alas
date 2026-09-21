@@ -1,8 +1,8 @@
-const CACHE_NAME = "alas-remote-shell-v70";
+const CACHE_NAME = "alas-remote-shell-v71";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/style.css?v=52",
+  "/style.css?v=53",
   "/repo-filter.js?v=3",
   "/session-ordering.js?v=2",
   "/worktree-creation.js?v=1",
@@ -10,7 +10,7 @@ const SHELL_ASSETS = [
   "/file-browser.js?v=3",
   "/hub-registry.js?v=1",
   "/hub-links.js?v=1",
-  "/app.js?v=88",
+  "/app.js?v=89",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",
