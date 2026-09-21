@@ -455,12 +455,12 @@ struct AppStateCLIRoutingTests {
         let file = dir.appendingPathComponent("spec.md")
         try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let handled = state.routeTranscriptOpenURL(
+        let route = state.transcriptLinkRoute(
             URL(string: "\(file.path):2")!,
             worktreeId: worktree.id
         )
 
-        #expect(handled == true)
+        #expect(route == .opened)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
             if case .editor(let s) = $0 {
                 return s.relativePath == "docs/design/spec.md"
@@ -478,12 +478,12 @@ struct AppStateCLIRoutingTests {
         let file = worktree.path.appendingPathComponent("Package.swift")
         try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let handled = state.routeTranscriptOpenURL(
+        let route = state.transcriptLinkRoute(
             URL(string: "Package.swift:2")!,
             worktreeId: worktree.id
         )
 
-        #expect(handled == true)
+        #expect(route == .opened)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
             if case .editor(let s) = $0 {
                 return s.relativePath == "Package.swift"
@@ -493,6 +493,77 @@ struct AppStateCLIRoutingTests {
             }
             return false
         })
+    }
+
+    @Test func routeTranscriptOpenURLOpensAbsolutePathInAnotherWorktree() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "transcript-sibling")
+        let siblingPath = worktree.path.deletingLastPathComponent()
+            .appendingPathComponent("transcript-sibling-other-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: worktree.path)
+            try? FileManager.default.removeItem(at: siblingPath)
+        }
+        state.selectedWorktreeId = worktree.id
+        _ = try await Process.git(
+            ["worktree", "add", "-q", "-b", "transcript-sibling-other", siblingPath.path, "main"],
+            cwd: worktree.path
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let sibling = try #require(
+            state.projectsManager.worktrees(projectId: project.id)
+                .first { $0.branch == "transcript-sibling-other" }
+        )
+        let file = sibling.path.appendingPathComponent("PLAN.md")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let route = state.transcriptLinkRoute(
+            URL(string: "\(file.path):2")!,
+            worktreeId: worktree.id
+        )
+
+        #expect(route == .opened)
+        #expect(state.selectedWorktreeId == sibling.id)
+        #expect(state.tabs.tabs(forWorktree: sibling.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "PLAN.md" && s.revealLine == 1 && !s.isExternal
+            }
+            return false
+        })
+        #expect(state.tabs.tabs(forWorktree: worktree.id).allSatisfy {
+            if case .editor = $0 { return false }
+            return true
+        })
+    }
+
+    @Test func routeTranscriptOpenURLHandsOutsideFileToTheSystemAsAFileURL() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-outside")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-transcript-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: externalDir) }
+        let file = externalDir.appendingPathComponent("notes.md")
+        try "x\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let route = state.transcriptLinkRoute(URL(string: file.path)!, worktreeId: worktree.id)
+
+        #expect(route == .systemOpen(file.standardizedFileURL))
+        #expect(state.tabs.tabs(forWorktree: worktree.id).allSatisfy {
+            if case .editor = $0 { return false }
+            return true
+        })
+    }
+
+    @Test func routeTranscriptOpenURLIsUnhandledForMissingAbsolutePath() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+
+        let route = state.transcriptLinkRoute(
+            URL(string: worktree.path.appendingPathComponent("nope.md").path)!,
+            worktreeId: worktree.id
+        )
+
+        #expect(route == .unhandled)
     }
 
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {
