@@ -1593,7 +1593,13 @@ extension ACPSessionRunner {
             queuedItemId: head.id,
             delegatedSource: head.delegatedSource,
             brokerOperationKey: brokerOperationKey,
-            draft: head.restorableDraft
+            // The raw optional, not `restorableDraft`: that heuristically
+            // fabricates a draft from `blocks` when none was captured, and
+            // `blocks` has already flattened every image to the end of the
+            // text — annotating from it would invent a wrong end-of-message
+            // offset instead of leaving `textOffset` nil as documented on
+            // `ACPMessage.Attachment.textOffset`.
+            draft: head.draft
         )
     }
 
@@ -1682,7 +1688,9 @@ extension ACPSessionRunner {
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
             recordUserPrompt: !item.transcriptRecorded,
-            draft: item.restorableDraft
+            // See the matching comment in `flushQueueIfIdle`: the raw
+            // optional, not the heuristic `restorableDraft`.
+            draft: item.draft
         )
     }
 

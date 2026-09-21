@@ -244,6 +244,29 @@ struct ACPSessionRunnerQueueTests {
         #expect(attachments.first?.textOffset == 8)
     }
 
+    @Test("flushQueueIfIdle leaves textOffset nil for a queue item with no captured draft")
+    func flushQueueLeavesOffsetNilWithoutCapturedDraft() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        // No draft captured — mirrors a recovery-path enqueue or a queue
+        // item persisted before the draft field existed. `blocks` alone has
+        // already flattened the image to the end of the text, so annotating
+        // from a heuristic reconstruction of it would invent a wrong offset.
+        session.enqueue(blocks: [
+            .text("look at  please"),
+            .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")
+        ])
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.last else {
+            Issue.record("expected a recorded user message")
+            return
+        }
+        #expect(attachments.first?.textOffset == nil)
+    }
+
     @Test("empty blocks → noOp; nothing queued, no RPC, no state change")
     func emptyNoOp() async throws {
         let (runner, mock, session, _) = try mkRunner()
