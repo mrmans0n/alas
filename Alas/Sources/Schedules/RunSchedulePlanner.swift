@@ -60,15 +60,22 @@ enum RunSchedulePlanner {
     /// A time-of-day trigger names a wall-clock time, so a `nextFireAt`
     /// computed in another zone points at the wrong instant — 09:00 Madrid is
     /// 03:00 New York, which would fire early and then again at the local
-    /// 09:00. Recompute from the anchor in the current calendar; interval
-    /// triggers are durations and need no adjustment.
+    /// 09:00. Interval triggers are durations and need no adjustment.
+    ///
+    /// Work that was already overdue when the zone changed is genuinely
+    /// pending and is handed back untouched. Anything still in the future is
+    /// recomputed relative to *now* rather than to the last fire, so moving
+    /// zones cannot invent an occurrence that has already passed locally and
+    /// make `runLatest` fire on the spot.
     static func retimedFireDate(
         for trigger: RunScheduleTrigger,
-        anchor: Date,
+        pendingFireAt: Date?,
+        now: Date,
         calendar: Calendar
     ) -> Date? {
         guard case .timeOfDay = trigger else { return nil }
-        return nextFireDate(for: trigger, after: anchor, anchor: anchor, calendar: calendar)
+        if let pendingFireAt, pendingFireAt <= now { return pendingFireAt }
+        return nextFireDate(for: trigger, after: now, anchor: now, calendar: calendar)
     }
 
     /// Occurrences in `[due, now]` inclusive of `due`, capped.

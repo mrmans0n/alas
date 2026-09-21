@@ -463,6 +463,31 @@ struct AppStateRunScheduleTests {
         #expect(state.selectedWorktreeId == main.id)
     }
 
+    /// A branch template need not vary per occurrence. A second run of the
+    /// same schedule has to get its own worktree rather than failing forever
+    /// on the name the first one took.
+    @Test func aRepeatingBranchTemplateStillGetsAFreshWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let composed = schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+        )
+
+        #expect(await state.runSchedule(composed) == .succeeded)
+        #expect(await state.runSchedule(composed) == .succeeded)
+
+        let created = state.projectsManager.worktrees(projectId: project.id)
+            .filter { $0.id != main.id }
+            .map(\.branch)
+            .sorted()
+        #expect(created == ["nightly", "nightly-2"])
+    }
+
     @Test func compositionWithoutAScriptJustLaunchesTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

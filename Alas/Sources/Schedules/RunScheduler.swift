@@ -255,7 +255,8 @@ final class RunScheduler {
             if state.timeZoneIdentifier != zone {
                 if let retimed = RunSchedulePlanner.retimedFireDate(
                     for: schedule.trigger,
-                    anchor: state.lastFiredAt ?? schedule.createdAt,
+                    pendingFireAt: state.nextFireAt,
+                    now: current,
                     calendar: calendar
                 ) {
                     state.nextFireAt = retimed

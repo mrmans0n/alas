@@ -210,6 +210,45 @@ struct RunSchedulerTests {
         #expect(log.fired == ["morning"])
     }
 
+    /// Moving zones after the new zone's hour has already passed must not
+    /// manufacture a missed occurrence: that local 09:00 was never skipped,
+    /// it simply never existed here.
+    @Test func retimingDoesNotInventAPastOccurrence() async throws {
+        func zoned(_ identifier: String) -> Calendar {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: identifier)!
+            return calendar
+        }
+        let madrid = zoned("Europe/Madrid")
+        let tokyo = zoned("Asia/Tokyo")
+        let start = madrid.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 7))!
+        let store = MemoryStore()
+        let clock = Clock(start)
+        let (first, _) = makeScheduler(store: store, clock: clock, calendar: madrid)
+        first.add(RunSchedule(
+            id: "morning",
+            name: "Morning",
+            target: .allProjects,
+            scriptKey: "repo:test.sh",
+            trigger: .timeOfDay(hour: 9, minute: 0, weekdays: []),
+            missedRunPolicy: .runLatest,
+            createdAt: start
+        ))
+        first.evaluate()
+
+        // In Tokyo the same instant is 14:00, so today's 09:00 is already
+        // behind us. It must wait for tomorrow rather than fire now.
+        let (second, log) = makeScheduler(store: store, clock: clock, calendar: tokyo)
+        second.evaluate()
+        await second.waitForRunsForTesting()
+
+        #expect(log.fired.isEmpty)
+        #expect(second.state(for: "morning").lastMissed == nil)
+        let next = try #require(second.state(for: "morning").nextFireAt)
+        #expect(next > clock.now)
+        #expect(next == tokyo.date(from: DateComponents(year: 2026, month: 9, day: 22, hour: 9)))
+    }
+
     @Test func schedulesWithoutAnActionAreDroppedOnLoad() throws {
         let store = MemoryStore()
         var file = RunSchedulesFile()
