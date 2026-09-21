@@ -580,10 +580,14 @@ final class ACPSession: ObservableObject, Identifiable {
             if transcript.toolCallIndex(toolCallId: payload.toolCallId) != nil {
                 let touched = updateToolCall(id: payload.toolCallId) { tc in
                     Self.applyToolCallPayloadFields(payload, to: &tc)
+                    if tc.status == "in_progress", tc.executionStartedAt == nil {
+                        tc.executionStartedAt = timestamp
+                    }
                 }
                 if let touched {
                     applyToolCallMetadata(payload.metadata)
-                    return [touched]
+                    let diffTouched = applyDiffStatsFromToolCallContent(payload.content ?? [], worktreeRoot: worktreeRoot)
+                    return diffTouched.union([touched])
                 }
             }
             let items = payload.content ?? []
@@ -855,11 +859,25 @@ final class ACPSession: ObservableObject, Identifiable {
         wasCancelled: Bool
     ) -> Int? {
         let toolCallId = toolCall.toolCallId
-        guard let facts = Self.permissionDecisionMetadata(
+        let facts = Self.permissionDecisionMetadata(
             presentation: presentation, chosenOption: chosenOption, mcpServerName: mcpServerName
-        ) else { return nil }
+        )
+        // A cancellation is itself worth persisting — the row's status
+        // going stale is a correctness issue, independent of whether the
+        // adapter also attached any `_meta.permission` presentation.
+        guard facts != nil || wasCancelled else { return nil }
         if let index = updateToolCall(id: toolCallId, { tc in
-            tc.metadata = Self.mergeMetadata(tc.metadata, facts)
+            if let facts { tc.metadata = Self.mergeMetadata(tc.metadata, facts) }
+            // `$/cancel_request` cancellation (unlike Stop) never routes
+            // through cancelInFlightToolCalls(), so an already-existing row
+            // for a canceled permission would otherwise sit indefinitely
+            // "pending"/"in_progress" with nothing left to ever touch it.
+            if wasCancelled, tc.status == "pending" || tc.status == "in_progress" {
+                tc.status = "canceled"
+                if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+                    tc.executionFinishedAt = Date()
+                }
+            }
         }) {
             return index
         }
@@ -867,15 +885,16 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Appends a placeholder tool-call row from a permission request's own
-    /// `toolCall` snapshot, carrying `facts` as its metadata. See
-    /// `mergePermissionDecision`.
+    /// `toolCall` snapshot, carrying `facts` as its metadata when present
+    /// (a cancellation with no other facts still materializes, just with
+    /// `metadata == nil`). See `mergePermissionDecision`.
     ///
     /// `wasCancelled` overrides the row's status to `"canceled"`: a Stop or
     /// `$/cancel_request` sweeps existing in-flight rows to that status via
     /// `cancelInFlightToolCalls()` before the permission continuation
     /// resumes, so a row this call first materializes afterward would
     /// otherwise escape that sweep and sit as indefinitely "pending".
-    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable, wasCancelled: Bool) -> Int {
+    private func materializeToolCall(fromPermission toolCall: ACPPermissionToolCall, facts: AnyCodable?, wasCancelled: Bool) -> Int {
         let items = toolCall.content ?? []
         let raw = Self.flatten(items)
         let status = wasCancelled ? "canceled" : (toolCall.status ?? "pending")

@@ -1745,6 +1745,9 @@ struct ACPSessionRunnerTests {
         )))
         try await waitUntil { toolCallRows().first?.status == "in_progress" }
         #expect(toolCallRows().count == 1)
+        // Merging into the materialized row must still apply the same
+        // side effects the normal creation path would (executionStartedAt).
+        #expect(toolCallRows().first?.executionStartedAt != nil)
         await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
@@ -2319,6 +2322,44 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.permissionResponses[requestId] != nil }
         #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
         #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("cancelling a permission whose tool-call row already exists marks that row canceled")
+    func cancelRequestCancelsExistingToolCallRow() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        // The row already exists (announced separately) before the
+        // permission is even requested — unlike the materialize case.
+        mock.emit(.init(sessionId: "s", update: .toolCall(.init(
+            toolCallId: "call_1", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil))))
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        // $/cancel_request (unlike Stop) never routes through
+        // cancelInFlightToolCalls() — the row must still end up canceled.
+        mock.emitCancelRequest(id: requestId)
+        try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+
+        let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let tc) = message { return tc }
+            return nil
+        }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls.first?.status == "canceled")
     }
 
     @Test("a permission cancelled before its tool-call row exists materializes it as canceled, not stuck pending")
