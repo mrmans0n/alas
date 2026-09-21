@@ -107,8 +107,7 @@ struct NewWorktreeDialog: View {
                         text: activeNameBinding,
                         monospaced: true,
                         focusOnAppear: true,
-                        onSubmit: submitCreate,
-                        inputFilter: .branchName
+                        onSubmit: submitCreate
                     )
                 }
                 HStack(spacing: 10) {

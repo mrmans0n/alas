@@ -1007,7 +1007,6 @@
 		87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */; };
 		8814D8EE15F78DE6D549EC84 /* session-update-compaction-summary-chunk.json in Resources */ = {isa = PBXBuildFile; fileRef = D8A14E0E9529665F98F57A86 /* session-update-compaction-summary-chunk.json */; };
 		881AE2B2D456B36573346AD6 /* DraftCommitTabsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB0C89AA6E07A2402934FD2 /* DraftCommitTabsManagerTests.swift */; };
-		881EB8E37CE9D947A2C74564 /* GitRefNameInputFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35D6BBD77A210BB378E217FC /* GitRefNameInputFilterTests.swift */; };
 		8824EFBA6EA3673F13244C6D /* MergeSingleResolvePromptEditorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 749E3289E4C70DA7E4DD80E6 /* MergeSingleResolvePromptEditorWindow.swift */; };
 		88410E03F4A1760992C58AE3 /* GitService+RemoteChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8C5E87A22F4A12518D4893 /* GitService+RemoteChanges.swift */; };
 		884F7EB87029E537B923191E /* DefinitionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781B8F6F0A3085FEBFC615C2 /* DefinitionPicker.swift */; };
@@ -1529,7 +1528,6 @@
 		CC912749E15F84D70B279999 /* SnippetSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162985B2A66A4E4FD99FA326 /* SnippetSessionTests.swift */; };
 		CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */; };
 		CCB0C90ABC15D987D0EEB230 /* AppConfigFilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBCC34174A7CEFA72099DDFD /* AppConfigFilesTests.swift */; };
-		CD227C48AA85A5E74A92DF3F /* GitRefNameInputFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF41571C93C1C34A77951E2 /* GitRefNameInputFilter.swift */; };
 		CD70FE88F62533B4A2A281B4 /* ACPMessageGutter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29FCCD153F9C2AF78A7B2E47 /* ACPMessageGutter.swift */; };
 		CD7FB3120E4B194063C76817 /* ClaudeCodeACPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48AFF324FEE695AE18065D5A /* ClaudeCodeACPInstaller.swift */; };
 		CDA1193EF673BA40A6548B2B /* ReviewRequestDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAB5BDBCB990CC0452BF9164 /* ReviewRequestDraft.swift */; };
@@ -2362,7 +2360,6 @@
 		35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStoreTests.swift; sourceTree = "<group>"; };
 		35A13D9B95A126987AD92885 /* ACPSessionManagerDisposalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerDisposalTests.swift; sourceTree = "<group>"; };
 		35C3F234BEF9CE053CD4DB1E /* IndentationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndentationHelper.swift; sourceTree = "<group>"; };
-		35D6BBD77A210BB378E217FC /* GitRefNameInputFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitRefNameInputFilterTests.swift; sourceTree = "<group>"; };
 		362981F0D01E8EAE39C1EAC5 /* RightPaneToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneToolbar.swift; sourceTree = "<group>"; };
 		364213292935A05F3B52F51F /* Paths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Paths.swift; sourceTree = "<group>"; };
 		364507D55CD5D73CD44819E7 /* InstallerHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallerHostTests.swift; sourceTree = "<group>"; };
@@ -3149,7 +3146,6 @@
 		9F650CFAC8E61B1EC99CD04A /* TabActivityPulseTransitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabActivityPulseTransitionTests.swift; sourceTree = "<group>"; };
 		9F80EA8C6EFF2C0A8F02C62D /* InstallRecipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallRecipe.swift; sourceTree = "<group>"; };
 		9FD5EF425B826054367B9A98 /* MermaidDiagramTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidDiagramTheme.swift; sourceTree = "<group>"; };
-		9FF41571C93C1C34A77951E2 /* GitRefNameInputFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitRefNameInputFilter.swift; sourceTree = "<group>"; };
 		9FF99EC1C513C5D76D690BC2 /* ReleaseChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseChecker.swift; sourceTree = "<group>"; };
 		A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictMarkerParserTests.swift; sourceTree = "<group>"; };
 		A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUnstackSheet.swift; sourceTree = "<group>"; };
@@ -4342,7 +4338,6 @@
 				D3DC5DBEC068EB1BFDBB7F59 /* GitEventFilterTests.swift */,
 				6EB58175A9A39073E9D73F85 /* GitIgnoreServiceTests.swift */,
 				8EDED937A8E8340D6E685A6E /* GitNameValidatorTests.swift */,
-				35D6BBD77A210BB378E217FC /* GitRefNameInputFilterTests.swift */,
 				82387CFDFFBF52E639095C65 /* GitServiceBehindStatusTests.swift */,
 				F3AB3D6DF4A23648F0C45AC5 /* GitServiceCommitEditingTests.swift */,
 				F936C036893FC70AD506FDD4 /* GitServiceDiscardTests.swift */,
@@ -4764,7 +4759,6 @@
 				BDEA5E54A30636928F5D3B3E /* GitIgnoreService.swift */,
 				90F0CBE40E2CF0251ABE72AE /* GitLFSBlobResolver.swift */,
 				269CE27A6F4F2E663EDF9052 /* GitNameValidator.swift */,
-				9FF41571C93C1C34A77951E2 /* GitRefNameInputFilter.swift */,
 				B7CE7B4DAFDB65A79308FB63 /* GitService.swift */,
 				7F4A17C42833BE6190A45AF3 /* GitService+CommitEditing.swift */,
 				90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */,
@@ -7788,7 +7782,6 @@
 				79212B50265AAC9A392957C9 /* GitLFSBlobResolver.swift in Sources */,
 				EA2BAFA70ED22F6085EB1971 /* GitLabCLIProvider.swift in Sources */,
 				175951CE78A1446A9131BA1F /* GitNameValidator.swift in Sources */,
-				CD227C48AA85A5E74A92DF3F /* GitRefNameInputFilter.swift in Sources */,
 				6FA1659F464BE9C03C90F787 /* GitService+CommitEditing.swift in Sources */,
 				DF8CAD5714483408B8BD72F7 /* GitService+Discard.swift in Sources */,
 				E703B4895A0337310A17FED6 /* GitService+ImageDiff.swift in Sources */,
@@ -8763,7 +8756,6 @@
 				195102F7D680452476D70329 /* GitLabCLIProviderTests.swift in Sources */,
 				370EA3E196540ACC6174D5CC /* GitLabCLIProviderVerdictTests.swift in Sources */,
 				513BF637E5FF0BF3883FB1CC /* GitNameValidatorTests.swift in Sources */,
-				881EB8E37CE9D947A2C74564 /* GitRefNameInputFilterTests.swift in Sources */,
 				EB6136E15E4F1A4CBA230D12 /* GitServiceBehindStatusTests.swift in Sources */,
 				6291072E82FC282625FD1617 /* GitServiceCommitEditingTests.swift in Sources */,
 				2C520D1FB289610CEB70BDB6 /* GitServiceDiscardTests.swift in Sources */,

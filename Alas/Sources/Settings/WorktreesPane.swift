@@ -40,7 +40,7 @@ struct WorktreesPane: View {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
                         VStack(alignment: .leading, spacing: 2) {
-                            AlasField(text: branchPrefixBinding, monospaced: true, inputFilter: .branchPrefix)
+                            AlasField(text: branchPrefixBinding, monospaced: true)
                             if let prefixError = branchPrefixError {
                                 Text(prefixError)
                                     .font(.system(size: 11))
