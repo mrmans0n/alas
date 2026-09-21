@@ -112,6 +112,13 @@ final class RemotePeerManager {
     /// counter-code for as long as it stays valid there, well after this
     /// attempt's own wait gave up.
     @ObservationIgnored private var endedCounterCodes: [String: Date] = [:]
+    /// Whether a peer existed for a given `serverId`, captured synchronously
+    /// by `notePeerPairingArrived` at the moment a `/pair` redemption for it
+    /// fires — before the `onPeerPaired` → `Task { @MainActor in ... }` hop
+    /// that schedules `handleInboundPeer` introduces an arbitrary delay.
+    /// Consumed (and removed) the first time `handleInboundPeer` runs for
+    /// that identity.
+    @ObservationIgnored private var priorExistenceAtRedeem: [String: Bool] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -290,6 +297,19 @@ final class RemotePeerManager {
         onRevokeDevice?(localDeviceId)
     }
 
+    /// Records, synchronously, whether a peer already exists for `serverId`
+    /// at the moment a `/pair` redemption for it fires — the earliest point
+    /// this can be observed, on the same call stack as the redeem itself,
+    /// before the `onPeerPaired` → `Task { @MainActor in ... }` hop that
+    /// schedules `handleInboundPeer`'s own body introduces an arbitrary
+    /// delay. A Forget landing in exactly that gap would otherwise vanish
+    /// before `handleInboundPeer` ever got a chance to observe "existed
+    /// before" for itself, since its own in-body snapshot only sees the
+    /// world as of whenever it happens to actually start running.
+    func notePeerPairingArrived(serverId: String) {
+        priorExistenceAtRedeem[serverId] = peers.contains(where: { $0.serverId == serverId })
+    }
+
     /// The server saw another Mac redeem a code here. With a counter-code we
     /// are the responder and pair back; without one we are the initiator and
     /// only learn which local device record represents the peer.
@@ -300,7 +320,14 @@ final class RemotePeerManager {
             // protection on the initiator side: pairing back can take up to
             // the full multi-origin timeout, and if the user forgets this
             // peer while it's in flight, the reply must not resurrect it.
+            // `priorExistenceAtRedeem`, captured synchronously at redemption
+            // time by `notePeerPairingArrived`, is authoritative when
+            // present — it predates even the scheduling gap before this
+            // function's own body started; this in-body snapshot is only a
+            // fallback for callers (direct test invocations) that skip it.
             let priorServerIds = Set(peers.map(\.serverId))
+            let existedBeforeThisExchange = priorExistenceAtRedeem.removeValue(forKey: request.peerServerId)
+                ?? priorServerIds.contains(request.peerServerId)
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
             guard case .paired(let token, _, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
@@ -321,7 +348,7 @@ final class RemotePeerManager {
             // recreate the OUTBOUND side of the relationship from this
             // now-unwanted reply, undoing the user's revocation just as
             // surely as resurrecting the peer row itself would.
-            if priorServerIds.contains(request.peerServerId), !peers.contains(where: { $0.serverId == request.peerServerId }) {
+            if existedBeforeThisExchange, !peers.contains(where: { $0.serverId == request.peerServerId }) {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
                 return

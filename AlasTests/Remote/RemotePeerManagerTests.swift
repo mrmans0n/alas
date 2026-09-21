@@ -710,6 +710,38 @@ struct RemotePeerManagerTests {
         #expect(pairing.validate(token: inbound.token) == nil)
     }
 
+    // The forgotten-during-pair-back check above still has a gap: it only
+    // snapshots identities at the START of handleInboundPeer's own body,
+    // but that body is itself scheduled via onPeerPaired's
+    // Task { @MainActor in ... } hop, an arbitrary delay after the /pair
+    // redemption that triggered it. A Forget landing in THAT gap is already
+    // gone by the time handleInboundPeer's own snapshot runs, so it would
+    // never be recognized as "existed before" at all.
+    // notePeerPairingArrived captures that fact synchronously, at redemption
+    // time, closing the gap.
+    @Test func aPeerForgottenBetweenRedemptionAndHandleInboundPeerStartingIsNotResurrected() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let inbound = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-b", name: "old", origins: ["http://10.0.0.2:8765"],
+                               lastOrigin: "http://10.0.0.2:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "dev-b", addedAt: Date(timeIntervalSince1970: 1))])
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: pairer(["10.0.0.2:8765": (200, #"{"token":"tokB","serverId":"srv-b","name":"Mac B"}"#)], requests: Requests()),
+                                  links: Links())
+        manager.connectAll()
+        // Simulates the exact moment redemption fires, synchronously —
+        // followed immediately by a Forget landing in the scheduling gap
+        // before handleInboundPeer's own body ever starts.
+        manager.notePeerPairingArrived(serverId: "srv-b")
+        manager.forget(peerId: "p1")
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-b", peerName: "Mac B", origins: ["http://10.0.0.2:8765"], counterCode: "CC",
+            localDeviceId: inbound.deviceId, redeemedCode: "ABC123"))
+        #expect(manager.peers.isEmpty)
+        #expect(pairing.validate(token: inbound.token) == nil)
+    }
+
     // A Mac with more advertised addresses than the shared bound (several
     // interfaces plus configured allowed hosts) would otherwise have the
     // receiving Mac reject the advertisement outright — it can never tell

@@ -631,6 +631,11 @@ final class AppState {
                 self?.remoteConnectedDeviceCountsSnapshot = counts
             }
             server.onPeerPaired = { [weak self] request in
+                // Recorded synchronously, on the same call stack as the
+                // redeem that produced this request — before Task-spawning
+                // below introduces a delay a concurrent Forget could land
+                // in unnoticed by handleInboundPeer's own, later snapshot.
+                self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId)
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
             do {
