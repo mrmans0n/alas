@@ -3612,6 +3612,19 @@ extension ACPSessionManager {
                 enqueuePersistence { persistence in
                     try await persistence.setAuthStatus(sessionId: sessionId, status: nil)
                 }
+            } else if session.authStatus?.kind == ACPAuthStatus.Kind.none {
+                // `.none` through optional chaining is ambiguous between
+                // "the kind is .none" and "the optional itself is nil" —
+                // the explicit type above forces the former (the classic
+                // Optional<Enum>.none gotcha; see ACPSessionRunnerTests).
+                //
+                // The generic setupState reset above (`.ready`, before this
+                // block) would otherwise hide a signed-out status that was
+                // only just restored — from persistence after an app
+                // restart, or preserved in memory across a broker-adopted
+                // reattach — without a matching live `_auth/status_update`
+                // to re-trigger the banner via `applyAuthStatus`.
+                session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
             }
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()

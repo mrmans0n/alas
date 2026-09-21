@@ -672,6 +672,10 @@ struct ACPSessionManagerTests {
         }
         #expect(firstSession.authStatus?.label == "Claude Max")
         await firstManager.flushAllPersistence()
+        // Release the writer lease so the second manager below can actually
+        // become the writer instead of silently becoming a read-only mirror
+        // (an app restart implies the first process, and its lease, is gone).
+        await firstManager.releaseAllOwnedLeases()
 
         // Simulate an app restart: a brand-new manager instance reading the
         // same on-disk store, adopting an agent that (like a broker-served
@@ -696,6 +700,61 @@ struct ACPSessionManagerTests {
         await secondManager.attach(to: secondSession.id, freshlyCreated: false)
 
         #expect(secondSession.authStatus?.label == "Claude Max")
+    }
+
+    @Test("a restored signed-out authStatus re-triggers the auth nudge banner")
+    func restoredSignedOutAuthStatusReTriggersBanner() async throws {
+        // Regression: `attach()` unconditionally resets `setupState` to
+        // `.ready` before this point. A persisted `kind == .none` status
+        // restored from a prior run (or preserved across a broker-adopted
+        // reattach with no fresh notification) must re-trigger `.needsAuth`
+        // here, or the user sees neither the banner (setupState says
+        // `.ready`) nor the pill (hidden for `kind == .none` by design).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-restart-none-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let firstClient = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(firstClient)
+        scriptSessionResult(firstClient, method: "session/new", sessionId: "remote")
+        let firstManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: firstClient) }
+        )
+        let firstSession = firstManager.createSession(id: "session", agentId: "claude")
+        await firstManager.attach(to: firstSession.id, freshlyCreated: true)
+        firstClient.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+        for _ in 0 ..< 100 where firstSession.authStatus == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await firstManager.flushAllPersistence()
+        await firstManager.releaseAllOwnedLeases()
+
+        let secondClient = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(secondClient)
+        scriptSessionResult(secondClient, method: "session/new", sessionId: "remote")
+        let secondManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: secondClient) }
+        )
+        guard let secondSession = secondManager.placeholderSession(id: "session") else {
+            Issue.record("expected a placeholder session to hydrate from the persisted row")
+            return
+        }
+        await secondManager.hydrateIfNeeded(id: secondSession.id)
+
+        await secondManager.attach(to: secondSession.id, freshlyCreated: false)
+
+        #expect(secondSession.authStatus?.kind == ACPAuthStatus.Kind.none)
+        guard case .needsAuth = secondSession.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(secondSession.setupState)")
+            return
+        }
     }
 
     @Test("a live authStatus update reaches the session after attach")
