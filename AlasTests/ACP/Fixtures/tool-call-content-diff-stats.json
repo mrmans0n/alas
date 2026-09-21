@@ -1,0 +1,24 @@
+[
+  {
+    "type": "diff",
+    "path": "src/foo.swift",
+    "oldText": "let a = 1\n",
+    "newText": "let a = 2\n",
+    "_meta": {
+      "kind": "update",
+      "jetbrains": { "air": { "version": 1, "diffStats": { "version": 1, "added": 12, "removed": 3 } } }
+    }
+  },
+  {
+    "type": "diff",
+    "path": "src/bar.swift",
+    "newText": "// new file\n",
+    "_meta": { "kind": "add" }
+  },
+  {
+    "type": "diff",
+    "path": "src/baz.swift",
+    "oldText": "old\n",
+    "newText": "new\n"
+  }
+]

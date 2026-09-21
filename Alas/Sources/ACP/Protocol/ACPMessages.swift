@@ -639,13 +639,15 @@ struct ACPModeInfo: Codable, Equatable, Identifiable, Hashable {
     let id: String
     let name: String
     let description: String?
+    let kind: ACPModeKind?
 
-    init(id: String, name: String, description: String? = nil) {
+    init(id: String, name: String, description: String? = nil, kind: ACPModeKind? = nil) {
         self.id = id
         self.name = name
         self.description = description
+        self.kind = kind
     }
-    enum CodingKeys: String, CodingKey { case id, modeId, name, description }
+    enum CodingKeys: String, CodingKey { case id, modeId, name, description, meta = "_meta" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if let v = try? c.decode(String.self, forKey: .modeId) {
@@ -655,6 +657,8 @@ struct ACPModeInfo: Codable, Equatable, Identifiable, Hashable {
         }
         name = try c.decode(String.self, forKey: .name)
         description = try? c.decode(String.self, forKey: .description)
+        let meta = (try? c.decodeIfPresent(ACPModeKindMetadata.self, forKey: .meta)) ?? nil
+        kind = meta?.kind.flatMap(ACPModeKind.init(rawValue:))
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1024,7 +1028,12 @@ enum ACPContentBlock: Codable, Equatable, Sendable {
 /// `ACPContentBlock`'s text/resource_link/image discriminator.
 enum ACPToolCallContent: Codable, Equatable {
     case content(ACPContentBlock)
-    case diff(path: String, oldText: String?, newText: String)
+    /// `kind`/`diffStats` come from the AIR diff-statistics extension
+    /// (`_meta.kind` and `_meta.jetbrains.air.diffStats`) — claude-agent-acp
+    /// ≥ 0.78 (#1122) and codex-acp ≥ 1.12 (#501). `diffStats` is nil when
+    /// the adapter can't produce valid counts; callers fall back to
+    /// computing their own.
+    case diff(path: String, oldText: String?, newText: String, kind: String?, diffStats: ACPDiffStats?)
     case terminal(terminalId: String)
     /// Forward-compatibility bucket so a future spec variant doesn't get
     /// misdecoded as empty text (the previous bug pattern).
@@ -1032,6 +1041,16 @@ enum ACPToolCallContent: Codable, Equatable {
 
     private enum Keys: String, CodingKey {
         case type, content, path, oldText, newText, terminalId
+        case meta = "_meta"
+    }
+
+    /// Wire shape of `_meta` on a `diff` content block. See
+    /// https://github.com/agentclientprotocol/codex-acp/blob/main/docs/diff-statistics-extension.md.
+    private struct DiffMeta: Codable {
+        let kind: String?
+        let jetbrains: Jetbrains?
+        struct Jetbrains: Codable { let air: Air? }
+        struct Air: Codable { let diffStats: ACPDiffStats? }
     }
 
     init(from decoder: Decoder) throws {
@@ -1040,10 +1059,13 @@ enum ACPToolCallContent: Codable, Equatable {
         case "content":
             self = .content(try c.decode(ACPContentBlock.self, forKey: .content))
         case "diff":
+            let meta = (try? c.decodeIfPresent(DiffMeta.self, forKey: .meta)) ?? nil
             self = .diff(
                 path: try c.decode(String.self, forKey: .path),
                 oldText: try? c.decode(String.self, forKey: .oldText),
-                newText: try c.decode(String.self, forKey: .newText))
+                newText: try c.decode(String.self, forKey: .newText),
+                kind: meta?.kind,
+                diffStats: meta?.jetbrains?.air?.diffStats)
         case "terminal":
             self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
         case "text", "resource_link", "image", "resource":
@@ -1063,11 +1085,17 @@ enum ACPToolCallContent: Codable, Equatable {
         case .content(let b):
             try c.encode("content", forKey: .type)
             try c.encode(b, forKey: .content)
-        case .diff(let path, let old, let new):
+        case .diff(let path, let old, let new, let kind, let diffStats):
             try c.encode("diff", forKey: .type)
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(old, forKey: .oldText)
             try c.encode(new, forKey: .newText)
+            if kind != nil || diffStats != nil {
+                let meta = DiffMeta(
+                    kind: kind,
+                    jetbrains: diffStats.map { DiffMeta.Jetbrains(air: DiffMeta.Air(diffStats: $0)) })
+                try c.encode(meta, forKey: .meta)
+            }
         case .terminal(let id):
             try c.encode("terminal", forKey: .type)
             try c.encode(id, forKey: .terminalId)
@@ -1078,4 +1106,13 @@ enum ACPToolCallContent: Codable, Equatable {
             try c.encode("unknown", forKey: .type)
         }
     }
+}
+
+/// AIR "diff statistics" extension payload — `_meta.jetbrains.air.diffStats`
+/// on a `diff` content block. All fields are required by the spec when
+/// present at all; a payload missing either count fails to decode and the
+/// whole `_meta` is dropped (the caller falls back to computing its own).
+struct ACPDiffStats: Codable, Equatable, Hashable {
+    let added: Int
+    let removed: Int
 }

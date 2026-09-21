@@ -70,6 +70,23 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
+    /// Per-model token usage from the most recent `session/prompt` result's
+    /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
+    /// only: re-derived on each prompt response, never persisted.
+    @Published private(set) var lastTurnQuota: ACPPromptQuota?
+    /// Running sum of every turn's `lastTurnQuota` for the lifetime of this
+    /// in-memory `ACPSession` object, per model. `_meta.quota` reports each
+    /// turn's own usage rather than a running total, so this is accumulated
+    /// client-side — see `ACPPromptQuota.accumulating(_:with:)`. Runtime
+    /// only, like `lastTurnQuota`, and *not* reset on reconnect —
+    /// `ACPSessionManager.reattach` reuses the existing `ACPSession`
+    /// instance, so this keeps growing across a flaky connection's retries.
+    /// It resets only when a fresh `ACPSession` is constructed (a true app
+    /// restart, or a session reloaded from persistence after eviction), so
+    /// it starts at nil and never reconstructs from the persisted
+    /// transcript — the UI labels it accordingly rather than claiming the
+    /// whole session's usage.
+    @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
     @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
@@ -448,7 +465,8 @@ final class ACPSession: ObservableObject, Identifiable {
     func apply(
         _ update: ACPSessionUpdate,
         tracksRetryStatus: Bool = true,
-        at timestamp: Date = Date()
+        at timestamp: Date = Date(),
+        worktreeRoot: String? = nil
     ) -> Set<Int> {
         if tracksRetryStatus {
             switch update {
@@ -582,7 +600,8 @@ final class ACPSession: ObservableObject, Identifiable {
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
-            return [transcript.messages.count - 1]
+            return applyDiffStatsFromToolCallContent(items, worktreeRoot: worktreeRoot)
+                .union([transcript.messages.count - 1])
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
@@ -598,7 +617,8 @@ final class ACPSession: ObservableObject, Identifiable {
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
             }
-            return touched.map { [$0] } ?? []
+            let diffTouched = applyDiffStatsFromToolCallContent(u.content ?? [], worktreeRoot: worktreeRoot)
+            return touched.map { diffTouched.union([$0]) } ?? diffTouched
         case .compactionUpdate(let update):
             clearRestoredContextRecoveryStatus()
             return applyContextCompaction(update)
@@ -1201,7 +1221,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return true
         case (.terminal(let a), .terminal(let b)):
             return a == b
-        case (.diff(let p1, let o1, let n1), .diff(let p2, let o2, let n2)):
+        case (.diff(let p1, let o1, let n1, _, _), .diff(let p2, let o2, let n2, _, _)):
             return p1 == p2 && o1 == o2 && n1 == n2
         case (.content(.image(let d1, let u1, let m1)),
               .content(.image(let d2, let u2, let m2))):
@@ -1454,6 +1474,30 @@ final class ACPSession: ObservableObject, Identifiable {
         flushPendingReplayCandidates()
         transcript.appendMessage(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
+    }
+
+    /// Stores a `session/prompt` response's decoded `_meta.quota` as the
+    /// last turn's usage and folds it into the running session total.
+    ///
+    /// `updatesLastTurn` defaults to true; callers pass `false` when this
+    /// response belongs to a cancelled/superseded prompt (its RPC can still
+    /// complete after a successor started or finished) — the tokens are
+    /// real spend either way, so they still accumulate into
+    /// `sessionQuotaTotal`, but a stale response must not overwrite (or, if
+    /// nil, clear) a newer prompt's `lastTurnQuota`.
+    ///
+    /// A nil quota (agent doesn't send the extension on this turn, or
+    /// decode failed) still clears `lastTurnQuota` when `updatesLastTurn`
+    /// — an earlier turn's usage must not linger under "Last turn" once it
+    /// no longer describes the most recent one — but `sessionQuotaTotal` is
+    /// untouched, since it's a valid cumulative total regardless of any
+    /// single turn's quota.
+    func recordPromptQuota(_ quota: ACPPromptQuota?, updatesLastTurn: Bool = true) {
+        if updatesLastTurn {
+            lastTurnQuota = quota
+        }
+        guard let quota else { return }
+        sessionQuotaTotal = ACPPromptQuota.accumulating(sessionQuotaTotal, with: quota)
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
@@ -1795,7 +1839,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 continue
             case .content(.resource(_, _, let text)):
                 out.append(text)
-            case .diff(let path, let old, let new):
+            case .diff(let path, let old, let new, _, _):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
                     for line in Self.diffLines(old) {
@@ -1816,6 +1860,60 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// Correlates adapter-supplied diff statistics (AIR extension,
+    /// `_meta.jetbrains.air.diffStats` on a `diff` content block) into the
+    /// most recent `.fileEdit` transcript row for the same path *and* the
+    /// same before/after text.
+    ///
+    /// `fs/write_text_file` only sees before/after text and falls back to
+    /// `ACPFileWriter`'s crude line-set heuristic; when the same edit's
+    /// tool call later reports the adapter's real patch counts, prefer
+    /// those. Matching on content as well as path (not path alone) keeps a
+    /// same-path-but-different-content diff — a stale preview, or a later
+    /// unrelated edit to the same file — from clobbering an earlier row's
+    /// counts; a diff item without stats, or with no matching file edit,
+    /// is a no-op and the heuristic count stands.
+    ///
+    /// `worktreeRoot`, when supplied, normalizes an absolute diff path to
+    /// worktree-relative before matching — `.fileEdit.path` is always
+    /// stored relative (see `ACPSessionRunner.appendAndPersistFileEdit`),
+    /// but the diff block's own path is whatever the adapter reported.
+    private func applyDiffStatsFromToolCallContent(
+        _ items: [ACPToolCallContent],
+        worktreeRoot: String?
+    ) -> Set<Int> {
+        var touched: Set<Int> = []
+        for item in items {
+            guard case .diff(let path, let oldText, let newText, _, let diffStats?) = item else { continue }
+            let relativePath = Self.relativeToWorktreeRoot(path, worktreeRoot: worktreeRoot)
+            guard let index = transcript.messages.lastIndex(where: {
+                if case .fileEdit(_, let edit) = $0 {
+                    return edit.path == relativePath && edit.oldText == oldText && edit.newText == newText
+                }
+                return false
+            }), case .fileEdit(let id, var edit) = transcript.messages[index] else { continue }
+            guard edit.added != diffStats.added || edit.removed != diffStats.removed else { continue }
+            edit.added = diffStats.added
+            edit.removed = diffStats.removed
+            transcript.replaceMessage(at: index, with: .fileEdit(id: id, edit))
+            touched.insert(index)
+        }
+        return touched
+    }
+
+    /// Mirrors `ACPSessionRunner.relativeToWorktree`: converts an absolute
+    /// path under `worktreeRoot` to worktree-relative. Returns `path`
+    /// unchanged when `worktreeRoot` is nil or `path` isn't under it (it
+    /// may already be relative).
+    private static func relativeToWorktreeRoot(_ path: String, worktreeRoot: String?) -> String {
+        guard let worktreeRoot else { return path }
+        let root = URL(fileURLWithPath: worktreeRoot).standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let target = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard target.hasPrefix(prefix) else { return path }
+        return String(target.dropFirst(prefix.count))
     }
 
     /// Split a diff hunk into lines while preserving blank lines inside

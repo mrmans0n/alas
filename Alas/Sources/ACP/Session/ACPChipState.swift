@@ -41,6 +41,14 @@ struct ChipSpec: Equatable {
         let id: String
         let name: String
         let description: String?
+        let kind: ACPModeKind?
+
+        init(id: String, name: String, description: String?, kind: ACPModeKind? = nil) {
+            self.id = id
+            self.name = name
+            self.description = description
+            self.kind = kind
+        }
     }
 }
 
@@ -130,7 +138,7 @@ extension ACPChipState {
             return ChipSpec(
                 source: .mode,
                 options: modes.map {
-                    ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
+                    ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind)
                 },
                 currentId: currentMode)
         case .configOption(let id):
@@ -151,7 +159,7 @@ extension ACPChipState {
         return ChipSpec(
             source: .configOption(id: opt.id),
             options: opt.options.map {
-                ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
+                ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind)
             },
             currentId: opt.currentStringValue)
     }
@@ -196,7 +204,7 @@ extension ACPChipState {
                 spec: ChipSpec(
                     source: .configOption(id: opt.id),
                     options: opt.options.map {
-                        ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
+                        ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description, kind: $0.kind)
                     },
                     currentId: opt.currentStringValue))
         }

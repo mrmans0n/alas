@@ -10,6 +10,11 @@ struct ACPSelectChip: View {
         let id: String
         let name: String
         let description: String?
+        /// SF Symbol shown before the name — currently only populated for
+        /// mode/mode-config-option items carrying `_meta.kind`. Absent for
+        /// every other chip (models, thinking, parameters), which keep
+        /// their existing icon-less look.
+        var iconSystemName: String? = nil
     }
 
     let label: String
@@ -33,6 +38,11 @@ struct ACPSelectChip: View {
             // outline at low opacity, accent-tinted (not white) text.
             // Outline-on-fill, not a solid bright pill.
             HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
+                if let icon = items.first(where: { $0.id == selectedId })?.iconSystemName {
+                    Image(systemName: icon)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(accent)
+                }
                 Text(label.isEmpty ? placeholder : label)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
@@ -293,6 +303,11 @@ private struct DropdownPanel: View {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
+                        if let icon = item.iconSystemName {
+                            Image(systemName: icon)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(accent)
+                        }
                         Text(item.name)
                             .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                             .foregroundStyle(theme.color("fg"))

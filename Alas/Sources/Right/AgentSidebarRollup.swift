@@ -45,6 +45,12 @@ struct AgentSidebarRow: Identifiable, Equatable {
     let model: String?
     let state: AgentSidebarState
     let contextUsage: ACPUsageInfo?
+    /// Per-model quota breakdown, mirroring `ACPSession.lastTurnQuota` /
+    /// `sessionQuotaTotal`. Threaded through so the sidebar's context-usage
+    /// popover shows the same data as the composer's — including for
+    /// quota-only adapters that never send `usage_update`.
+    let lastTurnQuota: ACPPromptQuota?
+    let sessionQuotaTotal: ACPPromptQuota?
     let plan: AgentSidebarPlanProgress?
     let host: String?
     /// The timestamp shown in the metadata caption: creation time for active
@@ -61,6 +67,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
         model: String?,
         state: AgentSidebarState,
         contextUsage: ACPUsageInfo? = nil,
+        lastTurnQuota: ACPPromptQuota? = nil,
+        sessionQuotaTotal: ACPPromptQuota? = nil,
         plan: AgentSidebarPlanProgress? = nil,
         host: String? = nil,
         activityAt: Date,
@@ -74,6 +82,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
             model: model,
             state: state,
             contextUsage: contextUsage,
+            lastTurnQuota: lastTurnQuota,
+            sessionQuotaTotal: sessionQuotaTotal,
             plan: plan,
             host: host,
             activityAt: activityAt,
@@ -97,6 +107,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
             model: nil,
             state: state,
             contextUsage: nil,
+            lastTurnQuota: nil,
+            sessionQuotaTotal: nil,
             plan: nil,
             host: host,
             activityAt: .distantPast,
@@ -249,6 +261,8 @@ struct AgentSidebarRollupBuilder {
             model: modelDisplay(currentModel: session.currentModel, availableModels: session.availableModels),
             state: resolvedState,
             contextUsage: session.contextUsage,
+            lastTurnQuota: session.lastTurnQuota,
+            sessionQuotaTotal: session.sessionQuotaTotal,
             plan: planProgress(for: session.transcript.currentPlan),
             host: remoteHost,
             activityAt: activityAt,

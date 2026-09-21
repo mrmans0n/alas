@@ -50,6 +50,28 @@ struct ACPConfigOptionTests {
         #expect(opt.options[1].id == "high")
     }
 
+    @Test("option items decode `_meta.kind`")
+    func decodeOptionKind() throws {
+        let json = """
+        {
+          "id": "mode",
+          "name": "Mode",
+          "type": "select",
+          "category": "mode",
+          "currentValue": "agent-full-access",
+          "options": [
+            { "value": "read-only", "name": "Ask for approval", "_meta": {"kind": "standard"} },
+            { "value": "agent-full-access", "name": "Full access", "_meta": {"kind": "full_access"} },
+            { "value": "legacy", "name": "Legacy" }
+          ]
+        }
+        """.data(using: .utf8)!
+        let opt = try JSONDecoder().decode(ACPConfigOption.self, from: json)
+        #expect(opt.options[0].kind == .standard)
+        #expect(opt.options[1].kind == .fullAccess)
+        #expect(opt.options[2].kind == nil)
+    }
+
     @Test("non-select type decodes with empty options")
     func decodeUnknownType() throws {
         let json = """
