@@ -41,6 +41,35 @@ struct GGCommandRunningStreamingTests {
 
     private struct TimeoutError: Error {}
 
+    /// The two detached-child watchdog tests below need their Python child to
+    /// reach `signal.signal(SIGTERM, ...)` *before* the production watchdog
+    /// fires. A SIGTERM that lands earlier hits the default disposition and
+    /// kills the child outright, so the detached grandchild those tests are
+    /// actually about never gets forked and its PID file is never written —
+    /// the test then fails on a missing file, which looks nothing like the
+    /// process leak it is meant to catch.
+    ///
+    /// `/usr/bin/python3` itself only takes ~60-170ms to get from `exec()` to
+    /// that line even under heavy CPU contention, so the original 0.2s budget
+    /// being a near-miss on a busy CI host isn't just process-startup cost:
+    /// the watchdog's `Task.sleep` fires on a real-time timer independent of
+    /// scheduling pressure, but the synchronous work between arming it and
+    /// releasing the launch gate (`processTree.start`, installing handlers)
+    /// still has to get a thread from Swift's cooperative pool first — under
+    /// heavy contention that alone measurably eats into the budget before the
+    /// child even execs. 1.5s was still observed to fail under sustained
+    /// heavy load; keep enough headroom that both sources of delay have to
+    /// stack up badly to matter.
+    private static let detachedChildWatchdogTimeout: TimeInterval = 3
+
+    /// Worst case for a `detachedChildWatchdogTimeout` run: the timeout
+    /// itself, then `terminateAndWait`'s 2s SIGTERM grace, its 1s SIGKILL
+    /// sweep, and the termination handler's 2s stdout/stderr EOF wait.
+    /// Tripping this ceiling early would cancel the stream and change the
+    /// very termination path under test, so leave real headroom over that
+    /// ~8s.
+    private static let detachedChildCollectCeiling: UInt64 = 15
+
     @Test func terminationHandlerDoesNotRetainProcessTree() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -308,16 +337,13 @@ struct GGCommandRunningStreamingTests {
             args: ["-c", script],
             cwd: nil,
             env: env,
-            timeout: 0.2
+            timeout: Self.detachedChildWatchdogTimeout
         )
 
-        _ = try? await collectWithTimeout(stream)
+        _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
         // The detached grandchild writes this file itself, on its own fork
-        // chain, well after `collectWithTimeout` returns — its 5s ceiling
-        // races the production termination sequence's own worst case
-        // (~5s: SIGTERM grace + SIGKILL sweep + stdout/stderr EOF wait), so
-        // under CI contention the file can still be a few milliseconds from
-        // existing the instant this reads it. Poll rather than read once.
+        // chain, so it can still be a few milliseconds from existing the
+        // instant `collectWithTimeout` returns. Poll rather than read once.
         var discoveredChildPID: pid_t?
         for _ in 0 ..< 50 {
             if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),
@@ -384,15 +410,13 @@ struct GGCommandRunningStreamingTests {
             args: ["-c", script],
             cwd: nil,
             env: env,
-            timeout: 0.2
+            timeout: Self.detachedChildWatchdogTimeout
         )
 
-        _ = try? await collectWithTimeout(stream)
+        _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
         // Same race as watchdogKillsDetachedChildSpawnedByTerminationHandler
         // above: the grandchild writes this file itself, on its own delayed
-        // fork chain, and `collectWithTimeout`'s 5s ceiling can race the
-        // production termination sequence's own comparable worst case under
-        // CI contention. Poll rather than read once.
+        // fork chain. Poll rather than read once.
         var discoveredChildPID: pid_t?
         for _ in 0 ..< 50 {
             if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),

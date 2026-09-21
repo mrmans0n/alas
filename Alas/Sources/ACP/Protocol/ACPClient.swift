@@ -71,14 +71,28 @@ protocol ACPClient: AnyObject {
     /// call `respondToPermission(id:decision:)` exactly once per emitted request.
     var permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { get }
 
+    /// Inbound `$/cancel_request` notifications (OpenCode v2), carrying the
+    /// id of a still-pending `session/request_permission` or
+    /// `fs/write_text_file` request the agent wants dropped.
+    var cancelRequests: AsyncStream<JSONRPCID> { get }
+
     /// Ask-user question requests from agent-specific ACP extensions. The
     /// client owner must call `respondToQuestion(id:response:)` exactly once
     /// per emitted request.
     var questionRequests: AsyncStream<ACPQuestionRequest> { get }
 
+    /// Plan-approval requests from Cursor's ACP extension.
+    var planRequests: AsyncStream<ACPCursorPlanRequest> { get }
+
     /// Standard ACP elicitation requests and URL completion notifications.
     var elicitationRequests: AsyncStream<ACPElicitationRequest> { get }
     var elicitationCompletions: AsyncStream<ACPElicitationCompleteParams> { get }
+
+    /// `_auth/status_update` notifications from the shared auth-status ACP
+    /// extension. Sent once right after `initialize` and again whenever the
+    /// agent's auth state changes. Agents that don't support the extension
+    /// simply never yield anything on this stream.
+    var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> { get }
 
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
@@ -90,6 +104,7 @@ protocol ACPClient: AnyObject {
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse)
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -115,10 +130,23 @@ extension ACPClient {
         AsyncStream { $0.finish() }
     }
 
+    var cancelRequests: AsyncStream<JSONRPCID> {
+        AsyncStream { $0.finish() }
+    }
+
+    var planRequests: AsyncStream<ACPCursorPlanRequest> {
+        AsyncStream { $0.finish() }
+    }
+
+    var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> {
+        AsyncStream { $0.finish() }
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
     ) {}
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {}
 
     func hasPendingOutboundRequest(id: JSONRPCID) -> Bool { true }
 

@@ -462,6 +462,35 @@ struct ACPSessionRunnerTests {
         #expect(mock.sent.contains { $0.method == "session/cancel" })
     }
 
+    @Test("user cancel completion does not depend on the prompt response's stopReason")
+    func userCancelCompletionIgnoresStopReason() async throws {
+        // Copilot 1.0.85+ returns stopReason "end_turn" instead of
+        // "cancelled" on a user-initiated stop (github/copilot-cli#4561).
+        // ACPConnection.prompt(...) never decodes stopReason at all — the
+        // completion callback and transcript state must settle the same
+        // way no matter what the field says.
+        let (runner, mock) = try makeRunner()
+        let promptStarted = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            return try JSONEncoder().encode(["stopReason": "end_turn"])
+        }
+
+        var completion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            completion = succeeded
+        }
+        await promptStarted.wait()
+        await runner.userCancel()
+
+        for _ in 0..<20 where completion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(completion == true)
+        #expect(runner.session.lastError == nil)
+        #expect(runner.session.transcript.streamingState == .idle)
+    }
+
     @Test("user cancel invokes the pending input cancellation hook")
     func userCancelInvokesInputCancellation() async throws {
         var didCancelInput = false
@@ -2097,7 +2126,8 @@ struct ACPSessionRunnerTests {
         async let decision = runner.policy.evaluate(
             scopeKey: "scope",
             options: params.options,
-            params: params)
+            params: params,
+            requestID: .number(1))
 
         // Give evaluate() a beat to register its continuation.
         try? await Task.sleep(for: .milliseconds(100))
@@ -2106,6 +2136,111 @@ struct ACPSessionRunnerTests {
 
         let response = await decision
         #expect(response.outcome == .cancelled)
+    }
+
+    @Test("inbound $/cancel_request dismisses the pending permission as cancelled")
+    func cancelRequestDismissesPendingPermission() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        mock.emitCancelRequest(id: requestId)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
+        #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("$/cancel_request for an id that isn't the pending permission is a no-op")
+    func cancelRequestIgnoresUnrelatedId() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+
+        mock.emitCancelRequest(id: .number(999))
+
+        // Give the (no-op) dispatch a beat, then confirm the permission is
+        // still parked, not resolved.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(mock.permissionResponses[requestId] == nil)
+        #expect(runner.session.transcript.pendingPermission != nil)
+    }
+
+    @Test("$/cancel_request arriving before the matching permission request cancels it once dequeued")
+    func cancelRequestArrivingBeforePermissionRequestIsRetained() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        let requestId = JSONRPCID.number(42)
+
+        // Cancel arrives first — e.g. a buffered broker replay, or both
+        // notifications landing in one transport batch ahead of
+        // permissionsTask dequeuing the request.
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitPermission(id: requestId, params: params)
+
+        try await waitUntil { mock.permissionResponses[requestId] != nil }
+        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
+        #expect(runner.session.transcript.pendingPermission == nil)
+    }
+
+    @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
+    func cancelRequestCancelsPendingFileWrite() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        let requestId = JSONRPCID.number(7)
+        mock.emitCancelRequest(id: requestId)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        mock.emitFile(.write(id: requestId, params: .init(
+            sessionId: "s", path: "cancelled.txt", content: "should not be written")))
+
+        try await waitUntil { mock.fileResponses[requestId] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestId] else {
+            Issue.record("expected the cancelled write to fail")
+            return
+        }
+        #expect(error.code == -32800)
+        let target = URL(fileURLWithPath: FileManager.default.temporaryDirectory.path)
+            .appendingPathComponent("cancelled.txt")
+        #expect(FileManager.default.fileExists(atPath: target.path) == false)
     }
 
     @Test("takeover flush excludes chunks received after lease loss")
@@ -2806,6 +2941,81 @@ struct ACPSessionRunnerTests {
             Issue.record("expected failure outcome for missing file")
             return
         }
+    }
+
+    // MARK: - Auth status tests
+
+    @Test("kind == none shows the auth nudge banner without a failed prompt")
+    func authStatusNoneShowsNudgeBanner() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+        // `.none` through optional chaining is ambiguous between "the kind
+        // is .none" and "the optional itself is nil" — spell out the type
+        // to force the former (the classic Optional<Enum>.none gotcha).
+        try await waitUntil { session.authStatus?.kind == ACPAuthStatus.Kind.none }
+
+        #expect(session.authStatus?.label == "Not logged in")
+        guard case .needsAuth(let methods, let reason) = session.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
+            return
+        }
+        #expect(methods.isEmpty)
+        #expect(reason == nil)
+    }
+
+    @Test("a later signed-in status clears the auth nudge banner")
+    func authStatusSignedInClearsNudgeBanner() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+        try await waitUntil {
+            if case .needsAuth = session.setupState { return true }
+            return false
+        }
+
+        mock.emitAuthStatus(.init(kind: .account, label: "Claude Max"))
+        try await waitUntil { session.setupState == .ready }
+
+        #expect(session.authStatus?.kind == .account)
+        #expect(session.authStatus?.label == "Claude Max")
+    }
+
+    @Test("a signed-in status while not showing the banner just updates the stored status")
+    func authStatusSignedInWithoutBannerJustStoresStatus() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .apiKey, label: "OpenAI API key"))
+        try await waitUntil { session.authStatus != nil }
+
+        #expect(session.authStatus?.kind == .apiKey)
+        #expect(session.setupState == .ready)
+    }
+
+    private func makeRunnerWithSession() throws -> (ACPSessionRunner, ACPSession, ACPMockClient) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.setupState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        return (runner, session, mock)
     }
 
     private func makeRunner(

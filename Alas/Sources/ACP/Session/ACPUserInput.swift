@@ -41,7 +41,8 @@ struct ACPUserInputRequest: Identifiable, Equatable {
                 minItems: question.allowMultiple == true ? 1 : nil,
                 maxItems: nil,
                 options: options,
-                defaultValue: nil
+                defaultValue: nil,
+                isSecret: false
             )
             return ACPUserInputField(key: question.id, required: true, schema: schema)
         }
@@ -118,6 +119,7 @@ struct ACPUserInputField: Identifiable, Equatable {
         let maxItems: Int?
         let options: [ACPElicitationOption]
         let defaultValue: AnyCodable?
+        let isSecret: Bool
 
         init(
             type: String,
@@ -132,7 +134,8 @@ struct ACPUserInputField: Identifiable, Equatable {
             minItems: Int?,
             maxItems: Int?,
             options: [ACPElicitationOption],
-            defaultValue: AnyCodable?
+            defaultValue: AnyCodable?,
+            isSecret: Bool
         ) {
             self.type = type
             self.title = title
@@ -147,6 +150,7 @@ struct ACPUserInputField: Identifiable, Equatable {
             self.maxItems = maxItems
             self.options = options
             self.defaultValue = defaultValue
+            self.isSecret = isSecret
         }
 
         init(_ property: ACPElicitationPropertySchema) {
@@ -161,6 +165,7 @@ struct ACPUserInputField: Identifiable, Equatable {
             maximum = property.maximum
             minItems = property.minItems
             maxItems = property.maxItems
+            isSecret = property.isSecret
             if let titled = property.oneOf {
                 options = titled
             } else if let values = property.values {

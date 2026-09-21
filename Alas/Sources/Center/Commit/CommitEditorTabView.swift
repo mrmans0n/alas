@@ -21,6 +21,7 @@ struct CommitEditorTabView: View {
 
     @State private var subject = ""
     @State private var bodyText = ""
+    @State private var protectedTrailers: [ProtectedCommitTrailer] = []
     @State private var savedSubject = ""
     @State private var savedBodyText = ""
     @State private var busy = false
@@ -111,7 +112,8 @@ struct CommitEditorTabView: View {
                         isEnabled: dirty && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                         showSavedState: !dirty,
                         handler: saveMessage
-                    )
+                    ),
+                    protectedTrailers: protectedTrailers
                 )
                 splitBody(details: details)
             } else if loadingDetails {
@@ -276,6 +278,7 @@ struct CommitEditorTabView: View {
         displayModel = nil
         displayModelKey = nil
         loadingDiff = false
+        protectedTrailers = []
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
@@ -287,10 +290,12 @@ struct CommitEditorTabView: View {
             details = loadedDetails
             selectedPath = loadedDetails.files.first?.path
             if !dirty {
+                let message = CommitMessage.split(loadedDetails.body)
                 subject = loadedSubject
-                bodyText = loadedDetails.body
+                bodyText = message.body
+                protectedTrailers = message.protectedTrailers
                 savedSubject = loadedSubject
-                savedBodyText = loadedDetails.body
+                savedBodyText = message.body
             }
         } catch {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
@@ -436,14 +441,16 @@ struct CommitEditorTabView: View {
                 async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: result.currentSha)
                 let (refreshedDetails, refreshedSubject) = try await (detailsLoad, subjectLoad)
 
+                let message = CommitMessage.split(refreshedDetails.body)
                 details = refreshedDetails
                 selectedPath = refreshedDetails.files.first?.path
                 diff = ParsedDiff(hunks: [])
                 activeDiffKey = nil
                 subject = refreshedSubject
-                bodyText = refreshedDetails.body
+                bodyText = message.body
+                protectedTrailers = message.protectedTrailers
                 savedSubject = refreshedSubject
-                savedBodyText = refreshedDetails.body
+                savedBodyText = message.body
 
                 appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
                 appState.tabs.updateCommitEditor(

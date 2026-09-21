@@ -20,7 +20,7 @@ struct JSONRPCEnvelope<Payload: Codable>: Codable {
     }
 }
 
-enum JSONRPCID: Codable, Equatable, Hashable {
+enum JSONRPCID: Codable, Equatable, Hashable, Sendable {
     case number(Int)
     case string(String)
 
@@ -242,6 +242,9 @@ struct ACPInitializeResult: Codable, Equatable {
         let mcpCapabilities: ACPMCPServerCapabilities
         let providerCapabilities: EmptyObject?
         let meta: Meta
+        /// `true` when `_meta.authStatus` was present on `initialize`, i.e.
+        /// the agent will push `_auth/status_update` notifications.
+        let advertisesAuthStatus: Bool
 
         init(
             promptCapabilities: ACPPromptCapabilities? = nil,
@@ -249,7 +252,8 @@ struct ACPInitializeResult: Codable, Equatable {
             sessionCapabilities: ACPAgentSessionCapabilities = .init(),
             mcpCapabilities: ACPMCPServerCapabilities = .init(),
             providerCapabilities: EmptyObject? = nil,
-            meta: Meta = .init()
+            meta: Meta = .init(),
+            advertisesAuthStatus: Bool = false
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
@@ -257,12 +261,17 @@ struct ACPInitializeResult: Codable, Equatable {
             self.mcpCapabilities = mcpCapabilities
             self.providerCapabilities = providerCapabilities
             self.meta = meta
+            self.advertisesAuthStatus = advertisesAuthStatus
         }
 
         enum CodingKeys: String, CodingKey {
             case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities
             case providerCapabilities = "providers"
             case meta = "_meta"
+        }
+
+        private enum MetaCodingKeys: String, CodingKey {
+            case authStatus
         }
 
         init(from decoder: Decoder) throws {
@@ -276,6 +285,25 @@ struct ACPInitializeResult: Codable, Equatable {
             mcpCapabilities = try c.decodeIfPresent(ACPMCPServerCapabilities.self, forKey: .mcpCapabilities) ?? .init()
             providerCapabilities = try? c.decodeIfPresent(EmptyObject.self, forKey: .providerCapabilities)
             meta = (try? c.decodeIfPresent(Meta.self, forKey: .meta)) ?? .init()
+            if let metaContainer = try? c.nestedContainer(keyedBy: MetaCodingKeys.self, forKey: .meta) {
+                advertisesAuthStatus = (try? metaContainer.decodeIfPresent(
+                    EmptyObject.self, forKey: .authStatus)) != nil
+            } else {
+                advertisesAuthStatus = false
+            }
+        }
+
+        // `meta`/`advertisesAuthStatus` are inbound-only (derived from what
+        // the agent's own `_meta` advertised); Alas never re-encodes an
+        // agent's own `agentCapabilities`, so there's nothing meaningful to
+        // write back for either and both are intentionally omitted here.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(promptCapabilities, forKey: .promptCapabilities)
+            try c.encode(loadSession, forKey: .loadSession)
+            try c.encode(sessionCapabilities, forKey: .sessionCapabilities)
+            try c.encode(mcpCapabilities, forKey: .mcpCapabilities)
+            try c.encodeIfPresent(providerCapabilities, forKey: .providerCapabilities)
         }
 
         /// Agent-side `_meta`. Only the keys Alas acts on are modelled;
@@ -877,6 +905,14 @@ struct ACPSessionCancelParams: Codable, Equatable {
     let sessionId: String
 }
 
+// MARK: - $/cancel_request (inbound notification)
+
+/// OpenCode v2 sends this to cancel a pending `session/request_permission`
+/// (or `fs/write_text_file`) when the turn itself is cancelled.
+struct ACPCancelRequestParams: Codable, Equatable {
+    let id: JSONRPCID
+}
+
 // MARK: - session/setMode + setModel
 
 struct ACPSessionSetModeParams: Codable, Equatable {
@@ -1061,6 +1097,12 @@ enum ACPToolCallContent: Codable, Equatable {
                 newText: try c.decode(String.self, forKey: .newText))
         case "terminal":
             self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
+        case "text", "resource_link", "image", "resource":
+            // Some adapters (and real permission-request payloads) send a
+            // bare ACPContentBlock here instead of wrapping it in the
+            // spec's tagged union. Decode it directly rather than losing it
+            // to `.unknown` — that silently drops the block's text.
+            self = .content(try ACPContentBlock(from: decoder))
         default:
             self = .unknown
         }

@@ -539,9 +539,10 @@ struct ChangesTabView: View {
                 rows.append(appKitRow(
                     id: "automatic-checkpoints",
                     token: "\(automatic.map(\.id))-\(rps.automaticCheckpointsExpanded)",
-                    estimatedHeight: 30
+                    estimatedHeight: 32
                 ) {
-                    AutomaticCheckpointGroupRow(
+                    SubHeader(
+                        title: "Automatic",
                         count: automatic.count,
                         expanded: rps.automaticCheckpointsExpanded,
                         onToggle: { rps.automaticCheckpointsExpanded.toggle() }
@@ -561,11 +562,16 @@ struct ChangesTabView: View {
         _ summaries: [WorktreeCheckpointSummary],
         to rows: inout [AppKitDiffRowSpec]
     ) {
+        let blockedReason = CheckpointPresentation.mutationsBlockedReason(
+            operationInFlight: rps.checkpointOperationInFlight,
+            hasInterruptedRestore: rps.hasInterruptedCheckpointRestore
+        )
         for checkpoint in summaries {
             let isExpanded = rps.expandedCheckpointIDs.contains(checkpoint.id)
             let isLoading = rps.loadingCheckpointManifestIDs.contains(checkpoint.id)
             let manifest = rps.checkpointManifests[checkpoint.id]
             let error = rps.checkpointManifestErrors[checkpoint.id]
+            let fileListPageIndex = rps.checkpointFileListPage(for: checkpoint.id)
             rows.append(appKitRow(
                 id: CheckpointPresentation.rowID(checkpointID: checkpoint.id),
                 token: Self.checkpointSummaryRowToken(
@@ -573,65 +579,46 @@ struct ChangesTabView: View {
                     expanded: isExpanded,
                     loading: isLoading,
                     manifestError: error,
-                    mutationsDisabled: rps.checkpointMutationsDisabled
+                    mutationsDisabled: rps.checkpointMutationsDisabled,
+                    manifest: isExpanded ? manifest : nil,
+                    blockedReason: blockedReason,
+                    fileListPageIndex: fileListPageIndex
                 ),
-                estimatedHeight: checkpoint.unavailableReason == nil ? 42 : 48
+                estimatedHeight: Self.checkpointCardHeight(
+                    summary: checkpoint,
+                    expanded: isExpanded,
+                    manifest: manifest,
+                    pendingManifest: isLoading || error != nil || manifest == nil,
+                    showsBlockedReason: rps.checkpointMutationsDisabled && blockedReason != nil,
+                    fileListPageIndex: fileListPageIndex
+                )
             ) {
-                CheckpointSummaryRow(
+                CheckpointCard(
                     checkpoint: checkpoint,
                     expanded: isExpanded,
+                    manifest: manifest,
+                    manifestLoading: isLoading,
+                    manifestError: error,
                     mutationsDisabled: rps.checkpointMutationsDisabled,
+                    blockedReason: blockedReason,
+                    fileListPageIndex: fileListPageIndex,
                     onToggle: { rps.toggleCheckpointExpanded(checkpoint.id) },
+                    onPreviousFilePage: { rps.retreatCheckpointFileListPage(checkpoint.id) },
+                    onNextFilePage: { rps.advanceCheckpointFileListPage(checkpoint.id) },
                     onRestore: { Task { await rps.previewCheckpointRestore(id: checkpoint.id) } },
-                    onDelete: { rps.pendingCheckpointDeletion = checkpoint }
+                    onDelete: { rps.pendingCheckpointDeletion = checkpoint },
+                    onInspect: { group in
+                        appState.openCheckpointDiffTab(
+                            worktree: rps.worktree,
+                            checkpointID: checkpoint.id,
+                            groupID: group.id,
+                            primaryPath: group.primaryPath,
+                            memberPaths: group.memberPaths,
+                            checkpointLabel: checkpoint.label
+                        )
+                    }
                 )
             })
-            guard isExpanded else { continue }
-            if isLoading || error != nil || manifest == nil {
-                rows.append(appKitRow(
-                    id: "checkpoint-\(checkpoint.id.uuidString)-detail",
-                    token: "\(isLoading)-\(String(reflecting: error))",
-                    estimatedHeight: 30
-                ) {
-                    CheckpointManifestRows(
-                        checkpointID: checkpoint.id,
-                        manifest: manifest,
-                        loading: isLoading,
-                        error: error
-                    )
-                })
-            } else if let manifest {
-                for group in manifest.groups {
-                    rows.append(appKitRow(
-                        id: CheckpointPresentation.groupRowID(
-                            checkpointID: checkpoint.id,
-                            groupID: group.id
-                        ),
-                        token: "\(checkpoint.id.uuidString)-\(group.id.uuidString)",
-                        estimatedHeight: 30
-                    ) {
-                        CheckpointFileGroupRow(group: group, manifest: manifest) {
-                            appState.openCheckpointDiffTab(
-                                worktree: rps.worktree,
-                                checkpointID: checkpoint.id,
-                                groupID: group.id,
-                                primaryPath: group.primaryPath,
-                                memberPaths: group.memberPaths,
-                                checkpointLabel: checkpoint.label
-                            )
-                        }
-                    })
-                }
-                if !manifest.exclusions.isEmpty {
-                    rows.append(appKitRow(
-                        id: "checkpoint-\(checkpoint.id.uuidString)-exclusions",
-                        token: String(reflecting: manifest.exclusions),
-                        estimatedHeight: 32
-                    ) {
-                        CheckpointExclusionsRow(exclusions: manifest.exclusions)
-                    })
-                }
-            }
         }
     }
 
@@ -836,13 +823,53 @@ struct ChangesTabView: View {
         expanded: Bool,
         loading: Bool,
         manifestError: String?,
-        mutationsDisabled: Bool
+        mutationsDisabled: Bool,
+        manifest: WorktreeCheckpointManifest?,
+        blockedReason: String?,
+        fileListPageIndex: Int
     ) -> String {
         String(reflecting: summary)
             + String(expanded)
             + String(loading)
             + String(reflecting: manifestError)
             + String(mutationsDisabled)
+            // The manifest now renders inside the summary row's card, so its
+            // content participates in the row's identity.
+            + String(reflecting: manifest?.groups.map(\.id))
+            + String(reflecting: manifest?.exclusions.count)
+            + String(reflecting: blockedReason)
+            + String(fileListPageIndex)
+    }
+
+    /// Estimated height for a checkpoint card. Collapsed: outer padding (4+4),
+    /// card padding (10+10) and the chip line (18). Expanded adds the detail
+    /// line, the manifest's current windowed page, and the action bar.
+    static func checkpointCardHeight(
+        summary: WorktreeCheckpointSummary,
+        expanded: Bool,
+        manifest: WorktreeCheckpointManifest?,
+        pendingManifest: Bool,
+        showsBlockedReason: Bool,
+        fileListPageIndex: Int
+    ) -> CGFloat {
+        var height: CGFloat = 46
+        if summary.unavailableReason != nil { return height + 20 }
+        guard expanded else { return height }
+        height += 6 + 14 + 4
+        if pendingManifest {
+            height += 22
+        } else if let manifest {
+            let cap = CheckpointPresentation.maxInlineFileGroups
+            let total = manifest.groups.count
+            let pageStart = total == 0 ? 0 : min(fileListPageIndex * cap, total - 1)
+            let pageEnd = min(pageStart + cap, total)
+            height += CGFloat(total == 0 ? 0 : pageEnd - pageStart) * 21
+            if total > cap { height += 18 }
+            if !manifest.exclusions.isEmpty { height += 22 }
+        }
+        height += 5 + ACPComposerActionButtonMetrics.capsuleHeight
+        if showsBlockedReason { height += 18 }
+        return height
     }
 
     private func appKitRow<Token: Equatable, Content: View>(

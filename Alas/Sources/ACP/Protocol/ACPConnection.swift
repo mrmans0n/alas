@@ -11,6 +11,8 @@ struct ACPInitializeOutcome: Equatable {
     /// standard `sessionCapabilities.subagents` or with OpenCode's
     /// `_meta["opencode/child-session-updates"]`.
     let supportsSubagents: Bool
+    /// Whether the agent advertised the `_auth/status_update` extension marker.
+    let advertisesAuthStatus: Bool
 
     init(
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
@@ -19,7 +21,8 @@ struct ACPInitializeOutcome: Equatable {
         sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
         mcpCapabilities: ACPMCPServerCapabilities,
         providerCapabilities: EmptyObject?,
-        supportsSubagents: Bool = false
+        supportsSubagents: Bool = false,
+        advertisesAuthStatus: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -28,6 +31,7 @@ struct ACPInitializeOutcome: Equatable {
         self.mcpCapabilities = mcpCapabilities
         self.providerCapabilities = providerCapabilities
         self.supportsSubagents = supportsSubagents
+        self.advertisesAuthStatus = advertisesAuthStatus
     }
 }
 
@@ -63,7 +67,8 @@ final class ACPConnection: @unchecked Sendable {
             mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
             providerCapabilities: capabilities?.providerCapabilities,
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
-                || capabilities?.meta.openCodeChildSessionUpdates == true
+                || capabilities?.meta.openCodeChildSessionUpdates == true,
+            advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false
         )
     }
 

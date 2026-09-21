@@ -136,6 +136,7 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
+    private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
@@ -256,6 +257,14 @@ final class ACPSessionManager: ObservableObject {
         _ response: ACPQuestionResponse
     ) {
         elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
+    }
+
+    func respondToPlan(
+        for id: ACPSession.ID,
+        requestId: JSONRPCID,
+        _ response: ACPCursorPlanResponse
+    ) {
+        elicitationCoordinators[id]?.respondToPlan(id: requestId, response: response)
     }
 
     func respondToUserInput(
@@ -636,6 +645,7 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
+         onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
@@ -671,6 +681,7 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
+        self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
         self.onCheckpointCapture = onCheckpointCapture
@@ -1099,6 +1110,7 @@ final class ACPSessionManager: ObservableObject {
         }
         session.pendingMCPPreamble = result.row.mcpPreamblePending
         session.mcpPreambleSent = result.row.mcpPreambleSent
+        session.authStatus = result.row.authStatus
         session.autoRunEnabled = result.row.autoRun
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
@@ -3269,6 +3281,17 @@ extension ACPSessionManager {
         session.currentModel = row.currentModel
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
+        session.authStatus = row.authStatus
+        // Mirrors never run their own attach/runner, so nothing else ever
+        // re-applies the `.needsAuth` semantics the writer's attach derives
+        // from a signed-out status — do it here too, or a mirror keeps
+        // showing whatever banner state it opened with even as the writer
+        // persists a real change.
+        if row.authStatus?.kind == ACPAuthStatus.Kind.none {
+            session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
+        } else if case .needsAuth = session.setupState {
+            session.setupState = .ready
+        }
         if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
             session.remoteSessionId = row.remoteSessionId
         }
@@ -3570,6 +3593,16 @@ extension ACPSessionManager {
             },
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onPlanAwaiting: { [weak self] session, request in
+                self?.onPlanAwaiting?(session, request)
+            },
+            onPlanRejected: { [weak self, weak session] reason in
+                guard let self, let session else { return }
+                self.persistComposerDraft(
+                    session.composerDraft.appending(.init(segments: [.text(reason)])),
+                    for: session
+                )
             }
         )
         elicitationCoordinators[sessionId] = elicitationCoordinator
@@ -3605,6 +3638,54 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
+            // Deliberately not reset here (unlike promptCapabilities/authMethods,
+            // which are re-derived from every `initialize` response): a broker-
+            // adopted reattach to an already-running agent serves `initialize`
+            // from a cached snapshot without re-running it against the live
+            // process, so the agent never re-emits `_auth/status_update` for
+            // this attach. Clearing unconditionally would blank out an
+            // otherwise still-accurate status until the agent's auth state
+            // actually changes again. A genuinely fresh process (local stdio,
+            // or a brand-new broker session) sends its own first notification
+            // moments later and overwrites this immediately.
+            //
+            // The one case that preservation alone gets wrong: this attach's
+            // agent doesn't advertise the extension at all, so nothing will
+            // ever replace a status left over from a previous agent/version
+            // that did. Clear it then — that adapter behaves exactly like
+            // any other agent that never supported this extension.
+            if !initialized.advertisesAuthStatus, session.authStatus != nil,
+               let fence = leaseFence(sessionId: sessionId) {
+                // Fenced like the runner's own auth-status writes: a
+                // cross-window takeover landing while this attach is still
+                // in flight must not let this queued clear overwrite a
+                // newer status the replacement owner already persisted.
+                //
+                // `leaseFence` returning nil here is not "no fencing
+                // needed" — the persistence overload would treat that as
+                // permission to write unconditionally. It means a takeover
+                // was detected while this attach awaited `initialize` and
+                // `standDown` already dropped this instance's ownership, so
+                // skip the clear entirely rather than let a losing attach
+                // still blank out whatever the new owner just persisted.
+                session.authStatus = nil
+                enqueuePersistence { persistence in
+                    _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
+                }
+            } else if session.authStatus?.kind == ACPAuthStatus.Kind.none {
+                // `.none` through optional chaining is ambiguous between
+                // "the kind is .none" and "the optional itself is nil" —
+                // the explicit type above forces the former (the classic
+                // Optional<Enum>.none gotcha; see ACPSessionRunnerTests).
+                //
+                // The generic setupState reset above (`.ready`, before this
+                // block) would otherwise hide a signed-out status that was
+                // only just restored — from persistence after an app
+                // restart, or preserved in memory across a broker-adopted
+                // reattach — without a matching live `_auth/status_update`
+                // to re-trigger the banner via `applyAuthStatus`.
+                session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
+            }
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
@@ -3744,6 +3825,17 @@ extension ACPSessionManager {
                     let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
                     session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
                     session.agentState = .failed(reason)
+                    // Same reasoning as the session-creation auth-failure
+                    // branch below: this early return happens before the
+                    // runner ever starts, so a fresh process's buffered
+                    // initial notification is never consumed and can't
+                    // correct a preserved-but-now-stale signed-in status.
+                    if session.authStatus != nil, let fence = leaseFence(sessionId: sessionId) {
+                        session.authStatus = nil
+                        enqueuePersistence { persistence in
+                            _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
+                        }
+                    }
                     await connection.shutdown()
                     return
                 }
@@ -3917,7 +4009,8 @@ extension ACPSessionManager {
                         }
                         if hasRestorableContext {
                             restoreWarning = .init(
-                                message: "Agent context could not be restored.",
+                                message: ACPRestoreFailureMessage.invalidParamsMessage(from: error)
+                                    ?? "Agent context could not be restored.",
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
@@ -4046,7 +4139,8 @@ extension ACPSessionManager {
                         }
                         if hasRestorableContext {
                             restoreWarning = .init(
-                                message: "Agent context could not be restored.",
+                                message: ACPRestoreFailureMessage.invalidParamsMessage(from: error)
+                                    ?? "Agent context could not be restored.",
                                 canSendTranscript: session.hasConversationTranscript
                             )
                         }
@@ -4415,6 +4509,20 @@ extension ACPSessionManager {
             } else if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
+                // The preserved-status path above assumes a fresh process's
+                // own first notification will arrive and correct a stale
+                // value in moments — true once the runner starts, but that
+                // notification is buffered until then, and this failure
+                // means it never will. Drop the stale value now: an
+                // explicit auth failure is definitive proof it's wrong, and
+                // leaving it would show a contradictory signed-in pill
+                // right next to this very banner.
+                if session.authStatus != nil, let fence = leaseFence(sessionId: sessionId) {
+                    session.authStatus = nil
+                    enqueuePersistence { persistence in
+                        _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
+                    }
+                }
             } else {
                 session.agentState = .failed(full)
             }

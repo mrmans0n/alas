@@ -139,6 +139,18 @@ struct ACPElicitationPropertySchema: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         try raw.encode(to: encoder)
     }
+
+    /// codex-acp >= 1.12 (#299) marks `request_user_input` fields that
+    /// should be masked with `_meta.codex.isSecret`. `raw` already captures
+    /// the full per-property JSON, so no dedicated CodingKey is needed.
+    var isSecret: Bool {
+        guard let root = raw.value as? [String: AnyCodable],
+              let meta = root["_meta"]?.value as? [String: AnyCodable],
+              let codex = meta["codex"]?.value as? [String: AnyCodable],
+              let flag = codex["isSecret"]?.value as? Bool
+        else { return false }
+        return flag
+    }
 }
 
 struct ACPElicitationItemsSchema: Codable, Equatable {

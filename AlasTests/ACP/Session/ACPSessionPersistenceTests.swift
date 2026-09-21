@@ -111,6 +111,43 @@ struct ACPSessionPersistenceTests {
         #expect(try await persistence.loadSession(id: "session")?.contextRecoveryPending == true)
     }
 
+    @Test("a stale runner's fenced authStatus write cannot overwrite the new owner's status")
+    func staleLeaseTokenCannotOverwriteAuthStatus() async throws {
+        let url = temporaryDatabaseURL()
+        let persistence = ACPSessionPersistence(path: url.path)
+        try await persistence.upsertSession(row(id: "session"))
+        let now = Int64(Date().timeIntervalSince1970)
+        let oldLease = try #require(try await persistence.claimLease(
+            sessionId: "session",
+            instanceId: "old",
+            pid: Int64(getpid()),
+            now: now,
+            staleAfter: 15,
+            leaseToken: "old-token"
+        ))
+        let newLease = try await persistence.seizeLease(
+            sessionId: "session",
+            instanceId: "new",
+            pid: Int64(getpid()),
+            now: now + 1,
+            leaseToken: "new-token"
+        )
+
+        // The new owner already persisted its own status.
+        let newStatus = ACPAuthStatus(kind: .account, label: "New owner")
+        #expect(try await persistence.setAuthStatus(
+            sessionId: "session", status: newStatus, fence: fence(for: newLease)
+        ))
+
+        // The stale runner, still draining a buffered notification under
+        // its now-superseded fence, must not be able to clobber it.
+        let staleStatus = ACPAuthStatus(kind: .none, label: "Stale, from the old owner")
+        #expect(!(try await persistence.setAuthStatus(
+            sessionId: "session", status: staleStatus, fence: fence(for: oldLease)
+        )))
+        #expect(try await persistence.loadSession(id: "session")?.authStatus == newStatus)
+    }
+
     private func temporaryDatabaseURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-persistence-\(UUID()).sqlite")

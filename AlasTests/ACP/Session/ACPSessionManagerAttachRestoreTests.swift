@@ -2108,6 +2108,33 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
+    @Test("session/load -32602 surfaces the agent's own message instead of a generic one")
+    func loadInvalidParamsSurfacesReadableMessage() async throws {
+        // OpenCode v2 returns -32602 from session/load when `cwd` no longer
+        // matches the session's stored directory. No local transcript means
+        // there is nothing to auto-resend, so the warning this sets is not
+        // immediately cleared and can be asserted directly.
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try store.setContextRecoveryPending(sessionId: "local", pending: true)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32602, message: "cwd mismatch: session was created in /a, request has /b", data: nil)
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/new"]
+        }
+        #expect(session.contextRestoreWarning?.message.contains("cwd mismatch") == true)
+    }
+
     @Test("attach retry clears stale warning before setup failure")
     func attachRetryClearsStaleWarningBeforeSetupFailure() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

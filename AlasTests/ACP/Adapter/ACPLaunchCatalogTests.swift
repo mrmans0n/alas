@@ -25,6 +25,12 @@ struct ACPLaunchCatalogTests {
         #expect(ids.contains("omp"))
     }
 
+    @Test("gemini launches with the stable --acp flag")
+    func geminiUsesStableFlag() throws {
+        let gemini = try #require(ACPLaunchCatalog.spec(for: "gemini"))
+        #expect(gemini.arguments == ["--acp"])
+    }
+
     @Test("omp launches its native ACP server")
     func ompUsesNativeACP() throws {
         let omp = try #require(ACPLaunchCatalog.spec(for: "omp"))

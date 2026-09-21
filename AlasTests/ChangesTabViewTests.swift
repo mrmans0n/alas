@@ -111,25 +111,45 @@ struct ChangesTabViewTests {
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: false
+            mutationsDisabled: false,
+            manifest: nil,
+            blockedReason: nil,
+            fileListPageIndex: 0
         )
         let disabled = ChangesTabView.checkpointSummaryRowToken(
             summary: available,
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: true
+            mutationsDisabled: true,
+            manifest: nil,
+            blockedReason: "A restore is already in progress.",
+            fileListPageIndex: 0
         )
         let nowUnavailable = ChangesTabView.checkpointSummaryRowToken(
             summary: unavailable,
             expanded: false,
             loading: false,
             manifestError: nil,
-            mutationsDisabled: false
+            mutationsDisabled: false,
+            manifest: nil,
+            blockedReason: nil,
+            fileListPageIndex: 0
+        )
+        let onSecondPage = ChangesTabView.checkpointSummaryRowToken(
+            summary: available,
+            expanded: false,
+            loading: false,
+            manifestError: nil,
+            mutationsDisabled: false,
+            manifest: nil,
+            blockedReason: nil,
+            fileListPageIndex: 1
         )
 
         #expect(enabled != disabled)
         #expect(enabled != nowUnavailable)
+        #expect(enabled != onSecondPage)
     }
 
     @Test func checkpointsSectionHiddenWhenThereIsNothingToShow() {

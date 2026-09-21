@@ -955,7 +955,7 @@ private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
     init(result: WorkspaceCheckoutMemberObservation) { self.result = result }
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
@@ -990,7 +990,7 @@ private actor RepairedDuringConflictVerificationLifecycle: WorkspaceCheckoutLife
     }
 
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        .init(reasons: [], submoduleLocalState: .none)
+        .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {

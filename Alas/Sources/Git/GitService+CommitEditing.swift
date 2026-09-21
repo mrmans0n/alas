@@ -53,6 +53,18 @@ extension GitService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func rawCommitBody(at worktreePath: URL, sha: String) async throws -> String {
+        let result = try await Process.git(["show", "-s", "--format=%b", sha], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.rawCommitBody",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr.isEmpty ? "git show failed" : result.stderr]
+            )
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func editCommit(
         worktreePath: URL,
         baseRef: String,
@@ -75,21 +87,36 @@ extension GitService {
         targetSha: String,
         action: CommitEditAction
     ) async throws -> CommitEditResult {
-        let message: (subject: String, body: String)?
+        let editedMessage: (subject: String, body: String)?
         switch action {
         case .message(let newSubject, let newBody):
-            message = (
+            editedMessage = (
                 subject: newSubject.trimmingCharacters(in: .whitespacesAndNewlines),
-                body: newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+                body: newBody
             )
         case .dropFile, .dropHunk:
-            message = nil
+            editedMessage = nil
         }
 
-        if let message {
-            guard !message.subject.isEmpty else { throw CommitEditError.emptySubject }
+        if let editedMessage {
+            guard !editedMessage.subject.isEmpty else { throw CommitEditError.emptySubject }
         }
         try await validateEditableState(worktreePath: worktreePath)
+        let message: (subject: String, body: String)?
+        if let editedMessage {
+            let originalMessage = CommitMessage.split(
+                try await rawCommitBody(at: worktreePath, sha: targetSha)
+            )
+            message = (
+                subject: editedMessage.subject,
+                body: CommitMessage.compose(
+                    body: editedMessage.body,
+                    preserving: originalMessage.protectedTrailers
+                )
+            )
+        } else {
+            message = nil
+        }
 
         let chain = try await gitLines(["rev-list", "--reverse", "\(baseRef)..HEAD"], cwd: worktreePath)
         guard let targetIndex = chain.firstIndex(of: targetSha) else {

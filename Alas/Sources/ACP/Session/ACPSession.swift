@@ -115,6 +115,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
     @Published var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    /// Latest auth status pushed by the `_auth/status_update` ACP
+    /// extension (claude-agent-acp >= 0.75, codex-acp >= 1.9). Nil for
+    /// adapters that don't advertise the extension, or before the first
+    /// notification of a fresh attach arrives.
+    /// Runtime-only: re-learned on each attach, never persisted.
+    @Published var authStatus: ACPAuthStatus?
     /// Runtime-only MCP attachment result for the most recent attach. It
     /// contains no resolved commands, environment values, or headers.
     @Published var mcpAttachmentSummary: MCPAttachmentSummary?
@@ -332,6 +338,10 @@ final class ACPSession: ObservableObject, Identifiable {
     struct PendingQuestion: Identifiable, Equatable {
         let id: JSONRPCID
         let params: ACPQuestionRequestParams
+    }
+    struct PendingPlan: Identifiable, Equatable {
+        let id: JSONRPCID
+        let params: ACPCursorCreatePlanParams
     }
 
     init(id: ID, agentId: String, worktreeId: String, title: String,

@@ -4,12 +4,15 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     var yieldedUpdateCount: Int {
@@ -18,18 +21,22 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     private let stateLock = NSLock()
     private var nextId: Int = 0
     private var _yieldedUpdateCount = 0
     private var pending: [JSONRPCID: CheckedContinuation<ACPResponse, Error>] = [:]
     private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
+    private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
     private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
@@ -54,9 +61,17 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
 
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
+
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
+
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
 
         var elC: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { elC = $0 }
@@ -77,6 +92,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
     }
 
     /// Test-only initialiser: accepts a pre-built transport directly,
@@ -92,9 +111,17 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
 
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
+
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
+
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
 
         var elC: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { elC = $0 }
@@ -115,6 +142,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
     }
 
     /// Convenience factory for tests — wraps `init(transport:)`.
@@ -142,12 +173,15 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             drainPending(with: ACPClientError.notRunning)
             updatesCont.finish()
             permsCont.finish()
+            cancelRequestsCont.finish()
             questionsCont.finish()
+            plansCont.finish()
             elicitationsCont.finish()
             elicitationCompletionsCont.finish()
             filesCont.finish()
             terminalsCont.finish()
             stderrCont.finish()
+            authStatusCont.finish()
         }
     }
 
@@ -229,6 +263,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 permsCont.yield((id, p))
             }
+        case "$/cancel_request":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCancelRequestParams>.self, from: data),
+               let p = env.params {
+                cancelRequestsCont.yield(p.id)
+            }
         case "cursor/ask_question":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
                let id = env.id, let p = env.params {
@@ -251,6 +290,17 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 from: data
             ), let p = env.params {
                 elicitationCompletionsCont.yield(p)
+            }
+        case "_auth/status_update":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPAuthStatusUpdateParams>.self,
+                from: data
+            ), let p = env.params {
+                acknowledgeAfterDispatch = false
+                authStatusCont.yield(.init(
+                    status: p.authStatus,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
             }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),
@@ -301,8 +351,61 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 terminalsCont.yield(.release(id: id, params: p))
             }
+        case "cursor/create_plan":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorCreatePlanParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                plansCont.yield(.init(id: id, params: params))
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/update_todos":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorUpdateTodosParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondToCursorUpdateTodos(id: id, params: params)
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/task":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorTaskParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondToCursorTask(id: id, params: params)
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/generate_image":
+            if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(
+                    id: id,
+                    result: .failure(.init(
+                        code: -32000,
+                        message: "cursor/generate_image is not supported",
+                        data: nil
+                    ))
+                )
+            }
         default:
-            break
+            if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(
+                    id: id,
+                    result: .failure(.init(code: -32601, message: "Method not found", data: nil))
+                )
+            }
         }
     }
 
@@ -399,6 +502,15 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try self.respond(id: id, body: JSONEncoder().encode(response))
+            } catch {}
+        }
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -413,6 +525,39 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             case .failure(let error):
                 self.respondFile(id: id, result: .failure(error))
             }
+        }
+    }
+
+    private func respondToCursorUpdateTodos(id: JSONRPCID, params: ACPCursorUpdateTodosParams) {
+        let todos = mergedCursorTodos(for: params)
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorUpdateTodosResponse(outcome: .init(todos: todos))
+        )
+    }
+
+    private func mergedCursorTodos(for params: ACPCursorUpdateTodosParams) -> [ACPCursorTodo] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let todos = params.mergedTodos(with: cursorTodosByToolCallId[params.toolCallId] ?? [])
+        cursorTodosByToolCallId[params.toolCallId] = todos
+        return todos
+    }
+
+    private func respondToCursorTask(id: JSONRPCID, params: ACPCursorTaskParams) {
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorTaskResponse(
+                outcome: .init(agentId: params.agentId, durationMs: params.durationMs)
+            )
+        )
+    }
+
+    private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
+        guard let body = try? JSONEncoder().encode(response) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            try? self.respond(id: id, body: body)
         }
     }
 

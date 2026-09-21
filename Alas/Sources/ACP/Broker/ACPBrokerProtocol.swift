@@ -140,6 +140,8 @@ enum ACPBrokerPendingRequestKind: String, Codable, Equatable, Sendable {
     case elicitation
     case file
     case terminal
+    case plan
+    case cursorExtension
 }
 
 struct ACPBrokerMetadata: Codable, Equatable, Sendable {
@@ -186,6 +188,7 @@ struct ACPBrokerSnapshot: Codable, Equatable, Sendable {
     let journalTail: ACPBrokerEventCursor
     let pendingRequests: [ACPBrokerPendingRequest]
     let operations: [ACPBrokerOperationSnapshot]
+    var cursorTodosByToolCallId: [String: [ACPCursorTodo]]? = nil
 }
 
 struct ACPBrokerEvent: Codable, Equatable, Sendable {

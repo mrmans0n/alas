@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -126,6 +126,8 @@ pub enum PendingClientRequestKind {
     Elicitation,
     File,
     Terminal,
+    Plan,
+    CursorExtension,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -217,6 +219,8 @@ pub struct ACPBrokerSnapshot {
     pub journal_tail: EventCursor,
     pub pending_requests: Vec<PendingClientRequest>,
     pub operations: Vec<OperationSnapshot>,
+    #[serde(default)]
+    pub cursor_todos_by_tool_call_id: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -309,6 +313,7 @@ pub struct ACPBrokerState {
     operations: HashMap<OperationKey, OperationRecord>,
     pending_requests: HashMap<String, PendingClientRequest>,
     resolved_requests: HashSet<String>,
+    cursor_todos_by_tool_call_id: BTreeMap<String, Value>,
 }
 
 impl ACPBrokerState {
@@ -325,6 +330,7 @@ impl ACPBrokerState {
             operations: HashMap::new(),
             pending_requests: HashMap::new(),
             resolved_requests: HashSet::new(),
+            cursor_todos_by_tool_call_id: BTreeMap::new(),
         }
     }
 
@@ -502,18 +508,52 @@ impl ACPBrokerState {
                 "pending request was already resolved",
             ));
         }
-        if self.pending_requests.remove(request_id).is_none() {
-            return Err(BrokerError::new(
+        let request = self.pending_requests.remove(request_id).ok_or_else(|| {
+            BrokerError::new(
                 BrokerErrorKind::PendingRequestNotFound,
                 "pending request was not found",
-            ));
-        }
+            )
+        })?;
+
+        self.record_cursor_todos_response(&request, &response);
 
         self.resolved_requests.insert(request_id.to_string());
         Ok(self.push_event(BrokerEventKind::PendingRequestResolved {
             request_id: request_id.to_string(),
             response,
         }))
+    }
+
+    fn record_cursor_todos_response(
+        &mut self,
+        request: &PendingClientRequest,
+        response: &AdapterRPCOutcome,
+    ) {
+        if request.kind != PendingClientRequestKind::CursorExtension {
+            return;
+        }
+        if request.payload.get("method").and_then(Value::as_str) != Some("cursor/update_todos") {
+            return;
+        }
+        let Some(tool_call_id) = request
+            .payload
+            .get("params")
+            .and_then(|params| params.get("toolCallId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        let Some(todos) = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("outcome"))
+            .and_then(|outcome| outcome.get("todos"))
+            .filter(|todos| todos.is_array())
+        else {
+            return;
+        };
+        self.cursor_todos_by_tool_call_id
+            .insert(tool_call_id.to_string(), todos.clone());
     }
 
     pub fn ack(&mut self, cursor: EventCursor) -> Result<(), BrokerError> {
@@ -586,6 +626,7 @@ impl ACPBrokerState {
             journal_tail: self.journal_tail(),
             pending_requests,
             operations,
+            cursor_todos_by_tool_call_id: self.cursor_todos_by_tool_call_id.clone(),
         }
     }
 

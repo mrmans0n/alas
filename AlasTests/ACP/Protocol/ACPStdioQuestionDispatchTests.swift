@@ -113,6 +113,126 @@ struct ACPStdioQuestionDispatchTests {
         #expect((result["content"] as? [String: Any])?["name"] as? String == "Alas")
     }
 
+    @Test("unknown inbound request receives method-not-found error")
+    func rejectsUnknownInboundRequest() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":"unknown-1","method":"cursor/future_extension","params":{}}"#.utf8))
+
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        let response = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(response["jsonrpc"] as? String == "2.0")
+        #expect(response["id"] as? String == "unknown-1")
+        let error = try #require(response["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32601)
+    }
+
+    @Test("Cursor update, task, and image requests are acknowledged")
+    func acknowledgesCursorExtensionRequests() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"cursor/update_todos","params":{"toolCallId":"todo-call","todos":[{"id":"todo-1","content":"Implement","status":"in_progress"}],"merge":true}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"method":"cursor/task","params":{"toolCallId":"task-call","description":"Explore","prompt":"Inspect the ACP client","agentId":"agent-1","durationMs":42}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":3,"method":"cursor/generate_image","params":{"toolCallId":"image-call","description":"Logo","filePath":"/tmp/logo.png","referenceImagePaths":[]}}"#.utf8))
+
+        try await waitUntil { transport.sentFrames.count == 3 }
+        let responses = try transport.sentFrames.map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+
+        let todosResponse = try #require(responses.first { $0["id"] as? Int == 1 })
+        let todos = try #require(todosResponse["result"] as? [String: Any])
+        let todoOutcome = try #require(todos["outcome"] as? [String: Any])
+        #expect(todoOutcome["outcome"] as? String == "accepted")
+        #expect((todoOutcome["todos"] as? [[String: Any]])?.first?["id"] as? String == "todo-1")
+
+        let taskResponse = try #require(responses.first { $0["id"] as? Int == 2 })
+        let task = try #require(taskResponse["result"] as? [String: Any])
+        let taskOutcome = try #require(task["outcome"] as? [String: Any])
+        #expect(taskOutcome["outcome"] as? String == "completed")
+        #expect(taskOutcome["agentId"] as? String == "agent-1")
+        #expect(taskOutcome["durationMs"] as? Int == 42)
+
+        let imageResponse = try #require(responses.first { $0["id"] as? Int == 3 })
+        let imageError = try #require(imageResponse["error"] as? [String: Any])
+        #expect(imageError["code"] as? Int == -32000)
+        #expect(imageError["message"] as? String == "cursor/generate_image is not supported")
+    }
+
+    @Test("Cursor todo updates merge by tool call")
+    func mergesCursorTodoUpdatesByToolCall() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"cursor/update_todos","params":{"toolCallId":"todo-call","todos":[{"id":"todo-1","content":"Implement","status":"pending"},{"id":"todo-2","content":"Verify","status":"pending"}],"merge":false}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"method":"cursor/update_todos","params":{"toolCallId":"todo-call","todos":[{"id":"todo-2","content":"Verify","status":"completed"}],"merge":true}}"#.utf8))
+
+        try await waitUntil { transport.sentFrames.count == 2 }
+        let responses = try transport.sentFrames.map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+        let response = try #require(responses.first { $0["id"] as? Int == 2 })
+        let result = try #require(response["result"] as? [String: Any])
+        let outcome = try #require(result["outcome"] as? [String: Any])
+        let todos = try #require(outcome["todos"] as? [[String: Any]])
+
+        #expect(todos.map { $0["id"] as? String } == ["todo-1", "todo-2"])
+        #expect(todos.map { $0["status"] as? String } == ["pending", "completed"])
+    }
+
+    @Test("Cursor create plan is dispatched and responds with the selected outcome")
+    func dispatchesCursorCreatePlan() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(##"{"jsonrpc":"2.0","id":"plan-1","method":"cursor/create_plan","params":{"toolCallId":"plan-call","name":"Fix ACP","overview":"Keep requests moving","plan":"# Plan\n\nImplement the replies.","todos":[{"id":"todo-1","content":"Implement","status":"pending"}],"isProject":false,"phases":[{"name":"Implementation","todos":[{"id":"todo-1","content":"Implement","status":"pending"}]}]}}"##.utf8))
+
+        var iterator = client.planRequests.makeAsyncIterator()
+        let request = try #require(await iterator.next())
+        #expect(request.id == .string("plan-1"))
+        #expect(request.params.name == "Fix ACP")
+        #expect(request.params.plan == "# Plan\n\nImplement the replies.")
+        #expect(request.params.todos.map(\.content) == ["Implement"])
+
+        client.respondToPlan(
+            id: request.id,
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        let response = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let outcome = try #require((response["result"] as? [String: Any])?["outcome"] as? [String: Any])
+        #expect(outcome["outcome"] as? String == "accepted")
+        #expect(outcome["planUri"] as? String == "alas://plans/plan-call")
+    }
+
+    @Test("Cursor extension replies defer durable consumption until written")
+    func defersCursorExtensionConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferWriteCompletions = true
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"cursor/task","params":{"toolCallId":"task-call","agentId":"agent-1","durationMs":42}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        #expect(consumed.get() == nil)
+        transport.completePendingWrites()
+        #expect(consumed.get() == true)
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         _ predicate: @escaping @Sendable () -> Bool
@@ -124,6 +244,23 @@ struct ACPStdioQuestionDispatchTests {
                 return
             }
             try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: T?
+
+        func set(_ value: T) {
+            lock.lock()
+            self.value = value
+            lock.unlock()
+        }
+
+        func get() -> T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
         }
     }
 }

@@ -60,8 +60,17 @@ final class ACPSessionRunner {
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
+    private var cancelRequestsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    /// `$/cancel_request` ids (OpenCode v2) that haven't yet matched a
+    /// dequeued permission or file request. A cancellation can arrive
+    /// before the request it targets — buffered broker replay, or both
+    /// delivered in one transport batch racing `permissionsTask`/`filesTask`
+    /// — so each consumer checks and drains this set before starting work
+    /// on a freshly dequeued id, instead of the id being silently dropped.
+    private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
+    private var authStatusTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -317,9 +326,32 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
                 self.flushPendingIncomingUpdates()
+                if self.pendingCancelledRequestIDs.remove(id) != nil {
+                    self.connection.client.respondToPermission(id: id, response: .init(outcome: .cancelled))
+                    continue
+                }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
-                let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
+                let response = await self.policy.evaluate(
+                    scopeKey: scopeKey, options: params.options, params: params, requestID: id)
                 self.connection.client.respondToPermission(id: id, response: response)
+            }
+        }
+
+        cancelRequestsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await id in self.connection.client.cancelRequests {
+                if self.policy.cancelRequest(id: id) { continue }
+                self.pendingCancelledRequestIDs.insert(id)
+            }
+        }
+
+        authStatusTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await event in self.connection.client.authStatusUpdates {
+                self.applyAuthStatus(
+                    event.status,
+                    acknowledging: event.durableConsumptionAcknowledgement
+                )
             }
         }
 
@@ -344,6 +376,12 @@ final class ACPSessionRunner {
                 self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        continue
+                    }
                     do {
                         if let remoteServer {
                             let target = try remoteServer.lexicallyResolveInsideWorktree(path: params.path)
@@ -428,6 +466,12 @@ final class ACPSessionRunner {
                         )
                     }
                 case .write(let id, let params):
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        break
+                    }
                     // Guard the actual disk write: if this runner has lost
                     // the session lease (takeover), deny the request rather
                     // than modifying the working tree on behalf of a session
@@ -508,6 +552,53 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await req in self.connection.client.terminalRequests {
                 await self.handleTerminalRequest(req)
+            }
+        }
+    }
+
+    /// Applies a `_auth/status_update` notification. Unlike a failed-prompt
+    /// `authRequired`, the connection here is healthy — the agent is simply
+    /// reporting it has no signed-in credentials yet — so this shows the
+    /// existing sign-in banner without tearing the runner/connection down.
+    /// A later update reporting a signed-in kind clears the banner again.
+    private func applyAuthStatus(
+        _ status: ACPAuthStatus,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        session.authStatus = status
+        if status.kind == .none {
+            session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
+        } else if case .needsAuth = session.setupState {
+            session.setupState = .ready
+        }
+        // Persisted so an app restart can restore it before any attach
+        // happens: a broker-adopted reattach serves a cached `initialize`
+        // and never re-emits this notification for that attach.
+        //
+        // Fenced like every other runner-owned mutation: during a
+        // cross-window takeover this runner can still be draining a
+        // buffered status after its lease was replaced. Without the fence,
+        // that stale write could land after the new owner already
+        // persisted a newer status and silently overwrite it.
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        if let acknowledgement {
+            // Hold the broker's replay cursor back — via `acknowledgement`,
+            // called only once this write actually lands — until the
+            // status is durable, so a crash between delivery and
+            // persistence doesn't cause the next process's replay to skip
+            // this notification and restore a stale or nil status.
+            enqueuePersistence({ persistence in
+                try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
+            }, completion: { persisted in
+                if persisted == true {
+                    acknowledgement()
+                }
+            })
+        } else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.setAuthStatus(sessionId: sessionId, status: status, fence: fence)
             }
         }
     }
@@ -1003,8 +1094,10 @@ final class ACPSessionRunner {
         incomingUpdateFlushTask = nil
         updatesTask?.cancel()
         permissionsTask?.cancel()
+        cancelRequestsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
+        authStatusTask?.cancel()
         // A detach/takeover can land while a permission prompt is parked.
         // userCancel() already resolves it; stop() must too, or the policy's
         // continuation is stranded when we tear the connection down.

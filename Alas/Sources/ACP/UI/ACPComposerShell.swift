@@ -384,6 +384,11 @@ struct ACPComposer: View {
                 if let providerName = session.currentProviderDisplayName {
                     providerPill(providerName)
                 }
+                // kind == .none is already covered by the sign-in banner
+                // above the composer, so the pill only shows once signed in.
+                if let status = session.authStatus, status.kind != .none {
+                    authStatusPill(status)
+                }
                 if let mode = session.chipState.mode {
                     modeChip(mode)
                 }
@@ -474,6 +479,32 @@ struct ACPComposer: View {
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Provider, \(name)")
             .help("Provider selected by the adapter")
+    }
+
+    private func authStatusPill(_ status: ACPAuthStatus) -> some View {
+        Text(status.label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .accessibilityLabel("Signed in, \(status.label)")
+            .help(authStatusHoverText(status))
+    }
+
+    private func authStatusHoverText(_ status: ACPAuthStatus) -> String {
+        var parts: [String] = []
+        if let plan = status.account?.plan, !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(plan)
+        }
+        if let email = status.account?.email, !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(email)
+        }
+        if let detail = status.detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(detail)
+        }
+        return parts.isEmpty ? "Auth status reported by the adapter" : parts.joined(separator: " · ")
     }
 
     private var borderColor: Color {

@@ -649,7 +649,7 @@ private struct RootRunScriptPresentationHandlers: ViewModifier {
                 )
             }
             .alert(
-                "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
+                "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(AppState.forceDeleteAlertTitleSuffix)",
                 isPresented: Binding(
                     get: { state.pendingForceDeleteWorktree != nil },
                     set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
@@ -663,7 +663,7 @@ private struct RootRunScriptPresentationHandlers: ViewModifier {
                     }
                 },
                 message: {
-                    Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+                    Text(AppState.forceDeleteAlertMessage)
                 }
             )
     }

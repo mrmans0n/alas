@@ -11,11 +11,14 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private var notificationAsyncScripts: [String: (ACPRequest) async throws -> Void] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let completionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
     private(set) var shutdownCount = 0
@@ -27,11 +30,14 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let cancelRequests: AsyncStream<JSONRPCID>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
+    let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
 
     var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
@@ -44,9 +50,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var p: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { p = $0 }
         self.permsCont = p
+        var cr: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cr = $0 }
+        self.cancelRequestsCont = cr
         var q: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { q = $0 }
         self.questionsCont = q
+        var plan: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { plan = $0 }
+        self.plansCont = plan
         var e: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { e = $0 }
         self.elicitationsCont = e
@@ -59,6 +71,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var t: AsyncStream<ACPTerminalRequest>.Continuation!
         self.terminalRequests = AsyncStream { t = $0 }
         self.terminalsCont = t
+        var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { a = $0 }
+        self.authStatusCont = a
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
@@ -92,8 +107,12 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         updatesCont.yield(update)
     }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
+    func emitCancelRequest(id: JSONRPCID) { cancelRequestsCont.yield(id) }
     func emitQuestion(id: JSONRPCID, params: ACPQuestionRequestParams) {
         questionsCont.yield(.init(id: id, params: params))
+    }
+    func emitPlan(id: JSONRPCID, params: ACPCursorCreatePlanParams) {
+        plansCont.yield(.init(id: id, params: params))
     }
     func emitElicitation(id: JSONRPCID, params: ACPElicitationRequestParams) {
         elicitationsCont.yield(.init(id: id, params: params))
@@ -103,6 +122,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
     func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
+    func emitAuthStatus(
+        _ status: ACPAuthStatus,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        authStatusCont.yield(.init(
+            status: status,
+            durableConsumptionAcknowledgement: durableConsumptionAcknowledgement
+        ))
+    }
 
     var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
@@ -111,6 +139,10 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     var questionResponses: [JSONRPCID: ACPQuestionResponse] = [:]
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
         questionResponses[id] = response
+    }
+    var planResponses: [JSONRPCID: ACPCursorPlanResponse] = [:]
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        planResponses[id] = response
     }
     var elicitationResponses: [JSONRPCID: Result<ACPElicitationResponse, JSONRPCError>] = [:]
     func respondToElicitation(
@@ -147,10 +179,13 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         shutdownCount += 1
         updatesCont.finish()
         permsCont.finish()
+        cancelRequestsCont.finish()
         questionsCont.finish()
+        plansCont.finish()
         elicitationsCont.finish()
         completionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
+        authStatusCont.finish()
     }
 }

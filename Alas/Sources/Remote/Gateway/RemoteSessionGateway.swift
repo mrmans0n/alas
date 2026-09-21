@@ -36,6 +36,7 @@ final class RemoteSessionGateway {
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
     private var lastQuestionReq: [String: Int] = [:]
+    private var lastPlanReq: [String: JSONRPCID] = [:]
     private var lastElicitationReq: [String: String] = [:]
     /// Requests currently being served, keyed by "<verb>\0<sessionId>\0<path>".
     /// A repeat while one is in flight is dropped: the client re-renders from
@@ -119,12 +120,15 @@ final class RemoteSessionGateway {
             lastPermissionReq[id] = nil
             lastQuestionReq[id] = nil
             lastElicitationReq[id] = nil
+            lastPlanReq[id] = nil
             endTracking(id: id)
             syncStates[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .planResponse(let id, let requestId, let action, let reason):
+            applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(let id, let requestId, let action, let content):
             applyElicitationResponse(
                 sessionId: id,
@@ -547,6 +551,7 @@ final class RemoteSessionGateway {
         }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
+        emitPendingPlanIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
@@ -675,6 +680,7 @@ final class RemoteSessionGateway {
         }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
+        emitPendingPlanIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
@@ -766,6 +772,40 @@ final class RemoteSessionGateway {
             send(.questionRequest(sessionId: id, payload: payload))
         } else if let rid = lastQuestionReq.removeValue(forKey: id) {
             send(.questionResolved(sessionId: id, requestId: rid))
+        }
+    }
+
+    private func emitPendingPlanIfAny(id: String, session: ACPSession) {
+        if let pending = session.transcript.pendingPlan {
+            guard lastPlanReq[id] != pending.id else { return }
+            lastPlanReq[id] = pending.id
+            let params = pending.params
+            let todos = params.todos.map {
+                RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status)
+            }
+            let phases = params.phases.map { phase in
+                RemotePlanPhase(
+                    name: phase.name,
+                    todos: phase.todos.map {
+                        RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status)
+                    }
+                )
+            }
+            send(.planRequest(
+                sessionId: id,
+                payload: .init(
+                    requestId: pending.id,
+                    toolCallId: params.toolCallId,
+                    name: params.name,
+                    overview: params.overview,
+                    plan: params.plan,
+                    todos: todos,
+                    isProject: params.isProject,
+                    phases: phases
+                )
+            ))
+        } else if let requestId = lastPlanReq.removeValue(forKey: id) {
+            send(.planResolved(sessionId: id, requestId: requestId))
         }
     }
 
@@ -887,6 +927,31 @@ final class RemoteSessionGateway {
         )
         lastQuestionReq[sessionId] = nil
         send(.questionResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private func applyPlanResponse(sessionId: String, requestId: JSONRPCID, action: String, reason: String?) {
+        guard let session = provider.session(for: sessionId),
+              let pending = session.transcript.pendingPlan,
+              pending.id == requestId
+        else { return }
+
+        let response: ACPCursorPlanResponse
+        switch action {
+        case "accept":
+            response = .init(outcome: .accepted(planUri: "alas://plans/\(pending.params.toolCallId)"))
+        case "reject":
+            let trimmed = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            response = .init(outcome: .rejected(reason: trimmed))
+        case "cancel":
+            response = .init(outcome: .cancelled)
+        default:
+            return
+        }
+
+        provider.respondToPlan(for: sessionId, requestId: requestId, response)
+        lastPlanReq[sessionId] = nil
+        send(.planResolved(sessionId: sessionId, requestId: requestId))
     }
 
     private static func queuedQuestion(in session: ACPSession) -> ACPSession.PendingQuestion? {
