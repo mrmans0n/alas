@@ -79,14 +79,29 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
         self.sendsPromptAutomatically = sendsPromptAutomatically
     }
 
-    /// The prompt as keystrokes for the agent's terminal. Line breaks become
-    /// spaces: typed into a TUI a newline is Enter, which would split the
-    /// prompt into several messages (or submit half of it).
+    /// The prompt as keystrokes for the agent's terminal.
+    ///
+    /// Line breaks become spaces: typed into a TUI a newline is Enter, which
+    /// would split the prompt into several messages, or submit half of one.
+    ///
+    /// Every other control character is dropped, and a tab becomes a space.
+    /// These bytes go straight to the PTY, where they are input rather than
+    /// text: a tab triggers completion, and an escape can leave the input
+    /// altogether and turn what follows into key bindings. A prompt that is
+    /// then submitted automatically would be sending something other than
+    /// what was written.
     static func terminalText(for prompt: String) -> String {
         prompt
             .replacingOccurrences(of: "\r\n", with: "\n")
             .split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { line in
+                let scalars = line.unicodeScalars.compactMap { scalar -> Unicode.Scalar? in
+                    if scalar == "\t" { return " " }
+                    return scalar.properties.generalCategory == .control ? nil : scalar
+                }
+                return String(String.UnicodeScalarView(scalars))
+                    .trimmingCharacters(in: .whitespaces)
+            }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
     }

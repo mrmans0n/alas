@@ -289,11 +289,19 @@ struct RunScheduleEditorView: View {
     }
 
     private var nextFireLabel: String {
+        let scheduleState = schedule.map { state.runScheduler.state(for: $0.id) }
         let next = RunSchedulePresentation.editorNextFireDate(
             existingTrigger: schedule?.trigger,
             draftTrigger: draft.trigger,
-            storedNextFireAt: schedule.map { state.runScheduler.state(for: $0.id).nextFireAt } ?? nil,
-            computedNextFireAt: draft.nextFireDate(now: now, calendar: calendar)
+            storedNextFireAt: scheduleState?.nextFireAt,
+            // Anchored where the scheduler will anchor it: an edited trigger
+            // is measured from the schedule's last fire, so a preview taken
+            // from now would promise a later occurrence than saving gives.
+            computedNextFireAt: draft.nextFireDate(
+                now: now,
+                anchor: scheduleState?.lastFiredAt,
+                calendar: calendar
+            )
         )
         return RunSchedulePresentation.nextFirePreviewLabel(next, now: now, calendar: calendar)
     }

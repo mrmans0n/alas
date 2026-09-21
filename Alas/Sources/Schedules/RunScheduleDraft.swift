@@ -129,18 +129,24 @@ struct RunScheduleDraft: Equatable {
         if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
     }
 
-    /// When the schedule would first fire if it were saved right now. An
-    /// interval schedule is anchored on creation, so its first occurrence is
-    /// one interval from now; a time-of-day schedule is the next allowed
-    /// wall-clock slot. Nil while the trigger is not valid.
-    func nextFireDate(now: Date, calendar: Calendar = .autoupdatingCurrent) -> Date? {
+    /// When the schedule would first fire if it were saved right now.
+    ///
+    /// `anchor` has to match what the scheduler will use, or the preview
+    /// contradicts the save. `RunScheduler.add` anchors a new schedule on
+    /// its creation, which is now; `RunScheduler.update` anchors an edited
+    /// trigger on the last fire. Interval occurrences sit on a grid from
+    /// that anchor, so an hourly schedule last run 30 minutes ago is next
+    /// due in 30 minutes, not in an hour. Time-of-day triggers ignore it.
+    ///
+    /// Nil while the trigger is not valid.
+    func nextFireDate(now: Date, anchor: Date? = nil, calendar: Calendar = .autoupdatingCurrent) -> Date? {
         switch triggerKind {
         case .interval:
             guard intervalValue >= 1 else { return nil }
         case .timeOfDay:
             guard (0...23).contains(hour), (0...59).contains(minute), !weekdays.isEmpty else { return nil }
         }
-        return RunSchedulePlanner.nextFireDate(for: trigger, after: now, anchor: now, calendar: calendar)
+        return RunSchedulePlanner.nextFireDate(for: trigger, after: now, anchor: anchor ?? now, calendar: calendar)
     }
 
     static func intervalComponents(_ seconds: TimeInterval) -> (Int, IntervalUnit) {

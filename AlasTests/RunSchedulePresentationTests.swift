@@ -262,12 +262,51 @@ struct RunSchedulePresentationTests {
         #expect(draft.nextFireDate(now: now, calendar: calendar) == nil)
     }
 
+    /// Interval occurrences sit on a grid from the anchor, and
+    /// `RunScheduler.update` anchors an edited trigger on the last fire.
+    /// Previewing from now instead would promise a later run than saving
+    /// actually schedules.
+    @Test func anEditedIntervalPreviewUsesTheLastFireAsItsAnchor() throws {
+        var calendar = self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let lastFired = now.addingTimeInterval(-30 * 60)
+
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .interval
+        draft.intervalValue = 1
+        draft.intervalUnit = .hours
+
+        // Anchored on the last fire, an hourly schedule run 30 minutes ago
+        // is due in 30 minutes.
+        #expect(draft.nextFireDate(now: now, anchor: lastFired, calendar: calendar) == now.addingTimeInterval(30 * 60))
+        // A schedule that has never fired anchors at now, as creation does.
+        #expect(draft.nextFireDate(now: now, anchor: nil, calendar: calendar) == now.addingTimeInterval(60 * 60))
+
+        // A time-of-day trigger names a wall-clock time and ignores it.
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+        draft.apply(.everyDay)
+        #expect(
+            draft.nextFireDate(now: now, anchor: lastFired, calendar: calendar)
+                == draft.nextFireDate(now: now, anchor: nil, calendar: calendar)
+        )
+    }
+
     @Test func promptHintsAndKeystrokes() {
         #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: true) == "The agent starts working without waiting for you.")
         #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false).contains("press Enter"))
         // Typed into a TUI, a line break is Enter; the prompt has to arrive
         // as one message.
         #expect(RunScheduleComposition.terminalText(for: "Fix the build.\n\nThen open a PR.\r\n") == "Fix the build. Then open a PR.")
+        // A tab would trigger completion and an escape would leave the input
+        // and turn the rest into key bindings, so neither reaches the PTY.
+        #expect(RunScheduleComposition.terminalText(for: "Fix\tthe build.") == "Fix the build.")
+        #expect(RunScheduleComposition.terminalText(for: "Fix\u{1B}[Athe build.\u{07}") == "Fix[Athe build.")
+        #expect(RunScheduleComposition.terminalText(for: "\t\u{1B}\u{07}") == "")
+        // Ordinary text, including non-ASCII, is left alone.
+        #expect(RunScheduleComposition.terminalText(for: "Arregla el build ✅") == "Arregla el build ✅")
         let withPrompt = RunScheduleComposition(agentId: "claude", prompt: "hi")
         #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: withPrompt, agentName: "Claude") == "New worktree → Launch Claude with a prompt")
     }
