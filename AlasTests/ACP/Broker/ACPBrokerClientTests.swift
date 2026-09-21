@@ -103,6 +103,48 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
+    /// Two clients can race to restart the same legacy broker: both see the
+    /// same missing-snapshot generation and both try to close it. The loser
+    /// reaches the helper after the winner already closed that generation
+    /// and opened its replacement, so the helper rejects the loser's
+    /// stale-generation close with -32075. `start()` must adopt the
+    /// winner's replacement rather than fail the whole connection.
+    @Test func adoptedLegacyBrokerRestartRaceAdoptsWinnersReplacement() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrowGenerationMismatch(true)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(
+            service: service,
+            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
+        )
+
+        let opened = try await client.start()
+
+        #expect(opened.adopted == true)
+        #expect(opened.snapshot.cursorTodosByToolCallId != nil)
+        #expect(await service.opened.count == 2)
+        #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
+        let attachParams = try await #require(service.attached.first)
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
+    }
+
+    /// A `close()` failure unrelated to the generation-mismatch race (e.g. a
+    /// genuine transport error) must still fail `start()` — only -32075 is
+    /// treated as "someone else already replaced it".
+    @Test func adoptedLegacyBrokerRestartPropagatesUnrelatedCloseFailure() async throws {
+        let service = MockBrokerService()
+        await service.setOpenAdopted(true)
+        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
+        await service.setCloseShouldThrow(MockBrokerServiceError.injected)
+        let client = makeClient(service: service)
+
+        await #expect(throws: MockBrokerServiceError.self) {
+            try await client.start()
+        }
+    }
+
     @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -1871,6 +1913,8 @@ private actor MockBrokerService: ACPBrokerServicing {
     var openAdopted = false
     var openSnapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     private var respondFailuresRemaining = 0
+    private var closeShouldThrowGenerationMismatch = false
+    private var closeShouldThrowError: (any Error)?
 
     func enqueueAttach(
         events: [ACPBrokerEvent],
@@ -1904,6 +1948,14 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func setOpenSnapshotCursorTodosByToolCallId(_ todos: [String: [ACPCursorTodo]]?) {
         openSnapshotCursorTodosByToolCallId = todos
+    }
+
+    func setCloseShouldThrowGenerationMismatch(_ value: Bool) {
+        closeShouldThrowGenerationMismatch = value
+    }
+
+    func setCloseShouldThrow(_ error: any Error) {
+        closeShouldThrowError = error
     }
 
     func setSnapshotResults(
@@ -2000,6 +2052,21 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
         closed.append(params)
+        if let closeShouldThrowError {
+            self.closeShouldThrowError = nil
+            throw closeShouldThrowError
+        }
+        if closeShouldThrowGenerationMismatch {
+            closeShouldThrowGenerationMismatch = false
+            // Model another client having won the same restart race: it
+            // already closed this generation and opened a current-build
+            // replacement, which is what a retried `open()` should now find.
+            openAdopted = true
+            openSnapshotCursorTodosByToolCallId = [:]
+            throw RemoteHelperClientError.jsonrpc(
+                JSONRPCError(code: -32075, message: "broker generation mismatch", data: nil)
+            )
+        }
         openAdopted = false
         openSnapshotCursorTodosByToolCallId = [:]
         return ACPBrokerSimpleOK(ok: true)

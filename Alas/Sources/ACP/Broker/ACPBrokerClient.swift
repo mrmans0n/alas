@@ -279,10 +279,27 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         )
         var opened = try await service.open(openParams)
         if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
-            try await service.close(ACPBrokerCloseParams(
-                brokerId: brokerId,
-                generation: opened.snapshot.metadata.generation
-            ))
+            do {
+                try await service.close(ACPBrokerCloseParams(
+                    brokerId: brokerId,
+                    generation: opened.snapshot.metadata.generation
+                ))
+            } catch {
+                // Two clients can race to restart the same legacy broker:
+                // both see the same missing-snapshot generation and both
+                // try to close it. Whichever loses that race reaches the
+                // helper after the winner already closed the old generation
+                // and opened its replacement, so the helper rejects this
+                // stale-generation close with -32075 ("broker generation
+                // mismatch"). That is not a failure to propagate — the
+                // broker this call wanted gone is already gone, replaced by
+                // a current build whose snapshot already carries a todos
+                // map. Fall through and adopt it instead of failing the
+                // whole connection.
+                guard ACPBrokerClient.errorIndicatesBrokerGenerationMismatch(error) else {
+                    throw error
+                }
+            }
             resetAcknowledgedCursor()
             opened = try await service.open(openParams)
         }
@@ -1076,6 +1093,24 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
         stateLock.unlock()
+    }
+
+    /// Matches `AlasHelper`'s `broker_error(-32075, "broker generation
+    /// mismatch")` (`AlasHelper/src/acp_broker_process.rs`), covering both a
+    /// directly-thrown `JSONRPCError` and the transport's wrapped form so
+    /// this stays correct regardless of which `ACPBrokerServicing`
+    /// conformer is in play.
+    private static let brokerGenerationMismatchErrorCode = -32075
+
+    private static func errorIndicatesBrokerGenerationMismatch(_ error: any Error) -> Bool {
+        switch error {
+        case let error as JSONRPCError:
+            return error.code == brokerGenerationMismatchErrorCode
+        case RemoteHelperClientError.jsonrpc(let error):
+            return error.code == brokerGenerationMismatchErrorCode
+        default:
+            return false
+        }
     }
 
     private func enqueueDurableStateLocked() -> Bool {
