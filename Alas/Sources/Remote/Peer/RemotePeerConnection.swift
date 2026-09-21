@@ -226,8 +226,14 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // attempt rather than just this origin.
             if version != config.localProtocolVersion {
                 candidate.cancel(with: .goingAway, reason: nil)
-                setState(.incompatible(remoteVersion: version))
-                runner = nil
+                // Unlike an identity mismatch, a version mismatch is not
+                // something only the user can fix: the remote Mac could be
+                // upgraded or downgraded to match at any time, and this
+                // link should notice once it does rather than sitting
+                // stuck — with no reconnect timer armed at all — until the
+                // user toggles federation, restarts, or forgets and
+                // re-pairs.
+                scheduleReconnect(reportedState: .incompatible(remoteVersion: version))
                 return
             }
             socket = candidate

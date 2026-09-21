@@ -285,6 +285,24 @@ struct RemotePeerConnectionTests {
         try await waitUntil { link.state == .incompatible(remoteVersion: RemoteProtocolVersion.current) }
     }
 
+    // Unlike an identity mismatch, a version mismatch is not something
+    // only the user can fix — the remote Mac could be upgraded or
+    // downgraded to match at any time — so this must keep retrying rather
+    // than getting stuck with no reconnect timer armed at all.
+    @Test func protocolMismatchKeepsRetrying() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token, config: fastConfig(localVersion: 99)) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .incompatible(remoteVersion: RemoteProtocolVersion.current) }
+        // A reconnect must be armed: another attempt starts on its own.
+        try await waitUntil { events.states.filter { $0 == .connecting }.count >= 2 }
+    }
+
     // The version check ran BEFORE the identity check, so a stale
     // origin reassigned to an unrelated Alas instance running an
     // incompatible version reported .incompatible — terminal, no reconnect —
