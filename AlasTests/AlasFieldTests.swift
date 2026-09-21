@@ -166,6 +166,28 @@ struct AlasFieldTests {
         #expect(text == "nacho/ê")
     }
 
+    @Test func disablesAutomaticTextSubstitutionsWhenRequested() throws {
+        let field = AlasNSTextFieldView()
+        field.disablesAutomaticTextSubstitutions = true
+        let cell = try #require(field.cell as? AlasNSTextFieldCell)
+        let editor = try #require(cell.setUpFieldEditorAttributes(NSTextView()) as? NSTextView)
+        #expect(!editor.isAutomaticTextCompletionEnabled)
+        #expect(editor.inlinePredictionType == .no)
+        #expect(!editor.isAutomaticTextReplacementEnabled)
+        #expect(!editor.isAutomaticSpellingCorrectionEnabled)
+        #expect(!editor.isAutomaticQuoteSubstitutionEnabled)
+        #expect(!editor.isAutomaticDashSubstitutionEnabled)
+    }
+
+    @Test func leavesAutomaticTextSubstitutionsUntouchedByDefault() throws {
+        let field = AlasNSTextFieldView()
+        let cell = try #require(field.cell as? AlasNSTextFieldCell)
+        let untouched = NSTextView()
+        let defaultReplacementSetting = untouched.isAutomaticTextReplacementEnabled
+        let editor = try #require(cell.setUpFieldEditorAttributes(untouched) as? NSTextView)
+        #expect(editor.isAutomaticTextReplacementEnabled == defaultReplacementSetting)
+    }
+
     private func pump(_ seconds: TimeInterval = 0.05) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }

@@ -107,7 +107,8 @@ struct NewWorktreeDialog: View {
                         text: activeNameBinding,
                         monospaced: true,
                         focusOnAppear: true,
-                        onSubmit: submitCreate
+                        onSubmit: submitCreate,
+                        disablesAutomaticTextSubstitutions: true
                     )
                 }
                 HStack(spacing: 10) {

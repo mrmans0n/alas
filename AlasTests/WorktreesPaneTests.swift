@@ -16,4 +16,16 @@ struct WorktreesPaneTests {
         #expect(WorktreesPane.persistableBranchPrefix("feature//") == nil)
         #expect(WorktreesPane.persistableBranchPrefix("-feature") == nil)
     }
+
+    @Test func surfacesErrorForPersistedInvalidPrefixWithoutADraft() {
+        #expect(WorktreesPane.branchPrefixValidationMessage(draft: nil, persisted: "feature name/") != nil)
+    }
+
+    @Test func surfacesNoErrorForValidPersistedPrefixWithoutADraft() {
+        #expect(WorktreesPane.branchPrefixValidationMessage(draft: nil, persisted: "feature/") == nil)
+    }
+
+    @Test func draftErrorTakesPrecedenceOverPersistedValue() {
+        #expect(WorktreesPane.branchPrefixValidationMessage(draft: "feature name/", persisted: "feature/") != nil)
+    }
 }

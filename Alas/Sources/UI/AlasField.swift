@@ -9,17 +9,19 @@ struct AlasField: View {
     var onSubmit: (() -> Void)? = nil
     var leadingIcon: String? = nil
     var isEnabled: Bool = true
+    var disablesAutomaticTextSubstitutions: Bool = false
     @Environment(\.theme) var theme
 
     var body: some View {
-        if focusOnAppear || onSubmit != nil {
+        if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions {
             AlasNSTextField(
                 text: $text,
                 placeholder: placeholder,
                 monospaced: monospaced,
                 focusOnAppear: focusOnAppear,
                 onSubmit: onSubmit,
-                isEnabled: isEnabled
+                isEnabled: isEnabled,
+                disablesAutomaticTextSubstitutions: disablesAutomaticTextSubstitutions
             )
             .alasFieldChrome(theme: theme)
         } else {
@@ -66,6 +68,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     var focusOnAppear: Bool
     var onSubmit: (() -> Void)?
     var isEnabled: Bool
+    var disablesAutomaticTextSubstitutions: Bool
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
@@ -83,12 +86,14 @@ private struct AlasNSTextField: NSViewRepresentable {
         field.action = #selector(Coordinator.action(_:))
         field.focusOnAppear = focusOnAppear
         field.isEnabled = isEnabled
+        field.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
         return field
     }
 
     func updateNSView(_ nsView: AlasNSTextFieldView, context: Context) {
         context.coordinator.parent = self
         nsView.isEnabled = isEnabled
+        nsView.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string
             if editingValue != text {
@@ -180,6 +185,9 @@ private struct AlasNSTextField: NSViewRepresentable {
 
 class AlasNSTextFieldView: NSTextField {
     var focusOnAppear = false
+    var disablesAutomaticTextSubstitutions: Bool = false {
+        didSet { (cell as? AlasNSTextFieldCell)?.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions }
+    }
 
     /// Acquires first responder and moves the caret to the end of the
     /// current text, synchronously, in a single call. Acquiring first
@@ -223,6 +231,8 @@ class AlasNSTextFieldView: NSTextField {
 }
 
 final class AlasNSTextFieldCell: NSTextFieldCell {
+    var disablesAutomaticTextSubstitutions = false
+
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
         let editor = super.setUpFieldEditorAttributes(textObj)
         guard let textView = editor as? NSTextView else { return editor }
@@ -232,6 +242,14 @@ final class AlasNSTextFieldCell: NSTextFieldCell {
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.lineBreakMode = .byClipping
         textView.textContainer?.maximumNumberOfLines = 1
+        if disablesAutomaticTextSubstitutions {
+            textView.isAutomaticTextCompletionEnabled = false
+            textView.inlinePredictionType = .no
+            textView.isAutomaticTextReplacementEnabled = false
+            textView.isAutomaticSpellingCorrectionEnabled = false
+            textView.isAutomaticQuoteSubstitutionEnabled = false
+            textView.isAutomaticDashSubstitutionEnabled = false
+        }
         return textView
     }
 }
