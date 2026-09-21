@@ -551,7 +551,7 @@ final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .unknown:
+             .usageUpdate, .notice, .unknown:
             return []
         }
     }
@@ -2266,7 +2266,7 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .unknown:
+             .usageUpdate, .notice, .unknown:
             return false
         }
     }

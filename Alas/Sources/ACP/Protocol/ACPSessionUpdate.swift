@@ -53,6 +53,7 @@ enum ACPSessionUpdate: Codable, Equatable {
     case sessionInfoUpdate(ACPSessionInfoUpdate)
     case compactionUpdate(ACPCompactionUpdate)
     case compactionSummaryChunk(ACPCompactionSummaryChunk)
+    case notice(ACPSessionNotice)
     case unknown(String)
 
     static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -116,6 +117,8 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .compactionUpdate(try ACPCompactionUpdate(from: decoder))
         case "compaction_summary_chunk":
             self = .compactionSummaryChunk(try ACPCompactionSummaryChunk(from: decoder))
+        case "notice":
+            self = .notice(try ACPSessionNotice(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -172,7 +175,7 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .availableCommandsUpdate:
             break
         case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,
-             .compactionSummaryChunk, .unknown:
+             .compactionSummaryChunk, .notice, .unknown:
             break
         }
     }
@@ -263,6 +266,98 @@ struct ACPCompactionSummaryChunk: Codable, Equatable {
         compactionId = try c.decode(String.self, forKey: .compactionId)
         content = try c.decode(ACPContentBlock.self, forKey: .content)
         metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+/// Experimental ACP session notice — a fire-and-forget out-of-band event
+/// (an MCP server dropping, a rate limit, a model fallback…) that can arrive
+/// at any time a session exists, including outside a prompt turn. It has no
+/// id, no ack, and no removal; an `error` severity does not fail the
+/// request or change session state. Live UI state only — never persisted
+/// into the transcript and never replayed on `session/load`.
+struct ACPSessionNotice: Codable, Equatable {
+    /// Open enum: the spec reserves `info`/`warning`/`error`, treats
+    /// `_`-prefixed values as implementation-specific, and everything else
+    /// as reserved-for-future-use. Both of the latter must render generically
+    /// (as `info`), which `.other` does at the presentation layer.
+    enum Severity: Equatable {
+        case info
+        case warning
+        case error
+        case other(String)
+
+        init(rawValue: String) {
+            switch rawValue {
+            case "info": self = .info
+            case "warning": self = .warning
+            case "error": self = .error
+            default: self = .other(rawValue)
+            }
+        }
+
+        var rawValue: String {
+            switch self {
+            case .info: return "info"
+            case .warning: return "warning"
+            case .error: return "error"
+            case .other(let value): return value
+            }
+        }
+
+        /// True for `.info` and any unrecognized value (`_`-prefixed or
+        /// reserved-unknown): the spec requires both to render — and
+        /// therefore behave, e.g. auto-dismiss — generically as info.
+        /// `.warning`/`.error` are the only severities that stay pinned.
+        var behavesAsInfo: Bool {
+            switch self {
+            case .info, .other: return true
+            case .warning, .error: return false
+            }
+        }
+    }
+
+    let severity: Severity
+    let title: String
+    let description: String?
+    let metadata: AnyCodable?
+
+    /// Whether `other` shows the same banner content as `self` — i.e. same
+    /// severity/title/description. `_meta` is deliberately excluded: it
+    /// carries no displayed content, so a chatty agent re-sending the same
+    /// notice with a bumped trace id must still coalesce.
+    func isVisuallyIdentical(to other: ACPSessionNotice) -> Bool {
+        severity == other.severity && title == other.title && description == other.description
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case severity, title, description
+        case metadata = "_meta"
+    }
+
+    init(severity: Severity, title: String, description: String? = nil, metadata: AnyCodable? = nil) {
+        self.severity = severity
+        self.title = title
+        self.description = description
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        severity = Severity(rawValue: try c.decode(String.self, forKey: .severity))
+        title = try c.decode(String.self, forKey: .title)
+        description = try? c.decodeIfPresent(String.self, forKey: .description)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+extension ACPSessionNotice.Severity: Codable {
+    init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
     }
 }
 
