@@ -549,6 +549,18 @@ extension AppState {
         // hops back onto the main actor, which bypasses the catch above and
         // would submit for a schedule that is already gone.
         guard !Task.isCancelled else { return }
+        // The agent can also die inside that pause, leaving the shell to
+        // reclaim the terminal. Enter would then run whatever of the prompt
+        // the agent had not consumed as a command, so ownership is confirmed
+        // once more before submitting.
+        guard scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) else {
+            inAppNotifications.post(
+                "\(schedule.name): the agent stopped before the prompt could be submitted in \(worktree.branch).",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
@@ -597,6 +609,18 @@ extension AppState {
         } catch {
             return false
         }
+        return harness.activeHarnessBySession[sessionID] == expected
+    }
+
+    /// Whether the schedule's agent is, right now, the process the detector
+    /// sees in that terminal. Asked again between typing and submitting,
+    /// because the gap between them is long enough for the agent to die and
+    /// the shell to take the session back.
+    private func scheduledAgentOwnsTerminal(sessionID: String, agentID: String) -> Bool {
+        // The readiness seam replaces the detector wholesale in tests, whose
+        // sessions have no process to observe.
+        if scheduledAgentReadiness != nil { return true }
+        guard let expected = HarnessKind.forAgentID(agentID) else { return false }
         return harness.activeHarnessBySession[sessionID] == expected
     }
 

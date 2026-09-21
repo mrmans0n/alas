@@ -18,9 +18,13 @@ struct RunScheduleEditorView: View {
     @State private var scripts: [RunScript] = []
     @State private var scriptDiscoveryError: String?
     @State private var errorMessage: String?
-    /// Frozen when the sheet opens: the next-fire preview is relative to it,
-    /// and a preview that ticked every second would only draw the eye.
+    /// What the preview is measured from. It has to keep up with the clock,
+    /// because saving anchors on the moment you press the button: a dialog
+    /// left open at 09:00 would otherwise promise an hourly schedule at
+    /// 10:00 and then create one at 10:20. Coarse enough not to draw the
+    /// eye, fine enough to stay right to the displayed minute.
     @State private var now = Date()
+    @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
     @Environment(\.theme) private var theme
 
     private let calendar = Calendar.autoupdatingCurrent
@@ -74,6 +78,7 @@ struct RunScheduleEditorView: View {
         )
         .task(id: discoveryKey) { await discoverScripts() }
         .onAppear { now = Date() }
+        .onReceive(ticker) { now = $0 }
     }
 
     // MARK: - Sections
@@ -396,7 +401,18 @@ struct RunScheduleEditorView: View {
 
     private var agentPicker: some View {
         let agents = state.agentRegistry.enabled()
-        let title = draft.agentID.flatMap { id in agents.first { $0.id == id }?.displayName } ?? "Project default"
+        // An agent that has since been disabled or removed is still named,
+        // the way a missing script is. Showing "Project default" for it
+        // would be a lie: the id stays in the draft and is saved, and the
+        // next firing fails on an agent the dialog claimed was not selected.
+        let missingAgentID = draft.agentID.flatMap { id in
+            agents.contains { $0.id == id } ? nil : id
+        }
+        let title: String = {
+            guard let id = draft.agentID else { return "Project default" }
+            if let agent = agents.first(where: { $0.id == id }) { return agent.displayName }
+            return "\(id) · unavailable"
+        }()
         return ScheduleChipMenu(title: title) {
             Picker("", selection: Binding(
                 get: { draft.agentID ?? "" },
@@ -405,6 +421,10 @@ struct RunScheduleEditorView: View {
                 Text("Project default").tag("")
                 ForEach(agents) { agent in
                     Text(agent.displayName).tag(agent.id)
+                }
+                if let missingAgentID {
+                    Divider()
+                    Text("\(missingAgentID) · unavailable").tag(missingAgentID)
                 }
             }
             .pickerStyle(.inline)
