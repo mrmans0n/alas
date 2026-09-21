@@ -140,20 +140,21 @@ final class RemotePeerConnection: RemotePeerConnecting {
             case .failed:
                 if Task.isCancelled { return }
                 // A dropped receive here carries no information about the
-                // credential unless the response actually confirms a
-                // rejection. A genuine 101 means the upgrade succeeded and
-                // the token was fine — whatever closed the connection
-                // afterward (a restart, a network blip, a proxy
-                // interruption) is an ordinary transport disconnect. A
-                // MISSING response — the connection reset before any HTTP
-                // reply arrived at all, e.g. the peer restarting mid-
-                // handshake — carries just as little evidence: probing
-                // `/health` here would let a peer merely coming back online
-                // right after turn a transient reset into the same terminal
-                // state as an actual revocation. Only an explicit rejection
-                // status is grounds to ask `/health` at all.
-                let responseStatus = (candidate.response as? HTTPURLResponse)?.statusCode
-                guard let responseStatus, responseStatus != 101 else {
+                // credential unless the response is a CONFIRMED 401 — the
+                // one status this server ever sends for a bad or unknown
+                // token. A genuine 101 means the upgrade succeeded and the
+                // token was fine. A MISSING response (a reset before any
+                // HTTP reply arrives at all, e.g. the peer restarting
+                // mid-handshake) carries just as little evidence. And any
+                // OTHER explicit status — 500, 502, 503, a proxy's own
+                // error page — is an infrastructure-level signal that says
+                // nothing about the credential either: treating it as
+                // grounds for a health probe could turn a transient proxy
+                // hiccup into the same terminal state as an actual
+                // revocation if `/health` happens to answer normally
+                // through a different path. Only a confirmed 401 is worth
+                // asking `/health` about at all.
+                guard (candidate.response as? HTTPURLResponse)?.statusCode == 401 else {
                     continue
                 }
                 let peerFederationEnabled = await healthCheck(origin)

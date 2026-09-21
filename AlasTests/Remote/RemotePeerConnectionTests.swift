@@ -19,15 +19,19 @@ struct RemotePeerConnectionTests {
         private(set) var port: UInt16?
         private var listener: NWListener?
         private let queue = DispatchQueue(label: "io.alas.tests.remote.handshake-then-drop")
-        /// When false, an upgrade attempt is reset without sending a single
-        /// byte back — the client never sees any HTTP response at all,
-        /// simulating a connection reset before any reply arrives (e.g. the
-        /// peer restarting mid-handshake), as distinct from an accepted
-        /// upgrade that drops before `hello`.
-        private let respondsToUpgrade: Bool
+        /// What an upgrade attempt gets back before the connection closes:
+        /// - `"101 Switching Protocols"` (default): completes the handshake
+        ///   with a genuine accept key, then drops before `hello` ever sends.
+        /// - Any other status line (e.g. `"503 Service Unavailable"`):
+        ///   sends that explicit, non-upgrade HTTP response — simulating an
+        ///   infrastructure-level rejection unrelated to the credential.
+        /// - `nil`: resets without sending a single byte back at all — the
+        ///   client never sees any HTTP response, simulating a reset before
+        ///   any reply arrives (e.g. the peer restarting mid-handshake).
+        private let upgradeResponseStatus: String?
 
-        init(respondsToUpgrade: Bool = true) {
-            self.respondsToUpgrade = respondsToUpgrade
+        init(upgradeResponseStatus: String? = "101 Switching Protocols") {
+            self.upgradeResponseStatus = upgradeResponseStatus
         }
 
         func start() throws {
@@ -41,7 +45,7 @@ struct RemotePeerConnectionTests {
                     self.port = assigned
                 }
             }
-            listener.newConnectionHandler = { [queue, respondsToUpgrade] conn in
+            listener.newConnectionHandler = { [queue, upgradeResponseStatus] conn in
                 conn.start(queue: queue)
                 var buffer = Data()
                 func receiveLoop() {
@@ -51,8 +55,13 @@ struct RemotePeerConnectionTests {
                             let headerText = String(data: buffer[..<range.lowerBound], encoding: .utf8) ?? ""
                             let lines = headerText.split(separator: "\r\n")
                             let isUpgrade = lines.contains { $0.lowercased().hasPrefix("upgrade:") && $0.lowercased().contains("websocket") }
-                            if isUpgrade, !respondsToUpgrade {
+                            if isUpgrade, upgradeResponseStatus == nil {
                                 conn.cancel()   // reset without sending anything back at all
+                            } else if isUpgrade, let status = upgradeResponseStatus, !status.hasPrefix("101") {
+                                let response = "HTTP/1.1 \(status)\r\nConnection: close\r\n\r\n"
+                                conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+                                    conn.cancel()
+                                })
                             } else if isUpgrade {
                                 let key = lines
                                     .first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
@@ -218,7 +227,28 @@ struct RemotePeerConnectionTests {
     // normally right after must not turn this into the terminal state a
     // genuine rejection produces.
     @Test func aConnectionResetBeforeAnyResponseStaysRetryable() async throws {
-        let server = HandshakeThenDropServer(respondsToUpgrade: false)
+        let server = HandshakeThenDropServer(upgradeResponseStatus: nil)
+        try server.start()
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        let origin = "http://127.0.0.1:\(port)"
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: "t", config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .offline }
+        #expect(!events.states.contains(.unauthorized))
+    }
+
+    // A reverse proxy or load balancer returning 502/503 for the upgrade —
+    // while /health still reaches the expected, federation-enabled instance
+    // through a different path — has nothing to say about the credential
+    // either. Only a confirmed 401 is actual evidence of a rejection.
+    @Test func aNonAuthenticationHTTPRejectionStaysRetryable() async throws {
+        let server = HandshakeThenDropServer(upgradeResponseStatus: "503 Service Unavailable")
         try server.start()
         defer { server.stop() }
         for _ in 0..<50 where server.port == nil {
