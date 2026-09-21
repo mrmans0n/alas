@@ -271,6 +271,7 @@ private func makeLiveScrollHost(session: ACPSession) -> ACPTranscriptScroller {
         policy: nil,
         scopeKey: "scope",
         onUserInputResponse: { _, _ in },
+        onPlanResponse: { _, _ in },
         onOpenElicitationURL: { _ in true },
         onDismissElicitationURLWait: { _ in },
         onQueueEdit: { _ in },

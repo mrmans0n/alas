@@ -258,6 +258,14 @@ final class ACPSessionManager: ObservableObject {
         elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
     }
 
+    func respondToPlan(
+        for id: ACPSession.ID,
+        requestId: JSONRPCID,
+        _ response: ACPCursorPlanResponse
+    ) {
+        elicitationCoordinators[id]?.respondToPlan(id: requestId, response: response)
+    }
+
     func respondToUserInput(
         for id: ACPSession.ID,
         token: UUID,
@@ -3511,6 +3519,10 @@ extension ACPSessionManager {
             },
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onPlanRejected: { [weak self, weak session] reason in
+                guard let self, let session else { return }
+                self.persistComposerDraft(.init(segments: [.text(reason)]), for: session)
             }
         )
         elicitationCoordinators[sessionId] = elicitationCoordinator

@@ -368,6 +368,88 @@ struct ACPUserInputPrompt: View {
     }
 }
 
+struct ACPPlanApprovalPrompt: View {
+    let plan: ACPCursorCreatePlanParams
+    let onRespond: (ACPCursorPlanResponse) -> Void
+    @Environment(\.theme) private var theme
+    @State private var rejectionReason = ""
+    @FocusState private var isRejectionReasonFocused: Bool
+
+    private var checklistItems: [ACPMessage.PlanItem] {
+        plan.todos.map { .init(content: $0.content, status: $0.status) }
+    }
+
+    private var trimmedRejectionReason: String {
+        rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            VStack(alignment: .leading, spacing: 12) {
+                if !plan.overview.isEmpty {
+                    Text(plan.overview)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(theme.color("fg"))
+                }
+                ACPMarkdownText(raw: plan.plan, typography: .default)
+                if !checklistItems.isEmpty {
+                    ACPPlanChecklist(items: checklistItems)
+                        .clipShape(.rect(cornerRadius: 6))
+                }
+            }
+            .padding(12)
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Reason for rejection", text: $rejectionReason)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg"))
+                    .alasFieldChrome(theme: theme)
+                    .focused($isRejectionReasonFocused)
+                HStack(spacing: 8) {
+                    Button("Reject") {
+                        onRespond(.init(outcome: .rejected(reason: trimmedRejectionReason)))
+                    }
+                    .disabled(trimmedRejectionReason.isEmpty)
+                    Spacer()
+                    Button("Accept") {
+                        onRespond(.init(outcome: .accepted(planUri: "alas://plans/\(plan.toolCallId)")))
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(12)
+            .background(theme.color("bg-0").opacity(0.45))
+        }
+        .background(theme.color("bg-1").opacity(0.96))
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
+        )
+        .defaultFocus($isRejectionReasonFocused, false)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checklist")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 18, height: 18)
+            Text(plan.name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.color("accent"))
+            Spacer(minLength: 8)
+            Text("Plan approval")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(theme.color("fg-muted"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(theme.color("accent").opacity(0.08))
+    }
+}
+
 struct ACPURLElicitationWaitView: View {
     let wait: ACPURLElicitationWait
     let onOpenAgain: (URL) -> Void

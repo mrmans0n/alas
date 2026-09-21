@@ -11,6 +11,7 @@ struct ACPMessageList: View {
     let trustedImageRoot: URL?
     let scopeKey: String
     let onUserInputResponse: (UUID, ACPUserInputAction) -> Void
+    let onPlanResponse: (JSONRPCID, ACPCursorPlanResponse) -> Void
     let onOpenElicitationURL: (UUID) async -> Bool
     let onDismissElicitationURLWait: (String) -> Void
     /// Callbacks invoked by the pending bubbles + header. The host wires
@@ -71,6 +72,7 @@ struct ACPMessageList: View {
                 policy: policy,
                 scopeKey: scopeKey,
                 onUserInputResponse: onUserInputResponse,
+                onPlanResponse: onPlanResponse,
                 onOpenElicitationURL: onOpenElicitationURL,
                 onDismissElicitationURLWait: onDismissElicitationURLWait,
                 onQueueEdit: onQueueEdit,

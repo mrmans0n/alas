@@ -26,6 +26,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let policy: ACPPermissionPolicy?
     let scopeKey: String
     let onUserInputResponse: (UUID, ACPUserInputAction) -> Void
+    let onPlanResponse: (JSONRPCID, ACPCursorPlanResponse) -> Void
     let onOpenElicitationURL: (UUID) async -> Bool
     let onDismissElicitationURLWait: (String) -> Void
     let onQueueEdit: (QueuedPrompt) -> Void
@@ -883,6 +884,21 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: host.scopeKey)
                         }
                     }
+                ))
+            }
+
+            if let pendingPlan = transcript.pendingPlan {
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__pending_plan_\(pendingPlan.id)",
+                    equalityToken: token(pendingPlan, host: host),
+                    build: {
+                        wrapRow(host: host) {
+                            ACPPlanApprovalPrompt(plan: pendingPlan.params) { response in
+                                host.onPlanResponse(pendingPlan.id, response)
+                            }
+                        }
+                    },
+                    keepsMountedOffscreen: true
                 ))
             }
 

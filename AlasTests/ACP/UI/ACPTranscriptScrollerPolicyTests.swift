@@ -31,6 +31,7 @@ private func makeHost(
         policy: nil,
         scopeKey: "scope",
         onUserInputResponse: { _, _ in },
+        onPlanResponse: { _, _ in },
         onOpenElicitationURL: { _ in true },
         onDismissElicitationURLWait: { _ in },
         onQueueEdit: { _ in },
@@ -182,14 +183,10 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(ids == expected)
     }
 
-    /// Regression test for the P2 finding (codex round 4): `ACPUserInputPrompt`
-    /// holds live `@State`/`@FocusState` form data that a fresh
-    /// `NSHostingView` would silently discard, so its spec must opt out of
-    /// the reconciler's ordinary "unmount when off-band" policy. Ordinary
-    /// synthetic rows (the streaming caret, a queued bubble — neither holds
-    /// state whose loss is user-visible) and message rows must NOT opt in,
-    /// or the exemption would stop being small and bounded.
-    @Test("only the pending user-input row opts into staying mounted off-band")
+    /// Regression test: the pending plan card holds a typed rejection reason,
+    /// just like a pending user-input prompt holds form state. Both must keep
+    /// their hosting views while scrolled outside the mount band.
+    @Test("pending input and plan rows stay mounted off-band")
     func onlyPendingUserInputKeepsMountedOffscreen() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.queue = [QueuedPrompt(blocks: [.text("queued")], status: .pending)]
@@ -212,17 +209,33 @@ struct ACPTranscriptScrollerRowSpecsTests {
                 mode: .form
             ),
         ]
+        host.transcript.pendingPlan = .init(
+            id: .string("plan-1"),
+            params: .init(
+                toolCallId: "plan-call",
+                name: "Fix ACP",
+                overview: "",
+                plan: "# Plan",
+                todos: [],
+                isProject: false,
+                phases: []
+            )
+        )
 
         let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
         let byId = Dictionary(uniqueKeysWithValues: specs.map { ($0.id, $0) })
 
-        let pendingInputId = specs.map(\.id).first { $0.hasPrefix("__pending_user_input_") }
-        #expect(pendingInputId != nil)
-        #expect(byId[pendingInputId!]?.keepsMountedOffscreen == true)
+        let keptIds = specs.map(\.id).filter {
+            $0.hasPrefix("__pending_user_input_") || $0.hasPrefix("__pending_plan_")
+        }
+        #expect(keptIds.count == 2)
+        for id in keptIds {
+            #expect(byId[id]?.keepsMountedOffscreen == true)
+        }
 
         // Every other row — message rows and the other synthetic rows —
         // stays with the default (unmount when off-band).
-        for id in specs.map(\.id) where id != pendingInputId {
+        for id in specs.map(\.id) where !keptIds.contains(id) {
             #expect(byId[id]?.keepsMountedOffscreen == false, "\(id) unexpectedly opted into keepsMountedOffscreen")
         }
     }
@@ -672,6 +685,7 @@ struct ACPTranscriptScrollerForkDividerTokenTests {
             policy: nil,
             scopeKey: "scope",
             onUserInputResponse: { _, _ in },
+            onPlanResponse: { _, _ in },
             onOpenElicitationURL: { _ in true },
             onDismissElicitationURLWait: { _ in },
             onQueueEdit: { _ in },

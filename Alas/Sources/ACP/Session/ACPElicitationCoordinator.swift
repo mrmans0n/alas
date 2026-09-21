@@ -9,11 +9,15 @@ final class ACPElicitationCoordinator {
     private let navigateURL: (URL) -> Void
     private let onInputAwaiting: (ACPSession, ACPUserInputRequest) -> Void
     private let onInputResolved: () -> Void
+    private let onPlanRejected: (String) -> Void
     private var questionsTask: Task<Void, Never>?
+    private var plansTask: Task<Void, Never>?
     private var elicitationsTask: Task<Void, Never>?
     private var completionsTask: Task<Void, Never>?
     private var pendingByToken: [UUID: ACPUserInputRequest] = [:]
     private var pendingInputPreviousStreamingState: ACPSession.StreamingState?
+    private var pendingPlans: [ACPCursorPlanRequest] = []
+    private var pendingPlanPreviousStreamingState: ACPSession.StreamingState?
     private var notifiedRequestIds: Set<JSONRPCID> = []
     private var didStop = false
 
@@ -35,7 +39,8 @@ final class ACPElicitationCoordinator {
         },
         navigateURL: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
-        onInputResolved: @escaping () -> Void = {}
+        onInputResolved: @escaping () -> Void = {},
+        onPlanRejected: @escaping (String) -> Void = { _ in }
     ) {
         self.session = session
         self.client = client
@@ -43,15 +48,23 @@ final class ACPElicitationCoordinator {
         self.navigateURL = navigateURL
         self.onInputAwaiting = onInputAwaiting
         self.onInputResolved = onInputResolved
+        self.onPlanRejected = onPlanRejected
     }
 
     func start() {
-        guard questionsTask == nil, elicitationsTask == nil else { return }
+        guard questionsTask == nil, plansTask == nil, elicitationsTask == nil else { return }
         questionsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await request in client.questionRequests {
                 enqueue(.cursor(request))
             }
+        }
+        plansTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await request in client.planRequests {
+                enqueuePlan(request)
+            }
+            if !Task.isCancelled { cancelPlans() }
         }
         elicitationsTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -75,8 +88,10 @@ final class ACPElicitationCoordinator {
         didStop = true
         questionsTask?.cancel()
         elicitationsTask?.cancel()
+        plansTask?.cancel()
         completionsTask?.cancel()
         cancelAll()
+        cancelPlans()
         session.transcript.urlElicitationWaits.removeAll()
     }
 
@@ -129,6 +144,22 @@ final class ACPElicitationCoordinator {
         respond(to: request.id, action: action)
     }
 
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        guard session.transcript.pendingPlan?.id == id,
+              let request = pendingPlans.first,
+              request.id == id
+        else { return }
+
+        pendingPlans.removeFirst()
+        session.transcript.pendingPlan = nil
+        client.respondToPlan(id: id, response: response)
+        if case .rejected(let reason) = response.outcome {
+            onPlanRejected(reason)
+        }
+        presentNextPlan()
+        restoreStreamingStateIfResolved()
+    }
+
     @discardableResult
     func openURL(for token: UUID) async -> Bool {
         guard let request = pendingByToken[token],
@@ -155,6 +186,7 @@ final class ACPElicitationCoordinator {
 
     func cancelPendingInputs() {
         cancelAll()
+        cancelPlans()
     }
 
     private func handleElicitation(_ request: ACPElicitationRequest) {
@@ -233,7 +265,40 @@ final class ACPElicitationCoordinator {
             }.first
         }
         restoreStreamingStateIfResolved()
+        presentNextPlan()
         return request
+    }
+
+    private func enqueuePlan(_ request: ACPCursorPlanRequest) {
+        guard !didStop else {
+            client.respondToPlan(id: request.id, response: .init(outcome: .cancelled))
+            return
+        }
+        pendingPlans.append(request)
+        presentNextPlan()
+    }
+
+    private func presentNextPlan() {
+        guard session.transcript.pendingPlan == nil,
+              pendingByToken.isEmpty,
+              let request = pendingPlans.first
+        else { return }
+
+        session.transcript.pendingPlan = .init(id: request.id, params: request.params)
+        if session.transcript.streamingState == .idle {
+            pendingPlanPreviousStreamingState = .idle
+            session.transcript.streamingState = .awaitingInput
+        }
+    }
+
+    private func cancelPlans() {
+        let pending = pendingPlans
+        pendingPlans.removeAll()
+        session.transcript.pendingPlan = nil
+        restoreStreamingStateIfResolved()
+        for request in pending {
+            client.respondToPlan(id: request.id, response: .init(outcome: .cancelled))
+        }
     }
 
     private func cancelAll() {
@@ -254,11 +319,14 @@ final class ACPElicitationCoordinator {
     }
 
     private func restoreStreamingStateIfResolved() {
-        guard pendingByToken.isEmpty else { return }
+        guard pendingByToken.isEmpty, pendingPlans.isEmpty else { return }
         if session.transcript.streamingState == .awaitingInput {
-            session.transcript.streamingState = pendingInputPreviousStreamingState ?? .idle
+            session.transcript.streamingState = pendingInputPreviousStreamingState
+                ?? pendingPlanPreviousStreamingState
+                ?? .idle
         }
         pendingInputPreviousStreamingState = nil
+        pendingPlanPreviousStreamingState = nil
     }
 
     private func cancel(_ request: ACPUserInputRequest) {

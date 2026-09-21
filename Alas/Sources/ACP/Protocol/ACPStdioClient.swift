@@ -5,6 +5,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
     private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
@@ -19,6 +20,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let planRequests: AsyncStream<ACPCursorPlanRequest>
     let elicitationRequests: AsyncStream<ACPElicitationRequest>
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
@@ -58,6 +60,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
 
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
+
         var elC: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { elC = $0 }
         self.elicitationsCont = elC
@@ -95,6 +101,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
+
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
 
         var elC: AsyncStream<ACPElicitationRequest>.Continuation!
         self.elicitationRequests = AsyncStream { elC = $0 }
@@ -279,8 +289,43 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 terminalsCont.yield(.release(id: id, params: p))
             }
+        case "cursor/create_plan":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorCreatePlanParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                plansCont.yield(.init(id: id, params: params))
+            } else if let id = head.id {
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/update_todos":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorUpdateTodosParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                respondToCursorUpdateTodos(id: id, params: params)
+            } else if let id = head.id {
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/task":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorTaskParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                respondToCursorTask(id: id, params: params)
+            } else if let id = head.id {
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/generate_image":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorGenerateImageParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                respondToCursorGenerateImage(id: id, params: params)
+            } else if let id = head.id {
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
         default:
-            break
+            if let id = head.id {
+                respondFile(
+                    id: id,
+                    result: .failure(.init(code: -32601, message: "Method not found", data: nil))
+                )
+            }
         }
     }
 
@@ -377,6 +422,15 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try self.respond(id: id, body: JSONEncoder().encode(response))
+            } catch {}
+        }
+    }
+
     func respondToElicitation(
         id: JSONRPCID,
         result: Result<ACPElicitationResponse, JSONRPCError>
@@ -391,6 +445,39 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             case .failure(let error):
                 self.respondFile(id: id, result: .failure(error))
             }
+        }
+    }
+
+    private func respondToCursorUpdateTodos(id: JSONRPCID, params: ACPCursorUpdateTodosParams) {
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorUpdateTodosResponse(outcome: .init(todos: params.todos))
+        )
+    }
+
+    private func respondToCursorTask(id: JSONRPCID, params: ACPCursorTaskParams) {
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorTaskResponse(
+                outcome: .init(agentId: params.agentId, durationMs: params.durationMs)
+            )
+        )
+    }
+
+    private func respondToCursorGenerateImage(id: JSONRPCID, params: ACPCursorGenerateImageParams) {
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorGenerateImageResponse(
+                outcome: .init(filePath: params.filePath, imageData: "")
+            )
+        )
+    }
+
+    private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
+        guard let body = try? JSONEncoder().encode(response) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            try? self.respond(id: id, body: body)
         }
     }
 

@@ -57,6 +57,7 @@ final class ACPTranscript: ObservableObject {
     @Published var streamingState: ACPSession.StreamingState = .idle
     @Published var pendingPermission: ACPSession.PendingPermission?
     @Published var pendingQuestion: ACPSession.PendingQuestion?
+    @Published var pendingPlan: ACPSession.PendingPlan?
     @Published var pendingUserInputs: [ACPUserInputRequest] = []
     @Published var urlElicitationWaits: [ACPURLElicitationWait] = []
     /// Items of the plan emitted for the current turn. Updated when the

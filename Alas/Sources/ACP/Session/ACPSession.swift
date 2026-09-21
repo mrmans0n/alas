@@ -316,6 +316,10 @@ final class ACPSession: ObservableObject, Identifiable {
         let id: JSONRPCID
         let params: ACPQuestionRequestParams
     }
+    struct PendingPlan: Identifiable, Equatable {
+        let id: JSONRPCID
+        let params: ACPCursorCreatePlanParams
+    }
 
     init(id: ID, agentId: String, worktreeId: String, title: String,
          owner: SessionOwnerID? = nil,

@@ -343,11 +343,69 @@ struct ACPElicitationCoordinatorTests {
         #expect(resolutionCount == 1)
     }
 
+    @Test("Cursor plans are accepted through the active approval prompt")
+    func acceptsCursorPlan() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan?.id == .string("plan-1") }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .accepted(planUri: "alas://plans/plan-call"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(client.planResponses[.string("plan-1")] == .init(
+            outcome: .accepted(planUri: "alas://plans/plan-call")
+        ))
+        #expect(session.transcript.pendingPlan == nil)
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("Cursor plan rejection preserves the supplied composer reason")
+    func rejectsCursorPlan() async throws {
+        var rejectionReason: String?
+        let (coordinator, session, client) = makeCoordinator(onPlanRejected: { rejectionReason = $0 })
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan != nil }
+
+        coordinator.respondToPlan(
+            id: .string("plan-1"),
+            response: .init(outcome: .rejected(reason: "Use the existing queue"))
+        )
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(rejectionReason == "Use the existing queue")
+        #expect(client.planResponses[.string("plan-1")] == .init(
+            outcome: .rejected(reason: "Use the existing queue")
+        ))
+    }
+
+    @Test("cancelling input cancels the pending Cursor plan")
+    func cancelsCursorPlan() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+
+        client.emitPlan(id: .string("plan-1"), params: planParams())
+        try await waitUntil { session.transcript.pendingPlan != nil }
+
+        coordinator.cancelPendingInputs()
+
+        try await waitUntil { client.planResponses[.string("plan-1")] != nil }
+        #expect(client.planResponses[.string("plan-1")] == .init(outcome: .cancelled))
+        #expect(session.transcript.pendingPlan == nil)
+    }
+
     private func makeCoordinator(
+        launchBrowser: @escaping (URL) async -> Bool = { _ in true },
+        navigateURL: @escaping (URL) -> Void = { _ in },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
-        launchBrowser: @escaping (URL) async -> Bool = { _ in true },
-        navigateURL: @escaping (URL) -> Void = { _ in }
+        onPlanRejected: @escaping (String) -> Void = { _ in }
     ) -> (ACPElicitationCoordinator, ACPSession, ACPMockClient) {
         let session = ACPSession(id: "local", agentId: "codex", worktreeId: "wt", title: "Test")
         let client = ACPMockClient()
@@ -358,10 +416,23 @@ struct ACPElicitationCoordinatorTests {
                 launchBrowser: launchBrowser,
                 navigateURL: navigateURL,
                 onInputAwaiting: onInputAwaiting,
-                onInputResolved: onInputResolved
+                onInputResolved: onInputResolved,
+                onPlanRejected: onPlanRejected
             ),
             session,
             client
+        )
+    }
+
+    private func planParams() -> ACPCursorCreatePlanParams {
+        .init(
+            toolCallId: "plan-call",
+            name: "Fix ACP",
+            overview: "Keep requests moving",
+            plan: "# Plan",
+            todos: [.init(id: "todo-1", content: "Implement", status: "pending")],
+            isProject: false,
+            phases: []
         )
     }
 
