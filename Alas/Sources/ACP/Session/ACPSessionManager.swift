@@ -3620,8 +3620,13 @@ extension ACPSessionManager {
             // any other agent that never supported this extension.
             if !initialized.advertisesAuthStatus, session.authStatus != nil {
                 session.authStatus = nil
+                // Fenced like the runner's own auth-status writes: a
+                // cross-window takeover landing while this attach is still
+                // in flight must not let this queued clear overwrite a
+                // newer status the replacement owner already persisted.
+                let fence = leaseFence(sessionId: sessionId)
                 enqueuePersistence { persistence in
-                    try await persistence.setAuthStatus(sessionId: sessionId, status: nil)
+                    _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
                 }
             } else if session.authStatus?.kind == ACPAuthStatus.Kind.none {
                 // `.none` through optional chaining is ambiguous between
