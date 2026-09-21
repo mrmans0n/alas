@@ -731,7 +731,19 @@ private struct DigitCell: View {
                 if !isFocused { text = formatted(newValue) }
             }
             .onChange(of: text) { _, newText in
-                let digits = String(newText.filter(\.isNumber).prefix(maxDigits))
+                // Any decimal digit is accepted and rewritten as ASCII.
+                // `Character.isNumber` alone would keep Arabic-Indic and
+                // full-width digits that `Int` then refuses to parse, which
+                // left the box showing a number the draft did not have.
+                // `wholeNumberValue` also answers for things like Roman
+                // numerals, so the range check is what keeps this to digits.
+                let digits = String(
+                    newText.compactMap { character -> Character? in
+                        guard let value = character.wholeNumberValue, (0...9).contains(value) else { return nil }
+                        return Character(String(value))
+                    }
+                    .prefix(maxDigits)
+                )
                 if digits != newText {
                     text = digits
                     return
