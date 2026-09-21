@@ -732,6 +732,40 @@ struct ACPSessionManagerTests {
         #expect(session.authStatus == nil)
     }
 
+    @Test("a failed pending authenticate call clears a stale preserved authStatus")
+    func failedPendingAuthenticateClearsStaleAuthStatus() async throws {
+        // Same reasoning as the session-creation auth-failure case, but for
+        // the earlier `connection.authenticate` early return: it also
+        // happens before the runner starts, so a fresh process's buffered
+        // initial notification is never consumed.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-failed-authenticate-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(client)
+        client.script(method: "authenticate") { _ in
+            throw JSONRPCError(code: -32000, message: "Internal error: auth_required", data: nil)
+        }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .account, label: "Stale, from before the agent lost auth")
+        session.pendingAuthMethodId = "claude-ai-login"
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+
+        guard case .needsAuth = session.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
+            return
+        }
+        #expect(session.authStatus == nil)
+    }
+
     @Test("authStatus survives an app restart and is restored before any attach")
     func authStatusSurvivesAppRestart() async throws {
         let url = FileManager.default.temporaryDirectory

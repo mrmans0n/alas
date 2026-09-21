@@ -3789,6 +3789,17 @@ extension ACPSessionManager {
                     let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
                     session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
                     session.agentState = .failed(reason)
+                    // Same reasoning as the session-creation auth-failure
+                    // branch below: this early return happens before the
+                    // runner ever starts, so a fresh process's buffered
+                    // initial notification is never consumed and can't
+                    // correct a preserved-but-now-stale signed-in status.
+                    if session.authStatus != nil, let fence = leaseFence(sessionId: sessionId) {
+                        session.authStatus = nil
+                        enqueuePersistence { persistence in
+                            _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
+                        }
+                    }
                     await connection.shutdown()
                     return
                 }
