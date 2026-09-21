@@ -717,7 +717,8 @@ final class ACPSessionRunner {
             flushStreamingPersist()
             preAppliedSessionInfoDirty = session.apply(
                 params.update,
-                tracksRetryStatus: !suppressingLoadReplay
+                tracksRetryStatus: !suppressingLoadReplay,
+                worktreeRoot: worktreePath
             )
             applySessionInfoTitle(info)
         } else {
@@ -767,7 +768,7 @@ final class ACPSessionRunner {
                     freezeStreamingPersistSnapshots()
                     streamingLeaseLost = true
                 }
-                let dirty = session.apply(params.update)
+                let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 if !streamingLeaseLost {
                     scheduleStreamingPersist(
                         dirty,
@@ -782,7 +783,7 @@ final class ACPSessionRunner {
                 } else {
                     hadConfigBackedModel = false
                 }
-                let dirty = session.apply(params.update)
+                let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
                 let hasConfigBackedModel: Bool
                 if case .configOption = session.chipState.models?.source {
@@ -2320,15 +2321,24 @@ extension ACPSessionRunner {
                 guard await MainActor.run(body: { self.activePromptID == promptID }) else {
                     throw CancellationError()
                 }
-                let promptAcknowledgement = try await self.connection.prompt(
+                let promptOutcome = try await self.connection.prompt(
                     sessionId: remoteId,
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil
                 )
+                let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // A cancelled/superseded prompt's response can still
+                    // arrive after a successor has started or finished.
+                    // Its tokens are real spend, so always fold them into
+                    // the session total, but only overwrite "last turn"
+                    // when this response still belongs to the active
+                    // prompt — otherwise it would show stale usage as
+                    // current, or clear a newer prompt's just-recorded one.
+                    self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
                     let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
@@ -2465,10 +2475,14 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
+                let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
                 await MainActor.run {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
+                    // See the matching comment in sendNow: always accumulate
+                    // into the session total, only overwrite "last turn"
+                    // when this response still belongs to the active prompt.
+                    self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
                     if isActivePrompt {
                         self.activePromptID = nil
                         let outputBoundaryReady = self.deferCompletedOutputBoundaryUntilUpdatesDrain()

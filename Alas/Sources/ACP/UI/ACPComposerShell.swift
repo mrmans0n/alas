@@ -361,7 +361,9 @@ struct ACPComposer: View {
                 hint
                 Spacer()
                 ACPContextUsageButton(usage: session.contextUsage,
-                                      modelName: session.currentModelDisplayName)
+                                      modelName: session.currentModelDisplayName,
+                                      lastTurnQuota: session.lastTurnQuota,
+                                      sessionQuotaTotal: session.sessionQuotaTotal)
                 if dictation.state != .unavailable {
                     micButton
                 }
@@ -752,10 +754,15 @@ struct ACPComposer: View {
     // MARK: - Chip builders driven by ACPChipState
 
     private func modeChip(_ spec: ChipSpec) -> some View {
-        chip(spec: spec,
+        let currentKind = spec.options.first(where: { $0.id == spec.currentId })?.kind
+        return chip(spec: spec,
              label: chipLabel(prefix: "Mode", spec: spec),
              placeholder: "Mode",
-             accent: theme.color("accent"))
+             // `fullAccess` (bypassPermissions / agent-full-access) bypasses
+             // per-action approval, so the chip switches to the warning
+             // tint as a passive heads-up. Every other kind — including no
+             // kind at all — keeps the standard accent.
+             accent: currentKind == .fullAccess ? theme.color("warn") : theme.color("accent"))
     }
 
     private func thinkingChip(_ spec: ChipSpec) -> some View {
@@ -848,7 +855,9 @@ struct ACPComposer: View {
             placeholder: placeholder,
             accent: accent,
             items: spec.options.map {
-                ACPSelectChip.Item(id: $0.id, name: $0.name, description: $0.description)
+                ACPSelectChip.Item(
+                    id: $0.id, name: $0.name, description: $0.description,
+                    iconSystemName: $0.kind?.iconSystemName)
             },
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,

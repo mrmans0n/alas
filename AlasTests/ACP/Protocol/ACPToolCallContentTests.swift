@@ -31,18 +31,46 @@ struct ACPToolCallContentTests {
     func diffVariant() throws {
         let items = try decode("tool-call-content-diff")
         #expect(items.count == 2)
-        guard case .diff(let path, let old, let new) = items[0] else {
+        guard case .diff(let path, let old, let new, _, _) = items[0] else {
             Issue.record("expected .diff")
             return
         }
         #expect(path == "src/foo.swift")
         #expect(old == "let a = 1\n")
         #expect(new == "let a = 2\n")
-        guard case .diff(_, let old2, _) = items[1] else {
+        guard case .diff(_, let old2, _, _, _) = items[1] else {
             Issue.record("expected .diff")
             return
         }
         #expect(old2 == nil)
+    }
+
+    @Test("decodes AIR diffStats and kind on a diff block, falling back to nil when absent")
+    func diffStatsVariant() throws {
+        let items = try decode("tool-call-content-diff-stats")
+        #expect(items.count == 3)
+
+        guard case .diff(let path, _, _, let kind, let stats) = items[0] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(path == "src/foo.swift")
+        #expect(kind == "update")
+        #expect(stats == ACPDiffStats(added: 12, removed: 3))
+
+        guard case .diff(_, _, _, let kind2, let stats2) = items[1] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(kind2 == "add")
+        #expect(stats2 == nil)
+
+        guard case .diff(_, _, _, let kind3, let stats3) = items[2] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(kind3 == nil)
+        #expect(stats3 == nil)
     }
 
     @Test("decodes terminal variant")

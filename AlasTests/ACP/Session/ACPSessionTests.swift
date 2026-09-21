@@ -228,6 +228,87 @@ struct ACPSessionTests {
         #expect(session.activeNotice == nil)
     }
 
+    @Test("recordPromptQuota stores the last turn and accumulates a session total")
+    func recordPromptQuotaStoresLastTurnAndAccumulatesTotal() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let turn1 = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
+                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
+        let turn2 = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
+                totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0))])
+
+        session.recordPromptQuota(turn1)
+        #expect(session.lastTurnQuota == turn1)
+        #expect(session.sessionQuotaTotal == turn1)
+
+        session.recordPromptQuota(turn2)
+        #expect(session.lastTurnQuota == turn2)
+        #expect(session.sessionQuotaTotal?.tokenCount?.totalTokens == 140)
+        #expect(session.sessionQuotaTotal?.modelUsage.first?.tokenCount.totalTokens == 140)
+    }
+
+    @Test("recordPromptQuota with nil quota is a no-op")
+    func recordPromptQuotaWithNilIsNoOp() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.recordPromptQuota(nil)
+        #expect(session.lastTurnQuota == nil)
+        #expect(session.sessionQuotaTotal == nil)
+    }
+
+    @Test("recordPromptQuota clears lastTurnQuota when a later turn omits quota, but keeps the session total")
+    func recordPromptQuotaClearsLastTurnOnNilButKeepsTotal() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let turn1 = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
+                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
+
+        session.recordPromptQuota(turn1)
+        #expect(session.lastTurnQuota == turn1)
+
+        session.recordPromptQuota(nil)
+        #expect(session.lastTurnQuota == nil)
+        #expect(session.sessionQuotaTotal == turn1)
+    }
+
+    @Test("recordPromptQuota with updatesLastTurn false accumulates into the total without touching lastTurnQuota")
+    func recordPromptQuotaWithUpdatesLastTurnFalseSkipsLastTurn() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let active = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
+        session.recordPromptQuota(active)
+
+        // A stale, superseded prompt's response arrives late: its tokens
+        // still count toward the session total, but must not clobber the
+        // active prompt's lastTurnQuota (nor clear it, when nil).
+        let stale = ACPPromptQuota(
+            tokenCount: .init(totalTokens: 50, inputTokens: 40, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "m", tokenCount: .init(
+                totalTokens: 50, inputTokens: 40, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0))])
+        session.recordPromptQuota(stale, updatesLastTurn: false)
+
+        #expect(session.lastTurnQuota == active)
+        #expect(session.sessionQuotaTotal?.tokenCount?.totalTokens == 150)
+
+        session.recordPromptQuota(nil, updatesLastTurn: false)
+        #expect(session.lastTurnQuota == active)
+    }
+
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -934,6 +1015,124 @@ struct ACPSessionTests {
             }
         }
         #expect(ordered == ["agent:editing files", "agent:editing", "fileEdit"])
+    }
+
+    @Test("adapter diffStats on a completed tool call's diff block overwrite the matching file edit's counts")
+    func diffStatsCorrelateIntoFileEdit() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "x.swift", oldText: "a\n", newText: "a\nb\n",
+                kind: "update", diffStats: .init(added: 4, removed: 2))])))
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 4)
+        #expect(edit.removed == 2)
+    }
+
+    @Test("diffStats correlate when the diff block reports an absolute path and a worktree root is supplied")
+    func diffStatsCorrelateWithAbsolutePathAndWorktreeRoot() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // `appendAndPersistFileEdit` stores the worktree-relative path
+        // (ACPSessionRunner.swift ~450-456); the diff block's path can
+        // still arrive absolute.
+        session.appendFileEdit(.init(
+            path: "src/x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "/repo/src/x.swift", oldText: "a\n", newText: "a\nb\n",
+                kind: "update", diffStats: .init(added: 4, removed: 2))])),
+            worktreeRoot: "/repo")
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 4)
+        #expect(edit.removed == 2)
+    }
+
+    @Test("a diff block without diffStats leaves the file edit's heuristic counts unchanged")
+    func diffWithoutStatsLeavesFileEditUnchanged() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "x.swift", oldText: "a\n", newText: "a\nb\n",
+                kind: nil, diffStats: nil)])))
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 1)
+        #expect(edit.removed == 1)
+    }
+
+    @Test("diffStats for a path with no matching file edit is a no-op")
+    func diffStatsWithNoMatchingFileEditIsNoOp() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        let touched = session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Edit missing.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "missing.swift", oldText: "a\n", newText: "b\n",
+                kind: "update", diffStats: .init(added: 1, removed: 1))])))
+
+        #expect(touched == [0])
+        let hasFileEdit = session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        }
+        #expect(!hasFileEdit)
+    }
+
+    @Test("diffStats for a same-path but different-content diff does not clobber an unrelated earlier edit")
+    func diffStatsWithMismatchedContentIsNoOp() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // An earlier, unrelated edit to the same path (e.g. a prior turn).
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+
+        // A later diff for the same path, but with different before/after
+        // text — a preview-only diff or an edit that hasn't landed via
+        // fs/write_text_file must not overwrite the earlier, unrelated row.
+        _ = session.apply(.toolCall(.init(
+            toolCallId: "tc-2", title: "Preview x.swift", kind: "edit", status: "completed",
+            content: [.diff(
+                path: "x.swift", oldText: "z\n", newText: "z\nq\n",
+                kind: "update", diffStats: .init(added: 99, removed: 99))])))
+
+        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
+            if case .fileEdit = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a fileEdit message")
+            return
+        }
+        #expect(edit.added == 1)
+        #expect(edit.removed == 1)
     }
 
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
@@ -3306,7 +3505,7 @@ struct ACPSessionTests {
             content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
         session.apply(.toolCallUpdate(.init(
             toolCallId: "tc-2", status: "completed",
-            content: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n")],
+            content: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n", kind: nil, diffStats: nil)],
             rawOutput: nil)))
         #expect(session.transcript.messages.count == 1)
         if case .toolCall(let tc) = session.transcript.messages[0] {

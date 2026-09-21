@@ -27,6 +27,25 @@ struct ACPChipStateTests {
                         category: category, currentValue: .boolean(current))
     }
 
+    @Test("mode kind carries through normalize onto the Mode chip's items")
+    func modeKindCarriesThrough() {
+        let state = ACPChipState.normalize(
+            agentId: "claude",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [
+                ACPModeInfo(id: "plan", name: "Plan", kind: .plan),
+                ACPModeInfo(id: "bypassPermissions", name: "Full access", kind: .fullAccess),
+                ACPModeInfo(id: "legacy", name: "Legacy"),
+            ],
+            currentMode: "plan",
+            configOptions: [])
+        let items = state.mode?.options ?? []
+        #expect(items.first(where: { $0.id == "plan" })?.kind == .plan)
+        #expect(items.first(where: { $0.id == "bypassPermissions" })?.kind == .fullAccess)
+        #expect(items.first(where: { $0.id == "legacy" })?.kind == nil)
+    }
+
     @Test("claude: modes -> Mode chip, effort configOption -> Thinking chip")
     func claudeFullHouse() {
         let state = ACPChipState.normalize(

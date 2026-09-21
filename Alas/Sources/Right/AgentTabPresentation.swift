@@ -110,6 +110,15 @@ struct AgentSidebarRowView: View {
     @State private var isHovering = false
     @Environment(\.theme) private var theme
 
+    /// Whether `controls` has anything worth rendering beyond the
+    /// interrupt/etc. buttons already gated by `canControl` — mirrors
+    /// `ACPContextUsageButton.hasContent`'s quota half so a quota-only
+    /// adapter's usage still surfaces on a non-controllable (history) row.
+    private var hasQuotaData: Bool {
+        (row.lastTurnQuota?.hasDisplayableContent == true)
+            || (row.sessionQuotaTotal?.hasDisplayableContent == true)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Button { actions.onFocus(row.id) } label: {
@@ -137,7 +146,7 @@ struct AgentSidebarRowView: View {
                 planProgress(plan)
             }
 
-            if row.contextUsage != nil || canControl {
+            if row.contextUsage != nil || hasQuotaData || canControl {
                 controls
             }
 
@@ -336,7 +345,9 @@ struct AgentSidebarRowView: View {
 
     private var controls: some View {
         HStack(spacing: 7) {
-            ACPContextUsageButton(usage: row.contextUsage, modelName: row.model)
+            ACPContextUsageButton(
+                usage: row.contextUsage, modelName: row.model,
+                lastTurnQuota: row.lastTurnQuota, sessionQuotaTotal: row.sessionQuotaTotal)
             Spacer(minLength: 0)
             if let sessionID = row.sessionID, row.isLiveACP, canControl {
                 if row.state == .running || row.state == .awaitingInput || row.state == .permissionRequest {

@@ -32,6 +32,12 @@ struct AgentSidebarRollupTests {
         let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
         session.currentModel = "gpt-5"
         session.contextUsage = ACPUsageInfo(used: 45_000, size: 128_000, cost: nil)
+        session.recordPromptQuota(.init(
+            tokenCount: .init(totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
+                              cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0),
+            modelUsage: [.init(model: "gpt-5", tokenCount: .init(
+                totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
+                cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0))]))
         _ = session.apply(.plan([
             .init(content: "Ship sidebar", priority: nil, status: "completed"),
             .init(content: "Test isolation", priority: nil, status: "in_progress"),
@@ -46,6 +52,8 @@ struct AgentSidebarRollupTests {
         #expect(row.id == .acp("acp-a"))
         #expect(row.model == "GPT 5")
         #expect(row.contextUsage?.used == 45_000)
+        #expect(row.lastTurnQuota?.modelUsage.first?.model == "gpt-5")
+        #expect(row.sessionQuotaTotal?.tokenCount?.totalTokens == 40)
         #expect(row.plan == .init(completed: 1, total: 2, currentStep: "Test isolation"))
         #expect(row.host == "builder.example")
     }

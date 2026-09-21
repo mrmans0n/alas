@@ -35,6 +35,13 @@ struct ACPInitializeOutcome: Equatable {
     }
 }
 
+/// Result of `session/prompt`: the durable-consumption acknowledgement (see
+/// `ACPResponse`) plus the decoded `_meta.quota`, when the agent sent it.
+struct ACPPromptOutcome {
+    let acknowledgement: ACPDurableConsumptionAcknowledgement?
+    let quota: ACPPromptQuota?
+}
+
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
 /// methods for the messages we send.
 final class ACPConnection: @unchecked Sendable {
@@ -255,15 +262,16 @@ final class ACPConnection: @unchecked Sendable {
         blocks: [ACPContentBlock],
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true
-    ) async throws -> ACPDurableConsumptionAcknowledgement? {
+    ) async throws -> ACPPromptOutcome {
         let resp = try await client.send(ACPRequest(method: "session/prompt",
                                                     params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
                                                     brokerOperationKey: brokerOperationKey))
+        let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
         if acknowledgeDurableConsumption {
             resp.acknowledgeDurableConsumption()
-            return nil
+            return ACPPromptOutcome(acknowledgement: nil, quota: quota)
         }
-        return resp.durableConsumptionAcknowledgement
+        return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
     }
 
     func acknowledgeDurableSessionResponses() {
