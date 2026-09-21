@@ -171,6 +171,95 @@ struct ACPSubagentSessionTests {
         #expect(answer.value == "answer continues")
     }
 
+    @Test("replaying an already-complete row is a visual no-op")
+    func replayOfCompleteRowIsNoOp() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.restore(
+            messages: [.agent(id: UUID(), messageId: "m1", StreamingText("hello world"))],
+            createdAts: [Date()])
+
+        for chunk in ["hello", " world"] {
+            run.applyReplayed(.agentMessageChunk(.init(messageId: "m1", content: .text(chunk))))
+        }
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the single agent row")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("replay recovers a message that never reached storage")
+    func replayRecoversMissingMessage() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Nothing was hydrated — the row never made it to SQLite.
+        for chunk in ["hello", " world"] {
+            run.applyReplayed(.agentMessageChunk(.init(messageId: "m1", content: .text(chunk))))
+        }
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, "m1", let buffer) = run.messages[0] else {
+            Issue.record("expected a recovered agent row")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("replay recovers a lost tail without duplicating what was persisted")
+    func replayRecoversLostTailWithoutDuplication() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Only the first chunk made it to SQLite before the crash.
+        run.restore(
+            messages: [.agent(id: UUID(), messageId: "m1", StreamingText("hello "))],
+            createdAts: [Date()])
+
+        // The agent's own history is authoritative and resends the WHOLE
+        // message from scratch, not just the missing suffix.
+        for chunk in ["hello", " world"] {
+            run.applyReplayed(.agentMessageChunk(.init(messageId: "m1", content: .text(chunk))))
+        }
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the row to be rebuilt in place")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("a replayed tool call upserts an existing row instead of duplicating it")
+    func replayUpsertsExistingToolCall() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.restore(
+            messages: [.toolCall(.init(toolCallId: "t1", title: "Read", status: "completed"))],
+            createdAts: [Date()])
+
+        run.applyReplayed(.toolCall(.init(
+            toolCallId: "t1", title: "Read", kind: nil, status: "completed",
+            content: [.content(.text("file contents"))])))
+
+        #expect(run.messages.count == 1)
+        guard case .toolCall(let toolCall) = run.messages[0] else {
+            Issue.record("expected the tool call to be replaced in place")
+            return
+        }
+        #expect(toolCall.content == "file contents")
+    }
+
+    @Test("a replayed tool call recovers a row that never reached storage")
+    func replayRecoversMissingToolCall() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.applyReplayed(.toolCall(.init(toolCallId: "t1", title: "Read", kind: nil, status: "completed")))
+
+        #expect(run.messages.count == 1)
+        guard case .toolCall(let toolCall) = run.messages[0] else {
+            Issue.record("expected a recovered tool call")
+            return
+        }
+        #expect(toolCall.toolCallId == "t1")
+    }
+
     @Test("a child's session-level updates never touch the parent's chrome")
     func childStateUpdatesAreIgnored() {
         let session = makeSession()

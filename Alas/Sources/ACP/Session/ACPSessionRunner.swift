@@ -80,6 +80,23 @@ final class ACPSessionRunner {
     private var persistedMessageCount: Int
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
+    /// Outcome of the most recently COMPLETED write queued via
+    /// `persistIndices` or `persistSubagentIndices`, regardless of whether
+    /// that write carried a durable acknowledgement of its own.
+    ///
+    /// Consulted (and reset) by `acknowledgeAfterQueuedPersistence`'s
+    /// barrier. That barrier's own fence re-check only proves the writer
+    /// lease is STILL valid right now — it says nothing about whether an
+    /// earlier queued write (the synthetic spawn's row, typically, in the
+    /// SAME batch) actually succeeded on its own terms. A transient
+    /// failure unrelated to the lease (a SQLite `step` error, say) would
+    /// otherwise slip past the fence check alone, and the barrier would
+    /// acknowledge a row that was never stored. Set unconditionally inside
+    /// each write's own completion — not the caller-supplied one, which is
+    /// nil whenever that particular update carries no ack of its own (the
+    /// spawn half of an OpenCode-normalized batch, always) — so it
+    /// reflects every real write, acked or not.
+    private var lastQueuedPersistenceSucceeded = true
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
     private var stopped = false
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
@@ -774,17 +791,20 @@ final class ACPSessionRunner {
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
             }
         default:
-            guard !suppressingLoadReplay else {
-                // The child transcript was restored from SQLite at
-                // hydration; a `session/load` replay of its content would
-                // only duplicate rows. Only the lifecycle cases above
-                // carry state worth reconciling from a replay.
-                durableConsumptionAcknowledgement?()
-                return
-            }
-            let dirty = session.applySubagentUpdate(
-                params.update,
-                subagentSessionId: params.sessionId)
+            // The child transcript was restored from SQLite at hydration,
+            // so a `session/load` replay of its content is USUALLY a pure
+            // duplicate — but persistence is asynchronous, and a chunk the
+            // agent already sent (and therefore resends during replay) can
+            // be missing from SQLite if the app quit before its queued
+            // write landed. `applySubagentReplayedUpdate` resets a row on
+            // its first replayed touch and rebuilds it from what replay
+            // actually sends, so an already-complete row is unaffected and
+            // a partially- or fully-lost one is recovered.
+            let dirty = suppressingLoadReplay
+                ? session.applySubagentReplayedUpdate(
+                    params.update, subagentSessionId: params.sessionId)
+                : session.applySubagentUpdate(
+                    params.update, subagentSessionId: params.sessionId)
             if dirty.isEmpty {
                 acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
             } else {
@@ -818,6 +838,14 @@ final class ACPSessionRunner {
     /// still checks the fence against the live lease row before running it,
     /// so the round trip is a genuine, current answer rather than the
     /// cached `canWrite()` snapshot this method also uses as a fast bail.
+    ///
+    /// That alone still isn't the whole story: the fence only proves the
+    /// LEASE is fine, not that the preceding write itself succeeded — a
+    /// transient failure unrelated to the lease (a SQLite `step` error,
+    /// say) would pass this barrier's own fence check while the earlier
+    /// write stored nothing. So the completion also folds in
+    /// `lastQueuedPersistenceSucceeded`, which every real write updates
+    /// unconditionally regardless of whether IT carried a durable ack.
     private func acknowledgeAfterQueuedPersistence(
         _ acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
@@ -826,8 +854,17 @@ final class ACPSessionRunner {
         let fence = leaseFenceProvider()
         enqueuePersistence({ persistence in
             try await persistence.persistSubagentMessages([], fence: fence)
-        }, completion: { persisted in
-            if persisted == true {
+        }, completion: { [weak self] persisted in
+            guard let self else { return }
+            // Combine with the PRECEDING queued write's outcome (read
+            // before this line overwrites it) rather than just this
+            // barrier's own fence check: a batch's real write can fail for
+            // a reason unrelated to the lease, which this barrier's own
+            // empty write — valid fence, nothing to actually store — would
+            // not surface on its own.
+            let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+            self.lastQueuedPersistenceSucceeded = succeeded
+            if succeeded {
                 acknowledgement()
             }
         })
@@ -876,6 +913,7 @@ final class ACPSessionRunner {
             // is dropped instead of being replayed to the new writer.
             try await persistence.persistSubagentMessages(subagentRows, fence: fence)
         }, completion: { [weak self] persisted in
+            self?.lastQueuedPersistenceSucceeded = (persisted == true)
             guard persisted == true else {
                 completion?(false)
                 return
@@ -2787,6 +2825,7 @@ extension ACPSessionRunner {
                 try await persistence.persistMessages(messageRows, fence: fence)
             }, completion: { [weak self] persisted in
                 guard let self else { return }
+                self.lastQueuedPersistenceSucceeded = (persisted == true)
                 guard persisted == true else {
                     completion?(false)
                     return

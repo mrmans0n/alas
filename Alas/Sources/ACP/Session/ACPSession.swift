@@ -861,10 +861,12 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        for run in subagents.values { run.beginReplayReconciliation() }
     }
 
     func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        for run in subagents.values { run.endReplayReconciliation() }
     }
 
     private static func applyToolCallPayloadFields(
@@ -1556,22 +1558,53 @@ final class ACPSession: ObservableObject, Identifiable {
     ) -> Set<Int> {
         guard let run = subagents[subagentSessionId] else { return [] }
         let dirty = run.apply(update, at: timestamp)
-        // Terminal side effects are NOT part of building the card: an
-        // agent that streams a terminal through `_meta` (Codex's shape)
-        // feeds `terminalHost` from here, and the child's card reads that
-        // same host. Without this a child's terminal card would render an
-        // id and no output. Mirrors the parent's `.toolCall` /
-        // `.toolCallUpdate` handling, including only applying an update's
-        // metadata when it actually touched a row.
+        applySubagentToolCallMetadataSideEffects(update, dirty: dirty)
+        return dirty
+    }
+
+    /// Reconciles one child-scoped `session/update` received while
+    /// `session/load` replay is suppressed for the parent transcript.
+    ///
+    /// Unlike `applySubagentUpdate` (the live path), replayed content is
+    /// reconciled against whatever hydration already restored rather than
+    /// being dropped outright: child persistence is asynchronous, so a
+    /// chunk the agent already sent — and that the agent's own replay
+    /// therefore resends — can be missing from SQLite if the app quit
+    /// before its queued write landed. See `ACPSubagentRun.applyReplayed`
+    /// for how a row is reset once per identity and rebuilt from what
+    /// replay actually sends, recovering only what was genuinely lost.
+    @discardableResult
+    func applySubagentReplayedUpdate(
+        _ update: ACPSessionUpdate,
+        subagentSessionId: String,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        guard let run = subagents[subagentSessionId] else { return [] }
+        let dirty = run.applyReplayed(update, at: timestamp)
+        applySubagentToolCallMetadataSideEffects(update, dirty: dirty, replaying: true)
+        return dirty
+    }
+
+    /// Terminal side effects are NOT part of building either card: an
+    /// agent that streams a terminal through `_meta` (Codex's shape) feeds
+    /// `terminalHost` from here, and the child's card reads that same
+    /// host. Without this a child's terminal card would render an id and
+    /// no output. Mirrors the parent's `.toolCall` / `.toolCallUpdate`
+    /// handling, including only applying an update's metadata when it
+    /// actually touched a row.
+    private func applySubagentToolCallMetadataSideEffects(
+        _ update: ACPSessionUpdate,
+        dirty: Set<Int>,
+        replaying: Bool = false
+    ) {
         switch update {
         case .toolCall(let payload):
-            applyToolCallMetadata(payload.metadata)
+            applyToolCallMetadata(payload.metadata, replaying: replaying)
         case .toolCallUpdate(let update) where !dirty.isEmpty:
-            applyToolCallMetadata(update.metadata)
+            applyToolCallMetadata(update.metadata, replaying: replaying)
         default:
             break
         }
-        return dirty
     }
 
     func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {

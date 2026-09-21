@@ -146,6 +146,64 @@ struct ACPSubagentRoutingTests {
         #expect(runner.session.subagentRun("grandchild")?.state == .completed)
     }
 
+    @Test("session/load replay recovers a child chunk that never reached SQLite")
+    func replayRecoversUnpersistedChildContent() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        // Only the first chunk made it into memory (and, in the real
+        // failure this models, to SQLite) before the app quit.
+        runner.session.applySubagentUpdate(
+            .agentMessageChunk(.init(messageId: "m1", content: .text("hello "))),
+            subagentSessionId: "child-1")
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        // `session/load` resends the message from scratch, not just the
+        // missing suffix.
+        for chunk in ["hello", " world"] {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "child-1",
+                update: .agentMessageChunk(.init(messageId: "m1", content: .text(chunk)))))
+        }
+
+        let run = try #require(runner.session.subagentRun("child-1"))
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the row to be rebuilt from replay")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("a barrier ack is withheld when the preceding write failed for a non-lease reason")
+    func barrierWithholdsAckOnUnrelatedPriorFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the PARENT table so the spawn's own write throws instead
+        // of merely being rejected by the fence — a failure the barrier's
+        // own fence re-check alone cannot see, since the lease is fine.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // The trailing half of the SAME batch: a `running` state against a
+        // run that already starts `.running`, so `dirty` is empty and this
+        // reaches the barrier. Its OWN fence check succeeds (nothing about
+        // the lease changed), so only the carried-forward prior outcome
+        // can withhold the ack.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
     @Test("a replayed nested lifecycle update is reconciled, its content is not")
     func replayReconcilesNestedLifecycleOnly() async throws {
         let (runner, _, _) = try makeRunner()

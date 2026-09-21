@@ -30,6 +30,13 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private(set) var finishedAt: Date?
 
     private var createdAts: [Int] = []
+    /// Identities (message id / tool-call id) already reconciled once in
+    /// the CURRENT `session/load` replay window. See `applyReplayed`.
+    private var replayTouchedIdentities: Set<ReplayIdentity> = []
+    private enum ReplayIdentity: Hashable {
+        case text(StreamKind, String)
+        case user(String)
+    }
 
     init(
         subagentSessionId: String,
@@ -149,10 +156,8 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)),
                 at: timestamp)]
         case .toolCallUpdate(let update):
-            guard let index = messages.lastIndex(where: {
-                if case .toolCall(let tc) = $0 { return tc.toolCallId == update.toolCallId }
-                return false
-            }), case .toolCall(var tc) = messages[index] else { return [] }
+            guard let index = toolCallIndex(id: update.toolCallId),
+                  case .toolCall(var tc) = messages[index] else { return [] }
             ACPSession.applyToolCallUpdate(update, to: &tc, at: timestamp)
             messages[index] = .toolCall(tc)
             return [index]
@@ -175,6 +180,68 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             // notice banner.
             return []
         }
+    }
+
+    /// Reconciles one child-scoped `session/update` received while
+    /// `session/load` replay is suppressed.
+    ///
+    /// Persistence of child rows is NOT batched/debounced the way the
+    /// parent's streamed text is (see `ACPSessionRunner.applySubagentUpdate`),
+    /// but it is still asynchronous — a queued write can be in flight when
+    /// the app quits. `session/load` then replays the agent's own history,
+    /// which is authoritative and complete for every row it names. Simply
+    /// dropping that replay (the pre-existing behaviour) is right for the
+    /// common case — nothing was lost, the write landed — but silently
+    /// loses content in the crash-before-flush case.
+    ///
+    /// So the FIRST replayed touch of an existing row resets it (discarding
+    /// whatever hydration produced for that specific row only), then
+    /// reconciliation reuses the ordinary live-merge path to rebuild it
+    /// from what replay actually sends. A row that already matched ends up
+    /// identical; a row that lost content is recovered; a row hydration
+    /// never had at all (an entirely missing message) is created exactly
+    /// as the live path would. A SECOND replayed touch of the same
+    /// identity extends the just-rebuilt row rather than resetting again.
+    ///
+    /// Tool calls need no reset step: a `.toolCall` payload during replay
+    /// is upserted by id (replacing an existing row, creating a missing
+    /// one), which is naturally idempotent however many times the same id
+    /// is replayed, and `.toolCallUpdate` already looks its target up by id
+    /// at any position — the ordinary `apply(_:at:)` path suffices for both.
+    @discardableResult
+    func applyReplayed(_ update: ACPSessionUpdate, at timestamp: Date = Date()) -> Set<Int> {
+        switch update {
+        case .agentMessageChunk(let chunk):
+            resetTextRowOnFirstReplayTouch(kind: .agent, messageId: chunk.messageId)
+        case .agentThoughtChunk(let chunk):
+            resetTextRowOnFirstReplayTouch(kind: .thought, messageId: chunk.messageId)
+        case .userMessageChunk(let chunk):
+            resetUserRowOnFirstReplayTouch(messageId: chunk.messageId)
+        case .toolCall(let payload):
+            // Upsert by id rather than delegating to `apply(_:at:)`, which
+            // always APPENDS a `.toolCall` payload — correct live (an
+            // adapter announces a given id once), wrong on replay (the
+            // announcement itself is replayed, and appending would
+            // duplicate a row hydration already restored).
+            if let index = toolCallIndex(id: payload.toolCallId) {
+                messages[index] = .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp))
+                return [index]
+            }
+        default:
+            break
+        }
+        return apply(update, at: timestamp)
+    }
+
+    /// Called once per `session/load` replay window so an identity touched
+    /// in an EARLIER window (this run outliving more than one reattach)
+    /// doesn't suppress a reset it should get in this one.
+    func beginReplayReconciliation() {
+        replayTouchedIdentities.removeAll()
+    }
+
+    func endReplayReconciliation() {
+        replayTouchedIdentities.removeAll()
     }
 
     /// Restores a persisted child transcript. Replaces whatever is in
@@ -259,6 +326,47 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             return id == messageId ? index : nil
         }
         return nil
+    }
+
+    /// On the first replayed touch of `messageId`, blanks whatever row
+    /// already carries it — if any — so the normal live-merge path that
+    /// runs right after in `applyReplayed` rebuilds it purely from what
+    /// replay sends, rather than appending on top of a possibly-stale
+    /// hydrated value. A later touch of the same identity in this same
+    /// replay window is a no-op here, since the row is already mid-rebuild.
+    private func resetTextRowOnFirstReplayTouch(kind: StreamKind, messageId: String?) {
+        guard let messageId else { return }
+        guard replayTouchedIdentities.insert(.text(kind, messageId)).inserted else { return }
+        guard let index = trailingIndex(of: kind, messageId: messageId) else { return }
+        switch (kind, messages[index]) {
+        case (.agent, .agent(let id, _, _)):
+            messages[index] = .agent(id: id, messageId: messageId, StreamingText())
+        case (.thought, .thought(let id, _, _)):
+            messages[index] = .thought(id: id, messageId: messageId, StreamingText())
+        default:
+            break
+        }
+    }
+
+    /// Companion to `resetTextRowOnFirstReplayTouch` for the child's prompt
+    /// bubble.
+    private func resetUserRowOnFirstReplayTouch(messageId: String?) {
+        guard let messageId else { return }
+        guard replayTouchedIdentities.insert(.user(messageId)).inserted else { return }
+        guard let index = userIndex(messageId: messageId),
+              case .user(let id, _, _, _, let source) = messages[index]
+        else { return }
+        messages[index] = .user(id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
+    }
+
+    /// A tool-call row for `id`, at any position — unlike the merge lookups
+    /// above, a replayed (or updated) tool call must be found regardless of
+    /// what has been appended after it.
+    private func toolCallIndex(id: String) -> Int? {
+        messages.lastIndex {
+            if case .toolCall(let tc) = $0 { return tc.toolCallId == id }
+            return false
+        }
     }
 
     private func legacyTrailingIndex(of kind: StreamKind) -> Int? {
