@@ -272,6 +272,34 @@ struct RunSchedulePresentationTests {
         #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: withPrompt, agentName: "Claude") == "New worktree → Launch Claude with a prompt")
     }
 
+    /// Saving an unchanged trigger keeps the occurrence the scheduler
+    /// already holds, so the editor has to show that one. Recomputing from
+    /// now would tell an hourly schedule due in five minutes that it runs in
+    /// an hour, then contradict itself once the sheet closed.
+    @Test func editingAnUnchangedTriggerKeepsTheStoredNextFire() {
+        let stored = Date(timeIntervalSince1970: 1_800_000_300)
+        let computed = Date(timeIntervalSince1970: 1_800_003_600)
+        let trigger = RunScheduleTrigger.interval(seconds: 3_600)
+
+        // Editing a name or prompt leaves the trigger alone.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: trigger, draftTrigger: trigger,
+            storedNextFireAt: stored, computedNextFireAt: computed
+        ) == stored)
+
+        // Changing the trigger re-anchors, so the fresh one is right.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: trigger, draftTrigger: .interval(seconds: 7_200),
+            storedNextFireAt: stored, computedNextFireAt: computed
+        ) == computed)
+
+        // A new schedule has nothing stored to preserve.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: nil, draftTrigger: trigger,
+            storedNextFireAt: nil, computedNextFireAt: computed
+        ) == computed)
+    }
+
     /// A remote terminal runs `ssh` on this Mac, so the harness detector
     /// classifies `ssh` and never the agent inside the remote PTY. Readiness
     /// cannot be confirmed there, so the prompt is dropped at once rather

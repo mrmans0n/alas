@@ -289,7 +289,13 @@ struct RunScheduleEditorView: View {
     }
 
     private var nextFireLabel: String {
-        RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar)
+        let next = RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: schedule?.trigger,
+            draftTrigger: draft.trigger,
+            storedNextFireAt: schedule.map { state.runScheduler.state(for: $0.id).nextFireAt } ?? nil,
+            computedNextFireAt: draft.nextFireDate(now: now, calendar: calendar)
+        )
+        return RunSchedulePresentation.nextFirePreviewLabel(next, now: now, calendar: calendar)
     }
 
     // MARK: - Pickers

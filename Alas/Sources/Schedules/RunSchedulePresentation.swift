@@ -94,6 +94,23 @@ enum RunSchedulePresentation {
         return "Next: \(day), \(time.string(from: next))"
     }
 
+    /// Which next fire the editor should show.
+    ///
+    /// Saving an unchanged trigger keeps the occurrence the scheduler is
+    /// already holding, because `RunScheduler.update` only recomputes when
+    /// the trigger itself changed. Anchoring every edit at `now` would tell
+    /// an hourly schedule due in five minutes that it runs in an hour, then
+    /// contradict itself the moment the sheet closed.
+    static func editorNextFireDate(
+        existingTrigger: RunScheduleTrigger?,
+        draftTrigger: RunScheduleTrigger,
+        storedNextFireAt: Date?,
+        computedNextFireAt: Date?
+    ) -> Date? {
+        guard let existingTrigger, existingTrigger == draftTrigger else { return computedNextFireAt }
+        return storedNextFireAt
+    }
+
     /// Whether a scheduled prompt can be delivered to an agent on `host`.
     ///
     /// Only to agents on this Mac. A prompt is typed into the agent's

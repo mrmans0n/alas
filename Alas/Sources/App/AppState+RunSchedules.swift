@@ -515,7 +515,15 @@ extension AppState {
             return
         }
         guard sendsAutomatically else { return }
-        try? await Task.sleep(for: Self.scheduledPromptSubmitDelay)
+        // Cancellation here means the schedule was deleted or torn down
+        // between the prompt and its Enter. Submitting anyway would start
+        // the very work that was just called off, so the typed text is left
+        // sitting in the input instead.
+        do {
+            try await Task.sleep(for: Self.scheduledPromptSubmitDelay)
+        } catch {
+            return
+        }
         _ = typeIntoTerminal("\r", sessionID: sessionID)
     }
 
