@@ -682,6 +682,11 @@ final class ACPSessionRunner {
                 } else {
                     hasConfigBackedModel = false
                 }
+                let isEmptySubagentLifecycleUpdate: Bool
+                switch params.update {
+                case .subagentSpawned, .subagentStateUpdate: isEmptySubagentLifecycleUpdate = dirty.isEmpty
+                default: isEmptySubagentLifecycleUpdate = false
+                }
                 if case .sessionConfigOptionsUpdate = params.update,
                    hadConfigBackedModel || hasConfigBackedModel {
                     persistIndices(dirty)
@@ -690,6 +695,16 @@ final class ACPSessionRunner {
                             durableConsumptionAcknowledgement?()
                         }
                     }
+                } else if isEmptySubagentLifecycleUpdate {
+                    // A ROOT-addressed subagent lifecycle update — the
+                    // shape both OpenCode-normalized updates take — can be
+                    // the trailing half of a batch sharing one wire frame's
+                    // ack with an earlier update whose real write (the
+                    // synthetic spawn, typically) is still queued.
+                    // `persistIndices`' empty-indices fast path below acks
+                    // synchronously without waiting for that write or
+                    // re-checking the fence; this barrier does both.
+                    acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
                     persistIndices(
                         dirty,
@@ -781,23 +796,41 @@ final class ACPSessionRunner {
         }
     }
 
-    /// Acknowledges a durable update that wrote nothing itself, but only
-    /// once everything already queued has been written.
+    /// Acknowledges a durable subagent lifecycle update that wrote nothing
+    /// itself, but only once everything already queued has been written
+    /// AND the writer lease still checks out at that point.
     ///
-    /// One OpenCode notification normalizes to SEVERAL updates and the
-    /// acknowledgement rides on the last of them (see
-    /// `ACPOpenCodeChildUpdate.normalized`). Persistence operations are
-    /// serialized through `enqueuePersistence`, so an acknowledgement that
-    /// follows a real write is safely ordered — but a last update with
-    /// nothing to write would otherwise complete synchronously and ack
-    /// while an earlier update's row (the synthetic spawn, typically) is
-    /// still in flight. A crash in that window would lose a row the broker
-    /// has been told we consumed.
+    /// Both call sites are batch tails: a root-addressed spawn/state update
+    /// (OpenCode's `ACPOpenCodeChildUpdate.normalized` puts the ack on the
+    /// LAST of several updates sharing one wire frame) and a nested
+    /// lifecycle update reconciled during suppressed replay. In both cases
+    /// an earlier update's real write (the synthetic spawn row, typically)
+    /// can still be queued. Persistence operations are serialized through
+    /// `enqueuePersistence`, so waiting behind the queue orders this
+    /// correctly against that write — but ordering alone doesn't prove the
+    /// write succeeded: if a takeover invalidated the fence in that same
+    /// window, the earlier write stored nothing, and acknowledging anyway
+    /// would tell the broker we consumed a row that was never persisted.
+    ///
+    /// So this re-validates the SAME fence with an empty write of its own,
+    /// exactly like `persistSubagentIndices`' real writes do — an empty
+    /// array is a no-op for `upsertSubagentMessages`, but `withLeaseFence`
+    /// still checks the fence against the live lease row before running it,
+    /// so the round trip is a genuine, current answer rather than the
+    /// cached `canWrite()` snapshot this method also uses as a fast bail.
     private func acknowledgeAfterQueuedPersistence(
         _ acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         guard let acknowledgement else { return }
-        enqueuePersistence({ _ in }, completion: { _ in acknowledgement() })
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        enqueuePersistence({ persistence in
+            try await persistence.persistSubagentMessages([], fence: fence)
+        }, completion: { persisted in
+            if persisted == true {
+                acknowledgement()
+            }
+        })
     }
 
     /// Persists the named rows of a child transcript.

@@ -249,6 +249,53 @@ struct ACPSubagentRoutingTests {
         var value = false
     }
 
+    @Test("a no-op update rejected by the lease fence is not acknowledged either")
+    func rejectedNoOpUpdateIsNotAcknowledged() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-fence-noop-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: "s", instanceId: "ME", pid: Int64(getpid()), now: now)
+        let ourLease = try #require(try store.loadLease(sessionId: "s"))
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.remoteSessionId = "remote-parent"
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                .init(sessionId: "s", ownerInstance: "ME", token: ourLease.token)
+            })
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Ownership moves. A repeated, identical spawn changes nothing
+        // (`dirty` is empty), so it takes the barrier path rather than a
+        // real write — that path must still refuse to acknowledge once the
+        // fence it re-checks no longer matches the live lease.
+        try store.seizeLease(sessionId: "s", instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
     @Test("cancel is a no-op unless the child advertised it and is still running")
     func cancelRequiresCapabilityAndLiveChild() async throws {
         let (runner, _, _) = try makeRunner()
