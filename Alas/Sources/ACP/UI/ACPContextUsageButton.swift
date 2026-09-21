@@ -6,10 +6,10 @@ struct ACPContextUsageButton: View {
     let usage: ACPUsageInfo?
     let modelName: String?
     /// Per-model breakdown from the last `session/prompt` response's
-    /// `_meta.quota`, and the running total accumulated since this session
-    /// was last attached (not the full persisted session — see
-    /// `ACPSession.sessionQuotaTotal`). Both nil for agents that don't send
-    /// the extension — the popover just omits the section.
+    /// `_meta.quota`, and the running total for this in-memory session's
+    /// lifetime — not the full persisted session, and not reset by a
+    /// reconnect (see `ACPSession.sessionQuotaTotal`). Both nil for agents
+    /// that don't send the extension — the popover just omits the section.
     var lastTurnQuota: ACPPromptQuota? = nil
     var sessionQuotaTotal: ACPPromptQuota? = nil
 
@@ -85,10 +85,10 @@ struct ACPContextUsageButton: View {
                 quotaSection(title: "Last turn", quota: lastTurnQuota)
             }
             if let sessionQuotaTotal, sessionQuotaTotal.hasDisplayableContent {
-                // Accumulated since this session was last attached, not
-                // necessarily the full persisted session — see
-                // `ACPSession.sessionQuotaTotal`.
-                quotaSection(title: "Since reconnect", quota: sessionQuotaTotal)
+                // Cumulative for this in-memory session's lifetime, not
+                // necessarily the full persisted session, and *not* reset
+                // by a reconnect — see `ACPSession.sessionQuotaTotal`.
+                quotaSection(title: "Cumulative", quota: sessionQuotaTotal)
             }
         }
         .padding(14)

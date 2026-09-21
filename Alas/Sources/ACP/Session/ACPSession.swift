@@ -74,14 +74,18 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
     /// only: re-derived on each prompt response, never persisted.
     @Published private(set) var lastTurnQuota: ACPPromptQuota?
-    /// Running sum of every turn's `lastTurnQuota` since this session was
-    /// last attached, per model. `_meta.quota` reports each turn's own
-    /// usage rather than a running total, so this is accumulated
+    /// Running sum of every turn's `lastTurnQuota` for the lifetime of this
+    /// in-memory `ACPSession` object, per model. `_meta.quota` reports each
+    /// turn's own usage rather than a running total, so this is accumulated
     /// client-side — see `ACPPromptQuota.accumulating(_:with:)`. Runtime
-    /// only, like `lastTurnQuota`: a restored session starts this at nil
-    /// and rebuilds it only from turns prompted after reattaching, not from
-    /// the full persisted transcript — the UI labels it accordingly rather
-    /// than claiming the whole session's usage.
+    /// only, like `lastTurnQuota`, and *not* reset on reconnect —
+    /// `ACPSessionManager.reattach` reuses the existing `ACPSession`
+    /// instance, so this keeps growing across a flaky connection's retries.
+    /// It resets only when a fresh `ACPSession` is constructed (a true app
+    /// restart, or a session reloaded from persistence after eviction), so
+    /// it starts at nil and never reconstructs from the persisted
+    /// transcript — the UI labels it accordingly rather than claiming the
+    /// whole session's usage.
     @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
     @Published var currentGoal: ACPGoalState?
