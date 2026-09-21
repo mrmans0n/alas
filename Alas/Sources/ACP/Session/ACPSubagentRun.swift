@@ -238,7 +238,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             resetTextRowOnFirstReplayTouch(kind: .thought, messageId: chunk.messageId)
         case .userMessageChunk(let chunk):
-            resetUserRowOnFirstReplayTouch(messageId: chunk.messageId)
+            return applyReplayedUserChunk(chunk, at: timestamp)
         case .toolCall(let payload):
             // Upsert by id rather than delegating to `apply(_:at:)`, which
             // always APPENDS a `.toolCall` payload — correct live (an
@@ -418,13 +418,53 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
 
     /// Companion to `resetTextRowOnFirstReplayTouch` for the child's prompt
     /// bubble.
-    private func resetUserRowOnFirstReplayTouch(messageId: String?) {
-        guard let messageId else { return }
-        guard replayTouchedIdentities.insert(.user(messageId)).inserted else { return }
-        guard let index = userIndex(messageId: messageId),
-              case .user(let id, _, _, _, let source) = messages[index]
-        else { return }
-        messages[index] = .user(id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
+    /// Replay of a child prompt. NOT delegated to `apply(_:at:)` — that
+    /// path's `userIndex` is deliberately bounded to the newest `.user` row
+    /// (right for LIVE input, where a later prompt reusing an id must not
+    /// reopen an older bubble), but `session/load` replays EVERY prompt
+    /// chronologically, including ones that are no longer the newest.
+    /// Reconciling those needs a lookup with no such bound.
+    private func applyReplayedUserChunk(_ chunk: ACPTextChunk, at timestamp: Date) -> Set<Int> {
+        let text = Self.text(of: chunk.content)
+        let attachments = ACPSessionRunner.attachments(of: [chunk.content])
+        guard !text.isEmpty || !attachments.isEmpty else { return [] }
+        guard let messageId = chunk.messageId else {
+            // No identity to reconcile against; behaves like the live path.
+            return apply(.userMessageChunk(chunk), at: timestamp)
+        }
+        guard let index = anyUserIndex(messageId: messageId) else {
+            // Genuinely missing — recover it in full, same as any other
+            // replay-recovered row.
+            return [append(.user(
+                id: UUID(), messageId: messageId, text: text, attachments: attachments), at: timestamp)]
+        }
+        if replayTouchedIdentities.insert(.user(messageId)).inserted,
+           case .user(let id, _, _, _, let source) = messages[index] {
+            // First replayed touch: reset so the accumulation below rebuilds
+            // from what replay actually sends rather than appending onto a
+            // possibly-stale hydrated value.
+            messages[index] = .user(id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
+        }
+        guard case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] else {
+            return []
+        }
+        messages[index] = .user(
+            id: id,
+            messageId: messageId,
+            text: existingText + text,
+            attachments: existingAttachments + attachments.filter { !existingAttachments.contains($0) },
+            delegatedSource: source)
+        return [index]
+    }
+
+    /// A user-prompt row for `messageId`, at ANY position — unlike
+    /// `userIndex` above, replay reconciliation must find and extend a
+    /// HISTORICAL prompt, not only the current/open one.
+    private func anyUserIndex(messageId: String) -> Int? {
+        for index in stride(from: messages.count - 1, through: 0, by: -1) {
+            if case .user(_, let id, _, _, _) = messages[index], id == messageId { return index }
+        }
+        return nil
     }
 
     /// A tool-call row for `id`, at any position — unlike the merge lookups

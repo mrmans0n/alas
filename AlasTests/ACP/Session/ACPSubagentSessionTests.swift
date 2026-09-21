@@ -167,6 +167,33 @@ struct ACPSubagentSessionTests {
         #expect(b.value == "b1")
     }
 
+    @Test("replay reconciles a historical prompt, not only the newest one")
+    func replayReconcilesHistoricalPrompt() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Two hydrated prompts — "p1" is no longer the newest `.user` row.
+        run.restore(
+            messages: [
+                .user(id: UUID(), messageId: "p1", text: "first", attachments: []),
+                .agent(id: UUID(), StreamingText("reply")),
+                .user(id: UUID(), messageId: "p2", text: "second", attachments: [])
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        // `session/load` replays both prompts chronologically, oldest
+        // first — the SAME resend semantics as any other row.
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first"))))
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p2", content: .text("second"))))
+
+        #expect(run.messages.count == 3)
+        guard case .user(_, _, let firstText, _, _) = run.messages[0],
+              case .user(_, _, let secondText, _, _) = run.messages[2] else {
+            Issue.record("expected both prompts to be reconciled in place")
+            return
+        }
+        #expect(firstText == "first")
+        #expect(secondText == "second")
+    }
+
     @Test("a child prompt's blocks reassemble into one bubble with its attachments")
     func childPromptBlocksReassemble() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")

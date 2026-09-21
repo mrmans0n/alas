@@ -410,6 +410,40 @@ struct ACPSubagentRoutingTests {
         var value = false
     }
 
+    @Test("a transient failure does not permanently block later, unrelated acknowledgements")
+    func transientFailureDoesNotPoisonFutureBatches() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A one-off, TERMINAL failure (it carries its own ack — a solo
+        // spawn, not paired with a trailing update): break the table, take
+        // one write through it, restore the table. This write's own ack
+        // decision is fully made and communicated right here — nothing
+        // about it should still be "pending" for the future.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        let firstAcknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "stale-failure")),
+            durableConsumptionAcknowledgement: { firstAcknowledged.value = true }))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+        #expect(firstAcknowledged.value == false)
+
+        // A LATER, fully independent batch: its own spawn write succeeds
+        // outright, so its ack must fire regardless of the earlier,
+        // unrelated failure — before the fix, the stuck flag would have
+        // silently withheld this one too, forever, for the rest of the
+        // runner's lifetime.
+        let secondAcknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "unrelated")),
+            durableConsumptionAcknowledgement: { secondAcknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(secondAcknowledged.value == true)
+    }
+
     @Test("a spawn's failure is not erased by the child write that follows it")
     func spawnFailureSurvivesSuccessfulChildWrite() async throws {
         let (runner, store, _) = try makeRunner()

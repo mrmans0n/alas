@@ -90,21 +90,32 @@ final class ACPSessionRunner {
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
-    /// `persistIndices` or `persistSubagentIndices`, regardless of whether
-    /// that write carried a durable acknowledgement of its own.
+    /// `persistIndices` or `persistSubagentIndices` that has not yet
+    /// reached an acknowledgement boundary, regardless of whether that
+    /// write itself carried a durable acknowledgement.
     ///
     /// Consulted (and reset) by `acknowledgeAfterQueuedPersistence`'s
-    /// barrier. That barrier's own fence re-check only proves the writer
-    /// lease is STILL valid right now — it says nothing about whether an
-    /// earlier queued write (the synthetic spawn's row, typically, in the
-    /// SAME batch) actually succeeded on its own terms. A transient
-    /// failure unrelated to the lease (a SQLite `step` error, say) would
-    /// otherwise slip past the fence check alone, and the barrier would
-    /// acknowledge a row that was never stored. Set unconditionally inside
-    /// each write's own completion — not the caller-supplied one, which is
-    /// nil whenever that particular update carries no ack of its own (the
-    /// spawn half of an OpenCode-normalized batch, always) — so it
-    /// reflects every real write, acked or not.
+    /// barrier and by the two `persistIndices`/`persistSubagentIndices`
+    /// completions themselves. A barrier's own fence re-check only proves
+    /// the writer lease is STILL valid right now — it says nothing about
+    /// whether an earlier queued write (the synthetic spawn's row,
+    /// typically, in the SAME batch) actually succeeded on its own terms.
+    /// A transient failure unrelated to the lease (a SQLite `step` error,
+    /// say) would otherwise slip past the fence check alone, and the
+    /// barrier would acknowledge a row that was never stored.
+    ///
+    /// Set unconditionally inside each write's own completion — not the
+    /// caller-supplied one, which is nil whenever that particular update
+    /// carries no ack of its own (the spawn half of an OpenCode-normalized
+    /// batch, always) — so it reflects every real write, acked or not.
+    ///
+    /// Reset to `true` the moment a write DOES carry the caller's own
+    /// completion — i.e. the moment a batch reaches its acknowledgement
+    /// boundary — rather than left to linger. Without the reset, one
+    /// transient failure anywhere would AND itself into every later
+    /// `succeeded` check forever, permanently withholding every subsequent
+    /// acknowledgement for the rest of this runner's lifetime — far worse
+    /// than the narrow, single-batch hazard this flag exists to close.
     private var lastQueuedPersistenceSucceeded = true
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
     private var stopped = false
@@ -970,7 +981,11 @@ final class ACPSessionRunner {
             // empty write — valid fence, nothing to actually store — would
             // not surface on its own.
             let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
-            self.lastQueuedPersistenceSucceeded = succeeded
+            // This call always carries a real acknowledgement (the guard
+            // above returns otherwise), so it is ALWAYS the acknowledgement
+            // boundary of its batch — reset unconditionally, regardless of
+            // outcome, so a failure here can't block a later, unrelated one.
+            self.lastQueuedPersistenceSucceeded = true
             if succeeded {
                 acknowledgement()
             }
@@ -1034,7 +1049,14 @@ final class ACPSessionRunner {
             // this write's own completion — unlike the barrier's — is what
             // acknowledges the batch's shared cursor when it carries the ack.
             let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
-            self.lastQueuedPersistenceSucceeded = succeeded
+            // `completion` (the caller's, not this closure) is non-nil
+            // exactly when THIS write carries the batch's real acknowledgement
+            // — i.e. this is the batch's boundary — so only reset there.
+            // A nil `completion` means more of the same batch is still
+            // coming (the spawn half of an OpenCode pair, typically), and
+            // this write's outcome must propagate forward to it rather
+            // than being cleared here.
+            self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
             guard succeeded else {
                 completion?(false)
                 return
@@ -2964,9 +2986,12 @@ extension ACPSessionRunner {
                 // See the matching comment in `persistSubagentIndices`:
                 // combine with the preceding write's outcome rather than
                 // record only this one, so a batch's earlier failure isn't
-                // erased by a later write's own success.
+                // erased by a later write's own success — but reset once a
+                // write that carries the caller's own completion concludes
+                // (the batch's acknowledgement boundary), so a transient
+                // failure can't block every later, unrelated batch forever.
                 let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
-                self.lastQueuedPersistenceSucceeded = succeeded
+                self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
                 guard succeeded else {
                     completion?(false)
                     return
