@@ -651,6 +651,14 @@ struct AppStateRunScheduleTests {
         #expect(state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID))
         // ...but nothing can render it, so the row must not pretend otherwise.
         #expect(!state.canOpenScheduleFiringRun(run))
+        #expect(state.visibleProjectForWorktree(run.worktreeID) == nil)
+
+        // Unarchiving flips that signal back. The Schedules pane keys its
+        // priming task on it, so a worktree restored while the pane stays
+        // mounted re-primes instead of keeping dead links until a remount.
+        state.projectsManager.setWorktreeHidden(projectId: project.id, path: created.path, hidden: false)
+        #expect(state.visibleProjectForWorktree(run.worktreeID)?.id == project.id)
+        #expect(state.canOpenScheduleFiringRun(run))
     }
 
     /// A branch template need not vary per occurrence. A second run of the

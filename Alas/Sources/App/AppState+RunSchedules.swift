@@ -96,7 +96,21 @@ extension AppState {
     /// selecting an archived id would empty the centre pane and strand the tab.
     /// The entry is still named in that case; it is just not a link.
     func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
-        hasRunReport(worktreeID: run.worktreeID, runID: run.runID) && visibleProject(for: run) != nil
+        hasRunReport(worktreeID: run.worktreeID, runID: run.runID)
+            && visibleProjectForWorktree(run.worktreeID) != nil
+    }
+
+    /// The project owning `worktreeID`, and only while that worktree is one
+    /// the centre pane can resolve. Archived worktrees are excluded on
+    /// purpose: see `canOpenScheduleFiringRun`.
+    ///
+    /// Also the Schedules pane's signal that visibility changed, because
+    /// archiving and unarchiving alters what priming should do without
+    /// altering which worktrees a history references.
+    func visibleProjectForWorktree(_ worktreeID: String) -> ProjectConfig? {
+        projects.first { project in
+            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == worktreeID }
+        }
     }
 
     /// Opens the report of a run a firing started, navigating to that run
@@ -113,18 +127,9 @@ extension AppState {
     /// Firing in the background still never steals the selection; only
     /// following a link does, because that is an explicit request to go there.
     func openScheduleFiringRun(_ run: RunScheduleFiring.RunReference) {
-        guard let project = visibleProject(for: run) else { return }
+        guard let project = visibleProjectForWorktree(run.worktreeID) else { return }
         focusGlobalWorktree(id: run.worktreeID, projectId: project.id)
         openRunReport(worktreeID: run.worktreeID, runID: run.runID)
-    }
-
-    /// The project owning a firing's run, but only while that run's worktree
-    /// is still visible. Archived worktrees are excluded on purpose: see
-    /// `canOpenScheduleFiringRun`.
-    private func visibleProject(for run: RunScheduleFiring.RunReference) -> ProjectConfig? {
-        projects.first { project in
-            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == run.worktreeID }
-        }
     }
 
     /// Loads the durable report ids for worktrees a schedule's history points

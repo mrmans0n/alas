@@ -52,7 +52,7 @@ struct SchedulesTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScheduler.evaluationGeneration) { now = Date() }
-        .task(id: historyWorktreeIDs) {
+        .task(id: historyPrimingToken) {
             await state.primeScheduleRunReportIDs(historyWorktreeIDs)
         }
         .sheet(item: $editing) { target in
@@ -82,8 +82,21 @@ struct SchedulesTabView: View {
         )
     }
 
-    /// Worktrees the visible histories link runs in, deduplicated and stable
-    /// so the priming task only re-runs when the set actually changes.
+    /// What the priming task keys on: the referenced worktrees *and* whether
+    /// each is currently visible.
+    ///
+    /// The ids alone are not enough. Archiving a worktree clears its cached
+    /// report ids, and unarchiving restores the worktree without changing
+    /// which worktrees the histories reference — so keying on ids alone would
+    /// leave the task unfired and the restored links dead until this pane was
+    /// remounted.
+    private var historyPrimingToken: [String] {
+        historyWorktreeIDs.map { id in
+            "\(id):\(state.visibleProjectForWorktree(id) != nil ? 1 : 0)"
+        }
+    }
+
+    /// Worktrees the visible histories link runs in, deduplicated and stable.
     private var historyWorktreeIDs: [String] {
         var seen: Set<String> = []
         var ordered: [String] = []
