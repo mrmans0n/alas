@@ -133,6 +133,29 @@ struct ACPSubagentSessionTests {
         #expect(childRow.status == "canceled")
     }
 
+    @Test("a live tool-call creation merges into a child's own permission placeholder instead of duplicating it")
+    func liveToolCallMergesIntoChildPermissionPlaceholder() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.mergePermissionDecision(
+            toolCall: .init(toolCallId: "tc-1", title: "Run command", kind: "execute", status: "pending"),
+            facts: AnyCodable(["permission": AnyCodable(true)]),
+            wasCancelled: false)
+        #expect(run.messages.count == 1)
+
+        // The normal `.toolCall` creation event for the SAME id follows —
+        // it must merge into the placeholder, not append a second row.
+        run.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "Run command", kind: "execute", status: "in_progress")))
+
+        #expect(run.messages.count == 1)
+        guard case .toolCall(let toolCall) = run.messages[0] else {
+            Issue.record("expected the row to be merged in place")
+            return
+        }
+        #expect(toolCall.status == "in_progress")
+        #expect(toolCall.executionStartedAt != nil)
+    }
+
     // MARK: - Child transcript
 
     @Test("child output lands in the child transcript, never the parent's")
@@ -269,6 +292,36 @@ struct ACPSubagentSessionTests {
               case .toolCall = run.messages[1],
               case .agent(_, nil, let second) = run.messages[2] else {
             Issue.record("expected both id-less runs to stay separate and in place")
+            return
+        }
+        #expect(first.value == "first")
+        #expect(second.value == "second")
+    }
+
+    @Test("replay recovers a missing id-less row without corrupting a later one of the same kind")
+    func replayRecoversMissingIdLessRowBeforeLaterOne() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Only the SECOND id-less agent row made it to SQLite — the first
+        // one, before the tool call, never persisted.
+        run.restore(
+            messages: [
+                .toolCall(.init(toolCallId: "t1", title: "Read", status: "completed")),
+                .agent(id: UUID(), StreamingText("second"))
+            ],
+            createdAts: [Date(), Date()])
+
+        // `session/load` resends the full chronological history: the
+        // missing first row, then the tool call, then the row that DID
+        // persist.
+        run.applyReplayed(.agentMessageChunk(.text("first")))
+        run.applyReplayed(.toolCall(.init(toolCallId: "t1", title: "Read", kind: nil, status: "completed")))
+        run.applyReplayed(.agentMessageChunk(.text("second")))
+
+        #expect(run.messages.count == 3)
+        guard case .agent(_, nil, let first) = run.messages[0],
+              case .toolCall = run.messages[1],
+              case .agent(_, nil, let second) = run.messages[2] else {
+            Issue.record("expected the recovered row before the tool call and the persisted row after it")
             return
         }
         #expect(first.value == "first")

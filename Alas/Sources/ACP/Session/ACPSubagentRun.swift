@@ -91,6 +91,14 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// prompts, which aren't keyed by `StreamKind`.
     private var legacyOpenUserRun: Int?
     private var legacyUserRunOrdinal = 0
+    /// Array positions `insertRecovered` inserted THIS replay window,
+    /// shifted on every later insertion exactly like `legacyOpenRun` is.
+    /// `legacyTextCandidates`/`legacyUserCandidates` exclude these: without
+    /// it, a row recovered here — itself id-less — would be picked up by
+    /// their own next re-scan and silently added to the still-unconsumed
+    /// candidate list, shifting every later ordinal off by one and letting
+    /// a legitimate, already-correct row be mistaken for an earlier one.
+    private var legacyRecoveredIndices: Set<Int> = []
 
     init(
         subagentSessionId: String,
@@ -222,6 +230,21 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 text: text,
                 attachments: attachments), at: timestamp)]
         case .toolCall(let payload):
+            // Normally the first event for this id, so appending
+            // unconditionally would usually be safe — except a permission
+            // request for this same id already materialized a placeholder
+            // row (see `ACPSubagentRun.mergePermissionDecision`) before
+            // this "creation" event arrived. Merge into that row instead
+            // of duplicating it, mirroring the parent transcript's own
+            // `.toolCall` case.
+            if let index = toolCallIndex(id: payload.toolCallId), case .toolCall(var tc) = messages[index] {
+                ACPSession.applyToolCallPayloadFields(payload, to: &tc)
+                if tc.status == "in_progress", tc.executionStartedAt == nil {
+                    tc.executionStartedAt = timestamp
+                }
+                messages[index] = .toolCall(tc)
+                return [index]
+            }
             return [append(
                 .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)),
                 at: timestamp)]
@@ -329,6 +352,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         legacyRunOrdinal.removeAll()
         legacyOpenUserRun = nil
         legacyUserRunOrdinal = 0
+        legacyRecoveredIndices.removeAll()
     }
 
     func endReplayReconciliation() {
@@ -529,8 +553,15 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
         let candidates = legacyTextCandidates(of: kind)
         let ordinal = legacyRunOrdinal[kind, default: 0]
-        legacyRunOrdinal[kind] = ordinal + 1
-        if ordinal < candidates.count {
+        // A candidate strictly AHEAD of the replay cursor belongs to a
+        // LATER chronological run than the one being reconciled right
+        // now — consuming it here would reset a row that's already
+        // correct, and leave THIS touch's actual row (never persisted)
+        // unrecovered. Only consume a candidate at or behind the cursor;
+        // otherwise insert, and leave the ordinal untouched so the
+        // candidate stays available for the touch it actually belongs to.
+        if ordinal < candidates.count, candidates[ordinal] <= replayCursor {
+            legacyRunOrdinal[kind] = ordinal + 1
             let index = candidates[ordinal]
             resetTextRow(at: index, kind: kind, messageId: nil)
             appendToTextRow(at: index, kind: kind, text: text, phase: chunk.phase, metadata: chunk.metadata)
@@ -582,6 +613,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// the candidate list a NEW id-less replay run picks its target from.
     private func legacyTextCandidates(of kind: StreamKind) -> [Int] {
         messages.indices.filter { index in
+            guard !legacyRecoveredIndices.contains(index) else { return false }
             switch (kind, messages[index]) {
             case (.agent, .agent(_, nil, _)): return true
             case (.thought, .thought(_, nil, _)): return true
@@ -648,8 +680,13 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
         let candidates = legacyUserCandidates()
         let ordinal = legacyUserRunOrdinal
-        legacyUserRunOrdinal += 1
-        if ordinal < candidates.count {
+        // See the matching comment in `applyReplayedTextChunk`: a
+        // candidate strictly ahead of the cursor belongs to a later turn,
+        // not the one being reconciled now — only consume one at or
+        // behind the cursor, and leave the ordinal alone otherwise so it
+        // stays available for the touch it actually belongs to.
+        if ordinal < candidates.count, candidates[ordinal] <= replayCursor {
+            legacyUserRunOrdinal += 1
             let index = candidates[ordinal]
             if case .user(let id, _, _, _, let source) = messages[index] {
                 messages[index] = .user(id: id, messageId: nil, text: "", attachments: [], delegatedSource: source)
@@ -690,6 +727,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// Every id-less `.user` row, in chronological (ascending) order.
     private func legacyUserCandidates() -> [Int] {
         messages.indices.filter {
+            guard !legacyRecoveredIndices.contains($0) else { return false }
             if case .user(_, nil, _, _, _) = messages[$0] { return true }
             return false
         }
@@ -817,6 +855,8 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         if let open = openIdentifiedUserRun, open.index >= index {
             openIdentifiedUserRun = (open.messageId, open.index + 1)
         }
+        legacyRecoveredIndices = Set(legacyRecoveredIndices.map { $0 >= index ? $0 + 1 : $0 })
+        legacyRecoveredIndices.insert(index)
         replayCursor = index + 1
         return index
     }

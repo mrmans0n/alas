@@ -1061,7 +1061,7 @@ final class ACPSession: ObservableObject, Identifiable {
         for run in subagents.values { run.endReplayReconciliation() }
     }
 
-    private static func applyToolCallPayloadFields(
+    static func applyToolCallPayloadFields(
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
     ) {
