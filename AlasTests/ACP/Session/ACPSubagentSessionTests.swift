@@ -261,6 +261,61 @@ struct ACPSubagentSessionTests {
         #expect(attachments.first?.uri == "file:///tmp/a.swift")
     }
 
+    @Test("a second turn's plan starts a new row instead of overwriting the first turn's")
+    func planStartsNewRowAfterNextTurn() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.text("first task")))
+        run.apply(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+        run.apply(.userMessageChunk(.text("second task")))
+        run.apply(.plan([.init(content: "step two", priority: nil, status: "pending")]))
+
+        #expect(run.messages.count == 4)
+        guard case .plan(_, let firstPlan) = run.messages[1],
+              case .plan(_, let secondPlan) = run.messages[3] else {
+            Issue.record("expected a separate plan row after each turn's prompt")
+            return
+        }
+        #expect(firstPlan.map(\.content) == ["step one"])
+        #expect(secondPlan.map(\.content) == ["step two"])
+
+        // A follow-up plan update for the CURRENT (second) turn still
+        // refines that turn's row in place rather than starting a third.
+        run.apply(.plan([.init(content: "step two", priority: nil, status: "completed")]))
+        #expect(run.messages.count == 4)
+        guard case .plan(_, let refinedPlan) = run.messages[3] else {
+            Issue.record("expected the second turn's plan to be refined in place")
+            return
+        }
+        #expect(refinedPlan.first?.status == "completed")
+    }
+
+    @Test("a replayed plan does not overwrite the newest already-persisted plan")
+    func replayedPlanIsANoOp() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Hydrated with two turns already persisted correctly.
+        run.restore(
+            messages: [
+                .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
+                .plan(id: UUID(), [.init(content: "step one", status: "completed")]),
+                .user(id: UUID(), messageId: "p2", text: "second task", attachments: []),
+                .plan(id: UUID(), [.init(content: "step two", status: "pending")])
+            ],
+            createdAts: [Date(), Date(), Date(), Date()])
+
+        // `session/load` resends the FIRST turn's plan chronologically —
+        // it has no stable identity to reconcile against, so it must not
+        // clobber the newest (second turn's) already-correct plan row.
+        let dirty = run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "completed")]))
+
+        #expect(dirty.isEmpty)
+        #expect(run.messages.count == 4)
+        guard case .plan(_, let secondPlan) = run.messages[3] else {
+            Issue.record("expected the second turn's plan row to be untouched")
+            return
+        }
+        #expect(secondPlan.map(\.content) == ["step two"])
+    }
+
     @Test("an id-less chunk still extends only the trailing row of its kind")
     func idLessChunkExtendsTrailingRow() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
@@ -439,6 +494,28 @@ struct ACPSubagentSessionTests {
 
         #expect(dirty == [0])
         #expect(session.subagentRun("child-1")?.state == .completed)
+    }
+
+    @Test("replayed lifecycle history does not resurrect or re-timestamp an already-terminal child")
+    func replayDoesNotResurrectOrRetimestampTerminalChild() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        session.applySuppressedReplaySideEffects(
+            .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .completed)))
+        let originalFinish = try? #require(session.subagentRun("child-1")?.finishedAt)
+
+        // `session/load` resends the child's FULL lifecycle history
+        // chronologically: the older "running" frame, then "completed"
+        // again — exactly the sequence that used to resurrect the child
+        // and then stamp a fresh (reattach-time) finish over the real one.
+        session.applySuppressedReplaySideEffects(
+            .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)))
+        session.applySuppressedReplaySideEffects(
+            .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .completed)))
+
+        #expect(session.subagentRun("child-1")?.state == .completed)
+        #expect(session.subagentRun("child-1")?.isRunning == false)
+        #expect(session.subagentRun("child-1")?.finishedAt == originalFinish)
     }
 
     @Test("a replayed spawn re-registers a child whose row never reached disk")

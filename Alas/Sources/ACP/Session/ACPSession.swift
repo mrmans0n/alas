@@ -883,7 +883,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // A terminal state that the previous process never committed
             // arrives only in this replay. Dropping it would leave the row
             // spinning against a child that finished long ago.
-            return applySubagentState(update)
+            return applySubagentState(update, replaying: true)
         default:
             return []
         }
@@ -1571,10 +1571,11 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func applySubagentState(
         _ update: ACPSubagentStateUpdate,
-        at timestamp: Date = Date()
+        at timestamp: Date = Date(),
+        replaying: Bool = false
     ) -> Set<Int> {
         guard let run = subagents[update.subagentSessionId] else { return [] }
-        run.apply(state: update.state, error: update.error, at: timestamp)
+        run.apply(state: update.state, error: update.error, at: timestamp, replaying: replaying)
         return refreshSubagentRow(for: run, at: timestamp)
     }
 

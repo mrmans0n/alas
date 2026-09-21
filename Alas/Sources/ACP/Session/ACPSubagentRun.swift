@@ -127,11 +127,20 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         if let startedAt { self.startedAt = startedAt }
     }
 
-    func apply(state newState: ACPSubagentState, error: String? = nil, at timestamp: Date = Date()) {
+    func apply(
+        state newState: ACPSubagentState, error: String? = nil, at timestamp: Date = Date(),
+        replaying: Bool = false
+    ) {
         // Captured ahead of the unchanged-state guard: OpenCode can resend
         // the SAME terminal state with diagnostic text a later notification
         // didn't carry, and a non-empty error is never worth discarding.
         if let error, !error.isEmpty { lastError = error }
+        // `session/load` resends a child's full lifecycle history — a
+        // child already restored as terminal must not be regressed to an
+        // earlier nonterminal frame, or a later replayed terminal frame
+        // would then overwrite its persisted `finishedAt` with the
+        // reattach time, inflating the displayed duration on every reattach.
+        if replaying, state.isTerminal, !newState.isTerminal { return }
         guard state != newState else { return }
         state = newState
         if newState.isTerminal {
@@ -204,10 +213,13 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             return [index]
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
-            if let index = messages.lastIndex(where: {
-                if case .plan = $0 { return true }
-                return false
-            }), case .plan(let existingId, _) = messages[index] {
+            // Overwrite the existing plan in place only if it belongs to
+            // the current turn (sits after the latest prompt), mirroring
+            // `ACPTranscript.currentPlanMessageIndex` — otherwise a second
+            // turn's plan update would overwrite the first turn's plan
+            // instead of starting a new one.
+            if let index = lastPlanIndex(), index > (lastUserIndex() ?? -1),
+               case .plan(let existingId, _) = messages[index] {
                 messages[index] = .plan(id: existingId, items)
                 return [index]
             }
@@ -277,6 +289,18 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             let index = insertRecovered(
                 .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)), at: timestamp)
             return [index]
+        case .plan:
+            // A per-turn plan has no stable identity to reconcile against,
+            // only a turn-boundary position — and that position is only
+            // meaningful relative to the CURRENT state, not to a replay
+            // resending the whole history out of its original increments.
+            // Reconciling it here would overwrite whichever plan is newest
+            // in the fully-hydrated transcript instead of the turn the
+            // replayed update actually belongs to. Dropped here exactly
+            // like the parent transcript's own `applySuppressedReplaySideEffects`
+            // already drops it — the live path persisted it correctly
+            // before any crash.
+            return []
         default:
             return apply(update, at: timestamp)
         }
@@ -589,6 +613,20 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private func legacyUserCandidates() -> [Int] {
         messages.indices.filter {
             if case .user(_, nil, _, _, _) = messages[$0] { return true }
+            return false
+        }
+    }
+
+    private func lastPlanIndex() -> Int? {
+        messages.lastIndex {
+            if case .plan = $0 { return true }
+            return false
+        }
+    }
+
+    private func lastUserIndex() -> Int? {
+        messages.lastIndex {
+            if case .user = $0 { return true }
             return false
         }
     }
