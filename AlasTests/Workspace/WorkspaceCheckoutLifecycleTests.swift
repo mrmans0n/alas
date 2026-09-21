@@ -860,6 +860,7 @@ struct WorkspaceCheckoutLifecycleTests {
     @Test func concreteLifecycleUsesSSHTransportForCleanup() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: " M file.txt\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -905,24 +906,28 @@ struct WorkspaceCheckoutLifecycleTests {
     /// initialized submodule is structural, not a data-loss signal, so a
     /// clean remote worktree must still delete without the caller having
     /// pre-approved force. Matches the local `WorktreeService.remove` path.
-    @Test func concreteRemoteRemovalForcesCleanInitializedSubmoduleWithoutPriorApproval() async throws {
-        let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 128, stdout: "", stderr: "fatal: working trees containing submodules cannot be moved or removed"),
-            .init(exitCode: 0, stdout: "", stderr: ""),
-            .init(exitCode: 0, stdout: "", stderr: ""),
-            .init(exitCode: 0, stdout: "", stderr: ""),
-        ])
-        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
-            try await runner.run(executable: executable, args: args, timeout: timeout)
-        })
+    ///
+    /// The generated command is a self-contained POSIX shell script, not a
+    /// sequence of independently mockable SSH round trips (that was the bug
+    /// Codex flagged — see `sshRemovalScript`'s doc comment), so this
+    /// exercises the script for real via `/bin/sh -c` against a local
+    /// repository standing in for the remote one, rather than a canned
+    /// `RemoteLifecycleRunner` queue.
+    @Test func sshRemovalScriptForcesCleanInitializedSubmoduleWithoutPriorApproval() async throws {
+        let fixture = try await Self.makeSubmoduleFixture(suffix: "ssh-script-clean")
+        defer { fixture.removeFiles() }
 
-        try await lifecycle.removeWorktree(Self.sshCleanupPlan(), force: false, forceTwice: false)
+        let script = WorkspaceCheckoutLifecycleOperator.sshRemovalScript(
+            sourceRepositoryPath: fixture.repo.path,
+            worktreePath: fixture.worktree.path,
+            force: false
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", script])
 
-        let commands = await runner.commands.joined(separator: "\n")
-        #expect(commands.contains("--ignore-submodules=none"))
-        #expect(commands.contains("submodule foreach --quiet --recursive"))
-        #expect(commands.contains("worktree remove -f --"))
-        #expect(commands.contains("worktree remove -f -f --") == false)
+        #expect(result.exitCode == 0)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path))
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: fixture.repo, usesRemoteHostRegistry: false)
+        #expect(!registrations.stdout.contains(fixture.worktree.path))
     }
 
     /// Regression: a submodule with `submodule.<name>.ignore = all` hides its
@@ -931,22 +936,29 @@ struct WorkspaceCheckoutLifecycleTests {
     /// even from an unignored one — only an explicit `--ignore-submodules=none`
     /// plus a recursive `submodule foreach` override sees either. Without
     /// both, an auto-force retry would silently discard that content.
-    @Test func concreteRemoteRemovalRefusesSubmoduleWithContentHiddenFromPlainStatus() async throws {
-        let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 128, stdout: "", stderr: "fatal: working trees containing submodules cannot be moved or removed"),
-            .init(exitCode: 0, stdout: "", stderr: ""),
-            .init(exitCode: 0, stdout: "?? hidden.txt\n", stderr: ""),
-        ])
-        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
-            try await runner.run(executable: executable, args: args, timeout: timeout)
-        })
+    @Test func sshRemovalScriptRefusesSubmoduleWithContentHiddenFromPlainStatus() async throws {
+        let fixture = try await Self.makeSubmoduleFixture(suffix: "ssh-script-hidden-dirty")
+        defer { fixture.removeFiles() }
+        try await Self.runGit(
+            ["config", "submodule.sub.ignore", "all"],
+            cwd: URL(fileURLWithPath: fixture.worktree.path)
+        )
+        try "dirty".write(
+            toFile: fixture.worktree.path + "/sub/tracked.txt",
+            atomically: true,
+            encoding: .utf8
+        )
 
-        await #expect(throws: WorktreeService.WorktreeError.self) {
-            try await lifecycle.removeWorktree(Self.sshCleanupPlan(), force: false, forceTwice: false)
-        }
+        let script = WorkspaceCheckoutLifecycleOperator.sshRemovalScript(
+            sourceRepositoryPath: fixture.repo.path,
+            worktreePath: fixture.worktree.path,
+            force: false
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", script])
 
-        let commands = await runner.commands.joined(separator: "\n")
-        #expect(commands.contains("worktree remove -f --") == false)
+        #expect(result.exitCode != 0)
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path))
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path + "/sub/tracked.txt"))
     }
 
     @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
@@ -1572,6 +1584,59 @@ struct WorkspaceCheckoutLifecycleTests {
         guard result.exitCode == 0 else {
             throw WorktreeService.WorktreeError.gitFailed(result.stderr)
         }
+    }
+
+    private struct SSHScriptSubmoduleFixture {
+        let repo: URL
+        let submoduleRepo: URL
+        let worktree: URL
+
+        func removeFiles() {
+            try? FileManager.default.removeItem(at: worktree)
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
+    }
+
+    /// Builds a real local repository with an initialized submodule, used to
+    /// stand in for a remote host when exercising `sshRemovalScript` for
+    /// real via `/bin/sh -c`.
+    private static func makeSubmoduleFixture(suffix: String) async throws -> SSHScriptSubmoduleFixture {
+        let root = FileManager.default.temporaryDirectory
+        let uniqueSuffix = "\(suffix)-\(UUID().uuidString)"
+
+        let repo = root.appendingPathComponent("alas-ssh-script-repo-\(uniqueSuffix)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try await runGit(["init", "-q", "-b", "main"], cwd: repo)
+        try await runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await runGit(["config", "user.name", "Test"], cwd: repo)
+        try "root".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try await runGit(["add", "tracked.txt"], cwd: repo)
+        try await runGit(["commit", "-q", "-m", "root init"], cwd: repo)
+
+        let submoduleRepo = root.appendingPathComponent("alas-ssh-script-submodule-\(uniqueSuffix)")
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        try await runGit(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        try await runGit(["config", "user.email", "test@example.com"], cwd: submoduleRepo)
+        try await runGit(["config", "user.name", "Test"], cwd: submoduleRepo)
+        try "initial".write(to: submoduleRepo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try await runGit(["add", "tracked.txt"], cwd: submoduleRepo)
+        try await runGit(["commit", "-q", "-m", "submodule init"], cwd: submoduleRepo)
+
+        try await runGit(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "sub"],
+            cwd: repo
+        )
+        try await runGit(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let worktree = root.appendingPathComponent("alas-ssh-script-worktree-\(uniqueSuffix)")
+        try await runGit(["worktree", "add", "-q", worktree.path, "-b", "feature-\(uniqueSuffix)"], cwd: repo)
+        try await runGit(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: worktree
+        )
+
+        return SSHScriptSubmoduleFixture(repo: repo, submoduleRepo: submoduleRepo, worktree: worktree)
     }
 
     private static func registeredAdminDirectory(repo: URL, worktree: URL) async throws -> URL {
