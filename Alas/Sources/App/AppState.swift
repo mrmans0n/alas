@@ -9881,18 +9881,32 @@ final class AppState {
     func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
         if pendingForceDeleteWorktree?.id == worktree.id {
             pendingForceDeleteWorktree = nil
+            // That pending force prompt claimed the worktree via
+            // `.preparingDelete`; discarding the prompt without releasing
+            // the claim would leave the row permanently blocked from new
+            // session admission — nothing else clears a bare
+            // `.preparingDelete`. This is scoped to exactly the claim that
+            // prompt owned: a `.preparingDelete` with no matching
+            // `pendingForceDeleteWorktree` belongs to the live first
+            // confirmation dialog (`beginDeleteWorktree`'s `NSAlert`), which
+            // this call must never touch — see the guard below.
+            if projectsManager.operationState(for: worktree.id) == .preparingDelete {
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+            }
         }
-        if projectsManager.operationState(for: worktree.id) == .deleting {
+        switch projectsManager.operationState(for: worktree.id) {
+        case .deleting:
             return .ok
-        }
-        // The CLI is authoritative over any pending UI decision for this
-        // worktree: release a leftover `.preparingDelete` claim from an
-        // in-app dialog the user hasn't answered yet (its
-        // `pendingForceDeleteWorktree` was just discarded above), so this
-        // call's own outcome decides admission blocking instead of a stale
-        // claim that nothing else would ever clear.
-        if projectsManager.operationState(for: worktree.id) == .preparingDelete {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+        case .preparingDelete:
+            // A delete confirmation this call does not own is already on
+            // screen for this worktree (`NSAlert.runModal()`'s nested run
+            // loop is exactly how this CLI request is able to run at all
+            // while that alert is still up). Let that decision resolve on
+            // its own instead of racing session admission or the removal
+            // itself against it.
+            return .error("a delete confirmation is already pending for this worktree")
+        default:
+            break
         }
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
