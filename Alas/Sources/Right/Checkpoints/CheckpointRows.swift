@@ -2,6 +2,13 @@ import SwiftUI
 
 enum CheckpointPresentation {
     static let remoteReason = "Checkpoints are not available for remote worktrees yet."
+    /// Cap on file rows built inline inside an expanded card. A checkpoint
+    /// can capture hundreds or thousands of paths; unlike the old per-group
+    /// `AppKitDiffRowSpec` rows, an expanded card's file list is one
+    /// `NSHostingView` subtree, so an unbounded `ForEach` here would eagerly
+    /// construct and measure every row instead of only the visible ones.
+    static let maxInlineFileGroups = 24
+
 
     static func compactDate(_ date: Date, now: Date = .now) -> String {
         let formatter = DateFormatter()
@@ -95,6 +102,17 @@ enum CheckpointPresentation {
     static func rowID(checkpointID: CheckpointID) -> String { "checkpoint-\(checkpointID.uuidString)" }
     static func groupRowID(checkpointID: CheckpointID, groupID: UUID) -> String {
         "checkpoint-\(checkpointID.uuidString)-group-\(groupID.uuidString)"
+    }
+
+    /// `index`/`working tree` badge for one file group. Takes a
+    /// path-to-state lookup built once per manifest so this stays O(member
+    /// paths) instead of re-filtering the whole manifest per group.
+    static func fileBadges(for group: CheckpointFileGroup, pathIndex: [String: CheckpointPathState]) -> String {
+        let hasIndexChange = group.memberPaths.contains { pathIndex[$0].map { $0.index != $0.head } ?? false }
+        let hasWorktreeChange = group.memberPaths.contains { pathIndex[$0].map { $0.worktree != $0.head } ?? false }
+        return [hasIndexChange ? "index" : nil, hasWorktreeChange ? "working tree" : nil]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
     static func restoreButtonID(checkpointID: CheckpointID) -> String {
         "checkpoint-restore-\(checkpointID.uuidString)"
@@ -256,9 +274,21 @@ struct CheckpointCard: View {
                 .foregroundColor(theme.color("del"))
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
-            ForEach(manifest.groups) { group in
-                CheckpointFileGroupRow(group: group, manifest: manifest) { onInspect(group) }
-                    .id(CheckpointPresentation.groupRowID(checkpointID: checkpoint.id, groupID: group.id))
+            let pathIndex = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
+            let visibleGroups = manifest.groups.prefix(CheckpointPresentation.maxInlineFileGroups)
+            ForEach(Array(visibleGroups)) { group in
+                CheckpointFileGroupRow(
+                    group: group,
+                    badges: CheckpointPresentation.fileBadges(for: group, pathIndex: pathIndex)
+                ) { onInspect(group) }
+                .id(CheckpointPresentation.groupRowID(checkpointID: checkpoint.id, groupID: group.id))
+            }
+            let overflow = manifest.groups.count - visibleGroups.count
+            if overflow > 0 {
+                Text("+\(overflow) more changed file\(overflow == 1 ? "" : "s") not shown")
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .padding(.vertical, 2)
             }
             if !manifest.exclusions.isEmpty {
                 CheckpointExclusionsRow(exclusions: manifest.exclusions)
@@ -350,7 +380,7 @@ struct CheckpointFooterRow: View {
 
 struct CheckpointFileGroupRow: View {
     let group: CheckpointFileGroup
-    let manifest: WorktreeCheckpointManifest
+    let badges: String
     let onInspect: () -> Void
 
     @Environment(\.theme) private var theme
@@ -379,14 +409,6 @@ struct CheckpointFileGroupRow: View {
         .buttonStyle(.plain)
         .padding(.vertical, 2)
         .accessibilityLabel("Inspect checkpoint file \(group.primaryPath)")
-    }
-
-    private var badges: String {
-        let paths = manifest.paths.filter { group.memberPaths.contains($0.relativePath) }
-        return [paths.contains { $0.index != $0.head } ? "index" : nil,
-                paths.contains { $0.worktree != $0.head } ? "working tree" : nil]
-            .compactMap { $0 }
-            .joined(separator: " · ")
     }
 }
 

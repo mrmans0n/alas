@@ -850,7 +850,9 @@ struct ChangesTabView: View {
         if pendingManifest {
             height += 22
         } else if let manifest {
-            height += CGFloat(manifest.groups.count) * 21
+            let visibleGroups = min(manifest.groups.count, CheckpointPresentation.maxInlineFileGroups)
+            height += CGFloat(visibleGroups) * 21
+            if manifest.groups.count > visibleGroups { height += 18 }
             if !manifest.exclusions.isEmpty { height += 22 }
         }
         height += 5 + ACPComposerActionButtonMetrics.capsuleHeight
