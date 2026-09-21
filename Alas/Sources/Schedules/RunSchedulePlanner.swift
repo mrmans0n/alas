@@ -160,7 +160,10 @@ enum RunSchedulePlanner {
                 scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "-_./".unicodeScalars.contains(scalar))
             }
             guard scalarOK else {
-                if previous != "-" { result.append("-"); previous = "-" }
+                if previous != "-" {
+                    result.append("-")
+                    previous = "-"
+                }
                 continue
             }
             // git refuses "..", "//", leading dots and trailing slashes.
