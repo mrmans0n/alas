@@ -194,6 +194,54 @@ struct ACPSubagentSessionTests {
         #expect(secondText == "second")
     }
 
+    @Test("replay does not duplicate an id-less prompt that already persisted")
+    func replayDoesNotDuplicateIdLessPrompt() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // An adapter that omits `messageId` on its prompt chunks — the
+        // whole prompt already made it to SQLite before reattachment.
+        run.restore(
+            messages: [.user(id: UUID(), messageId: nil, text: "review this", attachments: [])],
+            createdAts: [Date()])
+
+        run.applyReplayed(.userMessageChunk(.text("review this")))
+
+        #expect(run.messages.count == 1)
+        guard case .user(_, nil, let text, _, _) = run.messages[0] else {
+            Issue.record("expected the single id-less prompt to be reconciled in place")
+            return
+        }
+        #expect(text == "review this")
+    }
+
+    @Test("replay reconciles two separate id-less text runs of the same kind without corrupting either")
+    func replayReconcilesMultipleIdLessTextRuns() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Two id-less agent rows separated by a tool call — e.g. the
+        // agent narrates, invokes a tool, then narrates again.
+        run.restore(
+            messages: [
+                .agent(id: UUID(), StreamingText("first")),
+                .toolCall(.init(toolCallId: "t1", title: "Read", status: "completed")),
+                .agent(id: UUID(), StreamingText("second"))
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        // `session/load` resends every row chronologically.
+        run.applyReplayed(.agentMessageChunk(.text("first")))
+        run.applyReplayed(.toolCall(.init(toolCallId: "t1", title: "Read", kind: nil, status: "completed")))
+        run.applyReplayed(.agentMessageChunk(.text("second")))
+
+        #expect(run.messages.count == 3)
+        guard case .agent(_, nil, let first) = run.messages[0],
+              case .toolCall = run.messages[1],
+              case .agent(_, nil, let second) = run.messages[2] else {
+            Issue.record("expected both id-less runs to stay separate and in place")
+            return
+        }
+        #expect(first.value == "first")
+        #expect(second.value == "second")
+    }
+
     @Test("a child prompt's blocks reassemble into one bubble with its attachments")
     func childPromptBlocksReassemble() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")

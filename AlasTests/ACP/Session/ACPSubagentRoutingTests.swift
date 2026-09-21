@@ -218,25 +218,42 @@ struct ACPSubagentRoutingTests {
         #expect(run.seq(at: 0) == 0)
         #expect(run.seq(at: 1) == 2)
 
-        // Replay now recovers the missing seq-1 message, appended at
-        // array index 2 (the array is compacted — only 2 entries existed).
-        // Its allocated seq must be the next FREE one, not the array index.
+        // `session/load` replays the child's FULL history chronologically —
+        // "first" (m0), then the missing "second" (m1), then "third" (m2) —
+        // not just the recovered message in isolation.
         runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m0", content: .text("first")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
             update: .agentMessageChunk(.init(messageId: "m1", content: .text("second")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m2", content: .text("third")))))
         await runner.flushPersistence()
 
+        // The recovered row lands BETWEEN its chronological neighbours —
+        // both in memory and in its assigned seq — not always at the tail.
         #expect(run.messages.count == 3)
-        #expect(run.seq(at: 2) == 3)
+        guard case .agent(_, "m1", let recovered) = run.messages[1] else {
+            Issue.record("expected the recovered row between m0 and m2")
+            return
+        }
+        #expect(recovered.value == "second")
+        #expect(run.seq(at: 0) == 0)
+        #expect(run.seq(at: 1) == 1)
+        #expect(run.seq(at: 2) == 2)
 
         // The persisted rows must reflect that: seq 2's original content
         // (`m2`/"third") must be untouched, not overwritten by the
-        // recovered row.
+        // recovered row, which lands at the gap's own seq (1).
         let rows = try store.loadSubagentMessages(sessionId: "s")
-        #expect(rows.map(\.seq).sorted() == [0, 2, 3])
+        #expect(rows.map(\.seq).sorted() == [0, 1, 2])
         let seqTwoRow = try #require(rows.first { $0.seq == 2 })
         #expect(String(data: seqTwoRow.payload, encoding: .utf8)?.contains("third") == true)
+        let seqOneRow = try #require(rows.first { $0.seq == 1 })
+        #expect(String(data: seqOneRow.payload, encoding: .utf8)?.contains("second") == true)
     }
 
     @Test("a barrier ack is withheld when the preceding write failed for a non-lease reason")
@@ -258,6 +275,38 @@ struct ACPSubagentRoutingTests {
         // reaches the barrier. Its OWN fence check succeeds (nothing about
         // the lease changed), so only the carried-forward prior outcome
         // can withhold the ack.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed OpenCode-style trailing no-op waits behind its spawn's write")
+    func replayEmptyDirtyRootUpdateWaitsBehindSpawn() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the parent table so the SPAWN's write throws. The spawn
+        // itself carries no ack (mirroring `ACPOpenCodeChildUpdate`'s own
+        // shape), so nothing acks it directly — the only signal is what
+        // the TRAILING update below does with it. Left broken (not
+        // restored) until after both updates are sent: persistence is
+        // queued asynchronously, so restoring earlier would let the
+        // spawn's write land successfully once the queue finally drains.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+
+        // The trailing `running` state matches what a freshly-registered
+        // run already defaults to, so it produces NO dirty rows and
+        // reaches the empty-dirty branch directly — the exact path that
+        // used to acknowledge immediately, unconditionally, regardless of
+        // whether the spawn it followed ever made it to disk.
         let acknowledged = Acknowledged()
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "remote-parent",

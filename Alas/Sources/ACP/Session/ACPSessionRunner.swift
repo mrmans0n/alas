@@ -752,7 +752,17 @@ final class ACPSessionRunner {
                 // ever storing the row replay just recovered.
                 let dirty = session.applySuppressedReplaySideEffects(params.update)
                 if dirty.isEmpty {
-                    durableConsumptionAcknowledgement?()
+                    // This specific update produced nothing to persist, but
+                    // an EARLIER one in the same replayed batch (the
+                    // recovered spawn, typically, for an OpenCode status
+                    // frame) can still have a write queued and not yet
+                    // complete. Acking immediately here — as a plain,
+                    // unconditional call — could advance the broker cursor
+                    // before that write lands, or after it fails, either of
+                    // which loses the row replay just recovered. Route
+                    // through the same queued + fence-revalidating barrier
+                    // the nested (child-addressed) branch already uses.
+                    acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
                     persistIndices(
                         dirty,

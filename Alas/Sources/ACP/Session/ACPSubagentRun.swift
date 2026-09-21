@@ -46,12 +46,31 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private enum ReplayIdentity: Hashable {
         case text(StreamKind, String)
         case user(String)
-        /// Stands in for `.text` when the agent omits `messageId`. Keyed by
-        /// kind only, since the live model itself has no finer identity for
-        /// id-less chunks — they all extend whatever the trailing row of
-        /// that kind is (`legacyTrailingIndex`).
-        case legacyText(StreamKind)
     }
+    /// Array position replay reconciliation has reached, in chronological
+    /// order — a row recovered because it's genuinely missing (never
+    /// reached storage) is INSERTED here rather than appended, so it lands
+    /// in its correct position relative to rows on either side instead of
+    /// always at the tail, and gets a `seq` between its new neighbours
+    /// instead of always the highest unused one. Advanced past whichever
+    /// row every reconciled update (matched OR recovered) resolves to.
+    private var replayCursor = 0
+    /// Array index of the id-less run of each kind CURRENTLY open for
+    /// replay, if any — id-less rows have no identity beyond "the trailing
+    /// row of this kind" (mirroring `legacyTrailingIndex`), so a SECOND
+    /// historical run of the same kind needs its own explicit open/closed
+    /// tracking rather than reusing that trailing search, which would
+    /// always find the array's overall newest row regardless of which
+    /// chronological run is actually being replayed.
+    private var legacyOpenRun: [StreamKind: Int] = [:]
+    /// How many separate id-less runs of each kind have been STARTED so
+    /// far this window — indexes into that kind's own chronological list
+    /// of existing id-less rows when a NEW run needs a target.
+    private var legacyRunOrdinal: [StreamKind: Int] = [:]
+    /// Companions to `legacyOpenRun`/`legacyRunOrdinal` for id-less user
+    /// prompts, which aren't keyed by `StreamKind`.
+    private var legacyOpenUserRun: Int?
+    private var legacyUserRunOrdinal = 0
 
     init(
         subagentSessionId: String,
@@ -225,26 +244,22 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// as the live path would. A SECOND replayed touch of the same
     /// identity extends the just-rebuilt row rather than resetting again.
     ///
-    /// Tool calls need no reset step: a `.toolCall` payload during replay
-    /// is upserted by id (replacing an existing row, creating a missing
-    /// one), which is naturally idempotent however many times the same id
-    /// is replayed, and `.toolCallUpdate` already looks its target up by id
-    /// at any position — the ordinary `apply(_:at:)` path suffices for both.
+    /// A `.toolCall` payload during replay is upserted by id (replacing an
+    /// existing row, creating a missing one) — naturally idempotent however
+    /// many times the same id is replayed. `.toolCallUpdate` and `.plan`
+    /// look their target up by id/kind at any position already, so they
+    /// fall straight through to `apply(_:at:)`.
     @discardableResult
     func applyReplayed(_ update: ACPSessionUpdate, at timestamp: Date = Date()) -> Set<Int> {
         switch update {
         case .agentMessageChunk(let chunk):
-            resetTextRowOnFirstReplayTouch(kind: .agent, messageId: chunk.messageId)
+            return applyReplayedTextChunk(chunk, kind: .agent, at: timestamp)
         case .agentThoughtChunk(let chunk):
-            resetTextRowOnFirstReplayTouch(kind: .thought, messageId: chunk.messageId)
+            return applyReplayedTextChunk(chunk, kind: .thought, at: timestamp)
         case .userMessageChunk(let chunk):
             return applyReplayedUserChunk(chunk, at: timestamp)
         case .toolCall(let payload):
-            // Upsert by id rather than delegating to `apply(_:at:)`, which
-            // always APPENDS a `.toolCall` payload — correct live (an
-            // adapter announces a given id once), wrong on replay (the
-            // announcement itself is replayed, and appending would
-            // duplicate a row hydration already restored).
+            closeLegacyRuns()
             if let index = toolCallIndex(id: payload.toolCallId), case .toolCall(let existing) = messages[index] {
                 var fresh = ACPSession.makeToolCall(from: payload, at: timestamp)
                 // `makeToolCall` derives timing from THIS payload alone
@@ -256,23 +271,32 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 fresh.executionStartedAt = existing.executionStartedAt ?? fresh.executionStartedAt
                 fresh.executionFinishedAt = existing.executionFinishedAt ?? fresh.executionFinishedAt
                 messages[index] = .toolCall(fresh)
+                replayCursor = max(replayCursor, index + 1)
                 return [index]
             }
+            let index = insertRecovered(
+                .toolCall(ACPSession.makeToolCall(from: payload, at: timestamp)), at: timestamp)
+            return [index]
         default:
-            break
+            return apply(update, at: timestamp)
         }
-        return apply(update, at: timestamp)
     }
 
-    /// Called once per `session/load` replay window so an identity touched
-    /// in an EARLIER window (this run outliving more than one reattach)
-    /// doesn't suppress a reset it should get in this one.
+    /// Called once per `session/load` replay window so state left over
+    /// from an EARLIER window (this run outliving more than one reattach)
+    /// doesn't suppress a reset — or misplace an insertion — it should get
+    /// in this one.
     func beginReplayReconciliation() {
         replayTouchedIdentities.removeAll()
+        replayCursor = 0
+        legacyOpenRun.removeAll()
+        legacyRunOrdinal.removeAll()
+        legacyOpenUserRun = nil
+        legacyUserRunOrdinal = 0
     }
 
     func endReplayReconciliation() {
-        replayTouchedIdentities.removeAll()
+        beginReplayReconciliation()
     }
 
     /// Restores a persisted child transcript. Replaces whatever is in
@@ -311,7 +335,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
 
     // MARK: - Private
 
-    private enum StreamKind {
+    private enum StreamKind: Hashable {
         case agent
         case thought
     }
@@ -380,29 +404,67 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         return nil
     }
 
-    /// On the first replayed touch of `messageId`, blanks whatever row
-    /// already carries it — if any — so the normal live-merge path that
-    /// runs right after in `applyReplayed` rebuilds it purely from what
-    /// replay sends, rather than appending on top of a possibly-stale
-    /// hydrated value. A later touch of the same identity in this same
-    /// replay window is a no-op here, since the row is already mid-rebuild.
-    private func resetTextRowOnFirstReplayTouch(kind: StreamKind, messageId: String?) {
-        guard let messageId else {
-            // No per-message identity to key on — an agent that omits
-            // `messageId` gives every chunk of a kind the SAME identity in
-            // the live model too (`legacyTrailingIndex` always extends the
-            // trailing row), so the reset is scoped the same way: once per
-            // kind per replay window, on the trailing row of that kind.
-            guard replayTouchedIdentities.insert(.legacyText(kind)).inserted,
-                  let index = legacyTrailingIndex(of: kind)
-            else { return }
-            resetTextRow(at: index, kind: kind, messageId: nil)
-            return
+    /// Replay of an agent/thought chunk. NOT delegated to `apply(_:at:)`
+    /// for either its identified or id-less shape:
+    ///
+    /// - Identified, the first replayed touch of a row that already exists
+    ///   resets it (discarding whatever hydration produced for that
+    ///   specific row only) so accumulation rebuilds it purely from what
+    ///   replay sends; a genuinely missing row is INSERTED at the current
+    ///   replay position rather than appended, so it lands between its
+    ///   chronological neighbours instead of always at the tail.
+    /// - Id-less rows have no identity beyond "the trailing row of this
+    ///   kind" (`legacyTrailingIndex`), which always finds the array's
+    ///   OVERALL newest matching row — fine for a single run, wrong for a
+    ///   SECOND historical run replayed after a boundary (a tool call, a
+    ///   prompt, the other text kind) has closed the first one, since that
+    ///   boundary sits AFTER both runs in the array. `legacyOpenRun` tracks
+    ///   which row is currently being extended instead, closed by
+    ///   `closeLegacyRuns` on every boundary-shaped update; a NEW run picks
+    ///   the next unreconciled historical row from `legacyTextCandidates`,
+    ///   in chronological order, or inserts a fresh one if none remain.
+    private func applyReplayedTextChunk(
+        _ chunk: ACPTextChunk, kind: StreamKind, at timestamp: Date
+    ) -> Set<Int> {
+        let text = Self.text(of: chunk.content)
+        guard !text.isEmpty else { return [] }
+        closeLegacyRuns(keepingTextRun: kind)
+        if let messageId = chunk.messageId {
+            let isFirstTouch = replayTouchedIdentities.insert(.text(kind, messageId)).inserted
+            if let index = trailingIndex(of: kind, messageId: messageId) {
+                if isFirstTouch { resetTextRow(at: index, kind: kind, messageId: messageId) }
+                appendToTextRow(at: index, kind: kind, text: text, phase: chunk.phase, metadata: chunk.metadata)
+                replayCursor = max(replayCursor, index + 1)
+                return [index]
+            }
+            let index = insertRecovered(
+                Self.makeTextMessage(
+                    kind: kind, messageId: messageId, text: text,
+                    phase: chunk.phase, metadata: chunk.metadata),
+                at: timestamp)
+            return [index]
         }
-        guard replayTouchedIdentities.insert(.text(kind, messageId)).inserted,
-              let index = trailingIndex(of: kind, messageId: messageId)
-        else { return }
-        resetTextRow(at: index, kind: kind, messageId: messageId)
+        if let openIndex = legacyOpenRun[kind], openIndex < messages.count {
+            appendToTextRow(at: openIndex, kind: kind, text: text, phase: chunk.phase, metadata: chunk.metadata)
+            replayCursor = max(replayCursor, openIndex + 1)
+            return [openIndex]
+        }
+        let candidates = legacyTextCandidates(of: kind)
+        let ordinal = legacyRunOrdinal[kind, default: 0]
+        legacyRunOrdinal[kind] = ordinal + 1
+        if ordinal < candidates.count {
+            let index = candidates[ordinal]
+            resetTextRow(at: index, kind: kind, messageId: nil)
+            appendToTextRow(at: index, kind: kind, text: text, phase: chunk.phase, metadata: chunk.metadata)
+            legacyOpenRun[kind] = index
+            replayCursor = max(replayCursor, index + 1)
+            return [index]
+        }
+        let index = insertRecovered(
+            Self.makeTextMessage(kind: kind, messageId: nil, text: text, phase: chunk.phase, metadata: chunk.metadata),
+            at: timestamp)
+        legacyOpenRun[kind] = index
+        return [index]
     }
 
     private func resetTextRow(at index: Int, kind: StreamKind, messageId: String?) {
@@ -416,37 +478,94 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         }
     }
 
-    /// Companion to `resetTextRowOnFirstReplayTouch` for the child's prompt
-    /// bubble.
-    /// Replay of a child prompt. NOT delegated to `apply(_:at:)` — that
-    /// path's `userIndex` is deliberately bounded to the newest `.user` row
-    /// (right for LIVE input, where a later prompt reusing an id must not
-    /// reopen an older bubble), but `session/load` replays EVERY prompt
-    /// chronologically, including ones that are no longer the newest.
-    /// Reconciling those needs a lookup with no such bound.
+    private func appendToTextRow(
+        at index: Int, kind: StreamKind, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?
+    ) {
+        switch (kind, messages[index]) {
+        case (.agent, .agent(_, _, let buffer)), (.thought, .thought(_, _, let buffer)):
+            buffer.append(text)
+            buffer.adopt(phase: phase, metadata: metadata)
+        default:
+            break
+        }
+    }
+
+    private static func makeTextMessage(
+        kind: StreamKind, messageId: String?, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?
+    ) -> ACPMessage {
+        let buffer = StreamingText(text, phase: phase, metadata: metadata)
+        switch kind {
+        case .agent: return .agent(id: UUID(), messageId: messageId, buffer)
+        case .thought: return .thought(id: UUID(), messageId: messageId, buffer)
+        }
+    }
+
+    /// Every id-less row of `kind`, in chronological (ascending) order —
+    /// the candidate list a NEW id-less replay run picks its target from.
+    private func legacyTextCandidates(of kind: StreamKind) -> [Int] {
+        messages.indices.filter { index in
+            switch (kind, messages[index]) {
+            case (.agent, .agent(_, nil, _)): return true
+            case (.thought, .thought(_, nil, _)): return true
+            default: return false
+            }
+        }
+    }
+
+    /// Replay of a child prompt. Mirrors `applyReplayedTextChunk`'s split:
+    /// identified prompts reconcile by id at ANY position (unlike the live
+    /// path's `userIndex`, bounded to the newest row so a later prompt
+    /// reusing an id can't reopen an older bubble — replay has no such
+    /// concern, since it resends every prompt exactly once, in order);
+    /// id-less prompts use the same open-run/ordinal tracking id-less text
+    /// rows do, via `legacyOpenUserRun`/`legacyUserRunOrdinal`.
     private func applyReplayedUserChunk(_ chunk: ACPTextChunk, at timestamp: Date) -> Set<Int> {
         let text = Self.text(of: chunk.content)
         let attachments = ACPSessionRunner.attachments(of: [chunk.content])
         guard !text.isEmpty || !attachments.isEmpty else { return [] }
-        guard let messageId = chunk.messageId else {
-            // No identity to reconcile against; behaves like the live path.
-            return apply(.userMessageChunk(chunk), at: timestamp)
+        closeLegacyRuns(keepingUserRun: true)
+        if let messageId = chunk.messageId {
+            let isFirstTouch = replayTouchedIdentities.insert(.user(messageId)).inserted
+            if let index = anyUserIndex(messageId: messageId) {
+                if isFirstTouch, case .user(let id, _, _, _, let source) = messages[index] {
+                    messages[index] = .user(
+                        id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
+                }
+                appendToUserRow(at: index, messageId: messageId, text: text, attachments: attachments)
+                replayCursor = max(replayCursor, index + 1)
+                return [index]
+            }
+            let index = insertRecovered(
+                .user(id: UUID(), messageId: messageId, text: text, attachments: attachments), at: timestamp)
+            return [index]
         }
-        guard let index = anyUserIndex(messageId: messageId) else {
-            // Genuinely missing — recover it in full, same as any other
-            // replay-recovered row.
-            return [append(.user(
-                id: UUID(), messageId: messageId, text: text, attachments: attachments), at: timestamp)]
+        if let openIndex = legacyOpenUserRun, openIndex < messages.count {
+            appendToUserRow(at: openIndex, messageId: nil, text: text, attachments: attachments)
+            replayCursor = max(replayCursor, openIndex + 1)
+            return [openIndex]
         }
-        if replayTouchedIdentities.insert(.user(messageId)).inserted,
-           case .user(let id, _, _, _, let source) = messages[index] {
-            // First replayed touch: reset so the accumulation below rebuilds
-            // from what replay actually sends rather than appending onto a
-            // possibly-stale hydrated value.
-            messages[index] = .user(id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
+        let candidates = legacyUserCandidates()
+        let ordinal = legacyUserRunOrdinal
+        legacyUserRunOrdinal += 1
+        if ordinal < candidates.count {
+            let index = candidates[ordinal]
+            if case .user(let id, _, _, _, let source) = messages[index] {
+                messages[index] = .user(id: id, messageId: nil, text: "", attachments: [], delegatedSource: source)
+            }
+            appendToUserRow(at: index, messageId: nil, text: text, attachments: attachments)
+            legacyOpenUserRun = index
+            replayCursor = max(replayCursor, index + 1)
+            return [index]
         }
+        let index = insertRecovered(
+            .user(id: UUID(), messageId: nil, text: text, attachments: attachments), at: timestamp)
+        legacyOpenUserRun = index
+        return [index]
+    }
+
+    private func appendToUserRow(at index: Int, messageId: String?, text: String, attachments: [ACPMessage.Attachment]) {
         guard case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] else {
-            return []
+            return
         }
         messages[index] = .user(
             id: id,
@@ -454,7 +573,6 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             text: existingText + text,
             attachments: existingAttachments + attachments.filter { !existingAttachments.contains($0) },
             delegatedSource: source)
-        return [index]
     }
 
     /// A user-prompt row for `messageId`, at ANY position — unlike
@@ -467,6 +585,14 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         return nil
     }
 
+    /// Every id-less `.user` row, in chronological (ascending) order.
+    private func legacyUserCandidates() -> [Int] {
+        messages.indices.filter {
+            if case .user(_, nil, _, _, _) = messages[$0] { return true }
+            return false
+        }
+    }
+
     /// A tool-call row for `id`, at any position — unlike the merge lookups
     /// above, a replayed (or updated) tool call must be found regardless of
     /// what has been appended after it.
@@ -475,6 +601,51 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             if case .toolCall(let tc) = $0 { return tc.toolCallId == id }
             return false
         }
+    }
+
+    /// Closes every id-less run boundary-closed by replaying an update of
+    /// the given shape, mirroring `legacyTrailingIndex`'s own boundary set:
+    /// a tool call, a user chunk, and — for a text run — the OTHER text
+    /// kind's chunk (an agent chunk closes an open thought run live, and
+    /// vice versa). Called at the top of every replay handler with
+    /// whichever run (if any) that update itself might continue.
+    private func closeLegacyRuns(keepingTextRun kind: StreamKind? = nil, keepingUserRun: Bool = false) {
+        for candidate: StreamKind in [.agent, .thought] where candidate != kind {
+            legacyOpenRun[candidate] = nil
+        }
+        if !keepingUserRun { legacyOpenUserRun = nil }
+    }
+
+    /// Inserts a row recovered because it's genuinely missing from what
+    /// hydration restored, at `replayCursor` — its chronological position —
+    /// with a `seq` strictly between its new neighbours when there's room
+    /// for one (there always is when the gap is exactly this one row), so
+    /// persistence keeps it in the right place too instead of only the
+    /// in-memory array being briefly correct. Shifts any open legacy run
+    /// tracked at or after the insertion point, since inserting moves it.
+    private func insertRecovered(_ message: ACPMessage, at timestamp: Date) -> Int {
+        let index = min(max(replayCursor, 0), messages.count)
+        let before: Int64? = index > 0 ? seqs[index - 1] : nil
+        let after: Int64? = index < seqs.count ? seqs[index] : nil
+        let seq: Int64
+        switch (before, after) {
+        case let (b?, a?) where a > b + 1:
+            seq = b + 1
+        case let (nil, a?):
+            seq = a - 1
+        default:
+            seq = nextSeq
+        }
+        messages.insert(message, at: index)
+        createdAts.insert(Int(timestamp.timeIntervalSince1970), at: index)
+        seqs.insert(seq, at: index)
+        if seq >= nextSeq { nextSeq = seq + 1 }
+        for kind: StreamKind in [.agent, .thought] {
+            if let open = legacyOpenRun[kind], open >= index { legacyOpenRun[kind] = open + 1 }
+        }
+        if let open = legacyOpenUserRun, open >= index { legacyOpenUserRun = open + 1 }
+        replayCursor = index + 1
+        return index
     }
 
     private func legacyTrailingIndex(of kind: StreamKind) -> Int? {
