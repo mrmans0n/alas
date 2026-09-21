@@ -437,6 +437,13 @@ extension AppState {
         do {
             tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
         } catch {
+            // Deleting a schedule cancels its targets, and that cancellation
+            // arrives here as a thrown error. Recording it as a launch
+            // failure would leave the worktree in a retryable failed state
+            // and raise failure notifications for work deliberately stopped.
+            if Task.isCancelled || error is CancellationError {
+                return .skipped(reason: "The schedule was removed while its agent was launching.")
+            }
             markWorktreeLaunchFailed(
                 worktree: worktree,
                 projectId: project.id,
@@ -526,6 +533,10 @@ extension AppState {
             )
             return
         }
+        // Same race as the one guarded before Enter: the settle sleep can
+        // finish and the schedule be deleted before this resumes on the main
+        // actor, in which case nothing threw and the wait reported ready.
+        guard !Task.isCancelled else { return }
         guard typeIntoTerminal(text, sessionID: sessionID) else {
             inAppNotifications.post(
                 "\(schedule.name): the agent's terminal in \(worktree.branch) closed before the prompt could be sent.",
