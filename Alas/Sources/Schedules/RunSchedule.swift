@@ -58,12 +58,52 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     var branchTemplate: String
     /// Explicit agent, or nil for the project/repo/global default.
     var agentId: String?
+    /// Typed into the agent's terminal once the agent is up. Nil means the
+    /// agent just opens and waits.
+    var prompt: String?
+    /// Whether the prompt is submitted as soon as it is typed, or left in
+    /// the agent's input for the user to send. Meaningless without `prompt`.
+    var sendsPromptAutomatically: Bool
 
     static let defaultBranchTemplate = "scheduled/{name}-{date}-{time}"
 
-    init(branchTemplate: String = RunScheduleComposition.defaultBranchTemplate, agentId: String? = nil) {
+    init(
+        branchTemplate: String = RunScheduleComposition.defaultBranchTemplate,
+        agentId: String? = nil,
+        prompt: String? = nil,
+        sendsPromptAutomatically: Bool = true
+    ) {
         self.branchTemplate = branchTemplate
         self.agentId = agentId
+        self.prompt = prompt
+        self.sendsPromptAutomatically = sendsPromptAutomatically
+    }
+
+    /// The prompt as keystrokes for the agent's terminal. Line breaks become
+    /// spaces: typed into a TUI a newline is Enter, which would split the
+    /// prompt into several messages (or submit half of it).
+    static func terminalText(for prompt: String) -> String {
+        prompt
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case branchTemplate, agentId, prompt, sendsPromptAutomatically
+    }
+
+    /// Written by hand because the prompt fields arrived after the first
+    /// release: a file without them must still decode, or the lenient
+    /// per-schedule decoder in `RunSchedulesFile` drops the whole schedule.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        branchTemplate = try c.decodeIfPresent(String.self, forKey: .branchTemplate) ?? Self.defaultBranchTemplate
+        agentId = try c.decodeIfPresent(String.self, forKey: .agentId)
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
+        sendsPromptAutomatically = try c.decodeIfPresent(Bool.self, forKey: .sendsPromptAutomatically) ?? true
     }
 }
 

@@ -28,6 +28,33 @@ struct RunScheduleDraft: Equatable {
         var label: String { rawValue.capitalized }
     }
 
+    /// The quick picks above the weekday row. A preset is a named weekday
+    /// set; the row stays editable afterwards, at which point no preset is
+    /// selected any more.
+    enum WeekdayPreset: String, CaseIterable, Equatable {
+        case everyDay, weekdays, weekends
+
+        var weekdays: Set<Int> {
+            switch self {
+            case .everyDay: Set(1...7)
+            case .weekdays: Set(2...6)
+            case .weekends: [1, 7]
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .everyDay: "Every day"
+            case .weekdays: "Weekdays"
+            case .weekends: "Weekends"
+            }
+        }
+
+        static func matching(_ weekdays: Set<Int>) -> WeekdayPreset? {
+            allCases.first { $0.weekdays == weekdays }
+        }
+    }
+
     var name = ""
     var projectID: String?
     var worktreeID: String?
@@ -43,6 +70,8 @@ struct RunScheduleDraft: Equatable {
     var createsWorktree = false
     var branchTemplate = RunScheduleComposition.defaultBranchTemplate
     var agentID: String?
+    var prompt = ""
+    var sendsPromptAutomatically = true
 
     init() {}
 
@@ -84,7 +113,34 @@ struct RunScheduleDraft: Equatable {
             createsWorktree = true
             branchTemplate = composition.branchTemplate
             agentID = composition.agentId
+            prompt = composition.prompt ?? ""
+            sendsPromptAutomatically = composition.sendsPromptAutomatically
         }
+    }
+
+    /// The preset the weekday row currently matches, if any.
+    var weekdayPreset: WeekdayPreset? { WeekdayPreset.matching(weekdays) }
+
+    mutating func apply(_ preset: WeekdayPreset) {
+        weekdays = preset.weekdays
+    }
+
+    mutating func toggleWeekday(_ day: Int) {
+        if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+    }
+
+    /// When the schedule would first fire if it were saved right now. An
+    /// interval schedule is anchored on creation, so its first occurrence is
+    /// one interval from now; a time-of-day schedule is the next allowed
+    /// wall-clock slot. Nil while the trigger is not valid.
+    func nextFireDate(now: Date, calendar: Calendar = .autoupdatingCurrent) -> Date? {
+        switch triggerKind {
+        case .interval:
+            guard intervalValue >= 1 else { return nil }
+        case .timeOfDay:
+            guard (0...23).contains(hour), (0...59).contains(minute), !weekdays.isEmpty else { return nil }
+        }
+        return RunSchedulePlanner.nextFireDate(for: trigger, after: now, anchor: now, calendar: calendar)
     }
 
     static func intervalComponents(_ seconds: TimeInterval) -> (Int, IntervalUnit) {
@@ -120,9 +176,12 @@ struct RunScheduleDraft: Equatable {
     var composition: RunScheduleComposition? {
         guard createsWorktree else { return nil }
         let template = branchTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         return RunScheduleComposition(
             branchTemplate: template.isEmpty ? RunScheduleComposition.defaultBranchTemplate : template,
-            agentId: agentID
+            agentId: agentID,
+            prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+            sendsPromptAutomatically: sendsPromptAutomatically
         )
     }
 

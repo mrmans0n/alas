@@ -419,8 +419,9 @@ extension AppState {
             return .launchFailed(message)
         }
         let launchSurface = WorktreeLaunchSurface.terminal(agentId: agentId)
+        let tab: Tab?
         do {
-            try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
+            tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
         } catch {
             markWorktreeLaunchFailed(
                 worktree: worktree,
@@ -442,6 +443,90 @@ extension AppState {
             severity: .success,
             worktreeID: worktree.id
         )
+        if let prompt = composition.prompt, case .terminal(let terminal)? = tab {
+            await deliverScheduledPrompt(
+                prompt,
+                sendsAutomatically: composition.sendsPromptAutomatically,
+                sessionID: terminal.root.firstLeaf().sessionId,
+                schedule: schedule,
+                worktree: worktree
+            )
+        }
         return .succeeded
+    }
+
+    // MARK: - Prompt delivery
+
+    /// How long to wait for the agent to appear in its terminal before giving
+    /// up on the prompt. Generous because the startup script runs first and
+    /// a remote host may still be attaching its session.
+    static let scheduledPromptReadinessTimeout: TimeInterval = 120
+    /// Pause between the agent appearing and the first keystroke, so a TUI
+    /// has drawn its input box before text arrives in it.
+    static let scheduledPromptSettleDelay: Duration = .milliseconds(1_500)
+    /// Pause between the prompt and the Enter that submits it, so an input
+    /// that debounces paste-like bursts sees them as two events.
+    static let scheduledPromptSubmitDelay: Duration = .milliseconds(200)
+
+    /// Types the prompt into the agent's terminal, and Enter after it when
+    /// the schedule asks for that. Never types into a terminal whose agent
+    /// has not been seen: the shell would receive the text instead, and with
+    /// auto-send would run it. That failure is reported but does not undo the
+    /// launch, which did happen.
+    private func deliverScheduledPrompt(
+        _ prompt: String,
+        sendsAutomatically: Bool,
+        sessionID: String,
+        schedule: RunSchedule,
+        worktree: Worktree
+    ) async {
+        let text = RunScheduleComposition.terminalText(for: prompt)
+        guard !text.isEmpty else { return }
+        guard await waitForScheduledAgent(sessionID: sessionID) else {
+            inAppNotifications.post(
+                "\(schedule.name): the agent did not become ready in \(worktree.branch), so the prompt was not sent.",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
+        guard typeIntoTerminal(text, sessionID: sessionID) else {
+            inAppNotifications.post(
+                "\(schedule.name): the agent's terminal in \(worktree.branch) closed before the prompt could be sent.",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
+        guard sendsAutomatically else { return }
+        try? await Task.sleep(for: Self.scheduledPromptSubmitDelay)
+        _ = typeIntoTerminal("\r", sessionID: sessionID)
+    }
+
+    /// Ready means the harness detector has matched the session's foreground
+    /// process to a known agent. A changed foreground pid alone is not
+    /// enough — the user's startup script spawns processes too — so an agent
+    /// the detector does not know never gets its prompt, which is the safe
+    /// side to fail on.
+    private func waitForScheduledAgent(sessionID: String) async -> Bool {
+        if let scheduledAgentReadiness {
+            return await scheduledAgentReadiness(sessionID)
+        }
+        let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
+        while harness.harnessBySession[sessionID] == nil {
+            guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        try? await Task.sleep(for: Self.scheduledPromptSettleDelay)
+        return harness.detector.isRegistered(sessionId: sessionID)
+    }
+
+    private func typeIntoTerminal(_ text: String, sessionID: String) -> Bool {
+        if let terminalTextSender {
+            return terminalTextSender(sessionID, text)
+        }
+        guard let session = terminal.registry.session(for: sessionID) else { return false }
+        session.surface.sendText(text)
+        return true
     }
 }

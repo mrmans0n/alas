@@ -1,8 +1,36 @@
+import AppKit
 import SwiftUI
 
 enum DialogContainerLayout {
     static let defaultWidth: CGFloat = 480
     static let projectWidth: CGFloat = 640
+
+    /// Everything a dialog needs on screen besides its body: the header, the
+    /// footer, and breathing room at the screen's edges. Deliberately a
+    /// slight over-estimate — reserving too much only makes a dialog scroll
+    /// a little sooner, while reserving too little is the bug this exists to
+    /// prevent.
+    static let chromeHeight: CGFloat = 200
+
+    /// The body never shrinks below this, even on a very short screen. A
+    /// dialog showing two fields through a letterbox is worse than one that
+    /// runs slightly past the edge.
+    static let minimumBodyHeight: CGFloat = 240
+
+    /// How tall the scrolling body may get on a screen of `availableHeight`.
+    /// Header and footer sit outside it, so they stay reachable no matter
+    /// how much the body grows.
+    static func bodyMaxHeight(availableHeight: CGFloat) -> CGFloat {
+        max(minimumBodyHeight, availableHeight - chromeHeight)
+    }
+
+    /// Usable height of the screen the dialog is on. Falls back to a common
+    /// laptop height when there is no screen to ask, which is the case in
+    /// tests and when running headless.
+    @MainActor
+    static var availableScreenHeight: CGFloat {
+        NSScreen.main?.visibleFrame.height ?? 900
+    }
 }
 
 struct DialogContainer<Content: View, HeaderAccessory: View>: View {
@@ -18,8 +46,13 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
     let onConfirm: () -> Void
     let confirmEnabled: Bool
     let cancelEnabled: Bool
+    /// Quiet status text at the footer's leading edge, opposite the buttons.
+    let footerHint: String?
 
     @Environment(\.theme) var theme
+    /// The body's natural height, as last laid out. Drives the cap below;
+    /// zero until the first layout pass has measured it.
+    @State private var measuredBodyHeight: CGFloat = 0
 
     init(
         title: String,
@@ -33,7 +66,8 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         onCancel: @escaping () -> Void,
         onConfirm: @escaping () -> Void,
         confirmEnabled: Bool,
-        cancelEnabled: Bool = true
+        cancelEnabled: Bool = true,
+        footerHint: String? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
@@ -47,6 +81,7 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         self.onConfirm = onConfirm
         self.confirmEnabled = confirmEnabled
         self.cancelEnabled = cancelEnabled
+        self.footerHint = footerHint
     }
 
     var body: some View {
@@ -65,10 +100,26 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
             }
             .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 6)
 
-            VStack(alignment: .leading, spacing: 14) { content() }
-                .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
+            // The body scrolls rather than growing without limit: a dialog
+            // whose content expands (an optional section being opened, a
+            // long form) must not push its own footer off the screen.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 14) { content() }
+                    .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredBodyHeight = $0 }
+            }
+            .frame(height: bodyHeight)
+            .scrollBounceBehavior(.basedOnSize)
 
             HStack(spacing: 8) {
+                if let footerHint, !footerHint.isEmpty {
+                    Text(footerHint)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
                 Spacer()
                 AlasButton(title: cancelTitle, style: .subtle, action: onCancel)
                     .disabled(!cancelEnabled)
@@ -86,6 +137,17 @@ struct DialogContainer<Content: View, HeaderAccessory: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.6), radius: 80, y: 30)
     }
+
+    /// The body's height: its own, until that exceeds what the screen can
+    /// show. Nil before the first measurement, which leaves the scroll view
+    /// to size itself to its content for that pass.
+    private var bodyHeight: CGFloat? {
+        guard measuredBodyHeight > 0 else { return nil }
+        return min(
+            measuredBodyHeight,
+            DialogContainerLayout.bodyMaxHeight(availableHeight: DialogContainerLayout.availableScreenHeight)
+        )
+    }
 }
 
 extension DialogContainer where HeaderAccessory == EmptyView {
@@ -99,7 +161,8 @@ extension DialogContainer where HeaderAccessory == EmptyView {
         confirmStyle: AlasButtonStyle,
         onCancel: @escaping () -> Void,
         onConfirm: @escaping () -> Void,
-        confirmEnabled: Bool
+        confirmEnabled: Bool,
+        footerHint: String? = nil
     ) {
         self.init(
             title: title,
@@ -112,7 +175,8 @@ extension DialogContainer where HeaderAccessory == EmptyView {
             confirmStyle: confirmStyle,
             onCancel: onCancel,
             onConfirm: onConfirm,
-            confirmEnabled: confirmEnabled
+            confirmEnabled: confirmEnabled,
+            footerHint: footerHint
         )
     }
 }

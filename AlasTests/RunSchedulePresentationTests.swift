@@ -173,6 +173,105 @@ struct RunSchedulePresentationTests {
         #expect(hours.intervalUnit == .hours)
     }
 
+    @Test func draftCarriesThePromptAndDropsABlankOne() {
+        let original = RunSchedule(
+            id: "s1",
+            name: "Morning",
+            target: .allProjects,
+            scriptKey: nil,
+            trigger: .interval(seconds: 3_600),
+            composition: RunScheduleComposition(agentId: "claude", prompt: "Run the tests.", sendsPromptAutomatically: false)
+        )
+        var draft = RunScheduleDraft(schedule: original)
+        #expect(draft.prompt == "Run the tests.")
+        #expect(!draft.sendsPromptAutomatically)
+        #expect(draft.makeSchedule(existing: original) == original)
+
+        // Whitespace is not a prompt; the agent should just open.
+        draft.prompt = "  \n"
+        #expect(draft.composition?.prompt == nil)
+        draft.prompt = "  Fix the build  "
+        #expect(draft.composition?.prompt == "Fix the build")
+
+        // Older files predate the prompt fields and still have to decode,
+        // or the lenient schedule decoder drops the whole schedule.
+        let legacy = Data(#"{"branchTemplate":"nightly","agentId":"claude"}"#.utf8)
+        let decoded = try? JSONDecoder().decode(RunScheduleComposition.self, from: legacy)
+        #expect(decoded == RunScheduleComposition(branchTemplate: "nightly", agentId: "claude"))
+        #expect(decoded?.sendsPromptAutomatically == true)
+    }
+
+    @Test func weekdayPresetsNameTheRowAndTogglingLeavesThem() {
+        var draft = RunScheduleDraft()
+        #expect(draft.weekdayPreset == .everyDay)
+        draft.apply(.weekdays)
+        #expect(draft.weekdays == Set(2...6))
+        #expect(draft.weekdayPreset == .weekdays)
+        draft.toggleWeekday(2)
+        #expect(draft.weekdayPreset == nil)
+        draft.toggleWeekday(2)
+        #expect(draft.weekdayPreset == .weekdays)
+        draft.apply(.weekends)
+        #expect(draft.weekdays == [1, 7])
+        #expect(draft.weekdayPreset == .weekends)
+    }
+
+    @Test func triggerSummariesReadAsASentence() {
+        func plain(_ trigger: RunScheduleTrigger) -> String {
+            RunSchedulePresentation.triggerSummarySegments(trigger, calendar: calendar).map(\.text).joined()
+        }
+        func emphasized(_ trigger: RunScheduleTrigger) -> [String] {
+            RunSchedulePresentation.triggerSummarySegments(trigger, calendar: calendar).filter(\.isEmphasized).map(\.text)
+        }
+        #expect(plain(.timeOfDay(hour: 9, minute: 0, weekdays: Set(2...6))) == "Runs weekdays at 09:00")
+        #expect(emphasized(.timeOfDay(hour: 9, minute: 0, weekdays: Set(2...6))) == ["weekdays", "09:00"])
+        #expect(plain(.timeOfDay(hour: 22, minute: 30, weekdays: [1, 7])) == "Runs weekends at 22:30")
+        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [2, 4])) == "Runs Mon, Wed at 07:05")
+        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [])) == "Runs never at 07:05")
+        #expect(plain(.interval(seconds: 7_200)) == "Runs every 2 hours while Alas is open")
+        #expect(emphasized(.interval(seconds: 3_600)) == ["every 1 hour"])
+        #expect(RunSchedulePresentation.weekdaysLabel(Set(1...7)) == "every day")
+    }
+
+    @Test func nextFirePreviewNamesTodayTomorrowOrTheDay() throws {
+        var calendar = self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        // Monday 21 September 2026, 20:25.
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 20, minute: 25)))
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+        draft.apply(.weekdays)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Tomorrow, 09:00")
+        draft.hour = 21
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Today, 21:00")
+        draft.apply(.weekends)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Sat 26 Sep, 21:00")
+        draft.weekdays = []
+        #expect(draft.nextFireDate(now: now, calendar: calendar) == nil)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(nil, now: now, calendar: calendar) == "")
+
+        // An interval schedule is anchored on creation, so its first
+        // occurrence is one interval out.
+        draft.triggerKind = .interval
+        draft.intervalValue = 2
+        draft.intervalUnit = .hours
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Today, 22:25")
+        draft.intervalValue = 0
+        #expect(draft.nextFireDate(now: now, calendar: calendar) == nil)
+    }
+
+    @Test func promptHintsAndKeystrokes() {
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: true) == "The agent starts working without waiting for you.")
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false).contains("press Enter"))
+        // Typed into a TUI, a line break is Enter; the prompt has to arrive
+        // as one message.
+        #expect(RunScheduleComposition.terminalText(for: "Fix the build.\n\nThen open a PR.\r\n") == "Fix the build. Then open a PR.")
+        let withPrompt = RunScheduleComposition(agentId: "claude", prompt: "hi")
+        #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: withPrompt, agentName: "Claude") == "New worktree → Launch Claude with a prompt")
+    }
+
     // MARK: - History
 
     @Test func historyHeadingCarriesItsCount() {
