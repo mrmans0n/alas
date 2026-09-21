@@ -109,7 +109,8 @@ actor ACPSessionHydrator {
             subagentMessages.append(.init(
                 subagentSessionId: stored.subagentSessionId,
                 wire: wire,
-                createdAt: Date(timeIntervalSince1970: TimeInterval(stored.createdAt))))
+                createdAt: Date(timeIntervalSince1970: TimeInterval(stored.createdAt)),
+                seq: stored.seq))
         }
 
         return HydrationResult(
@@ -198,6 +199,13 @@ struct ACPHydratedSubagentMessage: Sendable {
     let subagentSessionId: String
     let wire: ACPMessageWire
     let createdAt: Date
+    /// The SQL `seq` this row was stored under. Carried explicitly rather
+    /// than inferred from array position: persistence can leave gaps (one
+    /// write in a sequence fails while a later one succeeds), and treating
+    /// a gappy, compacted array's offsets as durable sequence numbers would
+    /// let a later re-persist write a recovered row over an unrelated,
+    /// already-stored one.
+    let seq: Int64
 }
 
 struct ACPMirrorMessageFingerprint: Sendable, Equatable {

@@ -69,20 +69,27 @@ struct ACPSubagentCapabilities: Codable, Equatable, Sendable {
 struct ACPSubagentStateUpdate: Codable, Equatable, Sendable {
     let subagentSessionId: String
     let state: ACPSubagentState
+    /// Diagnostic text for a failure. The standard ACP `subagent_state_update`
+    /// has no such field, so this is nil for it; OpenCode's own status
+    /// notification carries one and is normalized onto this field so the
+    /// failure reason is not lost once folded into the standard shape.
+    let error: String?
 
-    init(subagentSessionId: String, state: ACPSubagentState) {
+    init(subagentSessionId: String, state: ACPSubagentState, error: String? = nil) {
         self.subagentSessionId = subagentSessionId
         self.state = state
+        self.error = error
     }
 
     private enum CodingKeys: String, CodingKey {
-        case subagentSessionId, state
+        case subagentSessionId, state, error
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         subagentSessionId = try c.decode(String.self, forKey: .subagentSessionId)
         state = try c.decode(ACPSubagentState.self, forKey: .state)
+        error = try? c.decodeIfPresent(String.self, forKey: .error)
     }
 }
 

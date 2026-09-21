@@ -67,14 +67,15 @@ struct ACPOpenCodeChildUpdate: Decodable, Equatable {
         switch payload {
         case .update(let update):
             return [spawn, .init(sessionId: childSessionId, update: update)]
-        case .status(let state, _):
+        case .status(let state, let error):
             return [
                 spawn,
                 .init(
                     sessionId: rootSessionId,
                     update: .subagentStateUpdate(.init(
                         subagentSessionId: childSessionId,
-                        state: state
+                        state: state,
+                        error: error
                     ))
                 )
             ]

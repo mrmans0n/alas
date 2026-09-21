@@ -59,6 +59,38 @@ struct ACPSubagentSessionTests {
         #expect(row.executionFinishedAt != nil)
     }
 
+    @Test("a failure's diagnostic text is preserved and survives a persist round trip")
+    func failureDiagnosticIsPreservedAndPersisted() throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        session.apply(.subagentStateUpdate(.init(
+            subagentSessionId: "child-1", state: .failed, error: "rate limited")))
+
+        #expect(session.subagentRun("child-1")?.lastError == "rate limited")
+        let descriptor = try #require(descriptor(in: session, at: 0))
+        #expect(descriptor.lastError == "rate limited")
+
+        // Round-trips through the same metadata encode/decode the row
+        // itself already relies on for name/task/state.
+        let toolCall = descriptor.toolCall(executionStartedAt: nil, executionFinishedAt: nil)
+        let encoded = try JSONEncoder().encode(toolCall)
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: encoded)
+        #expect(ACPSubagentRowDescriptor(toolCall: decoded)?.lastError == "rate limited")
+    }
+
+    @Test("a later update without its own error keeps the earlier diagnostic")
+    func failureDiagnosticIsSticky() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        session.apply(.subagentStateUpdate(.init(
+            subagentSessionId: "child-1", state: .failed, error: "network error")))
+        // A housekeeping update for the SAME terminal state, carrying no
+        // error of its own (the standard shape, not OpenCode's).
+        session.apply(.subagentStateUpdate(.init(subagentSessionId: "child-1", state: .failed)))
+
+        #expect(session.subagentRun("child-1")?.lastError == "network error")
+    }
+
     @Test("a state update for an unknown child changes nothing")
     func unknownChildStateIsIgnored() {
         let session = makeSession()
@@ -228,6 +260,52 @@ struct ACPSubagentSessionTests {
         #expect(buffer.value == "hello world")
     }
 
+    @Test("replay recovers a lost tail on an id-less row without duplicating it")
+    func replayRecoversIdLessLostTailWithoutDuplication() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // An agent that omits `messageId` entirely — only the first chunk
+        // made it to SQLite before the crash.
+        run.restore(
+            messages: [.agent(id: UUID(), StreamingText("hello "))],
+            createdAts: [Date()])
+
+        for chunk in ["hello", " world"] {
+            run.applyReplayed(.agentMessageChunk(.text(chunk)))
+        }
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the id-less row to be rebuilt in place")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("replaying a tool call preserves the persisted row's execution timing")
+    func replayPreservesToolCallTiming() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        let started = Date(timeIntervalSince1970: 1_000)
+        let finished = Date(timeIntervalSince1970: 1_010)
+        run.restore(
+            messages: [.toolCall(.init(
+                toolCallId: "t1", title: "Read", status: "completed",
+                executionStartedAt: started, executionFinishedAt: finished))],
+            createdAts: [started])
+
+        // Replayed far later than the original run — if timing weren't
+        // preserved, the row would show a fresh start at THIS time.
+        run.applyReplayed(
+            .toolCall(.init(toolCallId: "t1", title: "Read", kind: nil, status: "completed")),
+            at: Date(timeIntervalSince1970: 5_000))
+
+        guard case .toolCall(let toolCall) = run.messages[0] else {
+            Issue.record("expected the tool call row")
+            return
+        }
+        #expect(toolCall.executionStartedAt == started)
+        #expect(toolCall.executionFinishedAt == finished)
+    }
+
     @Test("a replayed tool call upserts an existing row instead of duplicating it")
     func replayUpsertsExistingToolCall() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
@@ -375,7 +453,7 @@ struct ACPSubagentSessionTests {
         session.restoreSubagents(
             rows: [descriptor.toolCall(executionStartedAt: created, executionFinishedAt: nil)],
             messages: ["child-1": [
-                (.agent(id: UUID(), StreamingText("restored")), created)
+                (.agent(id: UUID(), StreamingText("restored")), created, 0)
             ]])
 
         let run = try? #require(session.subagentRun("child-1"))

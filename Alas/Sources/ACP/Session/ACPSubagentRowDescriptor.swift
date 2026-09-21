@@ -18,19 +18,25 @@ struct ACPSubagentRowDescriptor: Equatable, Sendable {
     let task: String?
     let state: ACPSubagentState
     let capabilities: ACPSubagentCapabilities
+    /// Diagnostic text from the most recent failure, when the agent
+    /// provided one. Carried in the row's own metadata so it survives
+    /// persistence and hydration rather than living only in memory.
+    let lastError: String?
 
     init(
         subagentSessionId: String,
         name: String?,
         task: String?,
         state: ACPSubagentState,
-        capabilities: ACPSubagentCapabilities
+        capabilities: ACPSubagentCapabilities,
+        lastError: String? = nil
     ) {
         self.subagentSessionId = subagentSessionId
         self.name = name
         self.task = task
         self.state = state
         self.capabilities = capabilities
+        self.lastError = lastError
     }
 
     /// Reads the descriptor back off a transcript row. Returns nil for every
@@ -46,6 +52,7 @@ struct ACPSubagentRowDescriptor: Equatable, Sendable {
         name = Self.string(facts["name"])
         task = Self.string(facts["task"])
         state = Self.string(facts["state"]).map(ACPSubagentState.init(rawValue:)) ?? .running
+        lastError = Self.string(facts["lastError"])
         let capabilities = Self.object(facts["capabilities"]) ?? [:]
         self.capabilities = .init(
             cancel: Self.bool(capabilities["cancel"]) == true ? .init() : nil,
@@ -79,6 +86,7 @@ struct ACPSubagentRowDescriptor: Equatable, Sendable {
         ]
         if let name { facts["name"] = AnyCodable(name) }
         if let task { facts["task"] = AnyCodable(task) }
+        if let lastError { facts["lastError"] = AnyCodable(lastError) }
         var capabilityFacts: [String: AnyCodable] = [:]
         if capabilities.supportsCancel { capabilityFacts["cancel"] = AnyCodable(true) }
         if capabilities.supportsClose { capabilityFacts["close"] = AnyCodable(true) }

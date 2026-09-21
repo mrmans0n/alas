@@ -209,6 +209,26 @@ struct ACPOpenCodeChildUpdateTests {
         #expect(state.state == .completed)
     }
 
+    @Test("a failed status carries its diagnostic text into the normalized update")
+    func normalizesStatusErrorText() throws {
+        let json = """
+        {
+          "rootSessionId": "root",
+          "childSessionId": "child-1",
+          "type": "status",
+          "status": "failed",
+          "error": "rate limited by upstream provider"
+        }
+        """
+        let normalized = ACPOpenCodeChildUpdate.normalize(params: Data(json.utf8))
+        guard case .subagentStateUpdate(let state) = normalized.last?.update else {
+            Issue.record("expected subagentStateUpdate")
+            return
+        }
+        #expect(state.state == .failed)
+        #expect(state.error == "rate limited by upstream provider")
+    }
+
     @Test("OpenCode's interrupted status maps onto cancelled")
     func mapsInterruptedStatus() throws {
         let json = """

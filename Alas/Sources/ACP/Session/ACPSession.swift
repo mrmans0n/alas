@@ -1574,7 +1574,7 @@ final class ACPSession: ObservableObject, Identifiable {
         at timestamp: Date = Date()
     ) -> Set<Int> {
         guard let run = subagents[update.subagentSessionId] else { return [] }
-        run.apply(state: update.state, at: timestamp)
+        run.apply(state: update.state, error: update.error, at: timestamp)
         return refreshSubagentRow(for: run, at: timestamp)
     }
 
@@ -1654,7 +1654,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// cannot materialise one without mutating state mid-render).
     func restoreSubagents(
         rows: [ACPMessage.ToolCall],
-        messages restored: [String: [(message: ACPMessage, createdAt: Date)]]
+        messages restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]]
     ) {
         var rebuilt: [String: ACPSubagentRun] = [:]
         var order: [String] = []
@@ -1673,7 +1673,8 @@ final class ACPSession: ObservableObject, Identifiable {
             if let rows = restored[descriptor.subagentSessionId] {
                 run.restore(
                     messages: rows.map(\.message),
-                    createdAts: rows.map(\.createdAt))
+                    createdAts: rows.map(\.createdAt),
+                    seqs: rows.map(\.seq))
             }
             rebuilt[descriptor.subagentSessionId] = run
             order.append(descriptor.subagentSessionId)
@@ -1702,7 +1703,8 @@ final class ACPSession: ObservableObject, Identifiable {
             name: run.name,
             task: run.task,
             state: run.state,
-            capabilities: run.capabilities)
+            capabilities: run.capabilities,
+            lastError: run.lastError)
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {

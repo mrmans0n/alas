@@ -731,8 +731,23 @@ final class ACPSessionRunner {
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                 )
             } else {
-                _ = session.applySuppressedReplaySideEffects(params.update)
-                durableConsumptionAcknowledgement?()
+                // `.toolCall`/`.toolCallUpdate` reconciliation (pre-existing)
+                // and root-level subagent lifecycle reconciliation both
+                // return dirty parent-row indices now — persist them and
+                // acknowledge only after that succeeds, exactly like the
+                // nested (child-addressed) lifecycle branch below already
+                // does. Discarding the result and acking unconditionally
+                // let a broker-backed reattach advance its cursor without
+                // ever storing the row replay just recovered.
+                let dirty = session.applySuppressedReplaySideEffects(params.update)
+                if dirty.isEmpty {
+                    durableConsumptionAcknowledgement?()
+                } else {
+                    persistIndices(
+                        dirty,
+                        completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+                    )
+                }
             }
             if let target = loadReplaySuppressionTarget,
                observedUpdateCount >= target {
@@ -980,15 +995,21 @@ final class ACPSessionRunner {
             guard index >= 0, index < messages.count else { continue }
             let message = messages[index]
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
+            // The row's SQL seq, NOT its array index: persistence can leave
+            // gaps, and using the index here would let a row recovered by
+            // replay — appended at whatever position it lands in the
+            // compacted in-memory array — overwrite an unrelated row still
+            // holding that index's old seq. See `ACPSubagentRun.restore`.
+            let seq = run.seq(at: index)
             rows.append(ACPStoredSubagentMessage(
                 id: ACPStoredSubagentMessage.rowId(
                     sessionId: sessionId,
                     subagentSessionId: subagentSessionId,
-                    seq: Int64(index)),
+                    seq: seq),
                 sessionId: sessionId,
                 subagentSessionId: subagentSessionId,
                 kind: message.kind,
-                seq: Int64(index),
+                seq: seq,
                 payload: payload,
                 createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970)))
         }
@@ -1005,8 +1026,16 @@ final class ACPSessionRunner {
             // is dropped instead of being replayed to the new writer.
             try await persistence.persistSubagentMessages(subagentRows, fence: fence)
         }, completion: { [weak self] persisted in
-            self?.lastQueuedPersistenceSucceeded = (persisted == true)
-            guard persisted == true else {
+            guard let self else { return }
+            // Combine with the PRECEDING queued write's outcome (read
+            // before this overwrites it) rather than record only this
+            // write's own result: an OpenCode batch's spawn write can fail
+            // for a reason this write's own success says nothing about, and
+            // this write's own completion — unlike the barrier's — is what
+            // acknowledges the batch's shared cursor when it carries the ack.
+            let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+            self.lastQueuedPersistenceSucceeded = succeeded
+            guard succeeded else {
                 completion?(false)
                 return
             }
@@ -1021,7 +1050,7 @@ final class ACPSessionRunner {
             // bump it in SQLite, so the two would disagree. The spawn and
             // the terminal state both write parent rows, so a subagent run
             // still registers as activity at both ends.
-            self?.onPersist?()
+            self.onPersist?()
             completion?(true)
         })
         return true
@@ -2932,8 +2961,13 @@ extension ACPSessionRunner {
                 try await persistence.persistMessages(messageRows, fence: fence)
             }, completion: { [weak self] persisted in
                 guard let self else { return }
-                self.lastQueuedPersistenceSucceeded = (persisted == true)
-                guard persisted == true else {
+                // See the matching comment in `persistSubagentIndices`:
+                // combine with the preceding write's outcome rather than
+                // record only this one, so a batch's earlier failure isn't
+                // erased by a later write's own success.
+                let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+                self.lastQueuedPersistenceSucceeded = succeeded
+                guard succeeded else {
                     completion?(false)
                     return
                 }

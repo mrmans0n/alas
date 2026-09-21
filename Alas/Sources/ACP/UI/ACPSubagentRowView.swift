@@ -29,6 +29,17 @@ struct ACPSubagentRowView: View {
         ACPToolCallGroupLane {
             VStack(alignment: .leading, spacing: 8) {
                 header
+                if let lastError = run.lastError, state == .failed {
+                    // Often the only explanation a failed child leaves
+                    // behind, especially one that produced no output of
+                    // its own — dropping it would make the failure
+                    // permanently unexplained.
+                    Text(lastError)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(3)
+                        .padding(.leading, 17)
+                }
                 if expanded {
                     childTranscript
                 }

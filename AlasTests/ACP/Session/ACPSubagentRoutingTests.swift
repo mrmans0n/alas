@@ -77,10 +77,10 @@ struct ACPSubagentRoutingTests {
         for message in hydrated.messages {
             if case .toolCall(let toolCall) = message.wire { rows.append(toolCall) }
         }
-        var restored: [String: [(message: ACPMessage, createdAt: Date)]] = [:]
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
         for message in hydrated.subagentMessages {
             restored[message.subagentSessionId, default: []]
-                .append((message.wire.toMessage(), message.createdAt))
+                .append((message.wire.toMessage(), message.createdAt, message.seq))
         }
         reopened.restoreSubagents(rows: rows, messages: restored)
 
@@ -175,6 +175,70 @@ struct ACPSubagentRoutingTests {
         #expect(buffer.value == "hello world")
     }
 
+    @Test("a row recovered after a seq gap never collides with an existing seq")
+    func recoveredRowAfterSeqGapDoesNotCollide() async throws {
+        let (runner, store, path) = try makeRunner()
+        // Seq 1 never made it to disk (its write failed); seq 0 and seq 2
+        // did. Insert directly — this is the state persistence can
+        // legitimately leave behind, not something the live/replay path
+        // produces on its own.
+        try store.upsertSubagentMessages([
+            .init(
+                id: ACPStoredSubagentMessage.rowId(sessionId: "s", subagentSessionId: "child-1", seq: 0),
+                sessionId: "s", subagentSessionId: "child-1",
+                kind: "agent", seq: 0,
+                payload: try ACPMessageCodec.encode(
+                    .agent(id: UUID(), messageId: "m0", StreamingText("first"))),
+                createdAt: 10),
+            .init(
+                id: ACPStoredSubagentMessage.rowId(sessionId: "s", subagentSessionId: "child-1", seq: 2),
+                sessionId: "s", subagentSessionId: "child-1",
+                kind: "agent", seq: 2,
+                payload: try ACPMessageCodec.encode(
+                    .agent(id: UUID(), messageId: "m2", StreamingText("third"))),
+                createdAt: 30)
+        ])
+        runner.session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+
+        // Hydrate the way a relaunch does, and restore from that snapshot —
+        // this is what threads the STORED seq (0, 2) into the run rather
+        // than compacted array positions (0, 1).
+        let hydrated = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
+        #expect(hydrated.subagentMessages.map(\.seq).sorted() == [0, 2])
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
+        for stored in hydrated.subagentMessages {
+            restored[stored.subagentSessionId, default: []]
+                .append((stored.wire.toMessage(), stored.createdAt, stored.seq))
+        }
+        let run = try #require(runner.session.subagentRun("child-1"))
+        run.restore(
+            messages: restored["child-1"]!.map(\.message),
+            createdAts: restored["child-1"]!.map(\.createdAt),
+            seqs: restored["child-1"]!.map(\.seq))
+        #expect(run.seq(at: 0) == 0)
+        #expect(run.seq(at: 1) == 2)
+
+        // Replay now recovers the missing seq-1 message, appended at
+        // array index 2 (the array is compacted — only 2 entries existed).
+        // Its allocated seq must be the next FREE one, not the array index.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m1", content: .text("second")))))
+        await runner.flushPersistence()
+
+        #expect(run.messages.count == 3)
+        #expect(run.seq(at: 2) == 3)
+
+        // The persisted rows must reflect that: seq 2's original content
+        // (`m2`/"third") must be untouched, not overwritten by the
+        // recovered row.
+        let rows = try store.loadSubagentMessages(sessionId: "s")
+        #expect(rows.map(\.seq).sorted() == [0, 2, 3])
+        let seqTwoRow = try #require(rows.first { $0.seq == 2 })
+        #expect(String(data: seqTwoRow.payload, encoding: .utf8)?.contains("third") == true)
+    }
+
     @Test("a barrier ack is withheld when the preceding write failed for a non-lease reason")
     func barrierWithholdsAckOnUnrelatedPriorFailure() async throws {
         let (runner, store, _) = try makeRunner()
@@ -202,6 +266,45 @@ struct ACPSubagentRoutingTests {
         await runner.flushPersistence()
 
         #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed root-level spawn is not acknowledged unless it persists")
+    func replayRootSpawnAckRequiresPersistence() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the parent table so the recovered row's write throws.
+        // Before the fix, `applySuppressedReplaySideEffects`'s dirty
+        // result was discarded (`_ = ...`) and the durable event was
+        // acknowledged unconditionally right after — this proves the two
+        // are now coupled the same way the live path already couples them.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed root-level spawn is persisted before it is acknowledged")
+    func replayRootSpawnPersistsBeforeAck() async throws {
+        let (runner, store, _) = try makeRunner()
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.contains { $0.kind == "tool_call" })
+        #expect(acknowledged.value == true)
     }
 
     @Test("a replayed nested lifecycle update is reconciled, its content is not")
@@ -305,6 +408,39 @@ struct ACPSubagentRoutingTests {
     /// a `var` across the `@Sendable` boundary.
     private final class Acknowledged: @unchecked Sendable {
         var value = false
+    }
+
+    @Test("a spawn's failure is not erased by the child write that follows it")
+    func spawnFailureSurvivesSuccessfulChildWrite() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the PARENT table so the spawn's own write throws — a
+        // failure unrelated to the lease, exactly like
+        // `barrierWithholdsAckOnUnrelatedPriorFailure`, but this time
+        // followed by a CHILD write that succeeds on its own.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // The child's own table is intact, so THIS write succeeds — but it
+        // must not acknowledge on its own success alone, since the batch's
+        // earlier spawn write never landed and the orphaned child
+        // transcript has no parent row to render.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("orphaned output")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        // The child row DOES get written (its own write succeeded) — only
+        // the acknowledgement is withheld, which is the whole point: the
+        // broker must redeliver so a later attempt can recover the spawn.
+        #expect(!(try store.loadSubagentMessages(sessionId: "s")).isEmpty)
+        #expect(acknowledged.value == false)
     }
 
     @Test("a no-op update rejected by the lease fence is not acknowledged either")

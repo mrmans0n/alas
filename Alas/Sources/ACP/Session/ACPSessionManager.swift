@@ -1173,10 +1173,10 @@ final class ACPSessionManager: ObservableObject {
             session.restoreSubagents(rows: [], messages: [:])
             return
         }
-        var restored: [String: [(message: ACPMessage, createdAt: Date)]] = [:]
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
         for stored in result.subagentMessages {
             restored[stored.subagentSessionId, default: []]
-                .append((stored.wire.toMessage(), stored.createdAt))
+                .append((stored.wire.toMessage(), stored.createdAt, stored.seq))
         }
         session.restoreSubagents(rows: rows, messages: restored)
     }
