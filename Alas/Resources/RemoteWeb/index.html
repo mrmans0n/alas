@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas</title>
-  <link rel="stylesheet" href="/style.css?v=52" />
+  <link rel="stylesheet" href="/style.css?v=53" />
 </head>
 <body>
   <header id="bar">
@@ -154,6 +154,20 @@
       <button id="question-close" class="sheet-close">Close</button>
     </div>
   </div>
+  <div id="plan" class="sheet hidden">
+    <div class="sheet-card plan-card">
+      <p id="plan-title" class="sheet-title"></p>
+      <p id="plan-overview" class="plan-overview"></p>
+      <div id="plan-body" class="plan-body"></div>
+      <div id="plan-todos" class="plan-todos"></div>
+      <input id="plan-reason" class="sheet-input" type="text" autocomplete="off" placeholder="Reason for rejection" aria-label="Reason for rejection" />
+      <div class="plan-actions">
+        <button id="plan-reject" class="sheet-close" type="button" disabled>Reject</button>
+        <button id="plan-accept" class="btn-submit" type="button">Accept</button>
+      </div>
+      <button id="plan-close" class="sheet-close" type="button">Close</button>
+    </div>
+  </div>
   <div id="elicitation" class="sheet hidden">
     <div class="sheet-card elicitation-card">
       <p id="elicitation-title" class="sheet-title"></p>
@@ -277,7 +291,7 @@
   <script src="/file-browser.js?v=3"></script>
   <script src="/hub-registry.js?v=1"></script>
   <script src="/hub-links.js?v=1"></script>
-  <script src="/app.js?v=88"></script>
+  <script src="/app.js?v=89"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -204,6 +204,28 @@ struct RemoteQuestionAnswer: Codable, Equatable, Sendable {
     let selectedOptionIds: [String]
 }
 
+struct RemotePlanTodo: Codable, Equatable, Sendable {
+    let id: String
+    let content: String
+    let status: String
+}
+
+struct RemotePlanPhase: Codable, Equatable, Sendable {
+    let name: String
+    let todos: [RemotePlanTodo]
+}
+
+struct RemotePlanPayload: Codable, Equatable, Sendable {
+    let requestId: JSONRPCID
+    let toolCallId: String
+    let name: String
+    let overview: String
+    let plan: String
+    let todos: [RemotePlanTodo]
+    let isProject: Bool
+    let phases: [RemotePlanPhase]
+}
+
 struct RemoteElicitationOption: Codable, Equatable, Sendable {
     let value: String
     let title: String?

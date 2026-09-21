@@ -20,6 +20,7 @@ protocol RemoteSessionsProvider: AnyObject {
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
     func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse)
+    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse)
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
     func isWriter(for id: String) -> Bool
@@ -64,4 +65,5 @@ protocol RemoteSessionsProvider: AnyObject {
 
 extension RemoteSessionsProvider {
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
+    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {}
 }

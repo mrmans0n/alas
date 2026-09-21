@@ -48,6 +48,7 @@ enum RemoteClientMessage: Equatable, Sendable {
     case unsubscribe(sessionId: String)
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
     case questionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer])
+    case planResponse(sessionId: String, requestId: JSONRPCID, action: String, reason: String?)
     case elicitationResponse(
         sessionId: String,
         requestId: String,
@@ -74,7 +75,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -108,6 +109,12 @@ extension RemoteClientMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 requestId: try c.decode(Int.self, forKey: .requestId),
                 answers: try c.decode([RemoteQuestionAnswer].self, forKey: .answers))
+        case "planResponse":
+            self = .planResponse(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(JSONRPCID.self, forKey: .requestId),
+                action: try c.decode(String.self, forKey: .action),
+                reason: try c.decodeIfPresent(String.self, forKey: .reason))
         case "elicitationResponse":
             self = .elicitationResponse(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -218,6 +225,12 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
             try c.encode(a, forKey: .answers)
+        case .planResponse(let s, let r, let action, let reason):
+            try c.encode("planResponse", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+            try c.encode(action, forKey: .action)
+            try c.encodeIfPresent(reason, forKey: .reason)
         case .elicitationResponse(let s, let r, let action, let content):
             try c.encode("elicitationResponse", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -381,6 +394,8 @@ enum RemoteServerMessage: Equatable, Sendable {
     case permissionResolved(sessionId: String, requestId: Int)
     case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
     case questionResolved(sessionId: String, requestId: Int)
+    case planRequest(sessionId: String, payload: RemotePlanPayload)
+    case planResolved(sessionId: String, requestId: JSONRPCID)
     case elicitationRequest(sessionId: String, payload: RemoteElicitationPayload)
     case elicitationResolved(sessionId: String, requestId: String)
     case sessionClosed(sessionId: String)
@@ -500,6 +515,14 @@ extension RemoteServerMessage: Codable {
             self = .questionResolved(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 requestId: try c.decode(Int.self, forKey: .requestId))
+        case "planRequest":
+            self = .planRequest(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                payload: try c.decode(RemotePlanPayload.self, forKey: .payload))
+        case "planResolved":
+            self = .planResolved(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(JSONRPCID.self, forKey: .requestId))
         case "elicitationRequest":
             self = .elicitationRequest(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -682,6 +705,14 @@ extension RemoteServerMessage: Codable {
             try c.encode("questionResolved", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
+        case .planRequest(let id, let payload):
+            try c.encode("planRequest", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(payload, forKey: .payload)
+        case .planResolved(let id, let requestId):
+            try c.encode("planResolved", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(requestId, forKey: .requestId)
         case .elicitationRequest(let id, let payload):
             try c.encode("elicitationRequest", forKey: .type)
             try c.encode(id, forKey: .sessionId)

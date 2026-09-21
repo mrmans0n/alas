@@ -20,7 +20,7 @@ struct JSONRPCEnvelope<Payload: Codable>: Codable {
     }
 }
 
-enum JSONRPCID: Codable, Equatable, Hashable {
+enum JSONRPCID: Codable, Equatable, Hashable, Sendable {
     case number(Int)
     case string(String)
 
