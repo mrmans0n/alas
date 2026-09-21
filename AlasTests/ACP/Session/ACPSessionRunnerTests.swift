@@ -2943,6 +2943,81 @@ struct ACPSessionRunnerTests {
         }
     }
 
+    // MARK: - Auth status tests
+
+    @Test("kind == none shows the auth nudge banner without a failed prompt")
+    func authStatusNoneShowsNudgeBanner() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+        // `.none` through optional chaining is ambiguous between "the kind
+        // is .none" and "the optional itself is nil" — spell out the type
+        // to force the former (the classic Optional<Enum>.none gotcha).
+        try await waitUntil { session.authStatus?.kind == ACPAuthStatus.Kind.none }
+
+        #expect(session.authStatus?.label == "Not logged in")
+        guard case .needsAuth(let methods, let reason) = session.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
+            return
+        }
+        #expect(methods.isEmpty)
+        #expect(reason == nil)
+    }
+
+    @Test("a later signed-in status clears the auth nudge banner")
+    func authStatusSignedInClearsNudgeBanner() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+        try await waitUntil {
+            if case .needsAuth = session.setupState { return true }
+            return false
+        }
+
+        mock.emitAuthStatus(.init(kind: .account, label: "Claude Max"))
+        try await waitUntil { session.setupState == .ready }
+
+        #expect(session.authStatus?.kind == .account)
+        #expect(session.authStatus?.label == "Claude Max")
+    }
+
+    @Test("a signed-in status while not showing the banner just updates the stored status")
+    func authStatusSignedInWithoutBannerJustStoresStatus() async throws {
+        let (runner, session, mock) = try makeRunnerWithSession()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitAuthStatus(.init(kind: .apiKey, label: "OpenAI API key"))
+        try await waitUntil { session.authStatus != nil }
+
+        #expect(session.authStatus?.kind == .apiKey)
+        #expect(session.setupState == .ready)
+    }
+
+    private func makeRunnerWithSession() throws -> (ACPSessionRunner, ACPSession, ACPMockClient) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-auth-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.setupState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        return (runner, session, mock)
+    }
+
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil

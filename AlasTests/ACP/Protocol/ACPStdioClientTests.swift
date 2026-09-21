@@ -96,6 +96,23 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("routes _auth/status_update notifications to authStatusUpdates")
+    func routesAuthStatusUpdateNotification() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"none","label":"Not logged in"}}}
+        """#.utf8))
+
+        var iterator = client.authStatusUpdates.makeAsyncIterator()
+        let status = try #require(await iterator.next())
+        #expect(status.kind == .none)
+        #expect(status.label == "Not logged in")
+        await client.shutdown()
+    }
+
     @Test("transport request ID prefix namespaces outbound requests")
     func requestIDPrefixNamespacesOutboundRequests() async throws {
         let transport = FakeJSONRPCTransport()

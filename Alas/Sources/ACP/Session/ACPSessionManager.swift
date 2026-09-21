@@ -3590,6 +3590,10 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
+            // Re-learned on every attach: an adapter that doesn't advertise
+            // the marker never repopulates this, and a stale status from a
+            // previous connection (or agent) must not linger across attach.
+            session.authStatus = nil
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])

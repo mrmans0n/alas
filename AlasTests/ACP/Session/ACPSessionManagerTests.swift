@@ -580,6 +580,71 @@ struct ACPSessionManagerTests {
         )
     }
 
+    @Test("attach clears a stale authStatus left over from a previous connection")
+    func attachClearsStaleAuthStatus() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-reset-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .account, label: "Stale status from a prior agent")
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+
+        #expect(session.authStatus == nil)
+    }
+
+    @Test("a live authStatus update reaches the session after attach")
+    func authStatusUpdateReachesSessionAfterAttach() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-live-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            """
+            {
+              "protocolVersion": 1,
+              "agentCapabilities": { "_meta": { "authStatus": {} } },
+              "authMethods": []
+            }
+            """.data(using: .utf8)!
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        client.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
+
+        for _ in 0 ..< 100 where session.authStatus == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // `.none` through optional chaining is ambiguous between "the kind
+        // is .none" and "the optional itself is nil" — spell out the type
+        // to force the former (the classic Optional<Enum>.none gotcha).
+        #expect(session.authStatus?.kind == ACPAuthStatus.Kind.none)
+        guard case .needsAuth = session.setupState else {
+            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
+            return
+        }
+    }
+
     @Test("queue force send reattaches disconnected sessions first")
     func queueForceSendReattachesDisconnectedSession() async throws {
         let url = FileManager.default.temporaryDirectory

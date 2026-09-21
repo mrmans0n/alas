@@ -69,6 +69,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatus>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
@@ -79,6 +80,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
+    let authStatusUpdates: AsyncStream<ACPAuthStatus>
 
     private let stateLock = NSLock()
     private var generation: ACPBrokerGeneration?
@@ -208,6 +210,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         var t: AsyncStream<ACPTerminalRequest>.Continuation!
         terminalRequests = AsyncStream { t = $0 }
         terminalsCont = t
+
+        var a: AsyncStream<ACPAuthStatus>.Continuation!
+        authStatusUpdates = AsyncStream { a = $0 }
+        authStatusCont = a
     }
 
     /// Pre-registers operationKeys the caller still expects a result for,
@@ -505,6 +511,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         elicitationCompletionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
+        authStatusCont.finish()
     }
 
     @discardableResult
@@ -697,6 +704,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case "$/cancel_request":
             if let decoded = try? JSONDecoder().decode(ACPCancelRequestParams.self, from: params.data) {
                 cancelRequestsCont.yield(decoded.id)
+            }
+        case "_auth/status_update":
+            if let decoded = try? JSONDecoder().decode(ACPAuthStatusUpdateParams.self, from: params.data) {
+                authStatusCont.yield(decoded.authStatus)
             }
         case "adapter/exit":
             cancelBackgroundPolling()

@@ -70,6 +70,7 @@ final class ACPSessionRunner {
     /// — so each consumer checks and drains this set before starting work
     /// on a freshly dequeued id, instead of the id being silently dropped.
     private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
+    private var authStatusTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -324,6 +325,13 @@ final class ACPSessionRunner {
             }
         }
 
+        authStatusTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await status in self.connection.client.authStatusUpdates {
+                self.applyAuthStatus(status)
+            }
+        }
+
         // Agent-spawned terminals must see the exact env the agent
         // itself was launched with — same augmented PATH (npm / cargo
         // resolve under launchd's minimal PATH) and same scrubbed
@@ -522,6 +530,20 @@ final class ACPSessionRunner {
             for await req in self.connection.client.terminalRequests {
                 await self.handleTerminalRequest(req)
             }
+        }
+    }
+
+    /// Applies a `_auth/status_update` notification. Unlike a failed-prompt
+    /// `authRequired`, the connection here is healthy — the agent is simply
+    /// reporting it has no signed-in credentials yet — so this shows the
+    /// existing sign-in banner without tearing the runner/connection down.
+    /// A later update reporting a signed-in kind clears the banner again.
+    private func applyAuthStatus(_ status: ACPAuthStatus) {
+        session.authStatus = status
+        if status.kind == .none {
+            session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
+        } else if case .needsAuth = session.setupState {
+            session.setupState = .ready
         }
     }
 
@@ -779,6 +801,7 @@ final class ACPSessionRunner {
         cancelRequestsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
+        authStatusTask?.cancel()
         // A detach/takeover can land while a permission prompt is parked.
         // userCancel() already resolves it; stop() must too, or the policy's
         // continuation is stranded when we tear the connection down.
