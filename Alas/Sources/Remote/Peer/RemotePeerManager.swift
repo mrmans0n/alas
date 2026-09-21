@@ -153,6 +153,16 @@ final class RemotePeerManager {
     /// completely unrelated, concurrent INBOUND pairing for the same
     /// identity that this attempt could never have known about in advance.
     @ObservationIgnored private var lastForgottenAt: [String: Date] = [:]
+    /// The counter-code of whichever attempt — `addPeer` or
+    /// `handleInboundPeer`'s responder branch — most recently called
+    /// `upsert` for a given `serverId`. Lets a timed-out attempt's rollback
+    /// tell "am I still the last one to have upserted this row" apart from
+    /// "did a sibling's own reciprocal confirmation merely update
+    /// `localDeviceId` directly" (which never touches this map, since it
+    /// bypasses `upsert` entirely) — a value-based comparison of the row
+    /// itself cannot make that distinction when a genuinely different
+    /// upsert happens to write the same values this attempt did.
+    @ObservationIgnored private var lastUpsertOwnerByServerId: [String: String] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
 
@@ -261,6 +271,7 @@ final class RemotePeerManager {
             let previousState = peers.first(where: { $0.serverId == serverId })
             upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
+            lastUpsertOwnerByServerId[serverId] = counterCode
             // `upsert` proves OUR call to A succeeded — nothing more. Our own
             // token is valid the instant A's HTTP reply arrives, so OUR
             // outbound link would come online just fine regardless of
@@ -283,12 +294,18 @@ final class RemotePeerManager {
             // own schedule and have no way to know this attempt gave up.
             // A DIFFERENT, concurrent exchange for this same identity (an
             // inbound pairing, or another outbound attempt) could also have
-            // updated — or removed — this same row while this attempt's own
-            // wait was running; only roll back if the row still holds
-            // exactly what THIS attempt's own upsert wrote, otherwise a
-            // newer exchange's genuine success would be clobbered by this
-            // attempt's own, unrelated timeout.
-            if peers.first(where: { $0.id == peer.id }) == peer {
+            // upserted this same row while this attempt's own wait was
+            // running; only roll back if THIS attempt is still the last one
+            // to have upserted it, otherwise a newer exchange's genuine
+            // success would be clobbered by this attempt's own, unrelated
+            // timeout. Checked by ownership, not by comparing field values:
+            // a SIBLING attempt's own reciprocal confirmation can also
+            // update localDeviceId directly — bypassing `upsert` entirely —
+            // completely independent of whichever attempt's upsert most
+            // recently ran, so a value-based comparison could wrongly
+            // treat a genuine, later upsert as a no-op when its written
+            // values coincidentally match this attempt's own.
+            if lastUpsertOwnerByServerId[serverId] == counterCode {
                 if let previousState {
                     restorePreviousState(previousState, peerId: peer.id)
                 } else {
@@ -411,6 +428,7 @@ final class RemotePeerManager {
             }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
+            lastUpsertOwnerByServerId[request.peerServerId] = counterCode
         } else {
             // We are the initiator: this is A's reciprocal call redeeming
             // OUR counter-code. Always buffer it, keyed by that code, rather
@@ -555,11 +573,24 @@ final class RemotePeerManager {
     /// grants: the OLD one this restores may still be exactly what A is
     /// using to reach us, and revoking it would sever a relationship that
     /// this attempt never actually broke.
+    ///
+    /// The call site that reaches this always upserted with
+    /// `localDeviceId: nil`, so if the CURRENT value is non-nil, a
+    /// concurrent SIBLING attempt for this same identity must have set it
+    /// directly (bypassing `upsert` entirely) the moment its own
+    /// reciprocal confirmation arrived — independent of whether THIS
+    /// attempt's own outbound leg succeeded. That value is preserved
+    /// rather than reverted to `previous`'s own, older one, so a sibling's
+    /// legitimate, more recent confirmation is never discarded.
     private func restorePreviousState(_ previous: RemotePeer, peerId: String) {
         guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
-        peers[index] = previous
+        var restored = previous
+        if let confirmedSinceUpsert = peers[index].localDeviceId {
+            restored.localDeviceId = confirmedSinceUpsert
+        }
+        peers[index] = restored
         store.save(peers)
-        if isActive { connect(previous) }
+        if isActive { connect(restored) }
     }
 
     // MARK: - Links

@@ -202,6 +202,65 @@ struct RemotePeerManagerTests {
         #expect(peer.localDeviceId == "newer-device")
     }
 
+    // Two overlapping outbound adds for the same peer: EARLY's own
+    // reciprocal confirmation arrives and updates only localDeviceId
+    // directly — bypassing upsert entirely — while LATE's own upsert has
+    // since overwritten the row's other fields. When LATE's own wait then
+    // times out, its rollback must still be recognized as legitimate (it
+    // is still the last one to have upserted — EARLY's confirmation never
+    // touches ownership) and must revert to EARLY's own state — the one
+    // that actually got confirmed — without discarding EARLY's
+    // just-arrived, more recent confirmation.
+    @Test func addPeerRollbackPreservesAnEarlierSiblingsConfirmedDeviceWhileRestoringItsOwnState() async throws {
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "old", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", protocolVersion: 1,
+                               localDeviceId: "old-device", addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        // Both siblings' own outbound legs resolve immediately; each gets
+        // its own distinct token so the final state reveals which one
+        // survived.
+        let pairer = RemotePeerPairer(fetch: { req in
+            let token = requests.seen.isEmpty ? "tokEarly" : "tokLate"
+            requests.seen.append(req)
+            return (Data(#"{"token":"\#(token)","serverId":"srv-a","name":"Mac A"}"#.utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 0.05)
+        manager.connectAll()
+
+        async let early: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
+        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+        let earlyCounterCode = try #require((try body(of: requests.seen[0])["peer"] as? [String: Any])?["counterCode"] as? String)
+        // Wait for EARLY's own upsert to have definitely completed before
+        // starting LATE, so LATE's own `previousState` snapshot captures it.
+        while manager.peers.first?.token != "tokEarly" { try? await Task.sleep(nanoseconds: 1_000_000) }
+
+        async let late: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
+        // Wait for LATE's own upsert to have definitely completed too,
+        // before delivering EARLY's confirmation.
+        while manager.peers.first?.token != "tokLate" { try? await Task.sleep(nanoseconds: 1_000_000) }
+
+        // Confirm ONLY EARLY's own counter-code — LATE's own is never
+        // confirmed and will time out.
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: nil,
+            localDeviceId: "early-confirmed-device", redeemedCode: earlyCounterCode))
+
+        let earlyResult = await early
+        let lateResult = await late
+        #expect(earlyResult == nil)
+        #expect(lateResult == .reciprocalPairingFailed)
+
+        let peer = try #require(manager.peers.first)
+        // EARLY's own state — the one that actually got confirmed —
+        // survives LATE's rollback...
+        #expect(peer.token == "tokEarly")
+        // ...along with EARLY's own just-arrived confirmation, rather than
+        // LATE's rollback reverting it back to the pre-existing device.
+        #expect(peer.localDeviceId == "early-confirmed-device")
+    }
+
     // The happy path resolves fast rather than by exhausting the wait
     // window — proven by timing, since the return value alone (`nil`) is
     // identical whether confirmation genuinely landed or the wait just
