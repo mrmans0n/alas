@@ -3177,12 +3177,33 @@ function planText(o) {
 let permState = null;
 function showPermission(sessionId, payload) {
   permState = { sessionId, requestId: payload.requestId };
-  $("perm-tool").textContent = "Allow “" + payload.toolName + "”?";
+  // `title`/`reason`/option `description`/`mcpServerName` come from the
+  // adapter's `_meta.permission` extension (see ACPPermissionPresentation
+  // on the native side) and are absent for adapters that don't send it —
+  // fall back to the generic prompt so untagged adapters render as before.
+  $("perm-tool").textContent = payload.title || ("Allow “" + payload.toolName + "”?");
+  const reasonEl = $("perm-reason");
+  if (reasonEl) {
+    reasonEl.textContent = payload.reason || "";
+    reasonEl.hidden = !payload.reason;
+  }
+  const serverEl = $("perm-server");
+  if (serverEl) {
+    serverEl.textContent = payload.mcpServerName ? "via " + payload.mcpServerName : "";
+    serverEl.hidden = !payload.mcpServerName;
+  }
   const box = $("perm-options"); box.innerHTML = "";
+  // Default-button styling/focus normally goes to the once-only allow
+  // option; `defaultToNo` moves it to the once-only reject option instead.
+  const defaultKind = payload.defaultToNo ? "reject_once" : "allow_once";
+  let defaultButton = null;
   payload.options.forEach(o => {
+    const wrap = document.createElement("div");
+    wrap.className = "perm-option";
     const b = document.createElement("button");
     b.textContent = o.name;
     b.className = o.kind.startsWith("allow") ? "btn-allow" : "btn-deny";
+    if (o.kind === defaultKind) { b.classList.add("is-default"); defaultButton = b; }
     b.onclick = () => {
       // "once" kinds send null so the server reproduces the local prompt's
       // mapping (once → don't persist / re-ask next time); only "*_always"
@@ -3190,9 +3211,17 @@ function showPermission(sessionId, payload) {
       send({ type: "permissionDecision", sessionId, requestId: payload.requestId, optionId: o.optionId, persistScope: o.kind.endsWith("always") ? "project" : null });
       hidePermission();
     };
-    box.appendChild(b);
+    wrap.appendChild(b);
+    if (o.description) {
+      const desc = document.createElement("p");
+      desc.className = "perm-option-desc";
+      desc.textContent = o.description;
+      wrap.appendChild(desc);
+    }
+    box.appendChild(wrap);
   });
   $("permission").classList.remove("hidden");
+  if (defaultButton) defaultButton.focus();
 }
 function hidePermission() { $("permission").classList.add("hidden"); permState = null; }
 

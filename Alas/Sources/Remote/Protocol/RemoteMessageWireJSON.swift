@@ -169,12 +169,46 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
     let requestId: Int
     let toolName: String
     let options: [RemotePermissionOption]
+    /// `_meta.permission.title` (see `ACPPermissionPresentation`). Absent
+    /// for adapters without the extension — the client falls back to the
+    /// generic "Allow “<toolName>”?" prompt.
+    let title: String?
+    /// `_meta.permission.description` — reason line under the prompt.
+    let reason: String?
+    /// `_meta.permission.defaultToNo` — the client should give the reject
+    /// option default-button styling instead of the allow option.
+    let defaultToNo: Bool
+    /// `_meta.claudeCode.mcpServer.name` for `mcp__*` calls.
+    let mcpServerName: String?
+
+    init(
+        requestId: Int, toolName: String, options: [RemotePermissionOption],
+        title: String? = nil, reason: String? = nil, defaultToNo: Bool = false,
+        mcpServerName: String? = nil
+    ) {
+        self.requestId = requestId
+        self.toolName = toolName
+        self.options = options
+        self.title = title
+        self.reason = reason
+        self.defaultToNo = defaultToNo
+        self.mcpServerName = mcpServerName
+    }
 }
 
 struct RemotePermissionOption: Codable, Equatable, Sendable {
     let optionId: String
     let name: String
     let kind: String
+    /// `_meta.permission.description` for this option.
+    let description: String?
+
+    init(optionId: String, name: String, kind: String, description: String? = nil) {
+        self.optionId = optionId
+        self.name = name
+        self.kind = kind
+        self.description = description
+    }
 }
 
 /// A question option as sent to the client.
