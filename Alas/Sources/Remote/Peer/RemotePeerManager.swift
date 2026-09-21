@@ -281,13 +281,19 @@ final class RemotePeerManager {
             // could still land in the buffer right at that boundary, or
             // arrive even later — the far side's own retries run on their
             // own schedule and have no way to know this attempt gave up.
-            // Restore or forget the peer row FIRST, so `endAttempt`'s own
-            // orphan check reflects the FINAL state: a restored previous
-            // relationship, not the transient one `upsert` just wrote.
-            if let previousState {
-                restorePreviousState(previousState, peerId: peer.id)
-            } else {
-                forget(peerId: peer.id)
+            // A DIFFERENT, concurrent exchange for this same identity (an
+            // inbound pairing, or another outbound attempt) could also have
+            // updated — or removed — this same row while this attempt's own
+            // wait was running; only roll back if the row still holds
+            // exactly what THIS attempt's own upsert wrote, otherwise a
+            // newer exchange's genuine success would be clobbered by this
+            // attempt's own, unrelated timeout.
+            if peers.first(where: { $0.id == peer.id }) == peer {
+                if let previousState {
+                    restorePreviousState(previousState, peerId: peer.id)
+                } else {
+                    forget(peerId: peer.id)
+                }
             }
             endAttempt(counterCode: counterCode)
             return .reciprocalPairingFailed
@@ -365,13 +371,24 @@ final class RemotePeerManager {
             let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
                 ?? forgetGeneration(for: request.peerServerId)
             let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
-            guard case .paired(let token, _, _, let origin) = await pairer.pair(
+            guard case .paired(let token, let repliedServerId, _, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
             else {
                 // The peer already holds a token for this Mac: it was minted
                 // before this branch ran. Returning empty-handed would leave it
                 // standing access with no peer record to forget it by, so take
                 // the inbound grant back and let the exchange start over.
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
+            // The reply's own identity must confirm what the ORIGINAL /pair
+            // request claimed. `request.origins` is attacker-controlled, so
+            // a request claiming identity X but pointing this pair-back at
+            // an endpoint that answers as Y would otherwise have Y's token
+            // persisted under X — misdirecting every future connection to X
+            // toward Y instead.
+            guard let repliedServerId, !repliedServerId.isEmpty, repliedServerId == request.peerServerId else {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
                 return

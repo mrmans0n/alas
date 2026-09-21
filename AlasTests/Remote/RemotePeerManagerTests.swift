@@ -172,6 +172,36 @@ struct RemotePeerManagerTests {
         #expect(links.byPeerId.values.first?.disconnectCalls == 1)
     }
 
+    // A completely separate, concurrent exchange for the SAME identity
+    // (e.g. an inbound pairing) can succeed and update this same row while
+    // this attempt's own wait is still running. When this attempt's own
+    // wait then times out, it must not clobber that newer, unrelated
+    // success — only roll back if the row still holds exactly what THIS
+    // attempt's own upsert wrote.
+    @Test func addPeerTimeoutDoesNotClobberANewerConcurrentPairing() async throws {
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: Links(), reciprocalConfirmationTimeout: 0.02)
+        manager.connectAll()
+        // Nothing ever confirms this attempt's OWN counter-code — its wait
+        // will time out. While it's waiting, a completely separate,
+        // concurrent exchange for the SAME identity succeeds and updates
+        // the row with a newer device.
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+            await manager.handleInboundPeer(RemotePeerPairingRequest(
+                peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"], counterCode: "OTHER",
+                localDeviceId: "newer-device", redeemedCode: "OTHER-REDEEMED"))
+        }
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        // The newer, concurrent exchange's own success must survive this
+        // attempt's own, unrelated timeout — not be forgotten out from
+        // under it.
+        let peer = try #require(manager.peers.first)
+        #expect(peer.localDeviceId == "newer-device")
+    }
+
     // The happy path resolves fast rather than by exhausting the wait
     // window — proven by timing, since the return value alone (`nil`) is
     // identical whether confirmation genuinely landed or the wait just
@@ -234,6 +264,22 @@ struct RemotePeerManagerTests {
         #expect(sent["code"] as? String == "CC")
         let ad = try #require(sent["peer"] as? [String: Any])
         #expect(ad["counterCode"] == nil)
+    }
+
+    // `request.origins` is attacker-controlled. A request claiming identity
+    // X but pointing this pair-back at an endpoint that answers as Y must
+    // not have Y's token persisted under X — that would misdirect every
+    // future connection to X toward Y instead.
+    @Test func handleInboundPeerRejectsAPairBackReplyClaimingADifferentIdentity() async throws {
+        let requests = Requests()
+        var revoked: [String] = []
+        let manager = makeManager(pairer: pairer(["10.0.0.9:8765": (200, #"{"token":"tokY","serverId":"srv-y","name":"Mac Y"}"#)], requests: requests), links: Links())
+        manager.onRevokeDevice = { revoked.append($0) }
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-x", peerName: "Mac X", origins: ["http://10.0.0.9:8765"], counterCode: "CC",
+            localDeviceId: "dev-x", redeemedCode: "ABC123"))
+        #expect(manager.peers.isEmpty)
+        #expect(revoked.contains("dev-x"))
     }
 
     // A's reciprocal call (counterCode: nil, since it is the responder that
