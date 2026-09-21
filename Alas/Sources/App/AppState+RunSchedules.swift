@@ -227,6 +227,14 @@ extension AppState {
             case .success(let created):
                 worktree = created
             case .failure(let failure):
+                // Deleting a schedule cancels its targets, which makes
+                // creation report that it was interrupted. That is the
+                // deletion working, not a failure to announce.
+                if Task.isCancelled {
+                    return RunScheduleRunReport(
+                        outcome: .skipped(reason: "The schedule was removed while its worktree was being created.")
+                    )
+                }
                 reportScheduleFailure(
                     schedule, reason: failure.message, project: project, worktree: originWorktree
                 )
@@ -282,6 +290,11 @@ extension AppState {
         project: ProjectConfig,
         worktree: Worktree
     ) {
+        // Nothing is announced for a cancelled run. Cancellation here means
+        // the schedule was deleted, and every step it interrupts on the way
+        // out reports itself as having failed. Guarded centrally so no
+        // future call site has to remember.
+        guard !Task.isCancelled else { return }
         inAppNotifications.post("\(schedule.name): \(reason)", severity: .error, worktreeID: worktree.id)
         harness.notifications.notifyScheduleFailed(
             scheduleName: schedule.name,
@@ -584,10 +597,10 @@ extension AppState {
     /// otherwise collect the prompt, and with auto-send have it submitted,
     /// while the scheduled agent had not started yet.
     ///
-    /// An agent outside `AgentKind` cannot be identified this way, so it is
-    /// refused rather than accepting whatever else the detector happens to
-    /// see. Nothing is lost: the detector only ever recognises those same
-    /// binaries, so such an agent could never have been confirmed anyway.
+    /// An agent whose harness cannot be named at all is refused rather than
+    /// accepting whatever else the detector happens to see. Nothing is lost:
+    /// the detector recognises a fixed set of binaries, so such an agent
+    /// could never have been confirmed anyway.
     ///
     /// `activeHarnessBySession` rather than `harnessBySession`: the latter is
     /// never cleared when the process exits, so it answers "did an agent ever
@@ -601,7 +614,7 @@ extension AppState {
         if let scheduledAgentReadiness {
             return await scheduledAgentReadiness(sessionID)
         }
-        guard let expected = HarnessKind.forAgentID(agentID) else { return false }
+        guard let expected = expectedHarness(forAgentID: agentID) else { return false }
         let deadline = Date().addingTimeInterval(Self.scheduledPromptReadinessTimeout)
         while harness.activeHarnessBySession[sessionID] != expected {
             guard Date() < deadline, harness.detector.isRegistered(sessionId: sessionID) else { return false }
@@ -631,8 +644,18 @@ extension AppState {
         // The readiness seam replaces the detector wholesale in tests, whose
         // sessions have no process to observe.
         if scheduledAgentReadiness != nil { return true }
-        guard let expected = HarnessKind.forAgentID(agentID) else { return false }
+        guard let expected = expectedHarness(forAgentID: agentID) else { return false }
         return harness.activeHarnessBySession[sessionID] == expected
+    }
+
+    /// Which harness the schedule's agent will appear as in its terminal, or
+    /// nil when nothing about it is recognisable and readiness therefore
+    /// cannot be established.
+    private func expectedHarness(forAgentID agentID: String) -> HarnessKind? {
+        guard let agent = agentRegistry.agents.first(where: { $0.id == agentID }) else {
+            return HarnessKind.forAgentID(agentID)
+        }
+        return HarnessKind.forAgent(id: agentID, binary: agent.configuredBinary)
     }
 
     private func typeIntoTerminal(_ text: String, sessionID: String) -> Bool {

@@ -72,6 +72,19 @@ extension HarnessKind {
         }
         return HarnessKind(rawValue: agentID)
     }
+
+    /// The harness an agent runs, identified by its id when that is a
+    /// built-in's and otherwise by the binary it launches.
+    ///
+    /// A custom agent's id is a UUID, which says nothing about what will be
+    /// running, but a custom agent is often just a wrapper around one of
+    /// these same CLIs. The binary is what the detector will actually see,
+    /// so it is the thing worth asking about.
+    static func forAgent(id: String, binary: String) -> HarnessKind? {
+        if let viaID = forAgentID(id) { return viaID }
+        let executable = (binary as NSString).lastPathComponent
+        return HarnessDetector.matchKind(processName: executable)
+    }
 }
 
 extension AgentKind {

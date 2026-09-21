@@ -21,6 +21,21 @@ struct HarnessDetectorTests {
         #expect(HarnessKind.forAgentID("my-custom-agent") == nil)
     }
 
+    /// A custom agent has a UUID for an id, so only the binary it launches
+    /// says what will be running. Wrapping a known CLI is the common case
+    /// and has to stay identifiable, or its prompts are refused.
+    @Test func aCustomAgentIsIdentifiedByItsBinary() {
+        let uuid = "9C4E2A10-0000-4000-8000-000000000000"
+        #expect(HarnessKind.forAgent(id: uuid, binary: "claude") == .claudeCode)
+        #expect(HarnessKind.forAgent(id: uuid, binary: "/opt/homebrew/bin/codex") == .codex)
+        #expect(HarnessKind.forAgent(id: uuid, binary: "~/bin/cursor-agent") == .cursor)
+        // Nothing recognisable means readiness cannot be established, which
+        // is the safe answer rather than trusting any harness that appears.
+        #expect(HarnessKind.forAgent(id: uuid, binary: "my-own-wrapper") == nil)
+        // A built-in id still wins, whatever its binary override says.
+        #expect(HarnessKind.forAgent(id: "cursor-agent", binary: "/usr/bin/true") == .cursor)
+    }
+
     @Test func matchesClaudeProcess() {
         #expect(HarnessDetector.matchKind(processName: "claude") == .claudeCode)
         #expect(HarnessDetector.matchKind(processName: "claude-code") == .claudeCode)
