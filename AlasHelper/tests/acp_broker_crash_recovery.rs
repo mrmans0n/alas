@@ -211,6 +211,54 @@ fn concurrent_opens_of_a_not_yet_running_broker_spawn_only_one_supervisor() {
     );
 }
 
+/// Regression for keeping the open-decision lock outside the directory
+/// `acp_close` deletes. A lock file removed out from under its holder stops
+/// serializing anything — the next `acp_open` just creates a fresh inode at
+/// the same path, no longer contending with whoever still holds the
+/// (now-unlinked) old one. This can't reproduce the exact multi-process
+/// timing that makes that matter, but it does directly verify the
+/// structural property the fix relies on: the lock file lives in the
+/// never-removed `acp-brokers` root and survives closing (and so removing
+/// the directory of) the broker it guards.
+#[test]
+fn the_open_lock_file_survives_broker_close_and_removal() {
+    let fixture = Fixture::new("open-lock-survives-close");
+    let mut helper = Helper::start(&fixture.home);
+    let open = helper.request("acp/open", fixture.open_params("broker-lock-survival", 0));
+    let generation = open["snapshot"]["metadata"]["generation"].clone();
+
+    let lock_path = fixture
+        .home
+        .join(".alas/acp-brokers/broker-lock-survival.open.lock");
+    assert!(
+        lock_path.exists(),
+        "acp_open must create its per-broker lock file in the never-removed \
+         acp-brokers root, not inside the broker's own directory"
+    );
+
+    let close = helper.request(
+        "acp/close",
+        json!({ "brokerId": "broker-lock-survival", "generation": generation }),
+    );
+    assert_eq!(close["ok"], true);
+
+    assert!(
+        !fixture
+            .home
+            .join(".alas/acp-brokers/broker-lock-survival")
+            .exists(),
+        "acp_close must still remove the broker's own directory"
+    );
+    assert!(
+        lock_path.exists(),
+        "closing a broker must not remove its open lock file — the whole \
+         point of keeping it outside the broker's own directory is that a \
+         losing closer, rejected by broker_close and about to retry its \
+         own open, can still be serialized against a concurrent \
+         close-then-respawn even after remove_broker_dir runs"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn open_reclaims_stale_broker_pid_when_process_group_mismatches() {

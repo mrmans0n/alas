@@ -415,7 +415,17 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     // automatically if the holder exits or crashes, so there is no
     // stale-lock state to clean up, unlike a marker-file-based lock would
     // need.
-    let _open_lock = acquire_broker_open_lock(&dir)?;
+    //
+    // The lock file lives next to `dir`, not inside it: `acp_close`
+    // deletes `dir` wholesale (`remove_broker_dir`) once its own close
+    // succeeds, which can happen while a losing closer, rejected at
+    // `broker_close`, is already waiting on this very lock to retry its
+    // own open. A lock file removed out from under its holder stops
+    // serializing anything — the next opener just creates a fresh inode at
+    // the same path and never contends with whoever still holds the
+    // (now-unlinked) old one. `broker_root()` is never removed, so a lock
+    // there survives every `dir` removal in between.
+    let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
 
     // Someone else may have spawned a replacement while this call waited
     // for the lock above.
@@ -490,14 +500,22 @@ fn try_adopt_running_broker(
     }
 }
 
+/// Lives in `broker_root()`, keyed by broker id, deliberately not inside
+/// that broker's own (removable) directory — see the caller. Never cleaned
+/// up: an unused broker id leaves behind one empty lock file, which is a
+/// cheap, permanent trade-off against ever deleting a lock file a live
+/// holder might still be waiting on.
 #[cfg(unix)]
-fn acquire_broker_open_lock(dir: &Path) -> Result<std::fs::File, AcpBrokerProcessError> {
+fn acquire_broker_open_lock(broker_id: &str) -> Result<std::fs::File, AcpBrokerProcessError> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
+    let root = broker_root()?;
+    std::fs::create_dir_all(&root)
+        .map_err(|error| broker_error(-32070, format!("broker root failed: {error}")))?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).mode(0o600);
     let file = options
-        .open(dir.join("open.lock"))
+        .open(root.join(format!("{broker_id}.open.lock")))
         .map_err(|error| broker_error(-32070, format!("open lock failed: {error}")))?;
     // SAFETY: `file` owns a valid, open file descriptor through this call,
     // which is all `flock` needs; it stays open (and so locked) for as long
@@ -512,8 +530,8 @@ fn acquire_broker_open_lock(dir: &Path) -> Result<std::fs::File, AcpBrokerProces
 }
 
 #[cfg(not(unix))]
-fn acquire_broker_open_lock(dir: &Path) -> Result<(), AcpBrokerProcessError> {
-    let _ = dir;
+fn acquire_broker_open_lock(broker_id: &str) -> Result<(), AcpBrokerProcessError> {
+    let _ = broker_id;
     Err(broker_error(-32072, "ACP broker IPC requires Unix sockets"))
 }
 
