@@ -1677,7 +1677,7 @@ struct ACPSessionRunnerTests {
         #expect(decision["description"]?.value as? String == "Run this command one time")
     }
 
-    @Test("retains _meta.permission facts and merges them once the tool-call row lands")
+    @Test("materializes a tool-call row from the permission request and merges the real tool_call into it, not a duplicate")
     func retainsPermissionFactsUntilToolCallArrives() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -1702,7 +1702,10 @@ struct ACPSessionRunnerTests {
 
         // Handle the permission request BEFORE its tool_call row exists —
         // reproducing the race between ACPStdioClient's separate
-        // incomingUpdates/permissionRequests streams.
+        // incomingUpdates/permissionRequests streams. Some adapters never
+        // send a separate tool_call at all for this id, only the
+        // permission request followed by tool_call_updates, so the row
+        // must be materialized here rather than merely stashing the facts.
         mock.emitPermission(
             metadata: AnyCodable([
                 "permission": AnyCodable([
@@ -1715,7 +1718,21 @@ struct ACPSessionRunnerTests {
             mock.permissionResponses[.number(11)] != nil
         }
 
-        // The tool_call row lands only afterward.
+        func toolCallRows() -> [ACPMessage.ToolCall] {
+            session.transcript.messages.compactMap {
+                if case .toolCall(let tc) = $0 { return tc }
+                return nil
+            }
+        }
+
+        // The row already exists immediately after the permission response
+        // — not after a subsequent tool_call.
+        #expect(toolCallRows().count == 1)
+        #expect(toolCallRows().first?.status == "pending")
+
+        // A tool_call "creation" event can still arrive afterward for the
+        // same id (redundant, but not disallowed): it must merge into the
+        // materialized row, not duplicate it.
         mock.emit(.toolCall(.init(
             toolCallId: "tc-permission",
             title: "Run command",
@@ -1726,21 +1743,19 @@ struct ACPSessionRunnerTests {
             rawInput: nil,
             rawOutput: nil
         )))
-        try await waitUntil {
-            session.transcript.messages.contains {
-                if case .toolCall = $0 { return true }
-                return false
-            }
-        }
+        try await waitUntil { toolCallRows().first?.status == "in_progress" }
+        #expect(toolCallRows().count == 1)
         await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.filter { $0.kind == "tool_call" }.count == 1)
         let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
         let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
         guard case .toolCall(let persisted) = decoded else {
             Issue.record("expected persisted tool call")
             return
         }
+        #expect(persisted.status == "in_progress")
         let permission = try #require(persisted.metadata?.value as? [String: AnyCodable])
         let facts = try #require(permission["permission"]?.value as? [String: AnyCodable])
         #expect(facts["title"]?.value as? String == "Run command?")

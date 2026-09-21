@@ -588,8 +588,9 @@ final class ACPSessionRunner {
     /// (auto-run, remembered decision, or user click — `evaluate` already
     /// resolved all three the same way) into the matching persisted tool
     /// call, so a later hydration of this transcript still shows the same
-    /// title/reason/chosen-option context. A no-op when there is nothing
-    /// to persist or the tool call row hasn't landed yet.
+    /// title/reason/chosen-option context. Materializes the row from the
+    /// permission request's own toolCall snapshot when it hasn't landed
+    /// yet. A no-op only when there is nothing worth persisting at all.
     private func persistPermissionDecision(params: ACPPermissionRequestParams, response: ACPPermissionResponse) {
         let chosenOption: ACPPermissionOption?
         switch response.outcome {
@@ -597,7 +598,7 @@ final class ACPSessionRunner {
         case .cancelled: chosenOption = nil
         }
         guard let index = session.mergePermissionDecision(
-            toolCallId: params.toolCall.toolCallId,
+            toolCall: params.toolCall,
             presentation: ACPPermissionPresentation(metadata: params.metadata),
             chosenOption: chosenOption,
             mcpServerName: params.toolCall.mcpServerName

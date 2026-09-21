@@ -3177,6 +3177,11 @@ function planText(o) {
 let permState = null;
 function showPermission(sessionId, payload) {
   permState = { sessionId, requestId: payload.requestId };
+  // #perm-scroll is reused across prompts and keeps its scrollTop —
+  // without resetting it, a short prompt shown after a long, scrolled one
+  // can open already scrolled past its own heading/tool name.
+  const scrollEl = $("perm-scroll");
+  if (scrollEl) scrollEl.scrollTop = 0;
   // `title`/`reason`/option `description`/`mcpServerName` come from the
   // adapter's `_meta.permission` extension (see ACPPermissionPresentation
   // on the native side) and are absent for adapters that don't send it —
