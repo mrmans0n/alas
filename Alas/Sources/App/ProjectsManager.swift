@@ -37,6 +37,13 @@ struct ProjectUpdate: Equatable {
 
 enum WorktreeOperationState: Equatable {
     case creating
+    /// Claimed the moment the delete confirmation goes up, before the user
+    /// has answered it — not tied to any async preflight work. `NSAlert`'s
+    /// `runModal()` blocks the call stack but its nested run loop still
+    /// pumps other main-actor work, so without this claim a scheduled run
+    /// or issue-triggered session could be admitted into the worktree while
+    /// the user is still deciding, then keep writing straight through the
+    /// staging/audit window that follows a confirmed delete.
     case preparingDelete
     case deleting
     /// The raw GG policy is retry metadata only; AppState removes its effective
@@ -519,7 +526,20 @@ final class ProjectsManager {
                         reconciled.append(optimistic)
                     }
                 }
-            case .preparingDelete, .deleting:
+            case .preparingDelete:
+                // A worktree removed externally (another terminal, git
+                // worktree prune) while its confirmation was still pending
+                // leaves nothing to ever clear the claim otherwise:
+                // confirming looks the worktree up by id, fails, and
+                // returns before touching operation state; cancelling only
+                // clears it when the state still matches `.preparingDelete`
+                // for a *live* worktree. Recreating a worktree at the same
+                // path reuses the id, so an uncleared claim would block its
+                // new incarnation from session admission forever.
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
+                }
+            case .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)

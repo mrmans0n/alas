@@ -880,7 +880,7 @@ private actor BlockingCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
                 releaseWaiters.append(continuation)
             }
         }
-        return .init(reasons: [], submoduleLocalState: .none)
+        return .init(reasons: [])
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {

@@ -294,16 +294,10 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
         var risks: [String] = []
         if preflight.reasons.contains(.dirty) { risks.append("Uncommitted changes") }
         if preflight.reasons.contains(.locked) { risks.append("Locked worktree") }
-        if preflight.reasons.contains(.containsInitializedSubmodules) || preflight.submoduleLocalState == .present {
-            risks.append("Initialized submodules")
-        }
-        if preflight.submoduleLocalState == .unknown {
-            risks.append("Submodule state could not be verified")
-        }
         return WorkspaceLifecycleConfirmationModel(
             title: "Delete Workspace Member Worktree?",
             risks: risks,
-            confirmAction: .deleteMember(confirmingRisks: preflight.requiresForce || preflight.submoduleLocalState != .none),
+            confirmAction: .deleteMember(confirmingRisks: preflight.requiresForce),
             canForceDelete: false
         )
     }

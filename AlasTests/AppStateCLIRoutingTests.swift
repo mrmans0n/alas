@@ -1215,8 +1215,7 @@ struct AppStateCLIRoutingTests {
             repoPath: main.path,
             worktreePath: target.path,
             deleteBranchIfMerged: false,
-            removedIndex: 1,
-            reason: .dirty
+            removedIndex: 1
         )
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
@@ -1225,6 +1224,75 @@ struct AppStateCLIRoutingTests {
         #expect(response == .ok)
         #expect(state.pendingForceDeleteWorktree == nil)
         #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+    }
+
+    /// Regression: a CLI delete that dismisses a leftover `.preparingDelete`
+    /// claim from an unanswered in-app dialog must actually release it, not
+    /// just discard `pendingForceDeleteWorktree`. Otherwise the row stays
+    /// blocked from new session admission forever — nothing else clears a
+    /// bare `.preparingDelete` claim.
+    @Test func cliWorktreeDeleteReleasesStalePreparingDeleteClaim() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete-stale-claim")
+        let worktreePath = main.path.deletingLastPathComponent().appendingPathComponent("delete-stale-claim-target")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: worktreePath)
+        }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "delete-stale-claim-target", worktreePath.path, "main"], cwd: main.path)
+        try "dirty".write(to: worktreePath.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-stale-claim-target" })
+
+        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: target.id,
+            branch: target.branch,
+            projectId: target.projectId,
+            repoPath: main.path,
+            worktreePath: target.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 1
+        )
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-stale-claim-target", force: false, keepBranch: true))))
+
+        guard case .error = response else {
+            Issue.record("Expected an error response for an unforced dirty delete")
+            return
+        }
+        #expect(state.pendingForceDeleteWorktree == nil)
+        #expect(state.projectsManager.operationState(for: target.id) == nil)
+    }
+
+    /// Regression: a `.preparingDelete` claim with no matching
+    /// `pendingForceDeleteWorktree` belongs to the live first confirmation
+    /// dialog (`beginDeleteWorktree`'s blocking `NSAlert`, whose nested run
+    /// loop is exactly how this CLI call can run while that alert is still
+    /// up) — not a stale force prompt. The CLI must refuse rather than
+    /// clear that claim and race the open dialog's own eventual decision.
+    @Test func cliWorktreeDeleteRefusesWhenFirstDialogClaimIsLive() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete-live-dialog")
+        let worktreePath = main.path.deletingLastPathComponent().appendingPathComponent("delete-live-dialog-target")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: worktreePath)
+        }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "delete-live-dialog-target", worktreePath.path, "main"], cwd: main.path)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-live-dialog-target" })
+
+        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        #expect(state.pendingForceDeleteWorktree == nil)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-live-dialog-target", force: true, keepBranch: true))))
+
+        guard case .error = response else {
+            Issue.record("Expected the CLI to refuse rather than race the live dialog")
+            return
+        }
+        #expect(state.projectsManager.operationState(for: target.id) == .preparingDelete)
     }
 
     /// Regression test for the review palette ignoring a per-worktree

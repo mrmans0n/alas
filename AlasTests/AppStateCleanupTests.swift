@@ -1032,13 +1032,16 @@ struct AppStateCleanupTests {
 
     // MARK: - Dirty-worktree force-delete state
 
-    @Test func looksLikeDirtyWorktreeErrorMatchesKnownPatterns() {
-        #expect(AppState.forceDeleteReason(for: "Cannot delete a dirty worktree") == .dirty)
-        #expect(AppState.forceDeleteReason(for: "fatal: 'foo' contains modified or untracked files") == .dirty)
-        #expect(AppState.forceDeleteReason(for: "worktree is dirty and cannot be removed") == .dirty)
-        #expect(AppState.forceDeleteReason(for: "fatal: working trees containing submodules cannot be moved or removed") == .containsSubmodules)
-        #expect(AppState.forceDeleteReason(for: "fatal: not a git repository") == nil)
-        #expect(AppState.forceDeleteReason(for: "") == nil)
+    @Test func removalRefusalMatchesDirtyAndLockedButNotSubmodules() {
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "Cannot delete a dirty worktree"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "fatal: 'foo' contains modified or untracked files"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "worktree is dirty and cannot be removed"))
+        #expect(AppState.requiresForceRetry(forRemovalRefusal: "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first"))
+        // Git's submodule refusal is answered inside WorktreeService, never by
+        // asking the user to force.
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: "fatal: working trees containing submodules cannot be moved or removed"))
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: "fatal: not a git repository"))
+        #expect(!AppState.requiresForceRetry(forRemovalRefusal: ""))
     }
 
     @Test func resolveDeleteBranchIfMergedRespectsKeepBranchOverride() {
@@ -1052,139 +1055,83 @@ struct AppStateCleanupTests {
         #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: true) == false)
     }
 
-    @Test func deleteConfirmationForCleanPreflightUsesDeleteAndBranchDeletionCopy() {
-        let confirmation = AppState.deleteConfirmation(
-            branch: "feature/clean",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(reasons: [], submoduleLocalState: .none)
-        )
+    @Test func deleteConfirmationAnnouncesBranchDeletion() {
+        let confirmation = AppState.deleteConfirmation(branch: "feature/clean", keepBranch: false)
 
         #expect(confirmation == AppState.WorktreeDeleteConfirmation(
             title: "Delete worktree 'feature/clean'?",
-            message: "This removes its files from disk. The local branch will be deleted if merged.",
-            buttonTitle: "Delete",
-            force: false
+            message: "This removes its files from disk. The local branch will be deleted if merged."
         ))
     }
 
-    @Test func deleteConfirmationForDirtyPreflightUsesForceAndKeepBranchCopy() {
-        let confirmation = AppState.deleteConfirmation(
-            branch: "feature/dirty",
-            keepBranch: true,
-            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none)
-        )
+    @Test func deleteConfirmationAnnouncesBranchRetention() {
+        let confirmation = AppState.deleteConfirmation(branch: "feature/keep", keepBranch: true)
 
-        #expect(confirmation.title == "Delete worktree 'feature/dirty'?")
-        #expect(confirmation.buttonTitle == "Force Delete")
-        #expect(confirmation.force == true)
-        #expect(confirmation.message.contains("This removes its files from disk."))
-        #expect(confirmation.message.contains("The local branch will be kept."))
-        #expect(confirmation.message.contains("This worktree has modified or untracked files. Force delete will permanently remove them from disk."))
-    }
-
-    @Test func deleteConfirmationForSubmoduleLocalStateIncludesSubmoduleWarnings() {
-        let confirmation = AppState.deleteConfirmation(
-            branch: "feature/submodule",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(
-                reasons: [.containsInitializedSubmodules],
-                submoduleLocalState: .present
-            )
-        )
-
-        #expect(confirmation.buttonTitle == "Force Delete")
-        #expect(confirmation.force == true)
-        #expect(confirmation.message.contains("This worktree contains initialized submodules. Git requires force delete to remove it."))
-        #expect(confirmation.message.contains("Preflight found local-only submodule state that may only exist inside this worktree."))
-    }
-
-    @Test func deleteConfirmationForUnknownWithoutSubmoduleReasonUsesNormalCopy() {
-        let confirmation = AppState.deleteConfirmation(
-            branch: "feature/unknown",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(reasons: [], submoduleLocalState: .unknown)
-        )
-
-        #expect(confirmation.buttonTitle == "Delete")
-        #expect(confirmation.force == false)
-        #expect(!confirmation.message.contains("initialized submodules"))
-        #expect(!confirmation.message.contains("could not verify"))
-    }
-
-    @Test func deleteConfirmationForDirtyAndSubmodulePreflightIncludesBothWarnings() {
-        let confirmation = AppState.deleteConfirmation(
-            branch: "feature/combined",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(
-                reasons: [.dirty, .containsInitializedSubmodules],
-                submoduleLocalState: .none
-            )
-        )
-
-        #expect(confirmation.buttonTitle == "Force Delete")
-        #expect(confirmation.force == true)
-        #expect(confirmation.message.contains("This worktree has modified or untracked files. Force delete will permanently remove them from disk."))
-        #expect(confirmation.message.contains("This worktree contains initialized submodules. Git requires force delete to remove it."))
-    }
-
-    @Test func resolveDeleteDecisionReturnsForceDecisionWhenConfirmed() {
-        let preflight = WorktreeDeletePreflight(
-            reasons: [.containsInitializedSubmodules],
-            submoduleLocalState: .none
-        )
-
-        let decision = AppState.resolveDeleteDecision(
-            branch: "feature/submodule",
-            keepBranch: false,
-            preflight: preflight,
-            userConfirmed: true
-        )
-
-        #expect(decision == AppState.WorktreeDeleteDecision(
-            confirmation: AppState.deleteConfirmation(
-                branch: "feature/submodule",
-                keepBranch: false,
-                preflight: preflight
-            ),
-            force: true,
-            allowsSubmoduleLocalState: false
+        #expect(confirmation == AppState.WorktreeDeleteConfirmation(
+            title: "Delete worktree 'feature/keep'?",
+            message: "This removes its files from disk. The local branch will be kept."
         ))
-        #expect(decision?.confirmation.buttonTitle == "Force Delete")
     }
 
-    @Test func resolveDeleteDecisionAllowsReportedSubmoduleLocalState() {
-        let decision = AppState.resolveDeleteDecision(
-            branch: "feature/submodule",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(
-                reasons: [.containsInitializedSubmodules],
-                submoduleLocalState: .present
-            ),
-            userConfirmed: true
-        )
-
-        #expect(decision?.allowsSubmoduleLocalState == true)
-    }
-
-    @Test func resolveDeleteDecisionReturnsNilWhenCancelled() {
-        let decision = AppState.resolveDeleteDecision(
-            branch: "feature/cancel",
-            keepBranch: false,
-            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none),
-            userConfirmed: false
-        )
-
-        #expect(decision == nil)
-    }
-
-    @Test func submoduleRemoveErrorBuildsPendingForceDeleteFallback() {
-        let repoPath = URL(fileURLWithPath: "/tmp/repo")
-        let worktreePath = URL(fileURLWithPath: "/tmp/repo-worktree")
+    @Test func submoduleRemoveErrorIsNotUserForceable() {
         let worktree = Worktree(
             id: "wt-submodule",
             projectId: "project",
             name: "feature/submodule",
             branch: "feature/submodule",
+            path: URL(fileURLWithPath: "/tmp/repo-worktree"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+
+        let pending = AppState.pendingForceDelete(
+            for: worktree,
+            repoPath: URL(fileURLWithPath: "/tmp/repo"),
+            deleteBranchIfMerged: true,
+            removedIndex: 2,
+            stderr: "fatal: working trees containing submodules cannot be moved or removed"
+        )
+
+        #expect(pending == nil)
+    }
+
+    /// Regression: a locked worktree used to have no path back to the force
+    /// confirmation — the row failed with git's raw refusal and every retry
+    /// failed identically, since only dirty/submodule stderr was recognized.
+    @Test func lockedRemoveErrorBuildsPendingForceDeleteFallback() {
+        let repoPath = URL(fileURLWithPath: "/tmp/repo")
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo-worktree-locked")
+        let worktree = Worktree(
+            id: "wt-locked",
+            projectId: "project",
+            name: "feature/locked",
+            branch: "feature/locked",
+            path: worktreePath,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+
+        let pending = AppState.pendingForceDelete(
+            for: worktree,
+            repoPath: repoPath,
+            deleteBranchIfMerged: true,
+            removedIndex: 3,
+            stderr: "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first"
+        )
+
+        #expect(pending?.id == worktree.id)
+        #expect(pending?.worktreePath == worktreePath)
+        #expect(pending?.removedIndex == 3)
+    }
+
+    @Test func dirtyRemoveErrorBuildsPendingForceDeleteFallback() {
+        let repoPath = URL(fileURLWithPath: "/tmp/repo")
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo-worktree")
+        let worktree = Worktree(
+            id: "wt-dirty",
+            projectId: "project",
+            name: "feature/dirty",
+            branch: "feature/dirty",
             path: worktreePath,
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
@@ -1195,7 +1142,7 @@ struct AppStateCleanupTests {
             repoPath: repoPath,
             deleteBranchIfMerged: true,
             removedIndex: 2,
-            stderr: "fatal: working trees containing submodules cannot be moved or removed"
+            stderr: "fatal: 'foo' contains modified or untracked files"
         )
 
         #expect(pending?.id == worktree.id)
@@ -1205,28 +1152,6 @@ struct AppStateCleanupTests {
         #expect(pending?.worktreePath == worktreePath)
         #expect(pending?.deleteBranchIfMerged == true)
         #expect(pending?.removedIndex == 2)
-        #expect(pending?.reason == .containsSubmodules)
-    }
-
-    @Test func confirmedForceDeleteAllowsObservedInitializedSubmoduleState() {
-        #expect(AppState.allowsSubmoduleLocalStateForForcedDeletion(
-            force: true,
-            preflight: WorktreeDeletePreflight(
-                reasons: [.containsInitializedSubmodules],
-                submoduleLocalState: .present
-            )
-        ))
-        #expect(!AppState.allowsSubmoduleLocalStateForForcedDeletion(
-            force: true,
-            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none)
-        ))
-        #expect(!AppState.allowsSubmoduleLocalStateForForcedDeletion(
-            force: true,
-            preflight: WorktreeDeletePreflight(
-                reasons: [.containsInitializedSubmodules],
-                submoduleLocalState: .unknown
-            )
-        ))
     }
 
     @Test func cancelForceDeleteClearsPendingState() async throws {
@@ -1245,14 +1170,73 @@ struct AppStateCleanupTests {
             repoPath: repo,
             worktreePath: wt.path,
             deleteBranchIfMerged: false,
-            removedIndex: 0,
-            reason: .dirty
+            removedIndex: 0
         )
         #expect(state.pendingForceDeleteWorktree != nil)
 
         state.cancelForceDeletePendingWorktree()
         #expect(state.pendingForceDeleteWorktree == nil)
         #expect(state.projectsManager.operationState(for: wt.id) == nil)
+    }
+
+    /// Regression: the force-delete alert used to clear operation state to
+    /// `nil` while it waited on the user, leaving the worktree unclaimed —
+    /// a scheduled run or remote session could be admitted during that
+    /// window, then have its writes silently discarded once the user
+    /// confirmed force delete (which skips the cleanliness audits).
+    @Test func preparingDeleteDuringForceAlertBlocksAdmissionUntilResolved() async throws {
+        let repo = try await makeRepo(name: "force-alert-claim")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "force-alert-claim", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        let wt = try #require(trees.first)
+
+        state.projectsManager.setOperationState(id: wt.id, state: .preparingDelete)
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: wt.id,
+            branch: wt.branch,
+            projectId: wt.projectId,
+            repoPath: repo,
+            worktreePath: wt.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 0
+        )
+
+        #expect(AppState.blocksWorktreeSessionAdmission(state.projectsManager.operationState(for: wt.id)))
+
+        state.cancelForceDeletePendingWorktree()
+
+        #expect(state.pendingForceDeleteWorktree == nil)
+        #expect(state.projectsManager.operationState(for: wt.id) == nil)
+    }
+
+    /// Regression: a worktree removed externally (another terminal, `git
+    /// worktree prune`) while its `.preparingDelete` claim was still up had
+    /// nothing to ever clear that claim — confirming looks the worktree up
+    /// by id, fails, and returns before touching operation state;
+    /// cancelling only clears it when the state still matches
+    /// `.preparingDelete` for a *live* worktree. A worktree recreated at
+    /// the same path reuses the id, so the stale claim would block its new
+    /// incarnation from session admission until app restart.
+    @Test func preparingDeleteClaimClearsWhenWorktreeIsRemovedExternally() async throws {
+        let repo = try await makeRepo(name: "external-removal")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "external-removal", color: "#5fb7c4")
+        let worktreePath = repo.deletingLastPathComponent().appendingPathComponent("external-removal-target")
+        defer { try? FileManager.default.removeItem(at: worktreePath) }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "external-removal-target", worktreePath.path, "main"], cwd: repo)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "external-removal-target" })
+
+        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+
+        _ = try await Process.git(["worktree", "remove", "--force", worktreePath.path], cwd: repo)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        #expect(state.projectsManager.operationState(for: target.id) == nil)
     }
 
     @Test func removeProjectClosesTabsForProjectWorktrees() async throws {
