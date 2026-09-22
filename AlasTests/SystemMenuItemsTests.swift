@@ -25,6 +25,28 @@ struct SystemMenuItemsTests {
         ])
     }
 
+    /// `register(defaults:)` is a no-op when the key already has a value in a
+    /// higher-priority domain (the app's own, or the shared `NSGlobalDomain`
+    /// some of these keys are documented to live in). `registerOptOut` must
+    /// set the values directly so a pre-existing opposite value can't leave
+    /// the crash-causing insertion enabled.
+    @Test func registerOptOutOverridesAnExistingOppositeValue() throws {
+        let suiteName = "io.nlopez.alas.tests.SystemMenuItemsTests"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        for key in AppKitMenuInjection.optOutDefaults.keys {
+            defaults.set(true, forKey: key)
+        }
+        defaults.set(false, forKey: "NSDisabledDictationMenuItem")
+
+        AppKitMenuInjection.registerOptOut(in: defaults)
+
+        for (key, expected) in AppKitMenuInjection.optOutDefaults {
+            #expect(defaults.object(forKey: key) as? Bool == expected as? Bool, "key: \(key)")
+        }
+    }
+
     @Test func editMenuCarriesOnlySwiftUIOwnedItems() throws {
         let titles = try #require(mainMenu(titled: "Edit")).items.map(\.title)
         #expect(!titles.contains("Start Dictation…"))

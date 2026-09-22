@@ -32,8 +32,20 @@ enum AppKitMenuInjection {
     }
 
     /// Must run before AppKit finishes launching; `AlasApp.init` is early enough.
+    ///
+    /// Sets the values directly rather than via `register(defaults:)`. The
+    /// registration domain is the lowest-priority fallback UserDefaults
+    /// consults, so it would be silently ignored if any of these keys were
+    /// already present in the app's own domain or in `NSGlobalDomain` — which
+    /// `NSFullScreenMenuItemEverywhere` in particular is documented to be, as
+    /// a systemwide toggle some users or MDM profiles set directly. Writing
+    /// the app's own domain outranks `NSGlobalDomain` in the standard lookup
+    /// order, so this always wins and the opt-out can never be silently
+    /// defeated by a pre-existing value.
     static func registerOptOut(in defaults: UserDefaults = .standard) {
-        defaults.register(defaults: optOutDefaults)
+        for (key, value) in optOutDefaults {
+            defaults.set(value, forKey: key)
+        }
     }
 }
 
