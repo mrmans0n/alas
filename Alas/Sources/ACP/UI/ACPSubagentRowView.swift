@@ -109,9 +109,16 @@ struct ACPSubagentRowView: View {
                 .foregroundStyle(theme.color("fg-faint"))
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(run.messages.enumerated()), id: \.offset) { index, message in
+                // Keyed by the message's own stable identity, not its array
+                // offset — replay recovery can insert a missing row in the
+                // middle of an already-expanded transcript, shifting every
+                // later message's offset by one. Keying by offset would let
+                // SwiftUI reuse each row's view identity (and therefore its
+                // local state, like an `ACPToolCallCard`'s `expanded` flag)
+                // for what is now a DIFFERENT message.
+                ForEach(run.messages, id: \.stableIdentityKey) { message in
                     ACPSubagentMessageRow(
-                        stableId: "\(descriptor.subagentSessionId)#\(index)",
+                        stableId: "\(descriptor.subagentSessionId)#\(message.stableId)",
                         message: message,
                         typography: typography,
                         trustedImageRoot: trustedImageRoot)

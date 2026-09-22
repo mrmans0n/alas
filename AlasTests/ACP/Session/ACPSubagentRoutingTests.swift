@@ -397,6 +397,41 @@ struct ACPSubagentRoutingTests {
         }
     }
 
+    @Test("replaying an already-persisted id-less prompt advances the cursor so a later recovered spawn inserts after it")
+    func replayIdLessPromptAdvancesCursorBeforeSpawnRecovery() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Hydrate one ordinary, id-less prompt row, exactly as it would
+        // already exist in memory after a normal `session/load` restore.
+        runner.session.apply(.userMessageChunk(.init(content: .text("hello"))))
+        runner.persistIndices([0])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 1)
+
+        // `session/load` resends the full chronological history: the
+        // already-matched id-less prompt, THEN a subagent spawn whose own
+        // write never reached SQLite before the crash.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("hello")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Before the fix, an id-less `.userMessageChunk` never located a
+        // `matchedIndex` at all (only the identified branch did), so the
+        // cursor stayed at 0 and the recovered spawn inserted BEFORE the
+        // already-matched prompt instead of after it.
+        #expect(runner.session.transcript.messages.count == 2)
+        guard case .user = runner.session.transcript.messages[0],
+              case .toolCall = runner.session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn AFTER the already-matched id-less prompt")
+            return
+        }
+    }
+
     @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
     func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
         let (runner, store, _) = try makeRunner()

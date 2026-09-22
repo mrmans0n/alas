@@ -331,6 +331,30 @@ struct ACPSubagentSessionTests {
         #expect(second.value == "second")
     }
 
+    @Test("a message's stable identity survives being shifted by a mid-array insertion")
+    func stableIdentitySurvivesArrayShift() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.restore(
+            messages: [
+                .toolCall(.init(toolCallId: "t1", title: "Read", status: "completed")),
+                .agent(id: UUID(), StreamingText("second"))
+            ],
+            createdAts: [Date(), Date()])
+        let keyBeforeShift = run.messages[1].stableIdentityKey
+
+        // Recovering a missing id-less row ahead of "second" shifts its
+        // array position from 1 to 2.
+        run.applyReplayed(.agentMessageChunk(.text("first")))
+
+        #expect(run.messages.count == 3)
+        // The key itself is unchanged despite the array shift — this is
+        // what lets `ACPSubagentRowView`'s `ForEach` key rows by identity
+        // instead of by (mutable) array offset, so an already-expanded
+        // tool call's local view state doesn't jump to the wrong row
+        // after a recovery.
+        #expect(run.messages[2].stableIdentityKey == keyBeforeShift)
+    }
+
     @Test("replay of a bare tool-call update, with no creation event of its own, still advances the cursor past its row")
     func replayToolCallUpdateAdvancesCursorPastMaterializedPlaceholder() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
@@ -419,6 +443,48 @@ struct ACPSubagentSessionTests {
         }
         #expect(first == "first")
         #expect(second == "second")
+    }
+
+    @Test("live child agent chunks split at a sentence boundary get a separator, like the parent's own stream")
+    func liveChildAgentChunksSplitAtSentenceGetSeparator() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.agentMessageChunk(.text("Compacting completed.")))
+        run.apply(.agentMessageChunk(.text("Running the pull tests.")))
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected one agent message")
+            return
+        }
+        #expect(buffer.value == "Compacting completed.\nRunning the pull tests.")
+    }
+
+    @Test("replayed child agent chunks split at a sentence boundary get a separator too")
+    func replayedChildAgentChunksSplitAtSentenceGetSeparator() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.applyReplayed(.agentMessageChunk(.text("Compacting completed.")))
+        run.applyReplayed(.agentMessageChunk(.text("Running the pull tests.")))
+
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected one agent message")
+            return
+        }
+        #expect(buffer.value == "Compacting completed.\nRunning the pull tests.")
+    }
+
+    @Test("a child prompt's id-less blocks split at a sentence boundary get a separator")
+    func liveIdLessChildPromptSplitAtSentenceGetsSeparator() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.init(content: .text("Compacting completed."))))
+        run.apply(.userMessageChunk(.init(content: .text("Running the pull tests."))))
+
+        #expect(run.messages.count == 1)
+        guard case .user(_, nil, let text, _, _) = run.messages[0] else {
+            Issue.record("expected one prompt bubble")
+            return
+        }
+        #expect(text == "Compacting completed.\nRunning the pull tests.")
     }
 
     @Test("replay revives a locally-synthesized disconnected child back to its real reported state")

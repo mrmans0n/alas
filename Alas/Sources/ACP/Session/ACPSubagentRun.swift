@@ -225,7 +225,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                     messages[index] = .user(
                         id: id,
                         messageId: messageId,
-                        text: existingText + text,
+                        text: existingText + ACPSession.streamingSeparator(between: existingText, and: text) + text,
                         attachments: existingAttachments + attachments.filter {
                             !existingAttachments.contains($0)
                         },
@@ -246,7 +246,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 messages[index] = .user(
                     id: id,
                     messageId: nil,
-                    text: existingText + text,
+                    text: existingText + ACPSession.streamingSeparator(between: existingText, and: text) + text,
                     attachments: existingAttachments + attachments.filter {
                         !existingAttachments.contains($0)
                     },
@@ -496,7 +496,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         if let index = trailingIndex(of: kind, messageId: messageId) {
             switch messages[index] {
             case .agent(_, _, let buffer), .thought(_, _, let buffer):
-                buffer.append(text)
+                buffer.append(ACPSession.streamingSeparator(between: buffer.value, and: text) + text)
                 buffer.adopt(phase: phase, metadata: metadata)
                 return [index]
             default:
@@ -634,7 +634,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     ) {
         switch (kind, messages[index]) {
         case (.agent, .agent(_, _, let buffer)), (.thought, .thought(_, _, let buffer)):
-            buffer.append(text)
+            buffer.append(ACPSession.streamingSeparator(between: buffer.value, and: text) + text)
             buffer.adopt(phase: phase, metadata: metadata)
         default:
             break
@@ -757,7 +757,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         messages[index] = .user(
             id: id,
             messageId: messageId,
-            text: existingText + text,
+            text: existingText + ACPSession.streamingSeparator(between: existingText, and: text) + text,
             attachments: existingAttachments + attachments.filter { !existingAttachments.contains($0) },
             delegatedSource: source)
     }

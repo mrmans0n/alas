@@ -1076,7 +1076,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .userMessageChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) } ?? lastIdLessUser()
         case .plan:
             dirty = []
             matchedIndex = transcript.currentPlanMessageIndex
@@ -2997,6 +2997,19 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
+    /// The newest id-less `.user` row, for `applySuppressedReplaySideEffects`'s
+    /// cursor tracking only — unlike `lastAgent()`/`lastThought()`, this is
+    /// not a live-continuation decision (nothing here is being merged into),
+    /// so it does not stop at a boundary: replayed content is trusted to
+    /// already be hydrated in chronological order, and the cursor only ever
+    /// moves forward, so the newest match is always a safe lower bound.
+    private func lastIdLessUser() -> Int? {
+        for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
+            if case .user(_, nil, _, _, _) = transcript.messages[i] { return i }
+        }
+        return nil
+    }
+
     private enum TextMessageKind: Hashable {
         case user
         case agent
@@ -3409,7 +3422,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lowercase (a real English word ending a sentence, not a CamelCase
     /// token) and not look like the tail of a URL or path (no `/` or `://`
     /// in the run of non-whitespace preceding the punctuation).
-    private static func streamingSeparator(between previous: String, and next: String) -> String {
+    static func streamingSeparator(between previous: String, and next: String) -> String {
         guard let last = previous.last, let first = next.first else { return "" }
         if last.isWhitespace || first.isWhitespace { return "" }
         guard last == "." || last == "!" || last == "?" else { return "" }
