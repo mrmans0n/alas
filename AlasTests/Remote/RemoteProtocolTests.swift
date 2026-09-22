@@ -906,4 +906,66 @@ struct RemoteProtocolTests {
         let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
         #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
     }
+
+    @Test func helloCarriesPeersOnlyWhenThereAreAny() throws {
+        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let noneObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(none)) as? [String: Any])
+        #expect(noneObject["peers"] == nil)
+
+        let peers = [RemoteHelloPeer(serverId: "srv-b", name: "Mac B", state: "online"),
+                     RemoteHelloPeer(serverId: "srv-c", name: "Mac C", state: "offline")]
+        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false,
+                                                                  federationEnabled: true, peers: peers))
+        #expect(try roundTrip(some) == some)
+        let someObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(some)) as? [String: Any])
+        let encodedPeers = try #require(someObject["peers"] as? [[String: Any]])
+        #expect(encodedPeers.map { $0["serverId"] as? String } == ["srv-b", "srv-c"])
+        #expect(encodedPeers.map { $0["state"] as? String } == ["online", "offline"])
+
+        let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+                == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false))
+    }
+
+    @Test func sessionSummaryOmitsServerFieldsWhenLocal() throws {
+        let local = RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: true)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(local)) as? [String: Any])
+        #expect(object["serverId"] == nil)
+        #expect(object["serverName"] == nil)
+        #expect(try roundTrip(local) == local)
+    }
+
+    @Test func sessionSummaryRoundTripsServerFieldsWhenFederated() throws {
+        let federated = RemoteSessionSummary(id: "srv-b:s1", title: "T", agentId: "claude", status: "idle",
+                                             canDrive: false, serverId: "srv-b", serverName: "Mac B")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(federated)) as? [String: Any])
+        #expect(object["serverId"] as? String == "srv-b")
+        #expect(object["serverName"] as? String == "Mac B")
+        #expect(try roundTrip(federated) == federated)
+    }
+
+    @Test func sessionSummaryDecodesWithoutServerFields() throws {
+        let legacy = Data(#"{"id":"s1","title":"T","agentId":"claude","status":"idle","canDrive":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy)
+        #expect(decoded.serverId == nil)
+        #expect(decoded.serverName == nil)
+    }
+
+    @Test func errorOmitsSessionIdWhenUnscoped() throws {
+        let unscoped = RemoteServerMessage.error(message: "m")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(unscoped)) as? [String: Any])
+        #expect(object["sessionId"] == nil)
+        #expect(try roundTrip(unscoped) == unscoped)
+
+        let legacy = Data(#"{"type":"error","message":"m"}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+        #expect(decoded == .error(message: "m"))
+    }
+
+    @Test func errorRoundTripsSessionIdWhenScoped() throws {
+        let scoped = RemoteServerMessage.error(message: "m", sessionId: "s1")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(scoped)) as? [String: Any])
+        #expect(object["sessionId"] as? String == "s1")
+        #expect(try roundTrip(scoped) == scoped)
+    }
 }

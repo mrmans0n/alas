@@ -102,6 +102,11 @@ struct RemoteSessionSummary: Equatable, Sendable {
     let worktreeId: String?
     let updatedAt: Int64
     let worktree: RemoteWorktreeSummary?
+    /// Set only on rows a gateway forwards from a peer: the peer's `serverId`
+    /// and display name, so a client can group by Mac. Nil means the row is
+    /// local to the Mac that sent it, exactly as before federation.
+    let serverId: String?
+    let serverName: String?
 
     init(
         id: String,
@@ -113,7 +118,9 @@ struct RemoteSessionSummary: Equatable, Sendable {
         projectId: String? = nil,
         worktreeId: String? = nil,
         updatedAt: Int64 = 0,
-        worktree: RemoteWorktreeSummary? = nil
+        worktree: RemoteWorktreeSummary? = nil,
+        serverId: String? = nil,
+        serverName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -125,12 +132,15 @@ struct RemoteSessionSummary: Equatable, Sendable {
         self.worktreeId = worktreeId
         self.updatedAt = updatedAt
         self.worktree = worktree
+        self.serverId = serverId
+        self.serverName = serverName
     }
 }
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, agentId, status, canDrive, isActive, projectId, worktreeId, updatedAt, worktree
+        case serverId, serverName
     }
 
     init(from decoder: Decoder) throws {
@@ -145,7 +155,9 @@ extension RemoteSessionSummary: Codable {
             projectId: try c.decodeIfPresent(String.self, forKey: .projectId),
             worktreeId: try c.decodeIfPresent(String.self, forKey: .worktreeId),
             updatedAt: try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0,
-            worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree)
+            worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree),
+            serverId: try c.decodeIfPresent(String.self, forKey: .serverId),
+            serverName: try c.decodeIfPresent(String.self, forKey: .serverName)
         )
     }
 
@@ -161,6 +173,8 @@ extension RemoteSessionSummary: Codable {
         try c.encodeIfPresent(worktreeId, forKey: .worktreeId)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(worktree, forKey: .worktree)
+        try c.encodeIfPresent(serverId, forKey: .serverId)
+        try c.encodeIfPresent(serverName, forKey: .serverName)
     }
 }
 

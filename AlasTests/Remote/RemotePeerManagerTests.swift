@@ -10,11 +10,12 @@ struct RemotePeerManagerTests {
         var state: RemotePeerConnection.State = .idle
         var connectCalls = 0
         var disconnectCalls = 0
+        var sent: [RemoteClientMessage] = []
         let emit: @MainActor (RemotePeerConnection.Event) -> Void
         init(emit: @escaping @MainActor (RemotePeerConnection.Event) -> Void) { self.emit = emit }
         func connect() { connectCalls += 1 }
         func disconnect() { disconnectCalls += 1 }
-        func send(_ message: RemoteClientMessage) {}
+        func send(_ message: RemoteClientMessage) { sent.append(message) }
     }
 
     final class Links {
@@ -180,6 +181,33 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
         #expect(store.saved.isEmpty)
         #expect(links.byPeerId.values.first?.disconnectCalls == 1)
+    }
+
+    // The rollback above removes the peer from `peers` before disconnecting
+    // its link, so the link's OWN `.stateChanged(.idle)` — fired
+    // synchronously inside a real `disconnect()` — cannot find the peer to
+    // announce it by; `removeProvisionalPeer` must announce the removal
+    // itself, the same way `forget` already does, or `FederatedSessionsProvider`
+    // keeps treating a peer that briefly went `.online` as still there.
+    @Test func addPeerRollbackAnnouncesFederationAvailabilityForTheRemovedPeer() async {
+        let requests = Requests()
+        let store = InMemoryPeerStore()
+        let links = Links()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: links)
+        var events: [FederatedPeerLinkEvent] = []
+        manager.onFederationEvent = { events.append($0) }
+        manager.connectAll()
+        // Nothing ever calls handleInboundPeer for "srv-a": same rollback
+        // path as the test above, through `removeProvisionalPeer`.
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        let announced = events.compactMap { event -> String? in
+            if case .availabilityChanged(let serverId) = event { return serverId }
+            return nil
+        }
+        #expect(announced == ["srv-a"])
     }
 
     // A first-time addPeer's own reciprocal wait can time out while a
@@ -1563,5 +1591,110 @@ struct RemotePeerManagerTests {
         manager.disconnectAll()
         #expect(links.byPeerId["p1"]?.disconnectCalls == 1)
         #expect(manager.states.isEmpty)
+    }
+
+    private func verifiedPeer(id: String = "p1", serverId: String = "srv-a") -> RemotePeer {
+        RemotePeer(id: id, serverId: serverId, name: "Mac A", origins: ["http://10.0.0.1:8765"], lastOrigin: nil,
+                   token: "t", publicKey: "pinned-key", protocolVersion: nil, localDeviceId: nil, addedAt: Date())
+    }
+
+    private func unverifiedPeer(id: String = "p2", serverId: String = "srv-old") -> RemotePeer {
+        RemotePeer(id: id, serverId: serverId, name: "Old Mac", origins: ["http://10.0.0.2:8765"], lastOrigin: nil,
+                   token: "t", publicKey: nil, protocolVersion: nil, localDeviceId: nil, addedAt: Date())
+    }
+
+    @Test func sessionCarryingPeersListsOnlyVerifiedOnlineLinks() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer(), verifiedPeer(id: "p3", serverId: "srv-c")])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        #expect(manager.sessionCarryingPeers.isEmpty)
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p2"]).emit(.stateChanged(.online))   // unverified: never carries
+        try #require(links.byPeerId["p3"]).emit(.stateChanged(.offline))
+        #expect(manager.sessionCarryingPeers == [FederatedPeerInfo(serverId: "srv-a", name: "Mac A")])
+    }
+
+    @Test func peerFramesReachTheFederationEventOnlyOverACarryingLink() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer()])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        var events: [FederatedPeerLinkEvent] = []
+        manager.onFederationEvent = { events.append($0) }
+        manager.connectAll()
+        let verified = try #require(links.byPeerId["p1"])
+        let unverified = try #require(links.byPeerId["p2"])
+        verified.emit(.message(.sessionClosed(sessionId: "x")))         // offline: dropped
+        verified.emit(.stateChanged(.online))
+        verified.emit(.message(.sessionClosed(sessionId: "x")))         // online + verified: forwarded
+        unverified.emit(.stateChanged(.online))
+        unverified.emit(.message(.sessionClosed(sessionId: "y")))       // online but unverified: dropped
+        let forwarded = events.compactMap { event -> (String, RemoteServerMessage)? in
+            if case .message(let serverId, let message) = event { return (serverId, message) }
+            return nil
+        }
+        #expect(forwarded.count == 1)
+        #expect(forwarded.first?.0 == "srv-a")
+        #expect(forwarded.first?.1 == .sessionClosed(sessionId: "x"))
+        let availability = events.compactMap { event -> String? in
+            if case .availabilityChanged(let serverId) = event { return serverId }
+            return nil
+        }
+        #expect(availability.contains("srv-a"))
+        #expect(availability.contains("srv-old"))
+    }
+
+    @Test func sendToPeerOnlyReachesACarryingLink() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer()])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        let verified = try #require(links.byPeerId["p1"])
+        let unverified = try #require(links.byPeerId["p2"])
+        manager.sendToPeer(.listSessions, serverId: "srv-a")            // offline: dropped
+        verified.emit(.stateChanged(.online))
+        unverified.emit(.stateChanged(.online))
+        manager.sendToPeer(.listSessions, serverId: "srv-a")
+        manager.sendToPeer(.listSessions, serverId: "srv-old")
+        manager.sendToPeer(.listSessions, serverId: "srv-nobody")
+        #expect(verified.sent == [.listSessions])
+        #expect(unverified.sent.isEmpty)
+    }
+
+    @Test func helloPeersReportEveryRecordWithItsLinkState() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer(), verifiedPeer(id: "p3", serverId: "srv-c")])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p2"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p3"]).emit(.stateChanged(.identityUnproven))
+        #expect(manager.helloPeers == [
+            RemoteHelloPeer(serverId: "srv-a", name: "Mac A", state: "online"),
+            RemoteHelloPeer(serverId: "srv-old", name: "Old Mac", state: "unverified"),
+            RemoteHelloPeer(serverId: "srv-c", name: "Mac A", state: "identityUnproven"),
+        ])
+    }
+
+    @Test func forgetAndDisconnectAllAnnounceAvailabilityChanges() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), verifiedPeer(id: "p3", serverId: "srv-c")])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p3"]).emit(.stateChanged(.online))
+        var announced: [String] = []
+        manager.onFederationEvent = { if case .availabilityChanged(let id) = $0 { announced.append(id) } }
+        manager.forget(peerId: "p1")
+        #expect(announced == ["srv-a"])
+        #expect(manager.sessionCarryingPeers == [FederatedPeerInfo(serverId: "srv-c", name: "Mac A")])
+        manager.disconnectAll()
+        #expect(announced.contains("srv-c"))
+        #expect(manager.sessionCarryingPeers.isEmpty)
     }
 }
