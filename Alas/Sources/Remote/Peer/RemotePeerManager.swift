@@ -785,11 +785,22 @@ final class RemotePeerManager {
     private func removeProvisionalPeer(peerId: String) {
         guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
         let peer = peers.remove(at: index)
+        // `disconnect()` below fires `.stateChanged(.idle)` synchronously,
+        // but by then `peer` is already gone from `peers` — the `.stateChanged`
+        // handler's own lookup fails and skips its `onFederationEvent` call.
+        // Same reasoning as `forget`'s own explicit call: fire it here,
+        // unconditionally, from the value already captured above, so a
+        // peer that reached federation (its verified link went `.online`
+        // before this rollback ran) doesn't linger in
+        // `FederatedSessionsProvider.activePeers` forever — with its cached
+        // rows still exposed and its namespaced requests silently dropped
+        // by `sendToPeer` once the peer is gone.
         connections[peerId]?.disconnect()
         connections[peerId] = nil
         states[peerId] = nil
         durableStateByServerId[peer.serverId] = nil
         store.save(peers)
+        onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
     // MARK: - Links

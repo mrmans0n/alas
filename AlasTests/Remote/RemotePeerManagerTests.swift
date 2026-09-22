@@ -183,6 +183,33 @@ struct RemotePeerManagerTests {
         #expect(links.byPeerId.values.first?.disconnectCalls == 1)
     }
 
+    // The rollback above removes the peer from `peers` before disconnecting
+    // its link, so the link's OWN `.stateChanged(.idle)` — fired
+    // synchronously inside a real `disconnect()` — cannot find the peer to
+    // announce it by; `removeProvisionalPeer` must announce the removal
+    // itself, the same way `forget` already does, or `FederatedSessionsProvider`
+    // keeps treating a peer that briefly went `.online` as still there.
+    @Test func addPeerRollbackAnnouncesFederationAvailabilityForTheRemovedPeer() async {
+        let requests = Requests()
+        let store = InMemoryPeerStore()
+        let links = Links()
+        let manager = makeManager(store: store,
+                                  pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
+                                  links: links)
+        var events: [FederatedPeerLinkEvent] = []
+        manager.onFederationEvent = { events.append($0) }
+        manager.connectAll()
+        // Nothing ever calls handleInboundPeer for "srv-a": same rollback
+        // path as the test above, through `removeProvisionalPeer`.
+        let error = await manager.addPeer(link: linkFromA)
+        #expect(error == .reciprocalPairingFailed)
+        let announced = events.compactMap { event -> String? in
+            if case .availabilityChanged(let serverId) = event { return serverId }
+            return nil
+        }
+        #expect(announced == ["srv-a"])
+    }
+
     // A first-time addPeer's own reciprocal wait can time out while a
     // completely separate, concurrent INBOUND exchange for the SAME
     // identity is still awaiting its own pair-back reply — it has not
