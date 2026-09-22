@@ -1875,6 +1875,64 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(inspection.leftovers == ["notes.txt"])
     }
 
+    @Test func localRootInspectionTreatsADirectoryNamedFinderMetadataAsARealLeftover() async throws {
+        // A directory happening to share Finder's metadata filename (a
+        // copied folder, a deliberate rename) is not disposable metadata —
+        // matching by name alone would hide real user files from the
+        // leftover list that gates the forget confirmation.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        let member = root.appendingPathComponent("a")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: member, withIntermediateDirectories: true)
+        let metadataDirectory = root.appendingPathComponent(".DS_Store")
+        try FileManager.default.createDirectory(at: metadataDirectory, withIntermediateDirectories: true)
+        try Data("real data".utf8).write(to: metadataDirectory.appendingPathComponent("important.txt"))
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [member.path],
+            worktreePath: member.path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let inspection = await WorkspaceCheckoutLifecycleOperator().inspectRoot(plan)
+
+        #expect(inspection.leftovers == [".DS_Store"])
+    }
+
+    @Test func localRootCleanupNeverRecursivelyDeletesADirectoryNamedFinderMetadata() async throws {
+        let checkoutID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let metadataDirectory = root.appendingPathComponent(".DS_Store")
+        try FileManager.default.createDirectory(at: metadataDirectory, withIntermediateDirectories: true)
+        let importantFile = metadataDirectory.appendingPathComponent("important.txt")
+        try Data("real data".utf8).write(to: importantFile)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: root.path,
+            members: []
+        )
+
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+
+        #expect(FileManager.default.fileExists(atPath: root.path))
+        #expect(FileManager.default.fileExists(atPath: importantFile.path))
+    }
+
     @Test func localRootInspectionIgnoresFinderMetadata() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
         let member = root.appendingPathComponent("a")
@@ -1903,9 +1961,60 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(inspection.leftovers == ["notes.txt"])
     }
 
+    @Test func remoteRootInspectionOnlySkipsFinderMetadataThatIsARegularFile() async throws {
+        let runner = RemoteLifecycleRunner(results: [.init(exitCode: 0, stdout: "", stderr: "")])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .ssh("example.com"),
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: "/checkout",
+            managedMemberPaths: ["/checkout/a"],
+            worktreePath: "/checkout/a",
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        _ = await lifecycle.inspectRoot(plan)
+
+        let command = await runner.commands.joined(separator: "\n")
+        #expect(command.contains("[ -f \"$p\" ]"))
+    }
+
+    @Test func remoteRootCleanupOnlySkipsFinderMetadataThatIsARegularFile() async throws {
+        let runner = RemoteLifecycleRunner(results: [.init(exitCode: 0, stdout: "", stderr: "")])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .ssh("example.com"),
+            branch: "feature",
+            rootPath: "/checkout",
+            members: []
+        )
+
+        try await lifecycle.removeCheckoutRootArtifacts(for: checkout)
+
+        let command = await runner.commands.joined(separator: "\n")
+        #expect(command.contains("[ -f \"$p\" ]"))
+    }
+
     @Test func remoteRootInspectionIgnoresFinderMetadata() async throws {
+        // The script itself now decides what counts as disposable Finder
+        // metadata (it alone can check the remote entry's type), so a
+        // regular-file `.DS_Store` never appears in what it prints — this
+        // models that server-side behavior rather than re-filtering client-side.
         let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: ".DS_Store\nnotes.txt\n", stderr: ""),
+            .init(exitCode: 0, stdout: "notes.txt\n", stderr: ""),
         ])
         let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
             try await runner.run(executable: executable, args: args, timeout: timeout)

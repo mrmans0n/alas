@@ -2071,6 +2071,18 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     /// user's work, so they neither count as leftovers nor keep an otherwise
     /// empty checkout root alive.
     static let ignoredRootEntries: Set<String> = [".DS_Store"]
+
+    /// True only for a plain file matching an ignored name. Matching by name
+    /// alone would let a directory that happens to be named `.DS_Store` (rare,
+    /// but not impossible — a copied folder, a deliberate rename) disappear
+    /// unconfirmed, recursively, along with everything inside it.
+    private static func isDisposableFinderMetadataEntry(_ name: String, in directory: URL) -> Bool {
+        guard ignoredRootEntries.contains(name) else { return false }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path, isDirectory: &isDirectory)
+        else { return false }
+        return !isDirectory.boolValue
+    }
     private static let staleRegistrationTombstoneMarker = "alas-stale-registration-tombstone"
     private static let staleRegistrationOriginalNameMarker = "alas-stale-registration-original-name"
 
@@ -2100,9 +2112,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.lastPathComponent
             })
             managedNames.insert(WorkspaceCheckoutManifest.fileName)
-            managedNames.formUnion(Self.ignoredRootEntries)
             let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
-                .filter { !managedNames.contains($0) }
+                .filter { !managedNames.contains($0) && !Self.isDisposableFinderMetadataEntry($0, in: root) }
                 .sorted() ?? []
             return .init(isContained: true, leftovers: leftovers)
         case .ssh(let host):
@@ -2855,7 +2866,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 try FileManager.default.removeItem(at: manifestURL)
             }
             let remaining = (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) ?? []
-            if remaining.allSatisfy({ Self.ignoredRootEntries.contains($0) }) {
+            if remaining.allSatisfy({ Self.isDisposableFinderMetadataEntry($0, in: rootURL) }) {
                 for entry in remaining {
                     try? FileManager.default.removeItem(at: rootURL.appendingPathComponent(entry))
                 }
@@ -2881,7 +2892,12 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
               leftovers=0
               for p in \(root)/* \(root)/.[!.]* \(root)/..?*; do
                 [ -e "$p" ] || [ -L "$p" ] || continue
-                case "${p##*/}" in \(Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: "|"))) ;; *) leftovers=1 ;; esac
+                case "${p##*/}" in
+                  \(Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: "|")))
+                    [ -f "$p" ] || leftovers=1
+                    ;;
+                  *) leftovers=1 ;;
+                esac
               done
               if [ "$leftovers" = 0 ]; then
                 rm -f \(ignoredEntries.joined(separator: " "))
@@ -2935,8 +2951,12 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {
         var managedNames = Set(plan.managedMemberPaths.map { URL(fileURLWithPath: $0).lastPathComponent })
         managedNames.insert(WorkspaceCheckoutManifest.fileName)
-        managedNames.formUnion(Self.ignoredRootEntries)
         let managedList = managedNames.isEmpty ? "''" : managedNames.map(SSHCommand.shellQuote).joined(separator: " ")
+        let ignoredList = Self.ignoredRootEntries.isEmpty ? "''" : Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: " ")
+        // A managed member or the manifest is always skipped by name; Finder
+        // metadata is only skipped when it is actually a plain file — a
+        // directory that happens to share that name must still surface as a
+        // leftover.
         let command = """
         r=$(cd \(SSHCommand.shellQuote(plan.rootPath)) 2>/dev/null && pwd -P) || exit 2
         for p in "$r"/* "$r"/.[!.]* "$r"/..?*; do
@@ -2944,6 +2964,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
           n=${p##*/}
           skip=0
           for managed in \(managedList); do [ "$n" = "$managed" ] && skip=1; done
+          if [ "$skip" = 0 ]; then
+            for ignored in \(ignoredList); do
+              [ "$n" = "$ignored" ] && [ -f "$p" ] && skip=1
+            done
+          fi
           [ "$skip" = 1 ] || printf '%s\\n' "$n"
         done
         """
