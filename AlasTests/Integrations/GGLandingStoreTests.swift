@@ -488,4 +488,57 @@ struct GGLandingStoreTests {
         #expect(store.sessions["p"]?.phase == .cancelled)
         #expect(store.sessions["p"]?.rows[0].outcome == outcome)
     }
+
+    @Test func reconcilePreflightSeedWidensRowsAndConfirmedScopeButNeverShrinksIt() {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-1", "c-2"])
+
+        // A preflight that discovers a row the confirmed scope hadn't seen
+        // yet widens both the displayed rows and the retry baseline, so a
+        // later restart's scope comparison is built from what gg actually
+        // preflighted rather than the original (narrower) confirmation.
+        let widerSeed = GGLandingSession.Seed(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [
+                .init(position: 0, title: "Zero", ggId: "c-0", prNumber: 40),
+                .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
+                .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
+            ]
+        )
+        store.reconcilePreflightSeed(widerSeed, projectId: "p")
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+
+        // A later preflight that reports fewer rows — e.g. `c-0` already
+        // landed and dropped out of the live stack — narrows what's
+        // displayed but must not shrink the confirmed scope: restart still
+        // needs `c-0` on record to recognize it as already-landed via
+        // `completedIDs` instead of treating it as unexpectedly missing.
+        let narrowerSeed = GGLandingSession.Seed(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [
+                .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
+                .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
+            ]
+        )
+        store.reconcilePreflightSeed(narrowerSeed, projectId: "p")
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+    }
+
+    @Test func reconcilePreflightSeedIsANoOpOutsideTheRunningPhase() {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+        store.fail(projectId: "p", message: "stopped")
+        let originalScope = store.sessions["p"]?.confirmedScope
+
+        store.reconcilePreflightSeed(
+            .init(projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2", rows: []),
+            projectId: "p"
+        )
+
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope == originalScope)
+    }
 }

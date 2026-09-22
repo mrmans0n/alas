@@ -2507,7 +2507,7 @@ final class RightPaneState: GGSplitCommitServicing {
                       let seed = ggLandingSeed(target: target, stack: stack)
                 else { throw GGMutationError.staleConfirmation }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
-                ggLandingStore.updatePendingRows(seed.rows, projectId: projectId)
+                ggLandingStore.reconcilePreflightSeed(seed, projectId: projectId)
                 startGGLanding(prepared, target: target)
             } catch {
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
@@ -2581,7 +2581,7 @@ final class RightPaneState: GGSplitCommitServicing {
                     guard let self,
                           let seed = self.ggLandingSeed(target: target, stack: fresh.stack)
                     else { return }
-                    self.ggLandingStore.updatePendingRows(seed.rows, projectId: self.worktree.projectId)
+                    self.ggLandingStore.reconcilePreflightSeed(seed, projectId: self.worktree.projectId)
                 }
             ) else {
                 ggLandingStore.fail(

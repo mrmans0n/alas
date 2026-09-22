@@ -24,7 +24,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
         let stack: String
         let base: String
         let target: String
-        let rows: [GGLandingRow]
+        var rows: [GGLandingRow]
     }
 
     let id: UUID
@@ -33,7 +33,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     let stack: String
     let base: String
     let target: String
-    let confirmedScope: Seed
+    var confirmedScope: Seed
     let startedAt: Date
     var rows: [GGLandingRow]
     var phase: GGLandingPhase
@@ -99,9 +99,25 @@ final class GGLandingStore {
         return true
     }
 
-    func updatePendingRows(_ rows: [GGLandingRow], projectId: String) {
-        guard sessions[projectId]?.phase == .running else { return }
-        sessions[projectId]?.rows = rows
+    /// Corrects the displayed rows from a fresh preflight and widens
+    /// `confirmedScope` with any row it hadn't recorded yet. Updating rows
+    /// alone leaves `confirmedScope` pinned to the original (possibly stale)
+    /// seed; a later `restartGGLand` rebuilds from `confirmedScope` and
+    /// compares it against the current stack, so a drift this session
+    /// already absorbed would otherwise make every retry fail with
+    /// `staleConfirmation`. Widening only (never replacing) preserves rows
+    /// that have since landed and dropped out of the live stack — those stay
+    /// recorded so a later restart still recognizes them via `completedIDs`
+    /// instead of treating them as newly missing.
+    func reconcilePreflightSeed(_ seed: GGLandingSession.Seed, projectId: String) {
+        guard let session = sessions[projectId], session.phase == .running else { return }
+        sessions[projectId]?.rows = seed.rows
+        let knownIDs = Set(session.confirmedScope.rows.map { $0.stableID ?? $0.ggId ?? "\($0.position)" })
+        let newRows = seed.rows.filter { !knownIDs.contains($0.stableID ?? $0.ggId ?? "\($0.position)") }
+        guard !newRows.isEmpty else { return }
+        var widened = session.confirmedScope
+        widened.rows = (widened.rows + newRows).sorted { $0.position < $1.position }
+        sessions[projectId]?.confirmedScope = widened
     }
 
     @discardableResult
