@@ -33,13 +33,53 @@ assert.equal(registry.normalizeOrigin("http://alas.lan"), "http://alas.lan", "an
 const full = registry.parsePairingLink(
   "http://100.64.1.5:8765/?code=ABC123&hosts=http%3A%2F%2F100.64.1.5%3A8765,http%3A%2F%2F192.168.1.20%3A8765"
 );
-assert.deepEqual(full, { origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"], code: "ABC123" });
+assert.deepEqual(
+  full,
+  { origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"], code: "ABC123", originKinds: {} },
+  "no kind prefixes → an empty originKinds map, exactly like a link built before kind encoding existed"
+);
 
 const legacy = registry.parsePairingLink("http://192.168.1.20:8765/?code=XYZ");
-assert.deepEqual(legacy, { origins: ["http://192.168.1.20:8765"], code: "XYZ" }, "legacy link → its own origin");
+assert.deepEqual(legacy, { origins: ["http://192.168.1.20:8765"], code: "XYZ", originKinds: {} }, "legacy link → its own origin");
 
 const lastFallback = registry.parsePairingLink("http://192.168.1.20:8765/?code=Q&hosts=http%3A%2F%2F10.0.0.2%3A8765");
 assert.deepEqual(lastFallback.origins, ["http://10.0.0.2:8765", "http://192.168.1.20:8765"], "link origin is the last fallback");
+
+// Regression (#1341): each origin's advertised-address kind rides in its
+// own "kinds" query parameter — a same-length, same-order parallel list to
+// "hosts" — never folded into an origin string itself, so a client that
+// predates this encoding (an older Mac or web client redeeming a link a
+// newer one generated) still parses "hosts" as plain origins and simply
+// ignores the unrecognized "kinds" parameter. See test-hub-links.js for
+// the behavioral half (pair()'s authoritative-origin check).
+const withKinds = registry.parsePairingLink(
+  "http://100.64.1.5:8765/?code=ABC123&hosts=http%3A%2F%2F100.64.1.5%3A8765,http%3A%2F%2Fproxy.example%3A8765&kinds=tailnet,custom"
+);
+assert.deepEqual(withKinds.origins, ["http://100.64.1.5:8765", "http://proxy.example:8765"]);
+assert.deepEqual(withKinds.originKinds, { "http://100.64.1.5:8765": "tailnet", "http://proxy.example:8765": "custom" });
+
+// An older client redeeming a link a newer one generated ignores "kinds"
+// entirely and gets exactly the same origins from "hosts" either way.
+assert.deepEqual(
+  registry.parsePairingLink("http://100.64.1.5:8765/?code=ABC123&hosts=http%3A%2F%2F100.64.1.5%3A8765,http%3A%2F%2Fproxy.example%3A8765").origins,
+  withKinds.origins,
+  "hosts alone (kinds param absent) must still yield the identical origin list"
+);
+
+// An unrecognized kind value at a position is not one this format defines;
+// that origin is simply treated as having no kind info at all — the
+// origin itself was always parsed from "hosts" alone, so it is never
+// dropped or corrupted by an unknown "kinds" entry.
+const unknownKind = registry.parsePairingLink("http://10.0.0.1:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765&kinds=evil");
+assert.deepEqual(unknownKind.origins, ["http://10.0.0.9:8765", "http://10.0.0.1:8765"]);
+assert.deepEqual(unknownKind.originKinds, {});
+
+// A "kinds" list shorter than "hosts" leaves the remaining origins with no
+// kind info rather than misaligning or throwing.
+const shortKinds = registry.parsePairingLink(
+  "http://10.0.0.1:8765/?code=ABC123&hosts=http%3A%2F%2F10.0.0.9%3A8765,http%3A%2F%2F10.0.0.8%3A8765&kinds=lan"
+);
+assert.deepEqual(shortKinds.originKinds, { "http://10.0.0.9:8765": "lan" });
 
 assert.equal(registry.parsePairingLink("http://192.168.1.20:8765/"), null, "no code → not a pairing link");
 assert.equal(registry.parsePairingLink("garbage"), null);

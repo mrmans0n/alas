@@ -21,12 +21,34 @@ enum RemotePairingLink {
     static let maxOrigins = 8
 
     static func build(base: String, code: String, addresses: [RemoteAdvertisedAddress]) -> String {
+        var kindByURL: [String: RemoteAdvertisedAddress.Kind] = [:]
+        for address in addresses { kindByURL[address.url] = address.kind }
         var origins = [base]
         for address in addresses where !origins.contains(address.url) {
             origins.append(address.url)
         }
         let hosts = origins.map(encodeOrigin).joined(separator: ",")
-        return "\(base)/?code=\(code)&hosts=\(hosts)"
+        var link = "\(base)/?code=\(code)&hosts=\(hosts)"
+        // A `kinds` entry per origin (same order, "" for "no kind"), so
+        // `parsePairingLink` on the browser side can tell a live LAN/tailnet
+        // address — derived from current interfaces — apart from a static,
+        // user-configured custom host (a reverse proxy, or this Mac's own
+        // .local Bonjour name) or the loopback placeholder. Either of those
+        // can go stale, or answer for an unrelated Mac, after the link was
+        // generated; only a LAN/tailnet 401/403 is trusted as the real
+        // target's final answer (see hub-links.js's `pair`). This rides in
+        // its OWN query parameter, never inside a `hosts` entry: `hosts`
+        // must stay parseable as plain origins by a client that predates
+        // this encoding — an older Mac or web client redeeming a link a
+        // newer one generated — which would otherwise fail to parse a
+        // prefixed token as a URL and silently drop every fallback address
+        // but the base. Omitted entirely when nothing has a kind, matching
+        // every link built before this encoding existed exactly.
+        let kinds = origins.map { kindByURL[$0]?.rawValue ?? "" }
+        if kinds.contains(where: { !$0.isEmpty }) {
+            link += "&kinds=\(kinds.joined(separator: ","))"
+        }
+        return link
     }
 
     private static let unreserved = CharacterSet(

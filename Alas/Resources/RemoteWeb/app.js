@@ -298,10 +298,12 @@ function send(obj) { links.sendActive(obj); }
 // --- pairing & switching -----------------------------------------------------
 
 // `input` is { origins, code } from RemoteHubRegistry.parsePairingLink /
-// parseManualPairing. Resolves the registry entry; rejects with the link
-// manager's { reason } errors.
+// parseManualPairing, plus `originKinds` when it came from parsePairingLink
+// (a manual address/code pair has no advertised-address kind to encode).
+// Resolves the registry entry; rejects with the link manager's { reason }
+// errors.
 async function pairAndAdd(input, options) {
-  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40));
+  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40), input.originKinds);
   const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
   RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
   RemoteHubRegistry.save(localStorage, hub);
@@ -3985,6 +3987,20 @@ function attemptFirstPairing(input) {
     // once onActiveOpen() fires — any successful active connection makes a
     // stale scan-retry intent moot.
     if (hub.activeId) {
+      // Preserve the scan for a transient ("net") failure, so a later
+      // outage on the fallback Mac retries the originally scanned Mac
+      // rather than hammering the fallback (see the comment above) — and
+      // ALSO for an "expired"/"origin" failure pair() never actually
+      // CONFIRMED with an authoritative lan/tailnet origin (err.confirmed
+      // unset): e.g. a stale custom host's 401 becoming the reported
+      // reason only because every authoritative address then failed for
+      // some other cause (network, timeout) is no more trustworthy than a
+      // plain net failure. Only a CONFIRMED terminal failure can never
+      // succeed by retrying, so only that one is cleared immediately,
+      // exactly as the non-fallback path below already does for a
+      // (necessarily confirmed, since nothing else fell back) terminal
+      // failure.
+      if (err && err.reason !== "net" && err.confirmed) pendingFirstPairing = null;
       switchServer(hub.activeId);
       return;
     }
