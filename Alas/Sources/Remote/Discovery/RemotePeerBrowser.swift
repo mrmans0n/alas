@@ -3,14 +3,16 @@ import Network
 import Observation
 
 /// Another Alas instance seen on the local network. `id` is its `serverId`
-/// from the TXT record; the endpoint is the Bonjour service, resolved to an
-/// address only when the user picks it.
+/// from the TXT record. `endpoints` holds every Bonjour endpoint this
+/// identity was seen at — one instance can be visible on several interfaces
+/// (Ethernet, Wi-Fi, a bridge) as distinct browse results — tried in order,
+/// resolved to an address only when the user picks it.
 struct RemoteDiscoveredInstance: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let protocolVersion: Int
     let model: String?
-    let endpoint: NWEndpoint
+    let endpoints: [NWEndpoint]
 }
 
 /// One raw browse result, before any Alas-specific interpretation.
@@ -123,14 +125,22 @@ final class RemotePeerBrowser {
         for result in results {
             guard let txt = result.txt, let record = RemoteBonjourTXT(txt: txt) else { continue }
             guard record.serverId != me else { continue }
-            // One instance can show up once per interface; keep one row per identity.
-            guard byId[record.serverId] == nil else { continue }
-            byId[record.serverId] = RemoteDiscoveredInstance(
-                id: record.serverId,
-                name: result.name,
-                protocolVersion: record.protocolVersion,
-                model: record.model,
-                endpoint: result.endpoint)
+            // Bonjour can report the same identity once per interface as
+            // distinct results (Ethernet, Wi-Fi, a bridge). One is not
+            // reliably reachable over another: an interface can be down,
+            // firewalled, or on a subnet that can't route to this Mac.
+            // Keep every endpoint so the resolver can fall back across
+            // them instead of committing to whichever arrived first.
+            if let existing = byId[record.serverId] {
+                guard !existing.endpoints.contains(result.endpoint) else { continue }
+                byId[record.serverId] = RemoteDiscoveredInstance(
+                    id: existing.id, name: existing.name, protocolVersion: existing.protocolVersion,
+                    model: existing.model, endpoints: existing.endpoints + [result.endpoint])
+            } else {
+                byId[record.serverId] = RemoteDiscoveredInstance(
+                    id: record.serverId, name: result.name, protocolVersion: record.protocolVersion,
+                    model: record.model, endpoints: [result.endpoint])
+            }
         }
         let next = byId.values.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending

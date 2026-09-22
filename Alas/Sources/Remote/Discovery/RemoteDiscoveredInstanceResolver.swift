@@ -42,30 +42,38 @@ struct RemoteDiscoveredInstanceResolver {
     /// answered a Bonjour name, so never buffer it unbounded.
     static let maxReplyBytes = 64 * 1024
 
+    /// Tries every endpoint this identity was seen at, in order, falling
+    /// back past a resolve failure, an unanswered `/remote-info`, or an
+    /// answer from a different identity — any of those can be true of one
+    /// interface while another still reaches the real peer. An identity
+    /// mismatch is remembered over a plain unreachable, the same way
+    /// `RemotePeerPairer` prioritizes `expiredCode`: it is the more
+    /// informative failure to surface once every endpoint has been tried.
     func origins(for instance: RemoteDiscoveredInstance,
                  isolation: isolated (any Actor)? = #isolation) async -> Result<[String], Failure> {
-        guard let resolved = try? await resolve(instance.endpoint),
-              let base = RemotePairingLink.normalizeOrigin("http://\(Self.urlHost(resolved.host)):\(resolved.port)"),
-              let url = URL(string: "\(base)/remote-info") else {
-            return .failure(.unreachable)
+        var sawIdentityMismatch = false
+        for endpoint in instance.endpoints {
+            guard let resolved = try? await resolve(endpoint),
+                  let base = RemotePairingLink.normalizeOrigin("http://\(Self.urlHost(resolved.host)):\(resolved.port)"),
+                  let url = URL(string: "\(base)/remote-info") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = timeout
+            guard let (data, response) = try? await fetch(request), response.statusCode == 200,
+                  let info = try? JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: data) else { continue }
+            if let reported = info.serverId, !reported.isEmpty, reported != instance.id {
+                sawIdentityMismatch = true
+                continue
+            }
+            var origins = [base]
+            for address in info.addresses where address.kind != .localhost {
+                guard origins.count < RemotePairingLink.maxOrigins else { break }
+                guard let origin = RemotePairingLink.normalizeOrigin(address.url), !origins.contains(origin) else { continue }
+                origins.append(origin)
+            }
+            return .success(origins)
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = timeout
-        guard let (data, response) = try? await fetch(request), response.statusCode == 200,
-              let info = try? JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: data) else {
-            return .failure(.unreachable)
-        }
-        if let reported = info.serverId, !reported.isEmpty, reported != instance.id {
-            return .failure(.identityMismatch)
-        }
-        var origins = [base]
-        for address in info.addresses where address.kind != .localhost {
-            guard origins.count < RemotePairingLink.maxOrigins else { break }
-            guard let origin = RemotePairingLink.normalizeOrigin(address.url), !origins.contains(origin) else { continue }
-            origins.append(origin)
-        }
-        return .success(origins)
+        return .failure(sawIdentityMismatch ? .identityMismatch : .unreachable)
     }
 
     /// Opens a TCP connection to the Bonjour endpoint and reads the address

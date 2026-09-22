@@ -153,7 +153,7 @@ enum RemoteNetwork {
     ) -> Set<String> {
         var hosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
         for iface in interfaces {
-            if iface.isLoopback || classification(for: iface.host) != nil {
+            if iface.isLoopback || classification(for: iface.host) != nil || isLinkLocal(iface.host) {
                 hosts.insert(normalizedHost(iface.host))
             }
         }
@@ -186,12 +186,27 @@ enum RemoteNetwork {
         if normalized == "localhost" || normalized == "::1" { return true }
         if let octets = ipv4Octets(normalized) {
             if octets[0] == 127 { return true }
-            if octets[0] == 169 && octets[1] == 254 { return true }
-            return isLANIPv4(normalized) || isTailnetIPv4(normalized)
+            return isLinkLocal(normalized) || isLANIPv4(normalized) || isTailnetIPv4(normalized)
         }
         if let bytes = ipv6Bytes(normalized) {
-            if bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 { return true }   // fe80::/10
-            return isLANIPv6(normalized) || isTailnetIPv6(normalized)
+            return isLinkLocal(normalized) || isLANIPv6(normalized) || isTailnetIPv6(normalized)
+        }
+        return false
+    }
+
+    /// True for IPv4 APIPA (169.254/16) and IPv6 link-local (fe80::/10): the
+    /// self-assigned address range two Macs land on when they can reach each
+    /// other directly (cable, ad hoc Wi-Fi) but no DHCP server is present.
+    /// Bonjour is designed to work on exactly this range, so an own-interface
+    /// address here must be treated the same as a classified LAN address by
+    /// every caller that already trusts LAN/tailnet interfaces.
+    static func isLinkLocal(_ host: String) -> Bool {
+        let normalized = normalizedHost(host)
+        if let octets = ipv4Octets(normalized) {
+            return octets[0] == 169 && octets[1] == 254
+        }
+        if let bytes = ipv6Bytes(normalized) {
+            return bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80
         }
         return false
     }

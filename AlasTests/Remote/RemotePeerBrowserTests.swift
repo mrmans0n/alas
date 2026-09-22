@@ -15,12 +15,12 @@ struct RemotePeerBrowserTests {
         func stop() { stopCalls += 1 }
     }
 
-    private func result(name: String, id: String?, version: String = "1", model: String? = nil) -> RemoteServiceBrowseResult {
+    private func result(name: String, id: String?, version: String = "1", model: String? = nil, domain: String = "local.") -> RemoteServiceBrowseResult {
         var txt = NWTXTRecord()
         if let id { txt["id"] = id }
         txt["v"] = version
         if let model { txt["model"] = model }
-        let endpoint = NWEndpoint.service(name: name, type: RemoteBonjourService.type, domain: "local.", interface: nil)
+        let endpoint = NWEndpoint.service(name: name, type: RemoteBonjourService.type, domain: domain, interface: nil)
         return RemoteServiceBrowseResult(name: name, endpoint: endpoint, txt: txt)
     }
 
@@ -60,6 +60,22 @@ struct RemotePeerBrowserTests {
         browser.start()
         backend.onResults?([result(name: "Other", id: "srv-o"), result(name: "Other", id: "srv-o")])
         #expect(browser.instances.count == 1)
+    }
+
+    @Test func endpointsFromEveryInterfaceAreKeptForTheSameIdentity() {
+        let backend = FakeBackend()
+        let browser = RemotePeerBrowser(localServerId: { "me" }, backend: backend)
+        browser.start()
+        // Two distinct browse results for one identity, standing in for the
+        // same service seen on two interfaces (Ethernet and Wi-Fi) — the
+        // fake backend can't fabricate a real `NWInterface`, so the domain
+        // stands in as the axis that makes the two `NWEndpoint`s distinct.
+        backend.onResults?([
+            result(name: "Other", id: "srv-o", domain: "local."),
+            result(name: "Other", id: "srv-o", domain: "local2."),
+        ])
+        #expect(browser.instances.count == 1)
+        #expect(browser.instances.first?.endpoints.count == 2)
     }
 
     @Test func resultSetReplacesRatherThanAccumulates() {

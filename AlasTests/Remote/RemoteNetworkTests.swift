@@ -118,6 +118,25 @@ struct RemoteNetworkTests {
         #expect(hosts.contains("nacho-mbp"))
     }
 
+    @Test func allowedHostCandidatesIncludeOwnInterfaceLinkLocalAddresses() {
+        // The self-assigned APIPA/link-local range two Macs land on when
+        // connected directly with no DHCP server — exactly the scenario
+        // Bonjour discovery is meant to work on.
+        let interfaces = [
+            RemoteNetworkInterface(name: "en5", host: "169.254.12.34", isLoopback: false),
+            RemoteNetworkInterface(name: "en6", host: "fe80::1234", isLoopback: false),
+        ]
+
+        let hosts = RemoteNetwork.allowedHostCandidates(
+            interfaces: interfaces,
+            allowedHosts: [],
+            machineHostName: nil
+        )
+
+        #expect(hosts.contains("169.254.12.34"))
+        #expect(hosts.contains("fe80::1234"))
+    }
+
     @Test func allowedHostCandidatesExcludePublicInterfaceIpsUnlessConfigured() {
         let interfaces = [
             RemoteNetworkInterface(name: "en0", host: "8.8.8.8", isLoopback: false),

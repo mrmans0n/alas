@@ -50,7 +50,8 @@ struct RemoteDiscoveryIntegrationTests {
         #expect(instance.model == "TestMac1,1")
         #expect(instance.protocolVersion == RemoteProtocolVersion.current)
 
-        let resolved = try await RemoteDiscoveredInstanceResolver.resolveOverTCP(instance.endpoint, timeout: 10)
+        let endpoint = try #require(instance.endpoints.first)
+        let resolved = try await RemoteDiscoveredInstanceResolver.resolveOverTCP(endpoint, timeout: 10)
         #expect(resolved.port == server.port)
         #expect(!resolved.host.isEmpty)
     }

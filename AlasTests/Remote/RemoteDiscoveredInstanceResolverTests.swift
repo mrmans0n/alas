@@ -11,7 +11,7 @@ struct RemoteDiscoveredInstanceResolverTests {
 
     private let instance = RemoteDiscoveredInstance(
         id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil,
-        endpoint: .service(name: "Mac A", type: RemoteBonjourService.type, domain: "local.", interface: nil))
+        endpoints: [.service(name: "Mac A", type: RemoteBonjourService.type, domain: "local.", interface: nil)])
 
     private func info(serverId: String?, addresses: [RemoteAdvertisedAddress]) -> String {
         let snapshot = RemoteDiagnosticsSnapshot(
@@ -93,5 +93,71 @@ struct RemoteDiscoveredInstanceResolverTests {
     @Test func ipv6HostsAreBracketedInTheOrigin() async {
         let outcome = await resolver(host: "fd00::5", body: info(serverId: "srv-a", addresses: [])).origins(for: instance)
         #expect(outcome == .success(["http://[fd00::5]:8765"]))
+    }
+
+    @Test func fallsBackToTheNextEndpointWhenTheFirstFailsToResolve() async {
+        let endpointA = NWEndpoint.hostPort(host: "10.0.0.1", port: 8765)
+        let endpointB = NWEndpoint.hostPort(host: "10.0.0.2", port: 8765)
+        let multi = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil,
+                                             endpoints: [endpointA, endpointB])
+        let body = info(serverId: "srv-a", addresses: [])
+        let resolver = RemoteDiscoveredInstanceResolver(
+            resolve: { endpoint in
+                if endpoint == endpointA { throw URLError(.cannotFindHost) }
+                return ("192.168.1.20", 8765)
+            },
+            fetch: { request in
+                (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            },
+            timeout: 1)
+        let outcome = await resolver.origins(for: multi)
+        #expect(outcome == .success(["http://192.168.1.20:8765"]))
+    }
+
+    @Test func fallsBackWhenTheFirstEndpointsRemoteInfoDoesNotAnswer() async {
+        let endpointA = NWEndpoint.hostPort(host: "10.0.0.1", port: 8765)
+        let endpointB = NWEndpoint.hostPort(host: "10.0.0.2", port: 8765)
+        let multi = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil,
+                                             endpoints: [endpointA, endpointB])
+        let body = info(serverId: "srv-a", addresses: [])
+        let resolver = RemoteDiscoveredInstanceResolver(
+            resolve: { endpoint in endpoint == endpointA ? ("169.254.1.1", 8765) : ("192.168.1.20", 8765) },
+            fetch: { request in
+                guard request.url!.host != "169.254.1.1" else { throw URLError(.cannotConnectToHost) }
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            },
+            timeout: 1)
+        let outcome = await resolver.origins(for: multi)
+        #expect(outcome == .success(["http://192.168.1.20:8765"]))
+    }
+
+    @Test func identityMismatchIsRememberedOverAnUnreachableEndpointThatFollows() async {
+        let endpointA = NWEndpoint.hostPort(host: "10.0.0.1", port: 8765)
+        let endpointB = NWEndpoint.hostPort(host: "10.0.0.2", port: 8765)
+        let multi = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil,
+                                             endpoints: [endpointA, endpointB])
+        let mismatchBody = info(serverId: "srv-other", addresses: [])
+        let resolver = RemoteDiscoveredInstanceResolver(
+            resolve: { endpoint in
+                if endpoint == endpointA { return ("10.0.0.1", 8765) }
+                throw URLError(.cannotFindHost)
+            },
+            fetch: { request in
+                (Data(mismatchBody.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            },
+            timeout: 1)
+        let outcome = await resolver.origins(for: multi)
+        #expect(outcome == .failure(.identityMismatch))
+    }
+
+    @Test func exhaustingEveryEndpointWithoutASuccessIsUnreachable() async {
+        let multi = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil,
+                                             endpoints: [.hostPort(host: "10.0.0.1", port: 8765)])
+        let resolver = RemoteDiscoveredInstanceResolver(
+            resolve: { _ in throw URLError(.cannotFindHost) },
+            fetch: { _ in throw URLError(.cannotFindHost) },
+            timeout: 1)
+        let outcome = await resolver.origins(for: multi)
+        #expect(outcome == .failure(.unreachable))
     }
 }
