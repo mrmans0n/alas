@@ -39,7 +39,7 @@ struct WorktreesPane: View {
                 }
                 SettingsGroup(title: "Branch defaults") {
                     SettingsRow(name: "Branch prefix",
-                                desc: "Default prefix when creating a new worktree.") {
+                                desc: "Prepended to the name you type when creating a worktree.") {
                         VStack(alignment: .leading, spacing: 2) {
                             AlasField(text: branchPrefixBinding, monospaced: true, disablesAutomaticTextSubstitutions: true)
                             if let prefixError = branchPrefixError {
@@ -134,8 +134,8 @@ struct WorktreesPane: View {
                     branchPrefixDraft = nil
                 } else {
                     // Keep the rejected text as a local draft instead of persisting
-                    // an invalid prefix: NewWorktreeDialog seeds its branch field
-                    // straight from the saved config value.
+                    // an invalid prefix: the create dialogs prepend the saved
+                    // value to the typed name without showing it in the field.
                     branchPrefixDraft = newValue
                 }
             }

@@ -46,7 +46,7 @@ struct AttachIssueDialogModelTests {
         let draft = AttachedIssueDraft(
             source: Fixture.resolvedIssue().source,
             projectID: "alas",
-            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            branchSeed: "42-fix-offline-sync-conflicts",
             prompt: "Implement the issue."
         )
         let model = AttachIssueDialogModel(
@@ -75,7 +75,7 @@ struct AttachIssueDialogModelTests {
 
         #expect(model.phase == .confirmation)
         #expect(model.projectID == "alas")
-        #expect(model.branchSeed == "feature/42-fix-offline-sync-conflicts")
+        #expect(model.branchSeed == "42-fix-offline-sync-conflicts")
         #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source))
         #expect(model.makeDraft()?.attachment == IssueAttachment(
             canonicalURL: fixture.resolution.source.canonicalURL,
@@ -192,8 +192,7 @@ struct AttachIssueDialogModelTests {
             },
             loadSuggestions: { _, _ in [] },
             selectedProjectID: "alas",
-            projects: { [project] },
-            configuredBranchPrefix: { _ in "feature/" }
+            projects: { [project] }
         ))
         model.reference = "#42"
         await model.resolve()
@@ -212,7 +211,7 @@ struct AttachIssueDialogModelTests {
         let draft = AttachedIssueDraft(
             source: source,
             projectID: "alas",
-            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            branchSeed: "42-fix-offline-sync-conflicts",
             prompt: IssuePromptBuilder.build(source: source)
         )
         let model = AttachIssueDialogModel(environment: Fixture().environment, initialDraft: draft)
@@ -230,7 +229,7 @@ struct AttachIssueDialogModelTests {
         let draft = AttachedIssueDraft(
             source: source,
             projectID: "alas",
-            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            branchSeed: "42-fix-offline-sync-conflicts",
             prompt: "Keep this reopened custom prompt."
         )
         let model = AttachIssueDialogModel(environment: Fixture().environment, initialDraft: draft)
@@ -353,7 +352,6 @@ private final class Fixture {
             loadSuggestions: { _, _ in [] },
             selectedProjectID: selectedProjectID,
             projects: { [self] in projects },
-            configuredBranchPrefix: { _ in "feature/" },
             clipboardText: { [self] in clipboardText }
         )
     }

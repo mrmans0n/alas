@@ -318,7 +318,12 @@ struct CreateWorkspaceCheckoutDialog: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 14) {
             DialogField(label: "Shared branch") {
-                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "feature/my-change", monospaced: true, focusOnAppear: true)
+                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "my-change", monospaced: true, focusOnAppear: true, disablesAutomaticTextSubstitutions: true)
+            }
+            if !model.composedBranch.isEmpty {
+                Text("Branch: \(model.composedBranch)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {
@@ -371,7 +376,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                                         Text(workspace.members.first(where: { $0.projectID == member.projectID })?.fallbackProjectName ?? member.projectID)
                                             .font(.system(size: 12, weight: .medium))
                                             .foregroundColor(theme.color("fg"))
-                                        Text("\(member.baseReference) → \(model.branch)")
+                                        Text("\(member.baseReference) → \(model.composedBranch)")
                                             .foregroundColor(theme.color("fg-muted"))
                                         Text(member.branchIntent == .reuse ? "Use existing branch" : "Create branch at \(member.baseCommit.prefix(8))")
                                             .foregroundColor(theme.color("fg-dim"))

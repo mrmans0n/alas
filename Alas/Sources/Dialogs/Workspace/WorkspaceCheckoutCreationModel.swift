@@ -9,6 +9,10 @@ var totalMembers: Int }
 /// received; selection begins only after coordinator persistence succeeds.
 struct WorkspaceCheckoutCreationModel: Equatable {
     let workspace: Workspace
+    /// Configured worktree branch prefix. Never part of `branch`: the field
+    /// holds the bare name and `composedBranch` is the ref git is asked for.
+    let branchPrefix: String
+    /// The typed branch name, without `branchPrefix`.
     var branch: String
     var rootPath: String
     var baseReference: String
@@ -18,15 +22,24 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     private(set) var preflightResult: WorkspaceCheckoutPreflightResult?
     private(set) var selectedCheckoutID: UUID?
 
-    init(workspace: Workspace, branch: String = "", rootPath: String = "", baseReference: String = "main") {
+    init(
+        workspace: Workspace,
+        branchPrefix: String = "",
+        branch: String = "",
+        rootPath: String = "",
+        baseReference: String = "main"
+    ) {
         self.workspace = workspace
+        self.branchPrefix = branchPrefix
         self.branch = branch
         self.rootPath = rootPath
         self.baseReference = baseReference
     }
 
-    init(workspace: Workspace, branchPrefix: String, rootPath: String = "", baseReference: String = "main") {
-        self.init(workspace: workspace, branch: branchPrefix, rootPath: rootPath, baseReference: baseReference)
+    /// The shared branch actually created: prefix + typed name.
+    var composedBranch: String {
+        let name = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "" : branchPrefix + name
     }
 
     static func checkoutRoot(parentPath: String, branch: String) -> String {
@@ -39,13 +52,13 @@ struct WorkspaceCheckoutCreationModel: Equatable {
 
     mutating func selectCheckoutParent(_ parentPath: String) {
         checkoutParentPath = parentPath
-        rootPath = Self.checkoutRoot(parentPath: parentPath, branch: branch)
+        rootPath = Self.checkoutRoot(parentPath: parentPath, branch: composedBranch)
     }
 
     mutating func setBranch(_ branch: String) {
         self.branch = branch
         if let checkoutParentPath {
-            rootPath = Self.checkoutRoot(parentPath: checkoutParentPath, branch: branch)
+            rootPath = Self.checkoutRoot(parentPath: checkoutParentPath, branch: composedBranch)
         }
     }
 
@@ -60,11 +73,11 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     }
 
     func request() -> WorkspaceCheckoutRequest {
-        .init(workspace: workspace, branch: branch.trimmingCharacters(in: .whitespacesAndNewlines), rootPath: rootPath.trimmingCharacters(in: .whitespacesAndNewlines), baseReference: baseReference.trimmingCharacters(in: .whitespacesAndNewlines), memberBaseReferences: memberBaseReferences)
+        .init(workspace: workspace, branch: composedBranch, rootPath: rootPath.trimmingCharacters(in: .whitespacesAndNewlines), baseReference: baseReference.trimmingCharacters(in: .whitespacesAndNewlines), memberBaseReferences: memberBaseReferences)
     }
 
     mutating func advance() -> WorkspaceCheckoutCreationAdvanceResult {
-        guard !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failure("A shared branch is required.") }
+        guard !composedBranch.isEmpty else { return .failure("A shared branch is required.") }
         guard !rootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failure("Checkout root is required.") }
         step = .preflight
         return .success

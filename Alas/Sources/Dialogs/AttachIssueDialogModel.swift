@@ -15,7 +15,6 @@ final class AttachIssueDialogModel {
         let loadSuggestions: @Sendable (String, Int) async throws -> [CodeHostIssueSuggestion]
         let selectedProjectID: String
         let projects: () -> [ProjectConfig]
-        let configuredBranchPrefix: (String) -> String
         let clipboardText: () -> String?
 
         init(
@@ -23,14 +22,12 @@ final class AttachIssueDialogModel {
             loadSuggestions: @escaping @Sendable (String, Int) async throws -> [CodeHostIssueSuggestion],
             selectedProjectID: String,
             projects: @escaping () -> [ProjectConfig],
-            configuredBranchPrefix: @escaping (String) -> String,
             clipboardText: @escaping () -> String? = { Clipboard.read() }
         ) {
             self.resolve = resolve
             self.loadSuggestions = loadSuggestions
             self.selectedProjectID = selectedProjectID
             self.projects = projects
-            self.configuredBranchPrefix = configuredBranchPrefix
             self.clipboardText = clipboardText
         }
     }
@@ -98,8 +95,7 @@ final class AttachIssueDialogModel {
         guard let source = draftSource else { return "" }
         return IssueBranchName.make(
             displayReference: source.displayReference,
-            title: source.title,
-            prefix: environment.configuredBranchPrefix(projectID ?? "")
+            title: source.title
         )
     }
 
@@ -169,8 +165,7 @@ final class AttachIssueDialogModel {
             projectID: projectID,
             branchSeed: IssueBranchName.make(
                 displayReference: source.displayReference,
-                title: source.title,
-                prefix: environment.configuredBranchPrefix(projectID ?? "")
+                title: source.title
             ),
             prompt: prompt
         )
