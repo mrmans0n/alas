@@ -376,7 +376,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                                         Text(workspace.members.first(where: { $0.projectID == member.projectID })?.fallbackProjectName ?? member.projectID)
                                             .font(.system(size: 12, weight: .medium))
                                             .foregroundColor(theme.color("fg"))
-                                        Text("\(member.baseReference) → \(model.branch)")
+                                        Text("\(member.baseReference) → \(model.composedBranch)")
                                             .foregroundColor(theme.color("fg-muted"))
                                         Text(member.branchIntent == .reuse ? "Use existing branch" : "Create branch at \(member.baseCommit.prefix(8))")
                                             .foregroundColor(theme.color("fg-dim"))
