@@ -1,5 +1,32 @@
 import SwiftUI
 
+/// Per-row-INSTANCE identity for the child transcript's `ForEach`.
+///
+/// Unlike `ACPMessage.stableIdentityKey` (content-addressed — the same
+/// `messageId` always maps to the same key, which is exactly what replay
+/// reconciliation needs to locate a row to update), this always distinguishes
+/// two separate rows even when they share a `messageId`, since a child's
+/// replay reconciliation deliberately keeps two turns that reuse an id as
+/// two rows (see `applyReplayedUserChunk`). Built from each case's own
+/// per-instance id (or `toolCallId`, the one case without a UUID), which
+/// `resetTextRow`/in-place merges preserve across replay reconciliation, and
+/// which a genuinely new row (append or `insertRecovered`) always mints
+/// fresh — so it stays both unique per row and stable across the array
+/// shifts a mid-transcript insertion causes.
+private extension ACPMessage {
+    var rowViewIdentity: AnyHashable {
+        switch self {
+        case .user(let id, _, _, _, _): id
+        case .agent(let id, _, _): id
+        case .thought(let id, _, _): id
+        case .fileEdit(let id, _): id
+        case .plan(let id, _): id
+        case .systemNotice(let id, _): id
+        case .toolCall(let toolCall): toolCall.toolCallId
+        }
+    }
+}
+
 /// A native subagent in the parent transcript: one collapsible row showing
 /// the child's name, task and live state, expanding to its transcript
 /// inline.
@@ -109,14 +136,19 @@ struct ACPSubagentRowView: View {
                 .foregroundStyle(theme.color("fg-faint"))
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                // Keyed by the message's own stable identity, not its array
-                // offset — replay recovery can insert a missing row in the
-                // middle of an already-expanded transcript, shifting every
-                // later message's offset by one. Keying by offset would let
-                // SwiftUI reuse each row's view identity (and therefore its
-                // local state, like an `ACPToolCallCard`'s `expanded` flag)
-                // for what is now a DIFFERENT message.
-                ForEach(run.messages, id: \.stableIdentityKey) { message in
+                // Keyed by each row's own per-instance identity, not its
+                // array offset — replay recovery can insert a missing row
+                // in the middle of an already-expanded transcript, shifting
+                // every later message's offset by one. Keying by offset
+                // would let SwiftUI reuse each shifted row's view identity
+                // (and therefore its local state, like an
+                // `ACPToolCallCard`'s `expanded` flag) for what is now a
+                // DIFFERENT message. NOT `stableIdentityKey`: two child
+                // turns can legitimately reuse the same `messageId` (see
+                // `applyReplayedUserChunk`), which would give both rows the
+                // same key and reintroduce the identity collision this
+                // fix exists to prevent.
+                ForEach(run.messages, id: \.rowViewIdentity) { message in
                     ACPSubagentMessageRow(
                         stableId: "\(descriptor.subagentSessionId)#\(message.stableId)",
                         message: message,

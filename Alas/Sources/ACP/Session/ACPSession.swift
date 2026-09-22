@@ -1068,15 +1068,18 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) } ?? lastAgent()
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+                ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
         case .agentThoughtChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) } ?? lastThought()
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
+                ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) } ?? lastIdLessUser()
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
+                ?? firstIdLessMatch(of: .user, atOrAfter: suppressedReplayInsertionCursor)
         case .plan:
             dirty = []
             matchedIndex = transcript.currentPlanMessageIndex
@@ -2997,15 +3000,26 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
-    /// The newest id-less `.user` row, for `applySuppressedReplaySideEffects`'s
-    /// cursor tracking only — unlike `lastAgent()`/`lastThought()`, this is
-    /// not a live-continuation decision (nothing here is being merged into),
-    /// so it does not stop at a boundary: replayed content is trusted to
-    /// already be hydrated in chronological order, and the cursor only ever
-    /// moves forward, so the newest match is always a safe lower bound.
-    private func lastIdLessUser() -> Int? {
-        for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
-            if case .user(_, nil, _, _, _) = transcript.messages[i] { return i }
+    /// The FIRST id-less row of `kind` at or after `cursor`, for
+    /// `applySuppressedReplaySideEffects`'s cursor tracking only — unlike
+    /// `lastAgent()`/`lastThought()`, this is not a live-continuation
+    /// decision (nothing here is being merged into), so it does not stop at
+    /// a boundary. It scans FORWARD from the cursor rather than backward
+    /// from the tail: replayed content arrives in the same chronological
+    /// order it was hydrated in, so the row this specific touch matches is
+    /// the NEAREST one at or after wherever reconciliation currently
+    /// stands — never the array's overall newest, which can belong to a
+    /// LATER touch and, if matched now, would advance the cursor past an
+    /// earlier row still pending and a spawn recovered between them.
+    private func firstIdLessMatch(of kind: TextMessageKind, atOrAfter cursor: Int) -> Int? {
+        let start = min(cursor, transcript.messages.count)
+        for i in start..<transcript.messages.count {
+            switch (kind, transcript.messages[i]) {
+            case (.agent, .agent(_, nil, _)): return i
+            case (.thought, .thought(_, nil, _)): return i
+            case (.user, .user(_, nil, _, _, _)): return i
+            default: continue
+            }
         }
         return nil
     }

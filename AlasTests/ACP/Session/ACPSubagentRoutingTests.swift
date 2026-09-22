@@ -432,6 +432,53 @@ struct ACPSubagentRoutingTests {
         }
     }
 
+    @Test("a spawn missing between two already-persisted id-less prompts recovers between them, not after both")
+    func replaySpawnBetweenTwoIdLessPromptsRecoversInPlace() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Two ordinary, id-less prompt rows, already persisted adjacently
+        // — the spawn that chronologically belongs between them never
+        // reached SQLite before the crash. Appended directly rather than
+        // via `.apply(.userMessageChunk(...))` twice in a row, which would
+        // merge the second into the first as a continuation of the same
+        // live id-less run (see `legacyTrailingUserIndex`-equivalent
+        // merge in `appendUserChunk`) instead of producing two rows.
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "first", attachments: []))
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "second", attachments: []))
+        runner.persistIndices([0, 1])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 2)
+
+        // `session/load` resends the full chronological history in order:
+        // "first", the missing spawn, then "second".
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("first")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("second")))))
+        await runner.flushPersistence()
+
+        // Before this fix, the id-less fallback scanned backward from the
+        // tail unconditionally, so replaying "first" matched the array's
+        // globally NEWEST id-less prompt ("second") instead of "first"
+        // itself, advancing the cursor past BOTH rows — the recovered
+        // spawn then landed after "second" instead of between the two.
+        #expect(runner.session.transcript.messages.count == 3)
+        guard case .user(_, _, let first, _, _) = runner.session.transcript.messages[0],
+              case .toolCall = runner.session.transcript.messages[1],
+              case .user(_, _, let second, _, _) = runner.session.transcript.messages[2] else {
+            Issue.record("expected the recovered spawn BETWEEN the two already-matched id-less prompts")
+            return
+        }
+        #expect(first == "first")
+        #expect(second == "second")
+    }
+
     @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
     func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
         let (runner, store, _) = try makeRunner()

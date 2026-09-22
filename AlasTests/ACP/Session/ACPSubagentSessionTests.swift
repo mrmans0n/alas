@@ -355,6 +355,28 @@ struct ACPSubagentSessionTests {
         #expect(run.messages[2].stableIdentityKey == keyBeforeShift)
     }
 
+    @Test("two prompt rows reusing the same message id collide on stableIdentityKey")
+    func reusedMessageIdCollidesOnStableIdentityKey() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Two SEPARATE turns replaying the same reused `messageId` — a case
+        // `applyReplayedUserChunk` explicitly keeps as two distinct rows
+        // (see `identifiedUserCandidates`/`replayIdentifiedUserOrdinal`).
+        run.restore(
+            messages: [
+                .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
+                .agent(id: UUID(), StreamingText("reply")),
+                .user(id: UUID(), messageId: "p1", text: "second task", attachments: [])
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        // `stableIdentityKey` is intentionally content-addressed (keyed by
+        // `messageId`), so both rows collapse to the SAME key here — this
+        // is exactly why `ACPSubagentRowView`'s `ForEach` must not use it
+        // directly as SwiftUI row identity, and uses each row's own
+        // per-instance identity instead.
+        #expect(run.messages[0].stableIdentityKey == run.messages[2].stableIdentityKey)
+    }
+
     @Test("replay of a bare tool-call update, with no creation event of its own, still advances the cursor past its row")
     func replayToolCallUpdateAdvancesCursorPastMaterializedPlaceholder() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
