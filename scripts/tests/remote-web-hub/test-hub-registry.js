@@ -33,13 +33,34 @@ assert.equal(registry.normalizeOrigin("http://alas.lan"), "http://alas.lan", "an
 const full = registry.parsePairingLink(
   "http://100.64.1.5:8765/?code=ABC123&hosts=http%3A%2F%2F100.64.1.5%3A8765,http%3A%2F%2F192.168.1.20%3A8765"
 );
-assert.deepEqual(full, { origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"], code: "ABC123" });
+assert.deepEqual(
+  full,
+  { origins: ["http://100.64.1.5:8765", "http://192.168.1.20:8765"], code: "ABC123", originKinds: {} },
+  "no kind prefixes → an empty originKinds map, exactly like a link built before kind encoding existed"
+);
 
 const legacy = registry.parsePairingLink("http://192.168.1.20:8765/?code=XYZ");
-assert.deepEqual(legacy, { origins: ["http://192.168.1.20:8765"], code: "XYZ" }, "legacy link → its own origin");
+assert.deepEqual(legacy, { origins: ["http://192.168.1.20:8765"], code: "XYZ", originKinds: {} }, "legacy link → its own origin");
 
 const lastFallback = registry.parsePairingLink("http://192.168.1.20:8765/?code=Q&hosts=http%3A%2F%2F10.0.0.2%3A8765");
 assert.deepEqual(lastFallback.origins, ["http://10.0.0.2:8765", "http://192.168.1.20:8765"], "link origin is the last fallback");
+
+// Regression (#1341): a "hosts" entry may carry a "<kind>|" prefix
+// (RemotePairingLink.build) so hub-links.js's pair() can tell a live
+// LAN/tailnet address apart from a static custom host or the shared
+// loopback placeholder — see test-hub-links.js for the behavioral half.
+const withKinds = registry.parsePairingLink(
+  "http://100.64.1.5:8765/?code=ABC123&hosts=tailnet%7Chttp%3A%2F%2F100.64.1.5%3A8765,custom%7Chttp%3A%2F%2Fproxy.example%3A8765"
+);
+assert.deepEqual(withKinds.origins, ["http://100.64.1.5:8765", "http://proxy.example:8765"]);
+assert.deepEqual(withKinds.originKinds, { "http://100.64.1.5:8765": "tailnet", "http://proxy.example:8765": "custom" });
+
+// An unrecognized "<x>|" prefix is not a kind this format defines; the
+// whole token is left intact, which then simply fails to parse as an
+// http(s) URL and is dropped — never silently treated as origin-only.
+const unknownKind = registry.parsePairingLink("http://10.0.0.1:8765/?code=ABC123&hosts=evil%7Chttp%3A%2F%2F10.0.0.9%3A8765");
+assert.deepEqual(unknownKind.origins, ["http://10.0.0.1:8765"]);
+assert.deepEqual(unknownKind.originKinds, {});
 
 assert.equal(registry.parsePairingLink("http://192.168.1.20:8765/"), null, "no code → not a pairing link");
 assert.equal(registry.parsePairingLink("garbage"), null);

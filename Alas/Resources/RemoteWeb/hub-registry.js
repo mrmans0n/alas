@@ -74,11 +74,35 @@ function isLoopbackOrigin(origin) {
   }
 }
 
+// Kinds `RemotePairingLink.build` may prefix a `hosts` entry with, mirroring
+// `RemoteAdvertisedAddress.Kind`'s raw values. Only "lan" and "tailnet" are
+// derived live from current interfaces; "custom" (a configured reverse-proxy
+// host, or this Mac's own .local Bonjour name) is static and can go stale
+// after the link was generated, and "localhost" is shared by every Mac on
+// the same default port. `pair()` in hub-links.js uses this to decide
+// whether a 401/403 from an origin is authoritative for the target Mac.
+const PAIRING_LINK_KINDS = new Set(["localhost", "lan", "tailnet", "custom"]);
+
+// Splits a "<kind>|<origin>" hosts token into its parts. A legacy token (no
+// prefix), or one whose prefix isn't a recognized kind, yields a null kind —
+// the origin is used exactly as it always was.
+function splitPairingLinkKind(token) {
+  const separator = token.indexOf("|");
+  if (separator < 0) return { kind: null, origin: token };
+  const kind = token.slice(0, separator);
+  if (!PAIRING_LINK_KINDS.has(kind)) return { kind: null, origin: token };
+  return { kind, origin: token.slice(separator + 1) };
+}
+
 // The string encoded in the QR / Copy button:
-//   http://<host>:<port>/?code=<CODE>&hosts=<origin>,<origin>,…
-// or a legacy link without `hosts`. Returns { origins, code } with the
-// `hosts` order preserved (preferred first) and the link's own origin as the
-// last fallback, or null when the text is not a pairing link.
+//   http://<host>:<port>/?code=<CODE>&hosts=<kind>|<origin>,<kind>|<origin>,…
+// or a legacy link without `hosts`, or one built before origin kinds were
+// encoded. Returns { origins, code, originKinds } with the `hosts` order
+// preserved (preferred first) and the link's own origin as the last
+// fallback, or null when the text is not a pairing link. `originKinds` maps
+// each returned origin to its advertised-address kind when the link carried
+// one; an origin with no entry there had no kind info (a legacy link, or
+// the link's own bare origin fallback).
 function parsePairingLink(text) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
@@ -89,10 +113,17 @@ function parsePairingLink(text) {
   if (!code) return null;
   const candidates = [];
   const hosts = url.searchParams.get("hosts");
-  if (hosts) candidates.push(...hosts.split(","));
-  candidates.push(url.origin);
-  const origins = uniqueOrigins(candidates);
-  return origins.length ? { origins, code } : null;
+  if (hosts) candidates.push(...hosts.split(",").map(splitPairingLinkKind));
+  candidates.push({ kind: null, origin: url.origin });
+  const origins = [];
+  const originKinds = {};
+  for (const { kind, origin: rawOrigin } of candidates) {
+    const origin = normalizeOrigin(rawOrigin);
+    if (!origin || origins.includes(origin)) continue;
+    origins.push(origin);
+    if (kind) originKinds[origin] = kind;
+  }
+  return origins.length ? { origins, code, originKinds } : null;
 }
 
 function parseManualPairing(address, code) {

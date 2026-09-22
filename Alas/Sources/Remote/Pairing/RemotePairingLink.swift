@@ -21,12 +21,30 @@ enum RemotePairingLink {
     static let maxOrigins = 8
 
     static func build(base: String, code: String, addresses: [RemoteAdvertisedAddress]) -> String {
+        var kindByURL: [String: RemoteAdvertisedAddress.Kind] = [:]
+        for address in addresses { kindByURL[address.url] = address.kind }
         var origins = [base]
         for address in addresses where !origins.contains(address.url) {
             origins.append(address.url)
         }
-        let hosts = origins.map(encodeOrigin).joined(separator: ",")
+        let hosts = origins.map { encodeOrigin(token(origin: $0, kind: kindByURL[$0])) }.joined(separator: ",")
         return "\(base)/?code=\(code)&hosts=\(hosts)"
+    }
+
+    /// Prefixes an origin with its advertised-address kind
+    /// ("tailnet|http://…"), so `parsePairingLink` on the browser side can
+    /// tell a live LAN/tailnet address — derived from current interfaces —
+    /// apart from a static, user-configured custom host (a reverse proxy,
+    /// or this Mac's own .local Bonjour name) or the loopback placeholder.
+    /// Either of those can go stale, or answer for an unrelated Mac, after
+    /// the link was generated; only a LAN/tailnet 401/403 is trusted as the
+    /// real target's final answer (see hub-links.js's `pair`). Nil `kind`
+    /// (no matching advertised address, e.g. `base` falling back to a bare
+    /// "localhost" URL) leaves the origin unprefixed, matching every link
+    /// built before this encoding existed.
+    private static func token(origin: String, kind: RemoteAdvertisedAddress.Kind?) -> String {
+        guard let kind else { return origin }
+        return "\(kind.rawValue)|\(origin)"
     }
 
     private static let unreserved = CharacterSet(
@@ -36,6 +54,19 @@ enum RemotePairingLink {
     /// the comma separating origins is never ambiguous.
     static func encodeOrigin(_ origin: String) -> String {
         origin.addingPercentEncoding(withAllowedCharacters: unreserved) ?? origin
+    }
+
+    /// The inverse of `token(origin:kind:)`. A `hosts` entry may carry a
+    /// leading `"<kind>|"` this client has no use for — kind only matters
+    /// to the browser pairing client's own `parsePairingLink`. Stripped
+    /// rather than parsed: an unrecognized prefix, or none at all (every
+    /// link built before this encoding existed), passes the token through
+    /// unchanged.
+    private static func stripKindPrefix(_ token: String) -> String {
+        guard let separator = token.firstIndex(of: "|"),
+              RemoteAdvertisedAddress.Kind(rawValue: String(token[token.startIndex..<separator])) != nil
+        else { return token }
+        return String(token[token.index(after: separator)...])
     }
 
     /// The inverse of `build`. Origins come back in `hosts` order with the
@@ -66,7 +97,7 @@ enum RemotePairingLink {
         var origins: [String] = []
         for candidate in candidates {
             guard origins.count < maxOrigins else { break }
-            guard let origin = normalizeOrigin(candidate), !origins.contains(origin) else { continue }
+            guard let origin = normalizeOrigin(stripKindPrefix(candidate)), !origins.contains(origin) else { continue }
             origins.append(origin)
         }
         return origins.isEmpty ? nil : RemotePairingLinkParts(origins: origins, code: code)

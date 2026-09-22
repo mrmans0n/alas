@@ -6,14 +6,24 @@ struct RemotePairingLinkTests {
         RemoteAdvertisedAddress(kind: kind, interfaceName: nil, host: host, port: 8765, isRecommended: false)
     }
 
-    @Test func linkKeepsTheBaseFirstAndListsEveryAddress() {
+    // Regression: a stale custom/reverse-proxy host (or the Mac's own
+    // stale .local name) sitting earlier in address order than a live
+    // LAN/tailnet address used to make a stale 401 from it look
+    // authoritative. Each origin now carries its advertised-address kind
+    // so `parsePairingLink`/`pair()` can tell them apart (issue #1341).
+    @Test func linkKeepsTheBaseFirstAndPrefixesEveryAddressWithItsKind() {
         let link = RemotePairingLink.build(
             base: "http://100.64.1.5:8765",
             code: "ABC123",
             addresses: [address(.lan, "192.168.1.20"), address(.tailnet, "100.64.1.5")]
         )
-        #expect(link == "http://100.64.1.5:8765/?code=ABC123&hosts=http%3A%2F%2F100.64.1.5%3A8765,http%3A%2F%2F192.168.1.20%3A8765")
+        #expect(link == "http://100.64.1.5:8765/?code=ABC123&hosts=tailnet%7Chttp%3A%2F%2F100.64.1.5%3A8765,lan%7Chttp%3A%2F%2F192.168.1.20%3A8765")
     }
+
+    // A base with no matching advertised address (the "localhost" fallback
+    // when nothing else is available) has no kind to encode and stays
+    // unprefixed — the exact shape of every link built before kind
+    // encoding existed.
 
     @Test func linkWithoutAddressesStillCarriesTheBase() {
         let link = RemotePairingLink.build(base: "http://localhost:8765", code: "X", addresses: [])
@@ -34,6 +44,26 @@ struct RemotePairingLinkTests {
         let parts = try #require(RemotePairingLink.parse(link))
         #expect(parts.code == "ABC123")
         #expect(parts.origins == ["http://100.64.1.5:8765", "http://192.168.1.20:8765"])
+    }
+
+    // Regression: `parsePairingLink`'s kind-aware pairing check depends on
+    // this Swift-side `parse` NOT mangling a kind-prefixed hosts entry —
+    // RemotePeerManager.addPeer parses the very same link format to add a
+    // federated Mac, and has no use for kind info at all.
+    @Test func parseStripsTheKindPrefixEvenThoughThisClientIgnoresIt() throws {
+        let addresses = [address(.custom, "reverseproxy.example"), address(.lan, "192.168.1.20")]
+        let link = RemotePairingLink.build(base: "http://reverseproxy.example:8765", code: "ABC123", addresses: addresses)
+        let parts = try #require(RemotePairingLink.parse(link))
+        #expect(parts.origins == ["http://reverseproxy.example:8765", "http://192.168.1.20:8765"])
+    }
+
+    // An unrecognized prefix before "|" is not a kind this format defines —
+    // treated as part of the origin (defensive: it then simply fails to
+    // parse as an http(s) URL and is dropped), never silently stripped.
+    @Test func parseDoesNotStripAnUnrecognizedPipePrefix() throws {
+        let link = "http://10.0.0.1:8765/?code=ABC123&hosts=\(RemotePairingLink.encodeOrigin("evil|http://10.0.0.9:8765"))"
+        let parts = try #require(RemotePairingLink.parse(link))
+        #expect(parts.origins == ["http://10.0.0.1:8765"])
     }
 
     // A pasted link's `hosts` can carry an arbitrary number of entries.

@@ -440,20 +440,33 @@ function createLinks(deps, hooks) {
   // (not actually down) origin can still process and consume the
   // single-use code after the client has already moved on to the next
   // origin, which then gets a legitimate-looking but misleading 401.
-  function pair(origins, code, deviceName) {
+  function pair(origins, code, deviceName, originKinds) {
     // Every pairing link includes "localhost" alongside the target Mac's
     // real addresses, so it can answer from a completely unrelated local
     // Alas instance that has never heard of this code — a 401 from there
     // isn't proof the code is expired, it's a false read from the wrong
-    // server. Only a loopback origin gets that benefit of the doubt: the
-    // non-loopback addresses in one pairing link all come from the same
-    // Mac's own advertisedAddresses(), so a 401/403 from any of them is
-    // authoritative for the real target and must stop immediately —
-    // otherwise a single expired/mistyped code recursively posts to every
-    // advertised address and can burn through the whole 5-per-60s
-    // redemption-failure budget (RemotePairingService.redeem) in one
-    // submission, locking out even a freshly generated valid code.
+    // server. A "custom" origin (a configured reverse-proxy host, or this
+    // Mac's own .local Bonjour name) gets the same benefit of the doubt:
+    // unlike a LAN/tailnet address, derived live from current interfaces,
+    // a custom host is static and can go stale after the link was
+    // generated — a 401 from a stale custom host isn't proof either. Only
+    // a live LAN/tailnet origin is trusted as the real target's final
+    // answer: the LAN/tailnet addresses in one pairing link all come from
+    // that same Mac's own advertisedAddresses(), so a 401/403 from one of
+    // them is authoritative and must stop immediately — otherwise a single
+    // expired/mistyped code recursively posts to every advertised address
+    // and can burn through the whole 5-per-60s redemption-failure budget
+    // (RemotePairingService.redeem) in one submission, locking out even a
+    // freshly generated valid code. `originKinds` (from
+    // `RemoteHubRegistry.parsePairingLink`) carries each origin's kind; a
+    // legacy link with no kind info at all falls back to the original
+    // loopback-only check.
     const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;
+    const isAuthoritative = (origin) => {
+      const kind = originKinds && Object.prototype.hasOwnProperty.call(originKinds, origin) ? originKinds[origin] : null;
+      if (kind) return kind === "lan" || kind === "tailnet";
+      return !isLoopback(origin);
+    };
     const tryAt = (index, bestError) => {
       if (index >= origins.length) return Promise.reject(bestError || pairError("net"));
       const origin = origins[index];
@@ -464,11 +477,11 @@ function createLinks(deps, hooks) {
           (res) => {
             if (res.status === 401) {
               const err = bestError || pairError("expired");
-              return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);
+              return isAuthoritative(origin) ? Promise.reject(err) : tryAt(index + 1, err);
             }
             if (res.status === 403) {
               const err = bestError || pairError("origin");
-              return isLoopback(origin) ? tryAt(index + 1, err) : Promise.reject(err);
+              return isAuthoritative(origin) ? Promise.reject(err) : tryAt(index + 1, err);
             }
             if (!res.ok) return tryAt(index + 1, bestError);
             // A 2xx from an unrelated responder (a captive portal, a

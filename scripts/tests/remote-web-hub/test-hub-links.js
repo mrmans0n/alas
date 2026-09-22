@@ -528,6 +528,65 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     );
   }
   {
+    // Regression (#1341): a "custom" origin — a configured
+    // reverse-proxy host, or this Mac's own .local Bonjour name — is
+    // static and can go stale after the pairing link was generated. Unlike
+    // a "lan"/"tailnet" origin, its 401/403 must not be treated as the
+    // real target's final answer.
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        if (url.startsWith("http://stale-proxy")) return Promise.resolve({ ok: false, status: 401 });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "fresh" }) });
+      },
+    });
+    const result = await links.pair(
+      ["http://stale-proxy.example:8765", "http://10.0.0.1:8765"],
+      "CODE",
+      "phone",
+      { "http://stale-proxy.example:8765": "custom" }
+    );
+    assert.deepEqual(result, { origin: "http://10.0.0.1:8765", token: "fresh" }, "a stale custom host's 401 must not stop a reachable lan address from being tried");
+    assert.deepEqual(calls, ["http://stale-proxy.example:8765/pair", "http://10.0.0.1:8765/pair"]);
+  }
+  {
+    // A "lan"/"tailnet" origin's 401 remains terminal even when its kind is
+    // known explicitly, not merely inferred from "non-loopback".
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        return Promise.resolve({ ok: false, status: 401 });
+      },
+    });
+    await assert.rejects(
+      links.pair(
+        ["http://10.0.0.1:8765", "http://10.0.0.2:8765"],
+        "CODE",
+        "phone",
+        { "http://10.0.0.1:8765": "lan", "http://10.0.0.2:8765": "tailnet" }
+      ),
+      (err) => err.reason === "expired"
+    );
+    assert.deepEqual(calls, ["http://10.0.0.1:8765/pair"], "a known lan/tailnet origin's 401 must still stop the search immediately");
+  }
+  {
+    // If every origin in the link is non-authoritative (only custom/
+    // localhost kinds), a genuinely expired code is still eventually
+    // reported once every one of them has been tried.
+    const { links } = harness({ fetchImpl: () => Promise.resolve({ ok: false, status: 401 }) });
+    await assert.rejects(
+      links.pair(
+        ["http://localhost:8765", "http://stale-proxy.example:8765"],
+        "CODE",
+        "phone",
+        { "http://stale-proxy.example:8765": "custom" }
+      ),
+      (err) => err.reason === "expired"
+    );
+  }
+  {
     const { links } = harness();
     await assert.rejects(links.pair(["http://10.0.0.1:8765", "http://10.0.0.2:8765"], "CODE", "phone"), (err) => err.reason === "net");
   }

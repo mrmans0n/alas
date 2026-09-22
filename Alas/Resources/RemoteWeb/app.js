@@ -298,10 +298,12 @@ function send(obj) { links.sendActive(obj); }
 // --- pairing & switching -----------------------------------------------------
 
 // `input` is { origins, code } from RemoteHubRegistry.parsePairingLink /
-// parseManualPairing. Resolves the registry entry; rejects with the link
-// manager's { reason } errors.
+// parseManualPairing, plus `originKinds` when it came from parsePairingLink
+// (a manual address/code pair has no advertised-address kind to encode).
+// Resolves the registry entry; rejects with the link manager's { reason }
+// errors.
 async function pairAndAdd(input, options) {
-  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40));
+  const result = await links.pair(input.origins, input.code, navigator.userAgent.slice(0, 40), input.originKinds);
   const { server, rePaired } = RemoteHubRegistry.upsertPaired(hub, { origins: input.origins, token: result.token, now: Date.now(), targetId: options && options.targetId });
   RemoteHubRegistry.setLastOrigin(hub, server.id, result.origin);
   RemoteHubRegistry.save(localStorage, hub);
@@ -3985,6 +3987,14 @@ function attemptFirstPairing(input) {
     // once onActiveOpen() fires — any successful active connection makes a
     // stale scan-retry intent moot.
     if (hub.activeId) {
+      // Preserve the scan only for a transient ("net") failure, so a later
+      // outage on the fallback Mac retries the originally scanned Mac
+      // rather than hammering the fallback (see the comment above). A
+      // terminal failure ("expired"/"origin") can never succeed by
+      // retrying, so it must not survive to poison a future fallback retry
+      // — clear it immediately, exactly as the non-fallback path below
+      // already does for the same two reasons.
+      if (err && err.reason !== "net") pendingFirstPairing = null;
       switchServer(hub.activeId);
       return;
     }
