@@ -3461,6 +3461,7 @@ final class AppState {
         }
         return WorkspaceLifecycleConfirmationModel.forgetCheckout(
             cleanups: checkout.members.compactMap(\.cleanup),
+            unverifiedMemberCount: checkout.members.filter { $0.cleanup == nil }.count,
             confirmedPreserveArtifacts: false
         )
     }

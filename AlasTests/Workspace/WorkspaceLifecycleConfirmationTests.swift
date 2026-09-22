@@ -114,6 +114,21 @@ import Testing
         #expect(model.confirmAction == .forgetCheckout(confirmedPreserveArtifacts: true))
     }
 
+    @Test func forgetConfirmationRequiresAcknowledgementForUnverifiedMembers() {
+        // A snapshot-only member (creation never produced a worktree) has no
+        // cleanup record at all, so it carries no concrete leftover to list —
+        // but the coordinator still refuses to forget it without
+        // confirmedPreserveArtifacts, so this must still force a confirmation.
+        let model = WorkspaceLifecycleConfirmationModel.forgetCheckout(
+            cleanups: [],
+            unverifiedMemberCount: 1,
+            confirmedPreserveArtifacts: false
+        )
+
+        #expect(model.requiresConfirmation == true)
+        #expect(model.confirmAction == .forgetCheckout(confirmedPreserveArtifacts: true))
+    }
+
     @Test func cleanForgetHasNoDestructiveForceOption() {
         let cleanup = WorkspaceCheckoutMemberCleanup(
             plan: cleanupPlan(branchOwnership: .reused),

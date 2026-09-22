@@ -332,13 +332,26 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
         )
     }
 
-    static func forgetCheckout(cleanups: [WorkspaceCheckoutMemberCleanup], confirmedPreserveArtifacts: Bool) -> WorkspaceLifecycleConfirmationModel {
+    /// `unverifiedMemberCount` counts members with no cleanup record at all —
+    /// snapshot-only members whose creation never produced a worktree. The
+    /// coordinator refuses to forget those without `confirmedPreserveArtifacts`,
+    /// but they carry no concrete leftover to list, so without surfacing them
+    /// here `requiresConfirmation` would stay false and nothing would ever
+    /// set that flag — the record could never actually be forgotten.
+    static func forgetCheckout(
+        cleanups: [WorkspaceCheckoutMemberCleanup],
+        unverifiedMemberCount: Int = 0,
+        confirmedPreserveArtifacts: Bool
+    ) -> WorkspaceLifecycleConfirmationModel {
         var risks: [String] = []
         for cleanup in cleanups {
             risks.append(contentsOf: cleanup.sharedRootLeftovers)
             if cleanup.plan.branchOwnership == .created, cleanup.branchRemoved == false {
                 risks.append("Retained branch \(cleanup.plan.branch)")
             }
+        }
+        if unverifiedMemberCount > 0 {
+            risks.append("\(unverifiedMemberCount) \(unverifiedMemberCount == 1 ? "member was" : "members were") never verified as removed")
         }
         return WorkspaceLifecycleConfirmationModel(
             title: risks.isEmpty ? "Forget Workspace Checkout?" : "Forget Workspace Checkout and Preserve Artifacts?",

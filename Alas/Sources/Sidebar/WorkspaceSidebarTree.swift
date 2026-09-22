@@ -182,6 +182,11 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     }
 
     private func confirmCheckoutRowDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID) {
+        // A `.deleteCheckout` confirmation can resolve into `.artifactsNeedConfirmation`,
+        // which installs a fresh preserve-artifacts sheet via `handleCheckoutRowOutcome`.
+        // Capture the sheet's identity before that runs, so an unconditional clear below
+        // never wipes out a sheet installed during this very call.
+        let confirmationID = checkoutRowDeletionConfirmation?.id
         Task { @MainActor in
             do {
                 switch action {
@@ -193,7 +198,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 case .forgetCheckout(let confirmedPreserveArtifacts):
                     try await state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
                 }
-                checkoutRowDeletionConfirmation = nil
+                if checkoutRowDeletionConfirmation?.id == confirmationID { checkoutRowDeletionConfirmation = nil }
             } catch {
                 lifecycleError = error.localizedDescription
             }

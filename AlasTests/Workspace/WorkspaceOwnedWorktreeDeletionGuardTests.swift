@@ -96,6 +96,49 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID) == nil)
     }
 
+    @Test func forgetConfirmationAndForgetSucceedForASnapshotOnlyMemberWithNoCleanupRecord() async throws {
+        // A member whose creation attempt never produced a worktree is
+        // discarded with `cleanup == nil` rather than a cleanup record. The
+        // confirmation must ask for acknowledgement rather than silently
+        // reporting no risk, and confirming it must actually succeed.
+        let fixture = try await Fixture.make(suffix: "forget-unverified", includesCheckout: false)
+        defer { fixture.removeFiles() }
+        let checkoutID = UUID()
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature/forget-unverified",
+            rootPath: fixture.checkoutRoot.path,
+            members: [
+                WorkspaceCheckoutMember(
+                    workspaceMemberID: UUID(),
+                    projectID: fixture.project.id,
+                    fallbackProjectName: "Release",
+                    fallbackRepositoryRoot: fixture.repo.path,
+                    worktreePath: fixture.checkoutRoot.appendingPathComponent("never-created").path,
+                    availability: .explicitlyDeleted,
+                    checkpoint: .planPersisted,
+                    cleanupOwnership: .init(worktreeCreated: false, branchOwnership: .unknown),
+                    cleanup: nil
+                ),
+            ]
+        )
+        try await fixture.workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        await fixture.state.workspacesManager.refreshCheckoutSnapshots()
+
+        let confirmation = try fixture.state.workspaceForgetConfirmation(checkoutID: checkoutID)
+        #expect(confirmation.requiresConfirmation == true)
+        guard case .forgetCheckout(let confirmedPreserveArtifacts) = confirmation.confirmAction else {
+            Issue.record("Expected a forgetCheckout confirm action")
+            return
+        }
+        try await fixture.state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+
+        #expect(fixture.state.workspacesManager.checkout(id: checkoutID) == nil)
+    }
+
     @MainActor
     private struct Fixture {
         let state: AppState
