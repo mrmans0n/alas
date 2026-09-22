@@ -565,6 +565,30 @@ struct ACPSubagentRoutingTests {
         #expect(liveWriteAcknowledged.value == true)
     }
 
+    @Test("an ordinary local write is not poisoned by an unrelated prior lifecycle-batch failure, by default")
+    func ordinaryLocalWriteDoesNotParticipateInLifecycleBatchByDefault() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Same poisoning setup as above, but this time the LATER write is a
+        // completely ordinary `persistIndices` call with NO explicit
+        // `participatesInLifecycleBatch` argument — e.g. what
+        // `cancelInFlightToolCalls`'s or a checkpoint attach's own write
+        // does. It must be immune by default, not just when a caller
+        // remembers to opt out explicitly.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        let ordinaryWriteAcknowledged = Acknowledged()
+        _ = runner.persistIndices([0], completion: { ordinaryWriteAcknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(ordinaryWriteAcknowledged.value == true)
+    }
+
     @Test("a spawn's failure is not erased by the child write that follows it")
     func spawnFailureSurvivesSuccessfulChildWrite() async throws {
         let (runner, store, _) = try makeRunner()

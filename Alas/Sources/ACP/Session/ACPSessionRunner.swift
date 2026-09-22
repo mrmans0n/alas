@@ -845,8 +845,18 @@ final class ACPSessionRunner {
                     // the nested (child-addressed) branch already uses.
                     acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
+                    // This call site is shared by ordinary `.toolCall`/
+                    // `.toolCallUpdate` reconciliation and root-level
+                    // subagent lifecycle reconciliation — only the latter
+                    // is genuinely part of the OpenCode dual-write batch.
+                    let isSubagentLifecycleUpdate: Bool
+                    switch params.update {
+                    case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
+                    default: isSubagentLifecycleUpdate = false
+                    }
                     persistIndices(
                         dirty,
+                        participatesInLifecycleBatch: isSubagentLifecycleUpdate,
                         completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                     )
                 }
@@ -908,10 +918,10 @@ final class ACPSessionRunner {
                 } else {
                     hasConfigBackedModel = false
                 }
-                let isEmptySubagentLifecycleUpdate: Bool
+                let isSubagentLifecycleUpdate: Bool
                 switch params.update {
-                case .subagentSpawned, .subagentStateUpdate: isEmptySubagentLifecycleUpdate = dirty.isEmpty
-                default: isEmptySubagentLifecycleUpdate = false
+                case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
+                default: isSubagentLifecycleUpdate = false
                 }
                 if case .sessionConfigOptionsUpdate = params.update,
                    hadConfigBackedModel || hasConfigBackedModel {
@@ -921,7 +931,7 @@ final class ACPSessionRunner {
                             durableConsumptionAcknowledgement?()
                         }
                     }
-                } else if isEmptySubagentLifecycleUpdate {
+                } else if isSubagentLifecycleUpdate, dirty.isEmpty {
                     // A ROOT-addressed subagent lifecycle update — the
                     // shape both OpenCode-normalized updates take — can be
                     // the trailing half of a batch sharing one wire frame's
@@ -932,8 +942,13 @@ final class ACPSessionRunner {
                     // re-checking the fence; this barrier does both.
                     acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
+                    // This IS genuinely part of the OpenCode dual-write
+                    // lifecycle batch when the update is spawn/state — every
+                    // other kind (plan, toolCall, etc.) is ordinary content
+                    // unrelated to any batch and must not couple with one.
                     persistIndices(
                         dirty,
+                        participatesInLifecycleBatch: isSubagentLifecycleUpdate,
                         completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                     )
                 }
@@ -995,8 +1010,12 @@ final class ACPSessionRunner {
             if dirty.isEmpty {
                 acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
             } else {
+                // This IS genuinely part of the OpenCode dual-write
+                // lifecycle batch — a nested spawn/state update sharing an
+                // ack with a sibling write in the same normalized pair.
                 persistIndices(
                     dirty,
+                    participatesInLifecycleBatch: true,
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
             }
         default:
@@ -3049,7 +3068,7 @@ extension ACPSessionRunner {
     func persistIndices(
         _ indices: Set<Int>,
         requiresLease: Bool = true,
-        participatesInLifecycleBatch: Bool = true,
+        participatesInLifecycleBatch: Bool = false,
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         streamingPersistTask?.cancel()
