@@ -48,8 +48,16 @@ final class FederatedSessionsProvider {
     /// Several phones polling at once must not turn into a burst upstream.
     static let listRequestThrottle: TimeInterval = 2
 
-    /// Fired when the set of session-carrying peers changes, so the server
-    /// can push a fresh `hello` (its `peers` list) to connected clients.
+    /// Fired whenever any peer's link state or advertised record may have
+    /// changed, so the server can push a fresh `hello` (its `peers` list —
+    /// `RemotePeerManager.helloPeers` reports every peer's state, not only
+    /// the ones carrying sessions) to connected clients. Every call is
+    /// already a genuine transition: `reconcilePeers()` only runs in
+    /// response to a `RemotePeerManager` signal that itself never repeats
+    /// an unchanged state, so this can fire unconditionally rather than
+    /// re-deriving a narrower "did the carrying set change" condition that
+    /// would miss transitions among peers that were never carrying, and
+    /// miss `forget` on one that never was.
     var onPeerAvailabilityChanged: (@MainActor () -> Void)?
 
     /// Holds a `FederatedDownstream` weakly. This provider does not own
@@ -215,7 +223,7 @@ final class FederatedSessionsProvider {
             }
         }
         if listChanged { notifySessionListChanged() }
-        if Set(previous.keys) != Set(current.keys) { onPeerAvailabilityChanged?() }
+        onPeerAvailabilityChanged?()
         pruneDeadDownstreams()
     }
 
