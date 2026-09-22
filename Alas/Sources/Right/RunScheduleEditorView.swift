@@ -297,6 +297,10 @@ struct RunScheduleEditorView: View {
     }
 
     private var nextFireLabel: String {
+        // Disabling keeps the stored occurrence and the editor cannot
+        // re-enable, so saving leaves the schedule off. Naming a time would
+        // promise a run that is not coming; the card says this too.
+        if let schedule, !schedule.isEnabled { return "Disabled" }
         let scheduleState = schedule.map { state.runScheduler.state(for: $0.id) }
         let next = RunSchedulePresentation.editorNextFireDate(
             existingTrigger: schedule?.trigger,
