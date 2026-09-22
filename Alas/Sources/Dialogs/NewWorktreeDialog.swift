@@ -482,6 +482,7 @@ struct NewWorktreeDialog: View {
         }
         let names = Self.namesAfterIssueAttach(
             branchSeed: effects.branchSeed,
+            branchPrefix: state.config.worktrees.branchPrefix,
             createsGGStack: createsGGStack,
             branch: branch,
             stackName: stackName
@@ -732,14 +733,26 @@ struct NewWorktreeDialog: View {
 
     nonisolated static func namesAfterIssueAttach(
         branchSeed: String,
+        branchPrefix: String,
         createsGGStack: Bool,
         branch: String,
         stackName: String
     ) -> (branch: String, stackName: String) {
         if createsGGStack {
-            return (branch, branchSeed)
+            return (branch, stackNameSeed(branchSeed: branchSeed, branchPrefix: branchPrefix))
         }
         return (branchSeed, stackName)
+    }
+
+    /// gg composes the real branch as `<gg username>/<stack name>`, so the
+    /// configured worktree branch prefix must not be baked into a seeded
+    /// stack name: a `nacho/` prefix plus a `nacho` gg username would
+    /// otherwise produce `nacho/nacho/42-…`. Mirrors
+    /// `stackNameAfterGGAvailabilityProbe`, which strips the same prefix
+    /// when the branch field's seeded value is carried into stack mode.
+    nonisolated static func stackNameSeed(branchSeed: String, branchPrefix: String) -> String {
+        guard !branchPrefix.isEmpty, branchSeed.hasPrefix(branchPrefix) else { return branchSeed }
+        return String(branchSeed.dropFirst(branchPrefix.count))
     }
 
     nonisolated static func issueLaunchAgent(from agents: [AgentDefinition], preferredAgentID: String? = nil) -> String {

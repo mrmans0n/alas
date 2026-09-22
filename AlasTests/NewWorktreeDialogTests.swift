@@ -290,16 +290,33 @@ struct NewWorktreeDialogTests {
     @Test func issueAttachmentSeedsOnlyTheActiveBranchOrStackInput() {
         #expect(NewWorktreeDialog.namesAfterIssueAttach(
             branchSeed: "feature/42-fix-sync",
+            branchPrefix: "feature/",
             createsGGStack: false,
             branch: "manual-branch",
             stackName: "manual-stack"
         ) == (branch: "feature/42-fix-sync", stackName: "manual-stack"))
         #expect(NewWorktreeDialog.namesAfterIssueAttach(
             branchSeed: "feature/42-fix-sync",
+            branchPrefix: "feature/",
             createsGGStack: true,
             branch: "manual-branch",
             stackName: "manual-stack"
-        ) == (branch: "manual-branch", stackName: "feature/42-fix-sync"))
+        ) == (branch: "manual-branch", stackName: "42-fix-sync"))
+    }
+
+    /// gg prepends its own `<branch_username>/` when composing the stack
+    /// branch, so a seeded stack name carrying the configured worktree
+    /// prefix would double it up (`nacho/nacho/42-…`).
+    @Test func issueAttachmentStripsTheBranchPrefixFromTheSeededStackName() {
+        #expect(NewWorktreeDialog.stackNameSeed(
+            branchSeed: "nacho/42-fix-sync", branchPrefix: "nacho/"
+        ) == "42-fix-sync")
+        #expect(NewWorktreeDialog.stackNameSeed(
+            branchSeed: "nacho/42-fix-sync", branchPrefix: ""
+        ) == "nacho/42-fix-sync")
+        #expect(NewWorktreeDialog.stackNameSeed(
+            branchSeed: "42-fix-sync", branchPrefix: "feature/"
+        ) == "42-fix-sync")
     }
 
     @Test func issueAttachmentSelectsTheFirstEnabledACPCapableAgent() {
