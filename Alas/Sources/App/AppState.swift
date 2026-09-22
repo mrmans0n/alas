@@ -3128,6 +3128,31 @@ final class AppState {
                 .map(\.id)
             guard !pending.isEmpty else { break }
             for checkoutID in pending {
+                // Mirrors the git-risk path's existing safety: a checkout
+                // with unconfirmed risks (dirty/locked members, or live
+                // sessions that would silently close) refuses rather than
+                // proceeding without ever showing them, exactly as
+                // deleteAndForgetWorkspaceCheckout already does for git
+                // risks via confirmingRisks — this closes the gap for
+                // session risks, which forget() has no confirmingRisks gate
+                // for at all.
+                //
+                // An archived checkout is refused here without ever calling
+                // workspaceCheckoutDeletionConfirmation: that call unarchives
+                // as prep for an imminent deletion, which is fine when the
+                // caller goes on to actually delete, but this refusal path
+                // does not — restoring the archive afterward isn't an option
+                // either, since the only way to re-archive goes through the
+                // coordinator's archive(), which stops live sessions as a
+                // side effect and would defeat this very fix. An archived
+                // checkout needs the interactive flow first.
+                guard workspacesManager.checkout(id: checkoutID)?.archivedAt == nil else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
+                let confirmation = try await workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                guard !confirmation.requiresConfirmation else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
                 let outcome = try await deleteAndForgetWorkspaceCheckout(id: checkoutID)
                 guard outcome == .forgotten else {
                     throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
