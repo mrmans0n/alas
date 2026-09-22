@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 @testable import Alas
 
 @MainActor
@@ -1331,6 +1332,223 @@ struct RemotePeerManagerTests {
         // The cosmetic fields are still adopted.
         #expect(manager.peers.first?.name == "Mac A")
         #expect(manager.peers.first?.protocolVersion == 1)
+    }
+
+    // MARK: identity binding
+
+    /// A pairer whose replies prove possession of `key` under `serverId` —
+    /// what a real peer running this build produces.
+    private func provingPairer(serverId: String, key: Curve25519.Signing.PrivateKey,
+                               token: String = "tokA", name: String = "Mac A",
+                               requests: Requests) -> RemotePeerPairer {
+        RemotePeerPairer(fetch: { req in
+            requests.seen.append(req)
+            let payload = try #require(req.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let challenge = try #require(object["challenge"] as? String)
+            let proof = try #require(RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key))
+            let reply = """
+                {"token":"\(token)","serverId":"\(serverId)","name":"\(name)",\
+                "publicKey":"\(proof.publicKey)","signature":"\(proof.signature)"}
+                """
+            return (Data(reply.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, timeout: 1)
+    }
+
+    @Test func addPeerPinsTheProvedKeyOnTheRecord() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let requests = Requests()
+        let store = InMemoryPeerStore()
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, requests: requests),
+                                  links: Links())
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
+        #expect(peer.isVerified)
+        #expect(store.saved.first?.publicKey == peer.publicKey)
+    }
+
+    // The advertisement has to carry this Mac's own key, or the far side has
+    // nothing to pin us to and its record stays unverified forever.
+    @Test func theAdvertisementCarriesThisMacsPublicKey() async throws {
+        let requests = Requests()
+        let manager = makeManager(
+            pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(), requests: requests),
+            links: Links(),
+            identity: RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "Mac B",
+                                                      origins: ["http://10.0.0.2:8765"], publicKey: "my-key"))
+        _ = await manager.addPeer(link: linkFromA)
+        let first = try #require(requests.seen.first)
+        let advertised = try #require(body(of: first)["peer"] as? [String: Any])
+        #expect(advertised["publicKey"] as? String == "my-key")
+    }
+
+    // THE issue's central case, at the manager level: an established peer's
+    // record is pinned to its key, and another exchange claiming the same
+    // `serverId` with different key material must not re-key it or redirect
+    // its outbound link — no matter that it holds a live pairing code.
+    @Test func anOutboundExchangeCannotRebindAPinnedRecordToAnotherKey() async throws {
+        let realKey = Curve25519.Signing.PrivateKey()
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "real-token",
+                               publicKey: RemoteIdentityCrypto.publicKeyString(realKey.publicKey),
+                               protocolVersion: 1, localDeviceId: "real-device",
+                               addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        // The claimant proves a key of its own — it genuinely holds one —
+        // but it is not the key this record was paired with.
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(),
+                                                        token: "claimant-token", name: "Impostor",
+                                                        requests: requests),
+                                  links: Links())
+        #expect(await manager.addPeer(link: linkFromA) == .identityRebindRefused)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "real-token")
+        #expect(peer.name == "Mac A")
+        #expect(peer.publicKey == RemoteIdentityCrypto.publicKeyString(realKey.publicKey))
+    }
+
+    // Same refusal from the inbound direction — the shape the impersonation
+    // actually takes: the claimant redeems a code HERE while advertising the
+    // established peer's identity. The device it minted must not survive.
+    @Test func anInboundRedeemCannotRebindAPinnedRecordToAnotherKey() async throws {
+        let realKey = Curve25519.Signing.PrivateKey()
+        let pinned = RemoteIdentityCrypto.publicKeyString(realKey.publicKey)
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "real-token", publicKey: pinned,
+                               protocolVersion: 1, localDeviceId: "real-device",
+                               addedAt: Date(timeIntervalSince1970: 1))])
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let claimantDevice = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Impostor",
+                                                    peerServerId: "srv-a")
+        let requests = Requests()
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(),
+                                                        requests: requests),
+                                  links: Links())
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Impostor", origins: ["http://10.0.0.66:8765"],
+            peerPublicKey: RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey),
+            counterCode: "CTR", localDeviceId: claimantDevice.deviceId, redeemedCode: "CODE"))
+        let peer = try #require(manager.peers.first)
+        #expect(peer.token == "real-token")
+        #expect(peer.origins == ["http://10.0.0.1:8765"])
+        #expect(peer.publicKey == pinned)
+        // The inbound grant is taken back too, so the claimant keeps no
+        // access on this Mac either.
+        #expect(!pairing.devices.contains { $0.id == claimantDevice.deviceId })
+        // Refused before any pair-back was dialed: no code is spent on it.
+        #expect(requests.seen.isEmpty)
+    }
+
+    // A request that advertises one key while its own endpoint proves a
+    // different one is refused rather than reconciled toward either.
+    @Test func anInboundRequestWhoseEndpointProvesADifferentKeyIsRefused() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let device = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac A", peerServerId: "srv-a")
+        let store = InMemoryPeerStore()
+        let manager = makeManager(store: store, pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: Curve25519.Signing.PrivateKey(),
+                                                        requests: Requests()),
+                                  links: Links())
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.0.0.1:8765"],
+            peerPublicKey: RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey),
+            counterCode: "CTR", localDeviceId: device.deviceId, redeemedCode: "CODE"))
+        #expect(manager.peers.isEmpty)
+        #expect(!pairing.devices.contains { $0.id == device.deviceId })
+    }
+
+    // Re-pairing the SAME peer is the ordinary case and must keep working:
+    // the key it proves is the one already pinned, so nothing is rebound.
+    @Test func rePairingWithTheSameKeyIsAllowed() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pinned = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", publicKey: pinned,
+                               protocolVersion: 1, localDeviceId: "old-device",
+                               addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, token: "new-token",
+                                                        requests: requests),
+                                  links: Links())
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        #expect(manager.peers.first?.token == "new-token")
+        #expect(manager.peers.first?.publicKey == pinned)
+    }
+
+    // A record paired before verification shipped has nothing pinned, so
+    // re-pairing it is how the user upgrades it — the exchange they
+    // initiated is what pins the key.
+    @Test func rePairingAnUnverifiedRecordAdoptsTheProvedKey() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", publicKey: nil,
+                               protocolVersion: 1, localDeviceId: "old-device",
+                               addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        let manager = makeManager(store: store,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, token: "new-token",
+                                                        requests: requests),
+                                  links: Links())
+        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        #expect(manager.peers.first?.publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
+        #expect(manager.peers.first?.isVerified == true)
+    }
+
+    // A peer that stops advertising a key cannot drop an established
+    // binding: only the user's own Forget can.
+    @Test func aPeerCannotUnpinItselfByOfferingNoKey() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pinned = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let store = InMemoryPeerStore()
+        store.save([RemotePeer(id: "p1", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                               lastOrigin: "http://10.0.0.1:8765", token: "old-token", publicKey: pinned,
+                               protocolVersion: 1, localDeviceId: "old-device",
+                               addedAt: Date(timeIntervalSince1970: 1))])
+        let requests = Requests()
+        // A reply with no key at all — an older build, or something
+        // pretending to be one.
+        let manager = makeManager(
+            store: store,
+            pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)],
+                           requests: requests),
+            links: Links())
+        #expect(await manager.addPeer(link: linkFromA) == .identityRebindRefused)
+        #expect(manager.peers.first?.publicKey == pinned)
+        #expect(manager.peers.first?.token == "old-token")
+    }
+
+    // Phase 3 must not carry sessions over a link nobody proved anything to
+    // open. An unverified record still connects; it just does not qualify.
+    @Test func onlyAVerifiedOnlinePeerCarriesSessions() async throws {
+        let store = InMemoryPeerStore()
+        store.save([
+            RemotePeer(id: "p1", serverId: "srv-a", name: "Verified", origins: ["http://10.0.0.1:8765"],
+                       lastOrigin: nil, token: "t", publicKey: "a-key", addedAt: Date()),
+            RemotePeer(id: "p2", serverId: "srv-b", name: "Legacy", origins: ["http://10.0.0.2:8765"],
+                       lastOrigin: nil, token: "t", publicKey: nil, addedAt: Date()),
+        ])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p2"]).emit(.stateChanged(.online))
+        #expect(manager.carriesSessions(peerId: "p1"))
+        #expect(!manager.carriesSessions(peerId: "p2"))
+        // Not online is not enough either.
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.identityUnproven))
+        #expect(!manager.carriesSessions(peerId: "p1"))
     }
 
     @Test func connectAllIsIdempotentAndDisconnectAllTearsDown() {

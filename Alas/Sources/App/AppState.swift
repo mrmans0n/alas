@@ -490,6 +490,12 @@ final class AppState {
     /// file isn't touched unless the remote feature is actually exercised.
     @ObservationIgnored
     private(set) lazy var remotePairing = RemotePairingService(store: FileDeviceStore())
+    /// This Mac's peer identity key. Lazy like the rest: the key is only
+    /// generated the first time federation actually needs to prove who this
+    /// Mac is, so a launch that never touches remote control never creates
+    /// one.
+    @ObservationIgnored
+    private(set) lazy var remoteIdentityKey = RemoteIdentityKeyProvider()
     /// Outbound peers (other Macs running Alas). Lazy like `remotePairing`.
     @ObservationIgnored
     private(set) lazy var remotePeers: RemotePeerManager = {
@@ -506,7 +512,10 @@ final class AppState {
                     // more than that would have it reject a genuine peer with
                     // `originRejected`, since it can never tell "too many
                     // legitimate addresses" apart from a hostile advertisement.
-                    origins: Array(self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url).prefix(RemotePairingLink.maxOrigins) ?? []))
+                    origins: Array(self?.remoteAdvertisedAddresses.filter { $0.kind != .localhost }.map(\.url).prefix(RemotePairingLink.maxOrigins) ?? []),
+                    // Advertised so a peer can pin this Mac, and proved on
+                    // every later socket by the same key.
+                    publicKey: self?.remoteIdentityKey.publicKey ?? "")
             })
         manager.onRevokeDevice = { [weak self] deviceId in
             self?.remoteServer?.disconnectDevice(deviceId)
@@ -677,7 +686,8 @@ final class AppState {
                 },
                 identity: { [weak self] in
                     self?.remoteServerIdentity() ?? RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
-                }
+                },
+                signer: remoteIdentityKey
             )
             server.onPortChange = { [weak self] p in
                 self?.remotePort = p

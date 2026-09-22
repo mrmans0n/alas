@@ -360,16 +360,27 @@ struct RemoteServerPane: View {
     }
 
     private func peerStatus(_ peer: RemotePeer) -> String {
+        let status: String
         switch state.remotePeers.states[peer.id] ?? .idle {
-        case .online: return "Online via \(peer.lastOrigin ?? peer.origins.first ?? "")"
-        case .connecting: return "Connecting…"
-        case .offline: return "Offline. Retrying."
-        case .unauthorized: return "This Mac's token was revoked there. Forget and pair again."
-        case .incompatible(let version): return "Needs a matching Alas version (protocol \(version))."
+        case .online: status = "Online via \(peer.lastOrigin ?? peer.origins.first ?? "")"
+        case .connecting: status = "Connecting…"
+        case .offline: status = "Offline. Retrying."
+        case .unauthorized: status = "This Mac's token was revoked there. Forget and pair again."
+        case .incompatible(let version): status = "Needs a matching Alas version (protocol \(version))."
         case .identityMismatch:
-            return "A different Mac answered at that address. Forget this peer and pair again."
-        case .idle: return "Not connected"
+            status = "A different Mac answered at that address. Forget this peer and pair again."
+        case .identityUnproven:
+            // Deliberately worded apart from "offline" and from "token
+            // revoked": something IS answering as this peer, and it cannot
+            // prove it holds the key this record was paired with.
+            status = "That Mac couldn't prove it holds this peer's key. Forget this peer and pair again."
+        case .idle: status = "Not connected"
         }
+        guard !peer.isVerified else { return status }
+        // Records paired before identity verification shipped. They still
+        // connect, but nothing binds them to the Mac they name, so say so
+        // rather than let them look the same as a verified peer.
+        return status + " · Unverified pairing — forget and pair again to secure it."
     }
 
     private func addPeer() {
@@ -467,6 +478,10 @@ struct RemoteServerPane: View {
             return "Paired, but that Mac couldn't pair back to confirm it. Try again — it may need to reach this Mac at one of the addresses above."
         case .cancelled:
             return "Cancelled — that peer was forgotten while pairing was still in progress."
+        case .identityUnproven:
+            return "That Mac answered with a key it couldn't prove it holds. Nothing was paired."
+        case .identityRebindRefused:
+            return "You're already paired with that Mac under different key material, so nothing was changed. If it was reinstalled, forget the existing peer first, then pair again."
         }
     }
 

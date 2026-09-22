@@ -29,6 +29,12 @@ final class RemoteServer {
     private var originPolicy: RemoteOriginPolicy
     private let identityProvider: @MainActor () -> RemoteServerIdentity
     private let diagnosticsProvider: @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot
+    /// Signs peer identity challenges — on `/pair`, so a record can be pinned
+    /// to key material the peer had to possess, and on the socket, so every
+    /// later connection has to prove possession again. Nil means this server
+    /// has no identity key: pairing still works, but the resulting record
+    /// stays unverified and phase 3 will not carry sessions over it.
+    private let signer: (any RemoteIdentitySigning)?
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
@@ -66,7 +72,8 @@ final class RemoteServer {
         },
         identity: @escaping @MainActor () -> RemoteServerIdentity = {
             RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
-        }
+        },
+        signer: (any RemoteIdentitySigning)? = nil
     ) {
         self.pairing = pairing
         self.assets = assets
@@ -75,6 +82,7 @@ final class RemoteServer {
         self.originPolicy = originPolicy
         self.diagnosticsProvider = diagnostics
         self.identityProvider = identity
+        self.signer = signer
     }
 
     /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
@@ -208,6 +216,13 @@ final class RemoteServer {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
         let identity = self.identityProvider
+        let signer = self.signer
+        // Both the pairing reply and the socket sign with the SAME key over
+        // the SAME `serverId` this server advertises, so a record pinned at
+        // pairing time is exactly what later sockets are checked against.
+        let proveIdentity: @MainActor (String) -> RemoteIdentityProof? = { challenge in
+            signer?.proof(challenge: challenge, serverId: identity().serverId)
+        }
         var configured = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
@@ -217,6 +232,7 @@ final class RemoteServer {
         configured.acceptsPeers = { identity().federationEnabled }
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
         configured.identity = identity
+        configured.identityProof = proveIdentity
         let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(
@@ -244,6 +260,7 @@ final class RemoteServer {
                 RemoteSessionGateway(provider: provider, send: send)
             },
             makeHello: { RemoteServerMessage.hello(identity()) },
+            identityProof: proveIdentity,
             onAuthenticated: { [weak self] conn, did in
                 Task { @MainActor in
                     guard let self else { return }

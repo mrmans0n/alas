@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Network
+import CryptoKit
 @testable import Alas
 
 @MainActor
@@ -116,7 +117,8 @@ struct RemotePeerConnectionTests {
     private func startServer(pairing: RemotePairingService,
                              provider: RemoteSessionsProvider = FakeSessionsProvider(),
                              serverId: String? = nil,
-                             helloServerId: String = "srv-a") async throws -> (RemoteServer, String) {
+                             helloServerId: String = "srv-a",
+                             signer: (any RemoteIdentitySigning)? = nil) async throws -> (RemoteServer, String) {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
@@ -125,7 +127,8 @@ struct RemotePeerConnectionTests {
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
                                           usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
             },
-            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", hubEnabled: false, federationEnabled: true) },
+            signer: signer
         )
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
@@ -323,6 +326,156 @@ struct RemotePeerConnectionTests {
         defer { link.disconnect() }
         try await waitUntil { link.state == .identityMismatch(expected: "srv-elsewhere", actual: "srv-a") }
         #expect(!events.states.contains { if case .incompatible = $0 { return true } else { return false } })
+    }
+
+    // MARK: identity proof on the traffic socket
+
+    /// A signer with a key the test controls, so a link can be pinned to it
+    /// (or deliberately to a different one).
+    @MainActor
+    private final class StubSigner: RemoteIdentitySigning {
+        let key: Curve25519.Signing.PrivateKey
+        var proofCalls = 0
+        init(key: Curve25519.Signing.PrivateKey = Curve25519.Signing.PrivateKey()) { self.key = key }
+        var publicKey: String { RemoteIdentityCrypto.publicKeyString(key.publicKey) }
+        func proof(challenge: String, serverId: String) -> RemoteIdentityProof? {
+            proofCalls += 1
+            return RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key)
+        }
+    }
+
+    @Test func aPinnedLinkGoesOnlineOnlyAfterTheSocketProvesTheKey() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let signer = StubSigner()
+        let (server, origin) = try await startServer(pairing: pairing, signer: signer)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: signer.publicKey,
+                                        config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .online }
+        #expect(signer.proofCalls == 1)
+        #expect(events.hellos == ["srv-a"])
+    }
+
+    // The heart of the issue: whoever answers the address can report the
+    // right `serverId` — it is self-declared — so the socket has to prove
+    // possession of the key the record was pinned to. A Mac that cannot is
+    // refused, and the refusal is its own state, distinguishable from
+    // "offline" and from "token revoked".
+    @Test func aSocketThatCannotProveThePinnedKeyIsRefused() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        // The server signs with its own key; the link is pinned to another.
+        let (server, origin) = try await startServer(pairing: pairing, signer: StubSigner())
+        defer { server.stop() }
+        let pinned = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: pinned,
+                                        config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityUnproven }
+        #expect(!events.states.contains(.online))
+        #expect(!events.states.contains(.unauthorized))
+        // Nothing about the record may be adopted from a socket on its way
+        // to being refused — not even the cosmetic name.
+        #expect(events.hellos.isEmpty)
+    }
+
+    // An older peer has no key to sign with at all. Same refusal: a pinned
+    // record's link must never fall back to "connect anyway".
+    @Test func aPeerThatOffersNoProofAtAllIsRefusedWhenTheRecordIsPinned() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing, signer: nil)
+        defer { server.stop() }
+        let pinned = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: pinned,
+                                        config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityUnproven }
+        #expect(!events.states.contains(.online))
+    }
+
+    // Regression: `serverId` in `hello` is still just a claim at the point
+    // the version is read. An origin reporting the expected `serverId`
+    // alongside an INCOMPATIBLE version, but unable to prove the pinned
+    // key, must be skipped like any other unproven origin — not allowed to
+    // make the whole attempt terminal on the strength of an unverified
+    // version claim, which would strand a link whose real peer might still
+    // answer elsewhere.
+    @Test func anUnprovenOriginWithAnIncompatibleVersionIsSkippedNotTerminal() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing, signer: StubSigner())
+        defer { server.stop() }
+        let pinned = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let events = Events()
+        // `localVersion: 99` makes this server's protocol version look
+        // incompatible too — the OLD code trusted the version check ahead
+        // of the identity proof and would settle on `.incompatible` (a
+        // terminal state) even though nothing here proved it was really
+        // the pinned peer.
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: pinned,
+                                        config: fastConfig(localVersion: 99)) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityUnproven }
+        #expect(!events.states.contains { if case .incompatible = $0 { return true } else { return false } })
+    }
+
+    // Records paired before verification shipped have nothing pinned. They
+    // must keep connecting exactly as before — an upgrade that silently
+    // broke every existing pairing would be worse than the gap it closes —
+    // and the peer is asked for no proof at all.
+    @Test func anUnpinnedRecordConnectsWithoutAskingForAProof() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let signer = StubSigner()
+        let (server, origin) = try await startServer(pairing: pairing, signer: signer)
+        defer { server.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: nil,
+                                        config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .online }
+        #expect(signer.proofCalls == 0)
+    }
+
+    // A pinned link that failed at one origin must still try the rest: a
+    // reassigned address is not a reason to strand a peer that is still
+    // reachable somewhere else in its list.
+    @Test func aFailedProofAtOneOriginDoesNotStopTheRemainingOnes() async throws {
+        // One pairing service behind both servers, so the SAME token is
+        // accepted at either address and the proof is the only thing that
+        // tells the two apart.
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let realSigner = StubSigner()
+        let (impostor, impostorOrigin) = try await startServer(pairing: pairing, signer: StubSigner())
+        defer { impostor.stop() }
+        let (real, realOrigin) = try await startServer(pairing: pairing, signer: realSigner)
+        defer { real.stop() }
+        let events = Events()
+        let link = RemotePeerConnection(origins: [impostorOrigin, realOrigin], lastOrigin: impostorOrigin,
+                                        token: token, expectedServerId: "srv-a",
+                                        expectedPublicKey: realSigner.publicKey,
+                                        config: fastConfig()) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .online }
+        #expect(link.lastOrigin == realOrigin)
     }
 
     @Test func forwardsServerMessagesAfterHello() async throws {

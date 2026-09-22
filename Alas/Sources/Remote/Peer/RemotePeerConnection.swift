@@ -12,7 +12,9 @@ protocol RemotePeerConnecting: AnyObject {
 /// last good origin then the rest with a handshake timeout, expect `hello`
 /// first, answer `helloAck`, tell "revoked" from "unreachable" with a
 /// `/health` probe, and back off between attempts. On top of that it refuses
-/// any socket whose `hello` reports an identity other than `expectedServerId`.
+/// any socket whose `hello` reports an identity other than `expectedServerId`,
+/// and — when the record is pinned to key material — any socket that cannot
+/// sign a fresh challenge with `expectedPublicKey`.
 ///
 /// **The owner must call `disconnect()`.** Dropping the last reference is not
 /// enough: an in-flight `run()` resolves its weak `self` to a strong one for
@@ -35,6 +37,13 @@ final class RemotePeerConnection: RemotePeerConnecting {
         /// record now describes a Mac that is not there, which only the user
         /// can resolve by forgetting the peer and pairing again.
         case identityMismatch(expected: String, actual: String)
+        /// The socket reported the right `serverId` but could not sign this
+        /// link's challenge with the key its record was pinned to. Distinct
+        /// from `offline` (nothing answered), from `unauthorized` (the peer
+        /// answered and refused our token) and from `identityMismatch` (a
+        /// different Mac answered and said so): here something is answering
+        /// AS the peer without holding the peer's key.
+        case identityUnproven
     }
 
     enum Event {
@@ -63,6 +72,13 @@ final class RemotePeerConnection: RemotePeerConnecting {
     /// and a socket whose `hello` reports a different id is refused outright
     /// rather than adopted.
     private let expectedServerId: String?
+    /// The key this peer's record is pinned to. When set, the socket must
+    /// sign a fresh challenge with it before the link goes online — the
+    /// check that turns `expectedServerId` from a string comparison into
+    /// proof of possession. Nil for a record paired before verification
+    /// shipped: no challenge is sent, the link connects as before, and the
+    /// record stays visibly unverified.
+    private let expectedPublicKey: String?
     private let config: Config
     private let session: URLSession
     private let onEvent: @MainActor (Event) -> Void
@@ -72,12 +88,14 @@ final class RemotePeerConnection: RemotePeerConnecting {
     private var backoff: TimeInterval
 
     init(origins: [String], lastOrigin: String?, token: String, expectedServerId: String? = nil,
+         expectedPublicKey: String? = nil,
          config: Config = Config(), session: URLSession = .shared,
          onEvent: @escaping @MainActor (Event) -> Void) {
         self.origins = origins
         self.lastOrigin = lastOrigin
         self.token = token
         self.expectedServerId = expectedServerId
+        self.expectedPublicKey = expectedPublicKey
         self.config = config
         self.session = session
         self.onEvent = onEvent
@@ -118,12 +136,14 @@ final class RemotePeerConnection: RemotePeerConnecting {
         // `runner` already nil, and nothing would ever move the state again.
         if Task.isCancelled { return }
         setState(.connecting)
-        // An origin whose `hello` proves it is not the peer is skipped, not
-        // fatal: a stale advertised address can have been reassigned while a
-        // later origin still reaches the real peer. Remembered so that, if no
-        // origin ultimately works, the reported state is the more actionable
-        // "wrong Mac answered" rather than a bare "offline".
-        var lastMismatch: (expected: String, actual: String)?
+        // An origin that fails to establish it is the peer — either its
+        // `hello` names someone else, or it cannot prove the pinned key —
+        // is skipped, not fatal: a stale advertised address can have been
+        // reassigned while a later origin still reaches the real peer.
+        // Remembered so that, if no origin ultimately works, the reported
+        // state is the more actionable "something answered AS this peer and
+        // was not it" rather than a bare "offline".
+        var lastIdentityFailure: State?
         var ordered: [String] = []
         for origin in [lastOrigin].compactMap({ $0 }) + origins where !ordered.contains(origin) {
             ordered.append(origin)
@@ -211,18 +231,41 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // peer is still reachable elsewhere in it.
             if let expectedServerId, serverId != expectedServerId {
                 candidate.cancel(with: .policyViolation, reason: nil)
-                lastMismatch = (expected: expectedServerId, actual: serverId)
+                lastIdentityFailure = .identityMismatch(expected: expectedServerId, actual: serverId)
                 continue
             }
-            // This origin's identity checked out, so any mismatch seen at an
-            // EARLIER origin in this same attempt no longer describes what's
-            // wrong: it would misreport a normal disconnect later in this
-            // block as an identity problem with the Mac we are, in fact,
-            // correctly talking to.
-            lastMismatch = nil
+            // This origin's `serverId` claim checked out, so any identity
+            // failure seen at an EARLIER origin in this same attempt no
+            // longer describes what's wrong: it would misreport a normal
+            // disconnect later in this block as an identity problem with
+            // the Mac we are, in fact, correctly talking to.
+            lastIdentityFailure = nil
+            // The `helloAck` doubles as the challenge when this record is
+            // pinned to a key. Nothing about this socket is adopted — not
+            // the origin, not the name, not the protocol version — until
+            // the answer verifies: an impostor that got this far must not be
+            // able to rewrite the record on its way to being refused.
+            //
+            // Checked BEFORE the version check below, not after: `serverId`
+            // above is still just a claim, so a stale or malicious origin
+            // reporting the expected id alongside an arbitrary version could
+            // otherwise make the WHOLE attempt terminal — on the strength of
+            // an unverified claim — before a later origin holding the real
+            // peer's key is ever tried. Only a possession-proven endpoint's
+            // version may decide that.
+            if !(await proveIdentity(on: candidate, serverId: serverId)) {
+                candidate.cancel(with: .policyViolation, reason: nil)
+                if Task.isCancelled { return }
+                lastIdentityFailure = .identityUnproven
+                continue
+            }
+            if Task.isCancelled {
+                candidate.cancel(with: .goingAway, reason: nil)
+                return
+            }
             // Identity is confirmed at this point, so an incompatible
             // version genuinely means THIS peer cannot be talked to yet —
-            // unlike the identity check above, this is fatal for the whole
+            // unlike the identity checks above, this is fatal for the whole
             // attempt rather than just this origin.
             if version != config.localProtocolVersion {
                 candidate.cancel(with: .goingAway, reason: nil)
@@ -242,9 +285,6 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 onEvent(.originChanged(origin))
             }
             onEvent(.hello(serverId: serverId, name: name, protocolVersion: version, federationEnabled: federationEnabled))
-            if let ack = try? JSONEncoder().encode(RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion)) {
-                candidate.send(.data(ack)) { _ in }
-            }
             backoff = config.initialBackoff
             setState(.online)
             await pump(candidate)
@@ -253,12 +293,58 @@ final class RemotePeerConnection: RemotePeerConnecting {
             // this attempt owns — never whatever happens to be current.
             closeSocket(.goingAway, ifCurrent: candidate)
             if Task.isCancelled { return }
-            scheduleReconnect(reportedState: lastMismatch.map { State.identityMismatch(expected: $0.expected, actual: $0.actual) } ?? .offline)
+            scheduleReconnect(reportedState: lastIdentityFailure ?? .offline)
             return
         }
         if Task.isCancelled { return }
-        scheduleReconnect(reportedState: lastMismatch.map { State.identityMismatch(expected: $0.expected, actual: $0.actual) } ?? .offline)
+        scheduleReconnect(reportedState: lastIdentityFailure ?? .offline)
     }
+
+    /// Sends the `helloAck` and, when this record is pinned to a key, refuses
+    /// to continue until the socket signs a challenge with it.
+    ///
+    /// Returns true when the peer proved itself, or when there is nothing to
+    /// prove against — an unpinned (pre-verification) record connects exactly
+    /// as it did before rather than being locked out by an upgrade.
+    ///
+    /// The proof is demanded on THIS socket, the one that will carry traffic.
+    /// A side-channel check would only tell us that something at this address
+    /// holds the key, not that this connection does.
+    private func proveIdentity(on socket: URLSessionWebSocketTask, serverId: String) async -> Bool {
+        guard let expectedPublicKey else {
+            if let ack = try? JSONEncoder().encode(
+                RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion)) {
+                socket.send(.data(ack)) { _ in }
+            }
+            return true
+        }
+        let challenge = RemoteIdentityCrypto.randomChallenge()
+        guard let ack = try? JSONEncoder().encode(
+            RemoteClientMessage.helloAck(protocolVersion: config.localProtocolVersion, challenge: challenge))
+        else { return false }
+        socket.send(.data(ack)) { _ in }
+        // A peer that has nothing else to say answers with the proof and
+        // nothing else, but `broadcastHello` can push an unrelated frame at
+        // any moment. Skip past a few of those rather than reading one
+        // frame and declaring failure; nothing is lost by discarding them,
+        // since this link has subscribed to nothing yet.
+        for _ in 0..<Self.maxFramesBeforeProof {
+            if Task.isCancelled { return false }
+            guard case .message(let message) = await receive(from: socket, timeout: config.handshakeTimeout) else {
+                return false
+            }
+            guard case .identityProof(let proofChallenge, let publicKey, let signature) = message else { continue }
+            return RemoteIdentityCrypto.verify(
+                RemoteIdentityProof(challenge: proofChallenge, publicKey: publicKey, signature: signature),
+                serverId: serverId, expectedPublicKey: expectedPublicKey, challenge: challenge)
+        }
+        return false
+    }
+
+    /// How many non-proof frames a peer may send before its proof. Bounded so
+    /// a peer that answers a challenge with an endless stream of other frames
+    /// cannot hold the handshake open indefinitely.
+    private static let maxFramesBeforeProof = 4
 
     private func pump(_ socket: URLSessionWebSocketTask) async {
         while !Task.isCancelled {

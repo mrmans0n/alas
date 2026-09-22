@@ -49,6 +49,11 @@ struct RemoteHTTPResponder {
     /// pairing reply and the socket that follows it can never disagree.
     /// Nil means "no identity configured" and omits both keys from the reply.
     var identity: (@MainActor () -> RemoteServerIdentity)?
+    /// Signs the `challenge` a pairing peer sends, so the record it writes
+    /// can be pinned to key material this Mac had to possess — rather than
+    /// to a key string anyone could have copied from a public advertisement.
+    /// Shared with the socket's own proof, so both prove the same key.
+    var identityProof: (@MainActor (String) -> RemoteIdentityProof?)?
 
     func response(for req: HTTPRequest, body: Data) -> Data {
         let cors = corsHeaders(for: req)
@@ -112,11 +117,20 @@ struct RemoteHTTPResponder {
             let code: String
             let deviceName: String
             let peer: RemotePeerAdvertisement?
+            /// A nonce the pairing peer minted. Present only for peer
+            /// requests; browsers pin nothing and send none.
+            let challenge: String?
         }
         struct PairReply: Encodable {
             let token: String
             let serverId: String?
             let name: String?
+            /// The key the peer should pin this Mac to, and a signature over
+            /// its own challenge proving this Mac holds the private half.
+            /// Both absent when no key is configured, which leaves the
+            /// resulting record unverified rather than falsely verified.
+            let publicKey: String?
+            let signature: String?
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
                                      body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
@@ -139,7 +153,12 @@ struct RemoteHTTPResponder {
             guard peer.origins.count <= RemotePairingLink.maxOrigins,
                   !peer.serverId.isEmpty,
                   peer.name.count <= Self.maxPeerTextLength,
-                  pr.deviceName.count <= Self.maxPeerTextLength
+                  pr.deviceName.count <= Self.maxPeerTextLength,
+                  // An advertised key that is not a well-formed Ed25519 one
+                  // can never be verified, so it would only ever be stored
+                  // as an unusable string the pair-back then has to reject.
+                  // Refuse it here, while the code is still unconsumed.
+                  RemotePeerAdvertisement.isPlausiblePublicKey(peer.publicKey)
             else { return forbidden("peer rejected") }
             // A peer whose advertised identity matches this Mac's own would
             // have both reciprocal legs loop back into this same server,
@@ -155,16 +174,25 @@ struct RemoteHTTPResponder {
             token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
-                counterCode: peer.counterCode, localDeviceId: result.deviceId, redeemedCode: pr.code))
+                peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
+                localDeviceId: result.deviceId, redeemedCode: pr.code))
         } else {
             guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued
         }
         let id = identity?()
+        // Signed only when the caller asked: the challenge is the peer's
+        // own, so a reply carrying a signature over anything else would
+        // prove nothing and only invite a caller to accept it as if it did.
+        let proof = pr.challenge.flatMap { challenge in
+            challenge.isEmpty ? nil : identityProof?(challenge)
+        }
         let reply = PairReply(
             token: token,
             serverId: id?.serverId.isEmpty == false ? id?.serverId : nil,
-            name: id.map(\.name))
+            name: id.map(\.name),
+            publicKey: proof?.publicKey,
+            signature: proof?.signature)
         let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
         return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }

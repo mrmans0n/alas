@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 @testable import Alas
 
 @MainActor
@@ -104,7 +105,8 @@ struct RemoteHTTPResponderTests {
         var requests: [RemotePeerPairingRequest] = []
     }
 
-    private func makePeerResponder(pairing: RemotePairingService, accepts: Bool, sink: PeerSink) -> RemoteHTTPResponder {
+    private func makePeerResponder(pairing: RemotePairingService, accepts: Bool, sink: PeerSink,
+                                   signingKey: Curve25519.Signing.PrivateKey? = nil) -> RemoteHTTPResponder {
         var responder = RemoteHTTPResponder(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
@@ -116,7 +118,88 @@ struct RemoteHTTPResponderTests {
         responder.acceptsPeers = { accepts }
         responder.onPeerPaired = { sink.requests.append($0) }
         responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) }
+        if let signingKey {
+            responder.identityProof = { challenge in
+                RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: signingKey)
+            }
+        }
         return responder
+    }
+
+    /// The `/pair` reply is where a record's key binding is committed to, so
+    /// the key must arrive WITH a signature over the caller's own challenge.
+    /// A key alone is public information and would prove nothing.
+    @Test func pairReplySignsTheCallersChallenge() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let challenge = RemoteIdentityCrypto.randomChallenge()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","challenge":"\#(challenge)"}"#.utf8)
+        let out = makePeerResponder(pairing: pairing, accepts: true, sink: PeerSink(), signingKey: key)
+            .response(for: request("POST", "/pair"), body: body)
+        let json = try #require(String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n").last)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let publicKey = try #require(object["publicKey"] as? String)
+        let signature = try #require(object["signature"] as? String)
+        #expect(publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
+        #expect(RemoteIdentityCrypto.verify(
+            RemoteIdentityProof(challenge: challenge, publicKey: publicKey, signature: signature),
+            serverId: "srv-a", expectedPublicKey: publicKey, challenge: challenge))
+    }
+
+    // Nothing to sign means nothing signed: a reply carrying a signature
+    // over anything but the caller's own challenge would only invite a
+    // caller to accept it as proof of something it is not.
+    @Test func pairReplyOmitsTheProofWhenNoChallengeWasSent() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"phone"}"#.utf8)
+        let out = makePeerResponder(pairing: pairing, accepts: true, sink: PeerSink(),
+                                    signingKey: Curve25519.Signing.PrivateKey())
+            .response(for: request("POST", "/pair"), body: body)
+        let json = try #require(String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n").last)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["publicKey"] == nil)
+        #expect(object["signature"] == nil)
+    }
+
+    // A build with no identity key pairs without one rather than inventing
+    // something: the far side's record is then unverified, not wrongly bound.
+    @Test func pairReplyOmitsTheProofWhenThisMacHasNoKey() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","challenge":"abc"}"#.utf8)
+        let out = makePeerResponder(pairing: pairing, accepts: true, sink: PeerSink())
+            .response(for: request("POST", "/pair"), body: body)
+        let json = try #require(String(decoding: out, as: UTF8.self).components(separatedBy: "\r\n\r\n").last)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(object["publicKey"] == nil)
+    }
+
+    // An advertised key that could never be verified is refused while the
+    // code is still unconsumed, rather than stored as an unusable string.
+    @Test func pairWithAMalformedPublicKeyIsRejectedAndLeavesTheCodeRedeemable() {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://a:1"],"publicKey":"not-a-key"}}"#.utf8)
+        let out = text(makePeerResponder(pairing: pairing, accepts: true, sink: PeerSink())
+            .response(for: request("POST", "/pair"), body: body))
+        #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.isEmpty)
+        #expect((try? pairing.redeem(code: code, deviceName: "phone")) != nil)
+    }
+
+    // The advertised key has to reach the app, or the inbound side has
+    // nothing to cross-check its own pair-back against.
+    @Test func theAdvertisedKeyIsHandedToTheApp() throws {
+        let key = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        let code = pairing.beginPairing()
+        let body = Data(#"{"code":"\#(code)","deviceName":"Mac B","peer":{"serverId":"srv-b","name":"Mac B","origins":["http://a:1"],"counterCode":"C0DE","publicKey":"\#(key)"}}"#.utf8)
+        _ = makePeerResponder(pairing: pairing, accepts: true, sink: sink)
+            .response(for: request("POST", "/pair"), body: body)
+        #expect(sink.requests.first?.peerPublicKey == key)
     }
 
     @Test func pairReplyCarriesServerIdentity() throws {

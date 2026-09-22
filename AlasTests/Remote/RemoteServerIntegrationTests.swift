@@ -1279,6 +1279,51 @@ struct RemoteServerIntegrationTests {
         #expect(sink.requests.first?.counterCode == "X")
     }
 
+    // Regression: any authenticated browser or peer could send a `helloAck`
+    // challenge up to the WebSocket message limit and have it forwarded
+    // straight into CryptoKit signing on the main actor, up to
+    // `maxIdentityProofs` times per connection — hashing and signing
+    // attacker-controlled megabytes while freezing UI work. An oversized
+    // challenge must be dropped before any signature is even attempted: no
+    // `identityProof` reply for it, and the connection stays alive and
+    // responsive to everything after it.
+    @Test func anOversizedIdentityChallengeIsDroppedRatherThanSigned() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) },
+            signer: RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+        defer { task.cancel(with: .goingAway, reason: nil) }
+        _ = try await receiveServerMessage(task)   // hello
+
+        let oversized = String(repeating: "a", count: 5_000_000)
+        let ack = RemoteClientMessage.helloAck(protocolVersion: RemoteProtocolVersion.current, challenge: oversized)
+        try await task.send(.data(JSONEncoder().encode(ack)))
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))
+
+        // The only reply that can ever arrive is the one `listSessions`
+        // earns. A signed `identityProof` for the oversized challenge would
+        // arrive first if the length were never checked.
+        let reply = try await receiveServerMessage(task)
+        guard case .sessionList = reply else {
+            Issue.record("expected sessionList, got \(reply) — an oversized challenge must never be signed")
+            return
+        }
+    }
+
     private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()
