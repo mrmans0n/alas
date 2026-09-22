@@ -622,7 +622,10 @@ final class AppState {
             serverId: config.remote.serverId,
             name: remoteDisplayName,
             hubEnabled: config.remote.hubEnabled,
-            federationEnabled: config.remote.federationEnabled
+            federationEnabled: config.remote.federationEnabled,
+            // Only reach for the lazy manager when a server is up and the
+            // flag is on, for the same reason `syncRemotePeers` does.
+            peers: config.remote.federationEnabled && remoteServer != nil ? remotePeers.helloPeers : []
         )
     }
 

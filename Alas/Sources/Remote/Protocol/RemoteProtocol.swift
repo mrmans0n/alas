@@ -7,18 +7,32 @@ enum RemoteProtocolVersion {
     static let current = 1
 }
 
+/// One of the sending Mac's peers, as reported in `hello` so a client can
+/// render the gateway's peer list without a separate request. `state` is
+/// `"online"` only when that peer's sessions are actually reachable through
+/// this Mac; `"unverified"` marks a record that connects but is not pinned
+/// to a proven key, and the rest mirror `RemotePeerConnection.State`.
+struct RemoteHelloPeer: Codable, Equatable, Sendable {
+    let serverId: String
+    let name: String
+    let state: String
+}
+
 /// What a Mac says about itself in the first frame of every socket.
 struct RemoteServerIdentity: Equatable, Sendable {
     let serverId: String
     let name: String
     let hubEnabled: Bool
     let federationEnabled: Bool
+    let peers: [RemoteHelloPeer]
 
-    init(serverId: String, name: String, hubEnabled: Bool, federationEnabled: Bool = false) {
+    init(serverId: String, name: String, hubEnabled: Bool, federationEnabled: Bool = false,
+         peers: [RemoteHelloPeer] = []) {
         self.serverId = serverId
         self.name = name
         self.hubEnabled = hubEnabled
         self.federationEnabled = federationEnabled
+        self.peers = peers
     }
 }
 
@@ -396,7 +410,8 @@ extension RemoteClientMessage {
 /// Server → client. `type` discriminates.
 enum RemoteServerMessage: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
-    case hello(protocolVersion: Int, serverId: String, name: String, hubEnabled: Bool, federationEnabled: Bool = false)
+    case hello(protocolVersion: Int, serverId: String, name: String, hubEnabled: Bool,
+               federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [])
     /// Answer to a `helloAck` that carried a challenge: this Mac's public
     /// key and a signature over the asking peer's own nonce. Sent on the
     /// socket that will carry traffic, so what is proved is the identity of
@@ -465,7 +480,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers
         case challenge, publicKey, signature
     }
 
@@ -478,7 +493,8 @@ extension RemoteServerMessage: Codable {
                 serverId: try c.decode(String.self, forKey: .serverId),
                 name: try c.decode(String.self, forKey: .name),
                 hubEnabled: try c.decodeIfPresent(Bool.self, forKey: .hubEnabled) ?? false,
-                federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false)
+                federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false,
+                peers: try c.decodeIfPresent([RemoteHelloPeer].self, forKey: .peers) ?? [])
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),
@@ -660,13 +676,14 @@ extension RemoteServerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .hello(let protocolVersion, let serverId, let name, let hubEnabled, let federationEnabled):
+        case .hello(let protocolVersion, let serverId, let name, let hubEnabled, let federationEnabled, let peers):
             try c.encode("hello", forKey: .type)
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(serverId, forKey: .serverId)
             try c.encode(name, forKey: .name)
             try c.encode(hubEnabled, forKey: .hubEnabled)
             try c.encode(federationEnabled, forKey: .federationEnabled)
+            if !peers.isEmpty { try c.encode(peers, forKey: .peers) }
         case .identityProof(let challenge, let publicKey, let signature):
             try c.encode("identityProof", forKey: .type)
             try c.encode(challenge, forKey: .challenge)
@@ -860,6 +877,7 @@ extension RemoteServerMessage {
             serverId: identity.serverId,
             name: identity.name,
             hubEnabled: identity.hubEnabled,
-            federationEnabled: identity.federationEnabled)
+            federationEnabled: identity.federationEnabled,
+            peers: identity.peers)
     }
 }

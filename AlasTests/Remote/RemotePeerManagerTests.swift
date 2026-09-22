@@ -1637,6 +1637,22 @@ struct RemotePeerManagerTests {
         #expect(unverified.sent.isEmpty)
     }
 
+    @Test func helloPeersReportEveryRecordWithItsLinkState() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer(), verifiedPeer(id: "p3", serverId: "srv-c")])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        manager.connectAll()
+        try #require(links.byPeerId["p1"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p2"]).emit(.stateChanged(.online))
+        try #require(links.byPeerId["p3"]).emit(.stateChanged(.identityUnproven))
+        #expect(manager.helloPeers == [
+            RemoteHelloPeer(serverId: "srv-a", name: "Mac A", state: "online"),
+            RemoteHelloPeer(serverId: "srv-old", name: "Old Mac", state: "unverified"),
+            RemoteHelloPeer(serverId: "srv-c", name: "Mac A", state: "identityUnproven"),
+        ])
+    }
+
     @Test func forgetAndDisconnectAllAnnounceAvailabilityChanges() throws {
         let store = InMemoryPeerStore()
         store.save([verifiedPeer(), verifiedPeer(id: "p3", serverId: "srv-c")])

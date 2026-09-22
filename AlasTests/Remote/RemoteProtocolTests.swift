@@ -907,6 +907,26 @@ struct RemoteProtocolTests {
         #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
     }
 
+    @Test func helloCarriesPeersOnlyWhenThereAreAny() throws {
+        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let noneObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(none)) as? [String: Any])
+        #expect(noneObject["peers"] == nil)
+
+        let peers = [RemoteHelloPeer(serverId: "srv-b", name: "Mac B", state: "online"),
+                     RemoteHelloPeer(serverId: "srv-c", name: "Mac C", state: "offline")]
+        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false,
+                                                                  federationEnabled: true, peers: peers))
+        #expect(try roundTrip(some) == some)
+        let someObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(some)) as? [String: Any])
+        let encodedPeers = try #require(someObject["peers"] as? [[String: Any]])
+        #expect(encodedPeers.map { $0["serverId"] as? String } == ["srv-b", "srv-c"])
+        #expect(encodedPeers.map { $0["state"] as? String } == ["online", "offline"])
+
+        let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+                == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false))
+    }
+
     @Test func sessionSummaryOmitsServerFieldsWhenLocal() throws {
         let local = RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: true)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(local)) as? [String: Any])

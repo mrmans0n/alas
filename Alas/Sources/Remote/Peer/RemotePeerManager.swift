@@ -943,4 +943,26 @@ extension RemotePeerManager: FederatedPeerLinks {
               carriesSessions(peerId: peer.id) else { return }
         connections[peer.id]?.send(message)
     }
+
+    /// What `hello` says about this Mac's peers. Every record is listed, in
+    /// store order, so a client can show a peer that exists but is not
+    /// reachable; only `"online"` means its sessions come through here.
+    var helloPeers: [RemoteHelloPeer] {
+        peers.map { peer in
+            RemoteHelloPeer(serverId: peer.serverId, name: peer.name, state: helloState(for: peer))
+        }
+    }
+
+    private func helloState(for peer: RemotePeer) -> String {
+        switch states[peer.id] ?? .idle {
+        case .online: return peer.isVerified ? "online" : "unverified"
+        case .idle: return "idle"
+        case .connecting: return "connecting"
+        case .offline: return "offline"
+        case .unauthorized: return "unauthorized"
+        case .incompatible: return "incompatible"
+        case .identityMismatch: return "identityMismatch"
+        case .identityUnproven: return "identityUnproven"
+        }
+    }
 }
