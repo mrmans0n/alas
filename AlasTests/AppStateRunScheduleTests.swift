@@ -472,7 +472,20 @@ struct AppStateRunScheduleTests {
         )
         state.config.worktrees.rootPath = repo.deletingLastPathComponent().appendingPathComponent("wts-\(UUID().uuidString)").path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}/{branch}"
-        state.config.agents.builtinState["claude"] = BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)
+        // "term-agent" is a custom agent, so it carries no ACP launch spec
+        // and stands in for the terminal launch. OMP speaks ACP; its binary
+        // points nowhere so the chat session's attach fails at the setup
+        // check instead of spawning a real agent.
+        state.config.agents.custom = [AgentDefinition(
+            id: "term-agent", displayName: "Term Agent", binary: "term-agent", binaryOverride: nil,
+            promptModeArgs: [], bypassPermissionsFlag: nil, extraTerminalArgs: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )]
+        state.config.agents.builtinState["omp"] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: repo.appendingPathComponent("missing-omp").path,
+            extraTerminalArgs: nil
+        )
         state.agentRegistry = AgentRegistry(
             builtinState: state.config.agents.builtinState,
             customs: state.config.agents.custom,
@@ -489,7 +502,7 @@ struct AppStateRunScheduleTests {
     @Test func compositionCreatesAWorktreeRunsTheScriptThereAndLaunchesTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, locations) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, locations) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.selectWorktree(id: main.id)
@@ -497,7 +510,7 @@ struct AppStateRunScheduleTests {
         var composed = schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(branchTemplate: "sched/{name}-{date}", agentId: "claude")
+            composition: RunScheduleComposition(branchTemplate: "sched/{name}-{date}", agentId: "term-agent")
         )
         composed.name = "Morning"
         let report = await state.runSchedule(composed)
@@ -539,7 +552,7 @@ struct AppStateRunScheduleTests {
     @Test func openingAFiringRunSelectsThatRunsWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.selectWorktree(id: main.id)
@@ -547,7 +560,7 @@ struct AppStateRunScheduleTests {
         let report = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         ))
         await state.flushRunHistoryPersistence()
         #expect(report.outcome == .succeeded)
@@ -572,7 +585,7 @@ struct AppStateRunScheduleTests {
     @Test func openingAFiringRunSwitchesToItsSpace() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
 
         // The project lives in a Space that is not the active one.
@@ -583,7 +596,7 @@ struct AppStateRunScheduleTests {
         let report = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         ))
         await state.flushRunHistoryPersistence()
         let run = try #require(report.runs.first)
@@ -600,13 +613,13 @@ struct AppStateRunScheduleTests {
     @Test func unarchivingAWorktreeRestoresItsHistoryLinks() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
 
         let report = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         ))
         await state.flushRunHistoryPersistence()
         let run = try #require(report.runs.first)
@@ -630,13 +643,13 @@ struct AppStateRunScheduleTests {
     @Test func anArchivedWorktreesRunIsNamedButNotOffered() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
 
         let report = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         ))
         await state.flushRunHistoryPersistence()
         let run = try #require(report.runs.first)
@@ -667,13 +680,13 @@ struct AppStateRunScheduleTests {
     @Test func aRepeatingBranchTemplateStillGetsAFreshWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         let composed = schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "term-agent")
         )
 
         #expect(await state.runSchedule(composed).outcome == .succeeded)
@@ -696,7 +709,7 @@ struct AppStateRunScheduleTests {
     @Test func aTakenDestinationIsSkippedEvenWhenNothingIsOnThisMac() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         // The host holds the first run's worktree while this Mac holds
@@ -710,7 +723,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "term-agent")
         )).outcome
 
         #expect(outcome == .succeeded)
@@ -727,7 +740,7 @@ struct AppStateRunScheduleTests {
     @Test func anUndeterminableDestinationFailsTheRunRatherThanGuessing() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.scheduledDestinationExistence = { _, _ in .unknown }
@@ -737,7 +750,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "term-agent")
         )).outcome
 
         guard case .launchFailed(let message) = outcome else {
@@ -759,13 +772,13 @@ struct AppStateRunScheduleTests {
     @Test func aRetainedBranchIsNotReusedByTheNextRun() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         let composed = schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "claude")
+            composition: RunScheduleComposition(branchTemplate: "nightly", agentId: "term-agent")
         )
 
         #expect(await state.runSchedule(composed).outcome == .succeeded)
@@ -797,14 +810,14 @@ struct AppStateRunScheduleTests {
     @Test func compositionWithoutAScriptJustLaunchesTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, locations) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, locations) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
 
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         )).outcome
         // The archive has to land before the temp repo holding its sqlite
         // file is deleted; unlinking it mid-write fails the write.
@@ -820,7 +833,7 @@ struct AppStateRunScheduleTests {
     @Test func compositionTypesThePromptIntoTheAgentTerminal() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         let typed = TypedTextBox()
@@ -833,7 +846,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(agentId: "claude", prompt: "Fix the\nbuild.", sendsPromptAutomatically: true)
+            composition: RunScheduleComposition(agentId: "term-agent", prompt: "Fix the\nbuild.", sendsPromptAutomatically: true)
         )).outcome
         await state.flushRunHistoryPersistence()
         #expect(outcome == .succeeded)
@@ -850,7 +863,7 @@ struct AppStateRunScheduleTests {
     @Test func aPromptNotSentAutomaticallyIsLeftInTheInput() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let typed = TypedTextBox()
         state.scheduledAgentReadiness = { _ in true }
@@ -862,7 +875,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(agentId: "claude", prompt: "Fix the build.", sendsPromptAutomatically: false)
+            composition: RunScheduleComposition(agentId: "term-agent", prompt: "Fix the build.", sendsPromptAutomatically: false)
         )).outcome
         await state.flushRunHistoryPersistence()
         #expect(outcome == .succeeded)
@@ -875,7 +888,7 @@ struct AppStateRunScheduleTests {
     @Test func aPromptIsNotTypedIntoAShellThatNeverStartedTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         let typed = TypedTextBox()
@@ -888,7 +901,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: nil,
-            composition: RunScheduleComposition(agentId: "claude", prompt: "rm -rf everything", sendsPromptAutomatically: true)
+            composition: RunScheduleComposition(agentId: "term-agent", prompt: "rm -rf everything", sendsPromptAutomatically: true)
         )).outcome
         await state.flushRunHistoryPersistence()
         #expect(outcome == .succeeded)
@@ -896,6 +909,144 @@ struct AppStateRunScheduleTests {
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         // The user was not watching, so the undelivered prompt is reported.
         #expect(state.inAppNotifications.notifications(in: created.id).contains { $0.severity == .error && $0.message.contains("prompt") })
+    }
+
+    /// An ACP-capable agent opens a chat session instead of a terminal. The
+    /// prompt is queued as the session's first message with its line breaks
+    /// intact, and the model is parked for attach; nothing is typed.
+    ///
+    /// The fixture's agent cannot start (its binary points nowhere), which is
+    /// the schedule's business to report: a chat session knows its agent
+    /// never came up, where a terminal could only guess.
+    @Test func anACPCapableAgentGetsAChatSessionWithTheQueuedPrompt() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["omp"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let typed = TypedTextBox()
+        state.scheduledAgentReadiness = { _ in true }
+        state.terminalTextSender = { sessionID, text in
+            typed.append(sessionID: sessionID, text: text)
+            return true
+        }
+        let posted = NotificationBox()
+        state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(
+                agentId: "omp", modelId: "gpt-5", prompt: "Fix the\nbuild.", sendsPromptAutomatically: true
+            )
+        )).outcome
+        await state.flushRunHistoryPersistence()
+
+        #expect(typed.values.isEmpty)
+        let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        let tabs = state.tabs.tabs(forWorktree: created.id)
+        guard case .acpSession(let tab)? = tabs.first, tabs.count == 1 else {
+            Issue.record("Expected exactly one chat tab on the new worktree, got \(tabs)")
+            return
+        }
+        let manager = try #require(state.acpManager(forWorktreeId: created.id))
+        let session = try #require(manager.liveSession(for: tab.sessionId))
+        #expect(session.agentId == "omp")
+        #expect(session.queue.map { ACPSessionRunner.textPreview(of: $0.blocks) } == ["Fix the\nbuild."])
+        #expect(session.composerDraft.isEmpty)
+        // Attach never got as far as applying it, so the request is still parked.
+        #expect(manager.pendingModel[session.id] == "gpt-5")
+        // The worktree is not left retryable: the tab exists and the session
+        // itself carries the reason and the queued prompt.
+        #expect(state.projectsManager.operationState(for: created.id) == nil)
+        guard case .launchFailed(let message) = outcome else {
+            Issue.record("Expected the agent's failure to start to be reported, got \(outcome)")
+            return
+        }
+        #expect(message.contains("could not start"))
+        #expect(state.inAppNotifications.notifications(in: created.id).contains { $0.severity == .error && $0.message.contains("could not start") })
+        #expect(posted.values.map(\.content.title).contains { $0.contains("Nightly") && $0.contains("did not run") })
+    }
+
+    /// A schedule removed while its ACP-capable agent is launching must not
+    /// mutate any prepared session state at all — not just skip the enqueue
+    /// and attach, but never create the session, persist a composer draft,
+    /// or open a tab, since the worktree may already be gone by the time any
+    /// of that would run. Mirrors the terminal path's own `Task.isCancelled`
+    /// guards in `deliverScheduledPrompt`, exercised here through the same
+    /// `launchWorktreeSurface` entry point a schedule uses, with the
+    /// enclosing task cancelled before it runs. Uses `sendsAutomatically:
+    /// false` because that path writes straight to the composer draft
+    /// before any other guard used to run.
+    @Test func aCancelledScheduleNeverTouchesPreparedSessionState() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["omp"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let prepared = PreparedWorktreeACPPrompt(
+            sessionID: "cancelled-session", promptID: UUID(), text: "Do the thing", sendsAutomatically: false
+        )
+
+        let task = Task {
+            try await state.launchWorktreeSurface(
+                .acp(agentId: "omp", preparedPrompt: prepared), worktree: main, project: project
+            )
+        }
+        task.cancel()
+        _ = try? await task.value
+
+        let manager = try #require(state.acpManager(forWorktreeId: main.id))
+        #expect(manager.liveSession(for: prepared.sessionID) == nil)
+        #expect(state.tabs.tabs(forWorktree: main.id).isEmpty)
+    }
+
+    @Test func aChatPromptNotSentAutomaticallyIsLeftInTheComposer() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["omp"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        state.harness.notifications.notificationAdder = { _ in }
+
+        _ = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(agentId: "omp", prompt: "Fix the build.", sendsPromptAutomatically: false)
+        ))
+        await state.flushRunHistoryPersistence()
+
+        let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        guard case .acpSession(let tab)? = state.tabs.tabs(forWorktree: created.id).first else {
+            Issue.record("Expected the chat tab on the new worktree")
+            return
+        }
+        let manager = try #require(state.acpManager(forWorktreeId: created.id))
+        let session = try #require(manager.liveSession(for: tab.sessionId))
+        #expect(session.queue.isEmpty)
+        #expect(session.composerDraft == ACPComposerDraft(segments: [.text("Fix the build.")]))
+        #expect(manager.pendingModel[session.id] == nil)
+    }
+
+    /// The surface is decided by the agent the schedule resolves to, at fire
+    /// time: chat for an agent with an ACP adapter, terminal otherwise.
+    @Test func launchSurfaceFollowsTheAgentsACPSupport() {
+        let composition = RunScheduleComposition(
+            agentId: "claude", modelId: "opus", prompt: "Hi\nthere", sendsPromptAutomatically: false
+        )
+        let promptID = UUID()
+        #expect(AppState.scheduledLaunchSurface(agentId: "claude", composition: composition, sessionID: "s", promptID: promptID)
+            == .acp(agentId: "claude", preparedPrompt: PreparedWorktreeACPPrompt(
+                sessionID: "s", promptID: promptID, text: "Hi\nthere", sendsAutomatically: false, modelID: "opus"
+            )))
+        #expect(AppState.scheduledLaunchSurface(agentId: "term-agent", composition: composition) == .terminal(agentId: "term-agent"))
+        // No prompt still opens the session; there is just nothing to queue.
+        guard case .acp(_, let prepared?) = AppState.scheduledLaunchSurface(agentId: "omp", composition: RunScheduleComposition()) else {
+            Issue.record("Expected a chat session for an ACP-capable agent")
+            return
+        }
+        #expect(prepared.text.isEmpty)
+        #expect(prepared.modelID == nil)
     }
 
     @Test func unavailableAgentLeavesTheWorktreeRetryableAndReportsLaunchFailure() async throws {
@@ -910,7 +1061,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         )).outcome
         // The archive has to land before the temp repo holding its sqlite
         // file is deleted; unlinking it mid-write fails the write.
@@ -923,7 +1074,7 @@ struct AppStateRunScheduleTests {
             Issue.record("Expected a retryable launchFailed state on the new worktree")
             return
         }
-        #expect(surface == .terminal(agentId: "claude"))
+        #expect(surface == .terminal(agentId: "term-agent"))
         #expect(state.inAppNotifications.notifications(in: created.id).contains(where: { $0.severity == .error }))
         // Unattended failures also have to reach Notification Center, not
         // just the in-app toast list nobody is looking at.
@@ -934,7 +1085,7 @@ struct AppStateRunScheduleTests {
     @Test func failingScriptDoesNotLaunchTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         // The fixture's waiter always reports exit 0, so the script step is
         // made to fail at launch instead: an unsupported shell refuses it.
@@ -948,7 +1099,7 @@ struct AppStateRunScheduleTests {
         let outcome = await state.runSchedule(schedule(
             target: .project(id: project.id),
             scriptKey: "repo:setup.sh",
-            composition: RunScheduleComposition(agentId: "claude")
+            composition: RunScheduleComposition(agentId: "term-agent")
         )).outcome
         // The archive has to land before the temp repo holding its sqlite
         // file is deleted; unlinking it mid-write fails the write.

@@ -160,6 +160,10 @@ final class ACPSessionManager: ObservableObject {
     /// `alas mcp --http` process. Not called on `closeSession` (a transient
     /// in-memory unload where a later reattach is expected).
     private let onSessionEnded: (@MainActor (ACPSession.ID) -> Void)?
+    /// Invoked once a session has loaded and the agent has named its models,
+    /// with the normalized model chip items. Feeds `ACPAgentModelCatalog` so
+    /// a session configured before it exists can pick one.
+    private let onModelsObserved: (@MainActor (_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -486,8 +490,10 @@ final class ACPSessionManager: ObservableObject {
         if !accepted { onResult(false) }
     }
 
-    /// Pending model/mode to apply once a runner registers (the writer took over
-    /// but `attach` is still in flight). Keyed by session id. Applied in `attach`.
+    /// Pending model/mode to apply once a runner registers: the writer took
+    /// over but `attach` is still in flight, or the session was created by a
+    /// surface that chose a model before ever attaching (a schedule). Keyed
+    /// by session id. Applied in `attach`, before any queued prompt goes out.
     var pendingModel: [ACPSession.ID: String] = [:]
     var pendingMode: [ACPSession.ID: String] = [:]
 
@@ -662,6 +668,7 @@ final class ACPSessionManager: ObservableObject {
          isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
+         onModelsObserved: (@MainActor (_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil,
          issuePreambleProvider: IssuePreambleProvider? = nil)
@@ -692,6 +699,7 @@ final class ACPSessionManager: ObservableObject {
         self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
         self.clearMCPRegistration = clearMCPRegistration
         self.onSessionEnded = onSessionEnded
+        self.onModelsObserved = onModelsObserved
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.issuePreambleProvider = issuePreambleProvider
@@ -3903,6 +3911,9 @@ extension ACPSessionManager {
                                               self?.onSessionTitleUpdated?(sessionId, title)
                                               self?.changeNotifier.post()
                                           },
+                                          onModelsObserved: { [weak self] agentId, models in
+                                              self?.onModelsObserved?(agentId, models)
+                                          },
                                           onResumeTranscriptTail: { [weak self] in
                                               self?.rememberTranscriptScrollAnchor(
                                                 sessionId: sessionId,
@@ -4356,6 +4367,9 @@ extension ACPSessionManager {
             session.providerCapabilities = initialized.providerCapabilities
             session.availableProviders = providers
             session.contextRestoreWarning = restoreWarning
+            if let models = session.chipState.models?.options {
+                onModelsObserved?(session.agentId, models)
+            }
             guard await persistSessionRemoteId(session) else {
                 session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId
                 if isDisposed {

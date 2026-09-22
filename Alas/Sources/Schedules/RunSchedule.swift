@@ -52,16 +52,22 @@ enum RunScheduleMissedRunPolicy: String, Codable, CaseIterable, Sendable {
 
 /// Optional "new worktree + agent" step. The worktree is created through the
 /// standard creation path (worktree-create script included), the script runs
-/// inside it, and the agent is launched in a terminal on it afterwards.
+/// inside it, and the agent is launched on it afterwards: as an ACP chat
+/// session when the agent speaks ACP, otherwise in a terminal.
 struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     /// Branch name template. Supports `{name}`, `{date}` and `{time}`.
     var branchTemplate: String
     /// Explicit agent, or nil for the project/repo/global default.
     var agentId: String?
-    /// Typed into the agent's terminal once the agent is up. Nil means the
-    /// agent just opens and waits.
+    /// Model the chat session is switched to before the prompt goes out, or
+    /// nil for the agent's own default. Only meaningful for an ACP-capable
+    /// agent; a terminal launch has no channel to ask for one.
+    var modelId: String?
+    /// Handed to the agent once it is up: queued as the first message of a
+    /// chat session, or typed into the terminal. Nil means the agent just
+    /// opens and waits.
     var prompt: String?
-    /// Whether the prompt is submitted as soon as it is typed, or left in
+    /// Whether the prompt is submitted as soon as it is delivered, or left in
     /// the agent's input for the user to send. Meaningless without `prompt`.
     var sendsPromptAutomatically: Bool
 
@@ -70,11 +76,13 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     init(
         branchTemplate: String = RunScheduleComposition.defaultBranchTemplate,
         agentId: String? = nil,
+        modelId: String? = nil,
         prompt: String? = nil,
         sendsPromptAutomatically: Bool = true
     ) {
         self.branchTemplate = branchTemplate
         self.agentId = agentId
+        self.modelId = modelId
         self.prompt = prompt
         self.sendsPromptAutomatically = sendsPromptAutomatically
     }
@@ -107,16 +115,17 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case branchTemplate, agentId, prompt, sendsPromptAutomatically
+        case branchTemplate, agentId, modelId, prompt, sendsPromptAutomatically
     }
 
-    /// Written by hand because the prompt fields arrived after the first
-    /// release: a file without them must still decode, or the lenient
+    /// Written by hand because the prompt and model fields arrived after the
+    /// first release: a file without them must still decode, or the lenient
     /// per-schedule decoder in `RunSchedulesFile` drops the whole schedule.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         branchTemplate = try c.decodeIfPresent(String.self, forKey: .branchTemplate) ?? Self.defaultBranchTemplate
         agentId = try c.decodeIfPresent(String.self, forKey: .agentId)
+        modelId = try c.decodeIfPresent(String.self, forKey: .modelId)
         prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
         sendsPromptAutomatically = try c.decodeIfPresent(Bool.self, forKey: .sendsPromptAutomatically) ?? true
     }

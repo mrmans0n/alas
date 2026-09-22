@@ -150,12 +150,45 @@ enum RunSchedulePresentation {
         "\(scheduleName): the agent runs on \(host), where Alas cannot tell when it is ready, so the prompt was not sent."
     }
 
-    /// What ticking "send automatically" changes, in one line under it.
-    static func promptDeliveryHint(sendsAutomatically: Bool) -> String {
-        sendsAutomatically
-            ? "The agent starts working without waiting for you."
-            : "The prompt is pre-filled in the terminal; you press Enter to send it."
+    /// Where a schedule's agent will open, as far as the editor can tell.
+    enum AgentSurface: Equatable {
+        case chat
+        case terminal
+        /// "Project default": the agent, and so the surface, is only known
+        /// when the schedule fires.
+        case resolvedAtFireTime
     }
+
+    /// Mirrors `AppState.scheduledLaunchSurface`: an ACP-capable agent opens
+    /// a chat session, anything else a terminal.
+    static func agentSurface(agentID: String?) -> AgentSurface {
+        guard let agentID else { return .resolvedAtFireTime }
+        return ACPLaunchCatalog.spec(for: agentID) != nil ? .chat : .terminal
+    }
+
+    /// What ticking "send automatically" changes, in one line under it.
+    static func promptDeliveryHint(sendsAutomatically: Bool, surface: AgentSurface) -> String {
+        if sendsAutomatically { return "The agent starts working without waiting for you." }
+        switch surface {
+        case .chat: return "The prompt is pre-filled in the chat composer; you send it."
+        case .terminal: return "The prompt is pre-filled in the terminal; you press Enter to send it."
+        case .resolvedAtFireTime: return "The prompt is pre-filled in the agent's input; you send it."
+        }
+    }
+
+    /// The one-line summary of the worktree + agent step, under its fields.
+    static func compositionHint(surface: AgentSurface) -> String {
+        let opening: String = switch surface {
+        case .chat: "the agent opens in a chat session there once it succeeds."
+        case .terminal: "the agent opens in a terminal there once it succeeds."
+        case .resolvedAtFireTime: "the agent opens there once it succeeds, in a chat session if it supports ACP and otherwise in a terminal."
+        }
+        return "The worktree-create script runs first; the script above runs in the new worktree; \(opening)"
+    }
+
+    /// Under an empty model picker: the list comes from sessions the agent
+    /// has already opened, so until then there is nothing to choose from.
+    static let modelCatalogEmptyHint = "Open a chat session with this agent once to list its models here."
 
     static func intervalLabel(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())

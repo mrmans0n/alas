@@ -433,6 +433,31 @@ extension AppState {
         }
     }
 
+    /// Where a scheduled agent opens. An agent that speaks ACP gets a chat
+    /// session, which takes the prompt and model as data instead of as
+    /// keystrokes; any other agent gets its terminal. Decided at fire time so
+    /// a "Project default" agent is judged by what it resolves to then.
+    ///
+    /// `text` is the prompt as written: a chat message keeps its line breaks.
+    /// The terminal path still flattens it in `terminalText(for:)`.
+    nonisolated static func scheduledLaunchSurface(
+        agentId: String,
+        composition: RunScheduleComposition,
+        sessionID: ACPSession.ID = UUID().uuidString,
+        promptID: UUID = UUID()
+    ) -> WorktreeLaunchSurface {
+        guard ACPLaunchCatalog.spec(for: agentId) != nil else {
+            return .terminal(agentId: agentId)
+        }
+        return .acp(agentId: agentId, preparedPrompt: PreparedWorktreeACPPrompt(
+            sessionID: sessionID,
+            promptID: promptID,
+            text: composition.prompt ?? "",
+            sendsAutomatically: composition.sendsPromptAutomatically,
+            modelID: composition.modelId
+        ))
+    }
+
     private func launchScheduledAgent(
         for schedule: RunSchedule,
         composition: RunScheduleComposition,
@@ -445,7 +470,7 @@ extension AppState {
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
             return .launchFailed(message)
         }
-        let launchSurface = WorktreeLaunchSurface.terminal(agentId: agentId)
+        let launchSurface = Self.scheduledLaunchSurface(agentId: agentId, composition: composition)
         let tab: Tab?
         do {
             tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
@@ -472,6 +497,11 @@ extension AppState {
             return .launchFailed(error.localizedDescription)
         }
         let agentName = agentRegistry.agents.first { $0.id == agentId }?.displayName ?? agentId
+        if case .acp(_, let prepared?) = launchSurface {
+            return scheduledChatSessionOutcome(
+                prepared, schedule: schedule, worktree: worktree, project: project, agentName: agentName
+            )
+        }
         inAppNotifications.post(
             "\(schedule.name): launched \(agentName) in \(worktree.branch)",
             severity: .success,
@@ -486,6 +516,58 @@ extension AppState {
                 worktree: worktree,
                 host: project.host,
                 agentID: agentId
+            )
+        }
+        return .succeeded
+    }
+
+    /// What became of a scheduled chat session once its launch returned.
+    ///
+    /// The launch opens the tab and attaches; an agent that could not start
+    /// (missing adapter, no login) leaves its reason on the session, and the
+    /// prompt stays queued or in the composer for when the user sorts it out.
+    /// That is a launch failure: unlike a terminal, a chat session knows
+    /// whether its agent came up.
+    ///
+    /// A model the agent refused is not: the agent is running, on its own
+    /// default, and only the choice was lost. Said in the app so the user
+    /// learns why the transcript names a different model.
+    private func scheduledChatSessionOutcome(
+        _ prepared: PreparedWorktreeACPPrompt,
+        schedule: RunSchedule,
+        worktree: Worktree,
+        project: ProjectConfig,
+        agentName: String
+    ) -> RunScheduleOutcome {
+        // Mirrors the terminal path's cancellation handling: the schedule
+        // was removed while the agent was launching, so nothing is wrong —
+        // `openPreparedWorktreeACPSession` bailed before enqueueing the
+        // prompt or attaching, and the session sitting idle is not a
+        // failure worth reporting.
+        guard !Task.isCancelled else {
+            return .skipped(reason: "The schedule was removed while its agent was launching.")
+        }
+        guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
+            let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return .launchFailed(message)
+        }
+        if let reason = session.lastError {
+            let message = "\(agentName) could not start in \(worktree.branch): \(reason)"
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return .launchFailed(message)
+        }
+        inAppNotifications.post(
+            "\(schedule.name): launched \(agentName) in \(worktree.branch)",
+            severity: .success,
+            worktreeID: worktree.id
+        )
+        if let modelID = prepared.modelID, session.currentModel != modelID {
+            let modelName = acpModelCatalog.models(for: session.agentId).first { $0.id == modelID }?.name ?? modelID
+            inAppNotifications.post(
+                "\(schedule.name): \(agentName) did not accept the model \(modelName), so it is using its default.",
+                severity: .error,
+                worktreeID: worktree.id
             )
         }
         return .succeeded

@@ -1,9 +1,17 @@
 import Foundation
 
+/// A chat session to open on a new worktree, decided before the worktree
+/// exists so a retry reuses the same ids instead of queueing twice.
 struct PreparedWorktreeACPPrompt: Equatable, Sendable {
     let sessionID: ACPSession.ID
     let promptID: UUID
     let text: String
+    /// Queued to go out as soon as the agent is ready, or left in the
+    /// composer for the user to send. Meaningless when `text` is empty.
+    var sendsAutomatically = true
+    /// Model to switch the session to before the prompt goes out, or nil for
+    /// the agent's default.
+    var modelID: String? = nil
 }
 
 /// Describes what (if anything) the New Worktree dialog should open in the

@@ -427,7 +427,12 @@ struct RunScheduleEditorView: View {
         return ScheduleChipMenu(title: title) {
             Picker("", selection: Binding(
                 get: { draft.agentID ?? "" },
-                set: { draft.agentID = $0.isEmpty ? nil : $0 }
+                set: { selected in
+                    let agentID = selected.isEmpty ? nil : selected
+                    // A model belongs to the agent it was listed for.
+                    if agentID != draft.agentID { draft.modelID = nil }
+                    draft.agentID = agentID
+                }
             )) {
                 Text("Project default").tag("")
                 ForEach(agents) { agent in
@@ -442,6 +447,44 @@ struct RunScheduleEditorView: View {
             .labelsHidden()
         }
         .accessibilityLabel("Agent")
+    }
+
+    private var agentSurface: RunSchedulePresentation.AgentSurface {
+        RunSchedulePresentation.agentSurface(agentID: draft.agentID)
+    }
+
+    /// Models the agent has advertised in earlier sessions. Like the agent
+    /// picker, a saved id the list no longer carries stays selectable and
+    /// is named as such, rather than silently reading as "Agent default".
+    private var modelPicker: some View {
+        let models = draft.agentID.map { state.acpModelCatalog.models(for: $0) } ?? []
+        let missingModelID = draft.modelID.flatMap { id in
+            models.contains { $0.id == id } ? nil : id
+        }
+        let title: String = {
+            guard let id = draft.modelID else { return "Agent default" }
+            if let model = models.first(where: { $0.id == id }) { return model.name }
+            return "\(id) · not listed"
+        }()
+        return ScheduleChipMenu(title: title) {
+            Picker("", selection: Binding(
+                get: { draft.modelID ?? "" },
+                set: { draft.modelID = $0.isEmpty ? nil : $0 }
+            )) {
+                Text("Agent default").tag("")
+                ForEach(models) { model in
+                    Text(model.name).tag(model.id)
+                }
+                if let missingModelID {
+                    Divider()
+                    Text("\(missingModelID) · not listed").tag(missingModelID)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+        .disabled(models.isEmpty && missingModelID == nil)
+        .accessibilityLabel("Model")
     }
 
     // MARK: - Composition
@@ -471,6 +514,19 @@ struct RunScheduleEditorView: View {
                     Spacer(minLength: 0)
                 }
             }
+            if agentSurface == .chat, let agentID = draft.agentID {
+                DialogField(label: "Model") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 0) {
+                            modelPicker
+                            Spacer(minLength: 0)
+                        }
+                        if state.acpModelCatalog.models(for: agentID).isEmpty {
+                            helpText(RunSchedulePresentation.modelCatalogEmptyHint)
+                        }
+                    }
+                }
+            }
             DialogField(label: "Prompt") {
                 VStack(alignment: .leading, spacing: 8) {
                     PromptField(
@@ -478,10 +534,12 @@ struct RunScheduleEditorView: View {
                         placeholder: "e.g. Run the full test suite, fix any failures, and open a PR summarising the changes."
                     )
                     ScheduleCheckbox(isOn: $draft.sendsPromptAutomatically, label: "Send the prompt automatically when the agent starts")
-                    helpText(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: draft.sendsPromptAutomatically))
+                    helpText(RunSchedulePresentation.promptDeliveryHint(
+                        sendsAutomatically: draft.sendsPromptAutomatically, surface: agentSurface
+                    ))
                 }
             }
-            helpText("The worktree-create script runs first; the script above runs in the new worktree; the agent opens in a terminal there once it succeeds.")
+            helpText(RunSchedulePresentation.compositionHint(surface: agentSurface))
         }
         .padding(.leading, 23)
         .padding(.top, 2)

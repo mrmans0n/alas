@@ -180,12 +180,21 @@ struct RunSchedulePresentationTests {
             target: .allProjects,
             scriptKey: nil,
             trigger: .interval(seconds: 3_600),
-            composition: RunScheduleComposition(agentId: "claude", prompt: "Run the tests.", sendsPromptAutomatically: false)
+            composition: RunScheduleComposition(agentId: "claude", modelId: "opus", prompt: "Run the tests.", sendsPromptAutomatically: false)
         )
         var draft = RunScheduleDraft(schedule: original)
         #expect(draft.prompt == "Run the tests.")
+        #expect(draft.modelID == "opus")
         #expect(!draft.sendsPromptAutomatically)
         #expect(draft.makeSchedule(existing: original) == original)
+
+        // A model was listed for one agent. Falling back to the project
+        // default means the agent is only known at fire time, so the model
+        // cannot follow.
+        draft.agentID = nil
+        #expect(draft.composition?.modelId == nil)
+        draft.agentID = "claude"
+        #expect(draft.composition?.modelId == "opus")
 
         // Whitespace is not a prompt; the agent should just open.
         draft.prompt = "  \n"
@@ -199,6 +208,7 @@ struct RunSchedulePresentationTests {
         let decoded = try? JSONDecoder().decode(RunScheduleComposition.self, from: legacy)
         #expect(decoded == RunScheduleComposition(branchTemplate: "nightly", agentId: "claude"))
         #expect(decoded?.sendsPromptAutomatically == true)
+        #expect(decoded?.modelId == nil)
     }
 
     @Test func weekdayPresetsNameTheRowAndTogglingLeavesThem() {
@@ -330,8 +340,16 @@ struct RunSchedulePresentationTests {
     }
 
     @Test func promptHintsAndKeystrokes() {
-        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: true) == "The agent starts working without waiting for you.")
-        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false).contains("press Enter"))
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: true, surface: .terminal) == "The agent starts working without waiting for you.")
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false, surface: .terminal).contains("press Enter"))
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false, surface: .chat).contains("composer"))
+        // The surface follows the ACP catalog; "Project default" is only
+        // resolved when the schedule fires.
+        #expect(RunSchedulePresentation.agentSurface(agentID: "claude") == .chat)
+        #expect(RunSchedulePresentation.agentSurface(agentID: "term-agent") == .terminal)
+        #expect(RunSchedulePresentation.agentSurface(agentID: nil) == .resolvedAtFireTime)
+        #expect(RunSchedulePresentation.compositionHint(surface: .chat).contains("chat session"))
+        #expect(RunSchedulePresentation.compositionHint(surface: .terminal).contains("terminal"))
         // Typed into a TUI, a line break is Enter; the prompt has to arrive
         // as one message.
         #expect(RunScheduleComposition.terminalText(for: "Fix the build.\n\nThen open a PR.\r\n") == "Fix the build. Then open a PR.")
