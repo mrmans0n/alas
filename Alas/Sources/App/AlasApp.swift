@@ -11,10 +11,8 @@ struct AlasApp: App {
     private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
     init() {
-        // Enforces (or, on an unaffected OS, reverts) the AppKit menu-crash
-        // workaround; see SystemMenuItems.swift. Runs unconditionally so a
-        // downgrade or a preferences restore onto an older Mac can't leave a
-        // prior launch's opt-out stuck.
+        // Applies the AppKit menu-crash workaround on the affected OS, and
+        // is a no-op everywhere else; see SystemMenuItems.swift.
         AppKitMenuInjection.applyOptOut()
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())

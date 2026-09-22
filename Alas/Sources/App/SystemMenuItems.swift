@@ -20,12 +20,7 @@ import SwiftUI
 /// Only macOS 26 is known to hit this crash (`isAffectedOS`), so older
 /// systems (`project.yml` supports back to macOS 15) keep AppKit's native
 /// Dictation, AutoFill, and Writing Tools items rather than losing them for a
-/// bug they can't hit. `applyOptOut` runs unconditionally on every launch and
-/// reverts the opt-out on those systems, not just skips reapplying it — the
-/// values are written directly into the app's own persistent preferences
-/// domain (see below), so a prior launch on an affected OS could otherwise
-/// leave them stuck after e.g. a downgrade or a preferences restore onto an
-/// older Mac.
+/// bug they can't hit.
 enum AppKitMenuInjection {
     /// Computed rather than a stored constant: `[String: Any]` isn't `Sendable`,
     /// and a stored global would need to be, even though the value is fixed.
@@ -48,31 +43,27 @@ enum AppKitMenuInjection {
     }
 
     /// Must run before AppKit finishes launching; `AlasApp.init` is early
-    /// enough. Safe and idempotent to call on every launch.
+    /// enough. Safe and idempotent to call on every launch; a no-op on any
+    /// OS other than the one known to be affected.
     ///
-    /// On an affected OS, sets the values directly rather than via
-    /// `register(defaults:)`. The registration domain is the lowest-priority
-    /// fallback UserDefaults consults, so it would be silently ignored if any
-    /// of these keys were already present in the app's own domain or in
-    /// `NSGlobalDomain` — which `NSFullScreenMenuItemEverywhere` in
+    /// Overrides `UserDefaults.argumentDomain` — the same domain command-line
+    /// `-key value` arguments land in — rather than the app's own persistent
+    /// domain. That domain outranks every other domain UserDefaults
+    /// consults, including the app's own domain and the shared
+    /// `NSGlobalDomain`, which `NSFullScreenMenuItemEverywhere` in
     /// particular is documented to be, as a systemwide toggle some users or
-    /// MDM profiles set directly. Writing the app's own domain outranks
-    /// `NSGlobalDomain` in the standard lookup order, so this always wins.
-    ///
-    /// On any other OS, removes those same keys from the app's own domain,
-    /// undoing whatever a prior launch on an affected OS may have persisted
-    /// there — otherwise the opt-out would silently survive onto a system
-    /// that was never exposed to the crash it exists to prevent.
+    /// MDM profiles set directly — so the opt-out always wins for readers.
+    /// It is also purely in-memory for the current process, so nothing is
+    /// ever written to disk: an existing app-domain or `NSGlobalDomain`
+    /// value, however it got there, is left completely untouched underneath
+    /// the override, and there is nothing to revert on an unaffected OS.
     static func applyOptOut(isAffectedOS: Bool = AppKitMenuInjection.isAffectedOS, in defaults: UserDefaults = .standard) {
-        if isAffectedOS {
-            for (key, value) in optOutDefaults {
-                defaults.set(value, forKey: key)
-            }
-        } else {
-            for key in optOutDefaults.keys {
-                defaults.removeObject(forKey: key)
-            }
+        guard isAffectedOS else { return }
+        var overrides = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        for (key, value) in optOutDefaults {
+            overrides[key] = value
         }
+        defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
     }
 }
 
