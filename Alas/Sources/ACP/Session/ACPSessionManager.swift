@@ -3911,6 +3911,9 @@ extension ACPSessionManager {
                                               self?.onSessionTitleUpdated?(sessionId, title)
                                               self?.changeNotifier.post()
                                           },
+                                          onModelsObserved: { [weak self] agentId, models in
+                                              self?.onModelsObserved?(agentId, models)
+                                          },
                                           onResumeTranscriptTail: { [weak self] in
                                               self?.rememberTranscriptScrollAnchor(
                                                 sessionId: sessionId,

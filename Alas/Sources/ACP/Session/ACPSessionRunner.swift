@@ -57,6 +57,13 @@ final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
+    /// Fires whenever a live update changes what the agent has advertised as
+    /// its models — an `availableModelsUpdate`, or a `sessionConfigOptionsUpdate`
+    /// that could carry a model-shaped config option. The initial
+    /// `session/new`/`session/load` result is reported separately by
+    /// whoever calls `attach`; this covers changes reported later on the
+    /// same connection.
+    private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -190,6 +197,7 @@ final class ACPSessionRunner {
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
+         onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
@@ -217,6 +225,7 @@ final class ACPSessionRunner {
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.onModelsObserved = onModelsObserved
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
@@ -999,6 +1008,12 @@ final class ACPSessionRunner {
                     )
                 }
             }
+        }
+        switch params.update {
+        case .availableModelsUpdate, .sessionConfigOptionsUpdate:
+            onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
+        default:
+            break
         }
         if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
             flushQueueIfIdle()
