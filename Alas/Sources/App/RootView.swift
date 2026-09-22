@@ -270,8 +270,6 @@ struct RootView: View {
             )
         case .creating(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
-        case .deleting(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting, collapsed: collapsed)
         case .createFailed(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
         }

@@ -126,7 +126,7 @@ struct RightPaneSelectionStateResolverTests {
         }
     }
 
-    @Test func deletingWhenDeletingState() {
+    @Test func deletingSelectedWorktreeResolvesEmptySoThePaneUnmounts() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
@@ -137,13 +137,8 @@ struct RightPaneSelectionStateResolverTests {
             projects: [project],
             projectsManager: mgr
         )
-        let result = resolver.resolve()
-        if case .deleting(let returned) = result {
-            #expect(returned.id == wt.id)
-            #expect(result.showsRightPane)
-        } else {
-            Issue.record("Expected .deleting, got \(result)")
-        }
+        #expect(resolver.resolve() == .empty)
+        #expect(!resolver.resolve().showsRightPane)
     }
 
     @Test func createFailedWhenCreateFailedState() {
