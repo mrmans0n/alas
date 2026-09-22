@@ -1324,6 +1324,39 @@ struct RemoteServerIntegrationTests {
         }
     }
 
+    @Test func aConnectionOpenedAfterFederationIsSetSeesPeerRows() async throws {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "local", title: "L", agentId: "claude", status: "idle", canDrive: true)]
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing, provider: provider)
+        defer { server.stop() }
+        let links = FederatedSessionsProviderTests.FakeLinks()
+        let federation = FederatedSessionsProvider(links: links)
+        server.federation = federation
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.sessionList(sessions: [
+            RemoteSessionSummary(id: "s1", title: "B1", agentId: "claude", status: "idle", canDrive: false)
+        ]), from: "srv-b")
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+        let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
+        task.resume()
+        defer { task.cancel(with: .goingAway, reason: nil) }
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))
+        _ = try await receiveServerMessage(task)   // hello
+        var list: [RemoteSessionSummary]?
+        for _ in 0..<5 where list == nil {
+            if case .sessionList(let rows) = try await receiveServerMessage(task) { list = rows }
+        }
+        #expect(list?.map(\.id) == ["local", "srv-b:s1"])
+    }
+
     private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()

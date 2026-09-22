@@ -35,6 +35,11 @@ final class RemoteServer {
     /// has no identity key: pairing still works, but the resulting record
     /// stays unverified and phase 3 will not carry sessions over it.
     private let signer: (any RemoteIdentitySigning)?
+    /// Peer-session routing handed to every gateway this server creates.
+    /// Nil means clients see local sessions only. Read once per accepted
+    /// connection, so setting it affects sockets opened from then on; the
+    /// app sets it before `start()`.
+    var federation: FederatedSessionsProvider?
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
@@ -235,6 +240,7 @@ final class RemoteServer {
         configured.identityProof = proveIdentity
         let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
+        let federation = self.federation
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
@@ -257,7 +263,7 @@ final class RemoteServer {
             accessPolicy: accessPolicy,
             originPolicy: originPolicy,
             makeGateway: { send in
-                RemoteSessionGateway(provider: provider, send: send)
+                RemoteSessionGateway(provider: provider, federation: federation, send: send)
             },
             makeHello: { RemoteServerMessage.hello(identity()) },
             identityProof: proveIdentity,

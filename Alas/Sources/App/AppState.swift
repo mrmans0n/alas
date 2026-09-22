@@ -528,6 +528,18 @@ final class AppState {
     private(set) lazy var remotePeerBrowser = RemotePeerBrowser(localServerId: { [weak self] in
         self?.config.remote.serverId ?? ""
     })
+    /// Peer-session routing for this Mac's own remote clients. Lazy like
+    /// `remotePeers`, which it forces: only built once a server exists.
+    @ObservationIgnored
+    private(set) lazy var remoteFederation: FederatedSessionsProvider = {
+        let federation = FederatedSessionsProvider(links: remotePeers)
+        // Connected clients learn about a peer coming or going through a
+        // refreshed `hello` (its `peers` list, Task 8).
+        federation.onPeerAvailabilityChanged = { [weak self] in
+            self?.remoteServer?.broadcastHello()
+        }
+        return federation
+    }()
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -704,6 +716,11 @@ final class AppState {
                 self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
+            // Always set, flag or no flag: with federation off no link is
+            // online, so `sessionCarryingPeers` is empty and the provider
+            // routes nothing. Gating here instead would need a server
+            // restart on every toggle.
+            server.federation = remoteFederation
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
