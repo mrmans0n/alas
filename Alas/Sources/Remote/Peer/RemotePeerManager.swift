@@ -3,8 +3,8 @@ import Observation
 
 /// Owns this Mac's outbound peers: the persisted records, one link each, and
 /// both halves of reciprocal pairing. Session traffic over the links is
-/// consumed by a later `FederatedSessionsProvider`; for now `.message`
-/// events are dropped.
+/// consumed by `FederatedSessionsProvider` through `FederatedPeerLinks`; a
+/// frame is only handed over when the link carries sessions.
 ///
 /// **The owner must call `disconnectAll()` before releasing this manager.**
 /// It holds a `RemotePeerConnection` per peer, and dropping the last reference
@@ -74,6 +74,8 @@ final class RemotePeerManager {
     /// peer's access immediately: revoking the device record alone would leave
     /// an already-open socket authorized until it happened to close.
     @ObservationIgnored var onRevokeDevice: (@MainActor (String) -> Void)?
+    /// `FederatedPeerLinks` sink. Set by `FederatedSessionsProvider`.
+    @ObservationIgnored var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
 
     private let store: RemotePeerStore
     private let pairing: RemotePairingService
@@ -655,6 +657,7 @@ final class RemotePeerManager {
             onRevokeDevice?(deviceId)
         }
         store.save(peers)
+        onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
     /// Waits for A's reciprocal call to redeem THIS attempt's own
@@ -803,6 +806,9 @@ final class RemotePeerManager {
         for connection in connections.values { connection.disconnect() }
         connections = [:]
         states = [:]
+        for peer in peers {
+            onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+        }
     }
 
     private func connect(_ peer: RemotePeer) {
@@ -817,6 +823,9 @@ final class RemotePeerManager {
         switch event {
         case .stateChanged(let state):
             states[peerId] = state
+            if let peer = peers.first(where: { $0.id == peerId }) {
+                onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
+            }
         case .hello(_, let name, let protocolVersion, _):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             // The identity is deliberately NOT adopted from the frame. It is
@@ -846,15 +855,17 @@ final class RemotePeerManager {
             // origin again over the one this connection just proved works.
             durableStateByServerId[peers[index].serverId] = peers[index]
             store.save(peers)
-        case .message:
-            // Phase 3 (`FederatedSessionsProvider`) consumes these. Nothing
-            // may be consumed for a peer whose record is not bound to
-            // verified key material: an unverified record is only as strong
-            // as the address it was paired over, and session aggregation
-            // means transcripts, prompts, diffs and permission decisions.
-            // `carriesSessions(peerId:)` is that gate — a verified record's
-            // link has already proved possession on this very socket.
-            break
+        case .message(let message):
+            // Nothing may be consumed for a peer whose record is not bound
+            // to verified key material: an unverified record is only as
+            // strong as the address it was paired over, and session
+            // aggregation means transcripts, prompts, diffs and permission
+            // decisions. `carriesSessions(peerId:)` is that gate — a
+            // verified record's link has already proved possession on this
+            // very socket.
+            guard carriesSessions(peerId: peerId),
+                  let peer = peers.first(where: { $0.id == peerId }) else { return }
+            onFederationEvent?(.message(serverId: peer.serverId, message))
         }
     }
 
@@ -918,5 +929,18 @@ final class RemotePeerManager {
         }
         store.save(peers)
         if isActive { connect(peer) }
+    }
+}
+
+extension RemotePeerManager: FederatedPeerLinks {
+    var sessionCarryingPeers: [FederatedPeerInfo] {
+        peers.filter { carriesSessions(peerId: $0.id) }
+            .map { FederatedPeerInfo(serverId: $0.serverId, name: $0.name) }
+    }
+
+    func sendToPeer(_ message: RemoteClientMessage, serverId: String) {
+        guard let peer = peers.first(where: { $0.serverId == serverId }),
+              carriesSessions(peerId: peer.id) else { return }
+        connections[peer.id]?.send(message)
     }
 }
