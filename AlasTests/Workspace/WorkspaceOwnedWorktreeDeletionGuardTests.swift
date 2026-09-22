@@ -457,6 +457,43 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(state.spacesManager.space(id: "space")?.members?.contains(.workspace(workspace.id)) == true)
     }
 
+    @Test func deleteWorkspaceDefinitionAndCheckoutsRefusesWhenACheckoutHasUnconfirmedSessionRisk() async throws {
+        // Unlike a dirty/locked git risk, forget() has no confirmingRisks
+        // gate around closing sessions at all — without this check, the
+        // bulk "Delete Workspace and N Checkouts" path would silently
+        // close a checkout-owned terminal the single-checkout path already
+        // warns about.
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delete-workspace-session-risk-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        let checkout = WorkspaceCheckout(
+            workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
+            branch: "release/a", rootPath: "/checkouts/a", members: []
+        )
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace], checkouts: [checkout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let spaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
+        ])
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        _ = state.tabs.appendTerminal(owner: owner, title: "term", sessionId: "checkout-session")
+
+        await #expect(throws: WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved) {
+            try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
+        }
+
+        #expect(state.workspacesManager.workspaces.contains { $0.id == workspace.id })
+        #expect(state.workspacesManager.checkouts.contains { $0.id == checkout.id })
+    }
+
     /// Avoids touching real app-support files: `deleteWorkspaceDefinition`
     /// persists the Space placement change through this store.
     private final class InMemoryWorkspaceDeletionStore: PersistenceStoreProtocol, @unchecked Sendable {

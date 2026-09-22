@@ -3093,6 +3093,18 @@ final class AppState {
                 .map(\.id)
             guard !pending.isEmpty else { break }
             for checkoutID in pending {
+                // Mirrors the git-risk path's existing safety: a checkout
+                // with unconfirmed risks (dirty/locked members, or live
+                // sessions that would silently close) refuses rather than
+                // proceeding without ever showing them, exactly as
+                // deleteAndForgetWorkspaceCheckout already does for git
+                // risks via confirmingRisks — this closes the gap for
+                // session risks, which forget() has no confirmingRisks gate
+                // for at all.
+                let confirmation = try await workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                guard !confirmation.requiresConfirmation else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
                 let outcome = try await deleteAndForgetWorkspaceCheckout(id: checkoutID)
                 guard outcome == .forgotten else {
                     throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved

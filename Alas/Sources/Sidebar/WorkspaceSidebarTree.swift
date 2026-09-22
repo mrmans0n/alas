@@ -214,6 +214,16 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             var remainingFailures = 0
             for checkoutID in formerCheckoutIDs {
                 do {
+                    // Same reasoning as the "Delete Workspace and N
+                    // Checkouts" bulk path: refuse a checkout with
+                    // unconfirmed risks (including live sessions that would
+                    // otherwise close silently) instead of deleting it
+                    // without ever showing them.
+                    let confirmation = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                    guard !confirmation.requiresConfirmation else {
+                        remainingFailures += 1
+                        continue
+                    }
                     let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
                     if outcome != .forgotten { remainingFailures += 1 }
                 } catch {
