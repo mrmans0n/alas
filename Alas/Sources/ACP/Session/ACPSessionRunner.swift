@@ -599,9 +599,21 @@ final class ACPSessionRunner {
     /// explicitly. `stop()` is the wrong tool here: it also kills terminals
     /// and marks subagents disconnected, side effects a runner that never
     /// started owns nothing of.
-    func cancelAuthStatusListening() {
-        authStatusTask?.cancel()
+    ///
+    /// Awaits the task rather than just requesting cancellation: `.cancel()`
+    /// only sets a flag, so a `for await` iteration already past its
+    /// suspension point (an event was yielded and the loop body is running
+    /// `applyAuthStatus`, which synchronously enqueues the fenced
+    /// persistence write) keeps running to completion regardless. A caller
+    /// that flushes persistence right after `.cancel()` without waiting can
+    /// observe no pending write yet and flush too early, letting that write
+    /// land — or the status be dropped entirely by the loop exiting — after
+    /// the flush already returned.
+    func cancelAuthStatusListening() async {
+        let task = authStatusTask
         authStatusTask = nil
+        task?.cancel()
+        await task?.value
     }
 
     /// Applies a `_auth/status_update` notification. Unlike a failed-prompt

@@ -3585,6 +3585,26 @@ extension ACPSessionManager {
             }
         }
         var startedRunner: ACPSessionRunner?
+        // Set right after `startAuthStatusListening()` below, independently of
+        // `startedRunner` (only set once `.start()` actually runs): every
+        // early-return between listener start and the runner's registration
+        // must cancel-and-flush this specific runner's listener, and the
+        // outer `catch` — the one place none of `runner`'s own lexical scope
+        // is visible — needs an owner-scoped handle to do it too.
+        var earlyListenerRunner: ACPSessionRunner?
+        // Cancels (awaiting completion) and flushes `earlyListenerRunner`'s
+        // persistence queue. A no-op once the runner is registered — its own
+        // `stop()` owns teardown from there. Awaiting the cancelled task
+        // matters: `.cancel()` alone doesn't wait for an iteration already
+        // past its suspension point to finish running `applyAuthStatus` (and
+        // its synchronous `enqueuePersistence` call), so flushing right
+        // after `.cancel()` without waiting could observe no pending write
+        // yet — see `ACPSessionRunner.cancelAuthStatusListening()`.
+        func abandonEarlyListenerRunnerIfNeeded() async {
+            guard let earlyListenerRunner, runners[sessionId] !== earlyListenerRunner else { return }
+            await earlyListenerRunner.cancelAuthStatusListening()
+            await earlyListenerRunner.flushPersistence()
+        }
         let elicitationCoordinator = ACPElicitationCoordinator(
             session: session,
             client: connection.client,
@@ -3928,26 +3948,14 @@ extension ACPSessionManager {
             // being signed in. Listening from here makes the status track the
             // live agent no matter how that call ends.
             runner.startAuthStatusListening()
-            defer {
-                // The listener retains the runner while suspended on the
-                // stream, so every path that abandons this attach has to
-                // cancel it. Once the runner is the registered one, its own
-                // `stop()` owns the teardown instead.
-                if runners[sessionId] !== runner {
-                    runner.cancelAuthStatusListening()
-                    // A notification consumed before this attach failed may
-                    // already have enqueued a fenced authStatus write onto
-                    // this runner's own persistence queue (`applyAuthStatus`
-                    // → `enqueuePersistence`). `releaseWriterLease` below
-                    // only flushes *registered* runners via
-                    // `flushAllPersistence`, so an abandoned runner's
-                    // pending write would otherwise race the lease release
-                    // and get rejected by the fence — silently losing the
-                    // very status this fix exists to capture. Flush it here
-                    // before the runner goes out of scope.
-                    await runner.flushPersistence()
-                }
-            }
+            // Swift does not allow `await` inside a `defer` body, so every
+            // early-return between here and the runner's registration
+            // (`runners[sessionId] = runner`, below) explicitly cancels and
+            // flushes this listener instead of relying on scope-exit cleanup
+            // — see each `earlyListenerRunner` call site, including the
+            // catch block, where this is the only reference to this runner
+            // still in scope.
+            earlyListenerRunner = runner
             if shouldSuppressLoadReplay {
                 startRunnerIfNeeded()
             }
@@ -4227,6 +4235,7 @@ extension ACPSessionManager {
                     sessionCapabilities: initialized.sessionCapabilities
                 )
                 await connection.shutdown()
+                await abandonEarlyListenerRunnerIfNeeded()
                 await releaseWriterLease(sessionId: sessionId)
                 return
             }
@@ -4331,6 +4340,7 @@ extension ACPSessionManager {
                 }
                 startedRunner?.stop()
                 await startedRunner?.flushPersistence()
+                await abandonEarlyListenerRunnerIfNeeded()
                 session.agentState = .idle
                 if !isDisposed { beginMirroring(sessionId: sessionId) }   // don't start a mirror on a disposed manager
                 await releaseWriterLease(sessionId: sessionId)
@@ -4355,6 +4365,7 @@ extension ACPSessionManager {
                 }
                 startedRunner?.stop()
                 await startedRunner?.flushPersistence()
+                await abandonEarlyListenerRunnerIfNeeded()
                 session.agentState = .idle
                 if !isDisposed { beginMirroring(sessionId: sessionId) }
                 await releaseWriterLease(sessionId: sessionId)
@@ -4498,6 +4509,13 @@ extension ACPSessionManager {
             }
             stderrTask.cancel()
         } catch {
+            // Awaits (not just cancels) the listener before anything below
+            // inspects `session.authStatus` — a live update the listener was
+            // mid-way through applying when this failure fired must be
+            // allowed to land first, so the auth-failure branch further down
+            // decides whether to clear it using the true final value rather
+            // than a stale one caught mid-flight.
+            await abandonEarlyListenerRunnerIfNeeded()
             let durableReplay = error as? ACPBrokerDurableCompletionReplayError
             let durableRetry = durableReplay.flatMap {
                 $0.outcome.error == nil ? $0 : nil
