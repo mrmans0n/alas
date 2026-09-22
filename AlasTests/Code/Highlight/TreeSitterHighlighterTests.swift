@@ -242,6 +242,52 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "Red", in: source, spans: spans) == .constant)
     }
 
+    @Test("Kotlin truncated annotations at EOF do not hang the highlighter")
+    func kotlinAnnotationAtEOFDoesNotHang() throws {
+        // tree-sitter-kotlin-ng's external scanner has two annotation-scanning
+        // loops — one for the `constructor` disambiguation, one shared by the
+        // `get`/`set` accessor disambiguation — that historically advanced on
+        // `lexer->lookahead` without checking EOF. Alas slices Kotlin source
+        // into syntax segments (`DiffPaneTextDocumentBuilder.highlightedCodeDocument`)
+        // and per-line snippets (`TreeSitterHighlighter.tokenize`), either of
+        // which can end mid-annotation. A regression here hangs
+        // `computeHighlight` on the calling thread forever — the parser's own
+        // timeout cannot help, because the hanging external-scanner call
+        // never returns for the timeout to be polled between calls. Each case
+        // runs on a background thread bounded by a semaphore timeout, so a
+        // regression fails this test in a few seconds instead of hanging the
+        // whole suite.
+        let cases: [(String, String)] = [
+            ("top-level truncated annotation (get/set accessor context)", "val x = 1\n@Foo"),
+            ("top-level truncated annotation with paren (get/set accessor context)", "val x = 1\n@Foo("),
+            ("class-body truncated annotation (constructor context)", "class A {\nval x = 1\n@Foo"),
+        ]
+
+        for (label, source) in cases {
+            let semaphore = DispatchSemaphore(value: 0)
+            Thread.detachNewThread {
+                _ = TreeSitterHighlighter.highlight(source: source, fileExtension: "kt")
+                semaphore.signal()
+            }
+            let result = semaphore.wait(timeout: .now() + 3.0)
+            #expect(result == .success, "\(label): kotlin-ng scanner hung past the 3s bound on \(source.debugDescription)")
+        }
+    }
+
+    @Test("Kotlin annotations preserve highlighting and UTF-16 span offsets around non-ASCII text")
+    func kotlinAnnotationPreservesHighlightingAndUTF16Offsets() throws {
+        // A complete annotation (never hits the EOF guard) must keep
+        // highlighting exactly as before the scanner patch. The string
+        // argument includes an emoji (a UTF-16 surrogate pair) so a span
+        // computed in UTF-8 byte offsets instead of UTF-16 code units would
+        // land on the wrong substring here.
+        let source = "@Deprecated(\"legado 🚀\")\nval x = 1"
+        let spans = TreeSitterHighlighter.highlight(source: source, fileExtension: "kt")
+
+        #expect(capture(for: "@Deprecated(\"legado 🚀\")", in: source, spans: spans) == .attribute)
+        #expect(capture(for: "\"legado 🚀\"", in: source, spans: spans) == .string)
+    }
+
     @Test("YAML keys, strings, and numbers are captured")
     func yamlBasics() throws {
         let src = """
