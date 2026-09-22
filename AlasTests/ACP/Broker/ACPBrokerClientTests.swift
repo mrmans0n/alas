@@ -1100,6 +1100,104 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Regression (issue #1388): `dispatch()` used to mark an event's cursor
+    // as dispatched and drop `stateLock` *before* the per-method handler
+    // re-acquired it to protect that cursor from premature acknowledgement.
+    // The background poller and a foreground broker RPC replay overlapping
+    // ranges, so one call could sit in that window while the other saw the
+    // cursor as "already dispatched", skipped it, and went on to deliver a
+    // later event — whose acknowledgement then advanced the broker's
+    // acknowledged cursor past an event nobody had consumed yet.
+    //
+    // `onEventDispatchedForTesting` fires at exactly that instant: the point
+    // from which a concurrent duplicate dispatch starts skipping the cursor.
+    // Acking an already-delivered later cursor from inside it stands in for
+    // the concurrent call that raced ahead; that ack must defer behind the
+    // event still being dispatched, not go through.
+    @Test func laterAckDefersWhileAnEarlierEventIsStillMidDispatch() async throws {
+        let service = MockBrokerService()
+        let earlierCursor = ACPBrokerEventCursor(rawValue: 6)
+        let laterCursor = ACPBrokerEventCursor(rawValue: 7)
+        await service.enqueueAttach(events: [
+            sessionUpdateEvent(cursor: laterCursor, text: "later chunk")
+        ])
+        await service.enqueueAttach(events: [
+            sessionUpdateEvent(cursor: earlierCursor, text: "earlier chunk")
+        ])
+        let laterAck = PendingAcknowledgementBox()
+        let client = makeClient(
+            service: service,
+            onEventDispatchedForTesting: { cursor in
+                guard cursor == earlierCursor else { return }
+                laterAck.invoke()
+            }
+        )
+
+        try await client.start()
+        let laterUpdate = try await nextUpdate(from: client.incomingUpdates)
+        laterAck.store(laterUpdate.durableConsumptionAcknowledgement)
+
+        // Replays the earlier cursor; the seam acks the later one from
+        // inside that dispatch.
+        try await client.notify(ACPRequest(
+            method: "session/cancel",
+            params: ACPSessionCancelParams(sessionId: "remote-1")
+        ))
+
+        let earlierUpdate = try await nextUpdate(from: client.incomingUpdates)
+        #expect(await service.acks.isEmpty)
+
+        earlierUpdate.durableConsumptionAcknowledgement?()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [earlierCursor, laterCursor]
+        }
+    }
+
+    // `dispatch()` claims durable protection for every notification method
+    // that *can* hand out an acknowledgement, before the payload has been
+    // looked at (see the test above for why it can't wait). Notifications
+    // that turn out to carry nothing to deliver — an undecodable payload, or
+    // an OpenCode child update that normalizes to zero updates — never reach
+    // a consumer, so nothing would ever release them: they must drop their
+    // claim themselves, or every later ack defers forever.
+    @Test func undeliverableDurableNotificationsDoNotBlockLaterAcks() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object(["sessionId": .string("remote-1")])
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 3),
+                kind: .adapterNotification(
+                    method: ACPOpenCodeChildUpdate.method,
+                    params: .object(["rootSessionId": .string("remote-1")])
+                )
+            ),
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 4),
+                kind: .adapterNotification(
+                    method: "_auth/status_update",
+                    params: .object(["authStatus": .string("not-an-object")])
+                )
+            ),
+            sessionUpdateEvent(cursor: ACPBrokerEventCursor(rawValue: 5), text: "hello")
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+        let update = try await nextUpdate(from: client.incomingUpdates)
+        #expect(client.yieldedUpdateCount == 1)
+
+        update.durableConsumptionAcknowledgement?()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 5)]
+        }
+    }
+
     @Test func sendWaitsAcrossPendingResultAndReplaysPendingRequest() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
@@ -1838,13 +1936,33 @@ struct ACPBrokerClientTests {
         ])
     }
 
+    private func sessionUpdateEvent(cursor: ACPBrokerEventCursor, text: String) -> ACPBrokerEvent {
+        ACPBrokerEvent(
+            cursor: cursor,
+            kind: .adapterNotification(
+                method: "session/update",
+                params: .object([
+                    "sessionId": .string("remote-1"),
+                    "update": .object([
+                        "sessionUpdate": .string("agent_message_chunk"),
+                        "content": .object([
+                            "type": .string("text"),
+                            "text": .string(text)
+                        ])
+                    ])
+                ])
+            )
+        )
+    }
+
     private func makeClient(
         service: MockBrokerService,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
         onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
-        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil
+        onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
+        onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)? = nil
     ) -> ACPBrokerClient {
         ACPBrokerClient(
             service: service,
@@ -1859,7 +1977,8 @@ struct ACPBrokerClientTests {
             initialAcknowledgedCursor: initialAcknowledgedCursor,
             backgroundPollIdleIntervalNanoseconds: backgroundPollIdleIntervalNanoseconds,
             onDurableStateChanged: onDurableStateChanged,
-            onTurnStateChanged: onTurnStateChanged
+            onTurnStateChanged: onTurnStateChanged,
+            onEventDispatchedForTesting: onEventDispatchedForTesting
         )
     }
 
@@ -1961,6 +2080,30 @@ private final class SyncTurnStateRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return recordedStates
+    }
+}
+
+/// Holds the durable acknowledgement of an already-delivered event so a
+/// dispatch seam can fire it from inside a later dispatch, on whatever
+/// thread that dispatch happens to run on.
+private final class PendingAcknowledgementBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var acknowledgement: ACPDurableConsumptionAcknowledgement?
+
+    func store(_ acknowledgement: ACPDurableConsumptionAcknowledgement?) {
+        lock.lock()
+        self.acknowledgement = acknowledgement
+        lock.unlock()
+    }
+
+    /// Fires at most once, so a replay that dispatches the same cursor twice
+    /// can't turn one ack into two.
+    func invoke() {
+        lock.lock()
+        let acknowledgement = self.acknowledgement
+        self.acknowledgement = nil
+        lock.unlock()
+        acknowledgement?()
     }
 }
 
