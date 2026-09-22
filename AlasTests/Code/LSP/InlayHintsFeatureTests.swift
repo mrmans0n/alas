@@ -9,15 +9,24 @@ struct InlayHintsFeatureTests {
         let hint = try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(#"{"position":{"line":0,"character":1},"label":": Int"}"#.utf8)))
         var requests: [NSRange] = []
         var presentations: [[LSPInlayHint]] = []
+        var outstandingCalls: [[NSRange]] = []
         let feature = InlayHintsFeature(request: { range in
             requests.append(range)
             return range == first ? [hint] : []
-        }, apply: { presentations.append($0) }, clear: {})
+        }, apply: { hints, outstanding in presentations.append(hints)
+        outstandingCalls.append(outstanding) }, clear: {})
         defer { feature.stop() }
         feature.refresh(ranges: [first, second])
         for _ in 0..<100 where presentations.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
         #expect(presentations.count == 2)
         #expect(presentations.last?.map(\.label) == [": Int"])
+        // `first` answers before `second`, so only `second` is still
+        // outstanding at that point; once `second` also answers — with an
+        // empty result — nothing is outstanding any more. An empty result is
+        // still an answer: it must not be mistaken for "not yet answered" and
+        // kept outstanding, or a hint the server has since dropped from that
+        // range would linger under the old decoration forever.
+        #expect(outstandingCalls == [[second], []])
         feature.refresh(ranges: [second, first])
         for _ in 0..<20 { await Task.yield() }
         #expect(requests == [first, second])
@@ -45,7 +54,7 @@ struct InlayHintsFeatureTests {
         let feature = InlayHintsFeature(request: { _ in
             requests += 1
             return requests == 1 ? [] : nil
-        }, apply: { _ in applied += 1 }, clear: { cleared += 1 })
+        }, apply: { _, _ in applied += 1 }, clear: { cleared += 1 })
         defer { feature.stop() }
         feature.refresh(ranges: [.init(location: 0, length: 10), .init(location: 10, length: 10)])
         for _ in 0..<100 where requests < 2 { try await Task.sleep(for: .milliseconds(5)) }
@@ -57,7 +66,7 @@ struct InlayHintsFeatureTests {
     @Test func freshResponseCancelsRetainedPresentationExpiry() async throws {
         var cleared = 0
         var applied = 0
-        let feature = InlayHintsFeature(request: { _ in [] }, apply: { _ in applied += 1 }, clear: { cleared += 1 })
+        let feature = InlayHintsFeature(request: { _ in [] }, apply: { _, _ in applied += 1 }, clear: { cleared += 1 })
         defer { feature.stop() }
         feature.invalidate(preservingPresentation: true)
         feature.refresh(range: NSRange(location: 0, length: 1), debounce: .zero)
@@ -67,9 +76,43 @@ struct InlayHintsFeatureTests {
         #expect(cleared == 0)
     }
 
+    /// A success on one chunk must not disarm the watchdog while a sibling
+    /// chunk keeps failing — its carried-over presentation (see
+    /// `EditorInlayLayout`'s `covering`) would otherwise sit stale forever
+    /// with nothing left to clear it.
+    /// A chunk that already answered is confirmed, current data. The
+    /// watchdog firing while a sibling chunk keeps failing must not wipe it
+    /// out — `apply` never gets called again for an already-cached range, so
+    /// a `clear()` here would make those valid hints vanish for good.
+    @Test func presentationExpiryReappliesConfirmedHintsInsteadOfClearingThemWhileASiblingChunkKeepsFailing() async throws {
+        var cleared = 0
+        var applications: [[NSRange]] = []
+        let hint = try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(#"{"position":{"line":0,"character":1},"label":": Int"}"#.utf8)))
+        let succeeding = NSRange(location: 0, length: 10), failing = NSRange(location: 10, length: 10)
+        let feature = InlayHintsFeature(request: { range in range == succeeding ? [hint] : nil },
+                                        apply: { hints, outstanding in applications.append(outstanding)
+                                        #expect(hints.map(\.label) == [": Int"]) }, clear: { cleared += 1 })
+        defer { feature.stop() }
+        feature.invalidate(preservingPresentation: true)
+        feature.refresh(ranges: [succeeding, failing], debounce: .zero)
+        for _ in 0..<100 where applications.count < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        // The succeeding chunk already answered, so it is not outstanding —
+        // only the still-failing sibling is, and only until the watchdog
+        // gives up on it.
+        #expect(applications.last == [failing])
+        // The watchdog reapplies the confirmed chunk once the failing
+        // sibling's retry window has been open long enough with nothing else
+        // to wait on, instead of clearing everything — and gives up on the
+        // failing chunk for good rather than reporting it outstanding again.
+        for _ in 0..<300 where applications.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(applications.count == 2)
+        #expect(applications.last == [])
+        #expect(cleared == 0)
+    }
+
     @Test func retainedPresentationExpiresIfNoFreshResponseArrives() async throws {
         var cleared = 0
-        let feature = InlayHintsFeature(request: { _ in nil }, apply: { _ in }, clear: { cleared += 1 })
+        let feature = InlayHintsFeature(request: { _ in nil }, apply: { _, _ in }, clear: { cleared += 1 })
         defer { feature.stop() }
         feature.invalidate(preservingPresentation: true)
         #expect(cleared == 0)
@@ -82,9 +125,9 @@ struct InlayHintsFeatureTests {
         var repliesA: [CheckedContinuation<[LSPInlayHint]?, Never>] = [], repliesB: [CheckedContinuation<[LSPInlayHint]?, Never>] = []
         var appliedA = 0, appliedB = 0
         let a = InlayHintsFeature(request: { range in requestsA.append(range)
-        return await withCheckedContinuation { repliesA.append($0) } }, apply: { _ in appliedA += 1 }, clear: {})
+        return await withCheckedContinuation { repliesA.append($0) } }, apply: { _, _ in appliedA += 1 }, clear: {})
         let b = InlayHintsFeature(request: { range in requestsB.append(range)
-        return await withCheckedContinuation { repliesB.append($0) } }, apply: { _ in appliedB += 1 }, clear: {})
+        return await withCheckedContinuation { repliesB.append($0) } }, apply: { _, _ in appliedB += 1 }, clear: {})
         defer { a.stop()
         b.stop() }
         a.refresh(range: NSRange(location: 0, length: 10), debounce: .zero)
@@ -136,7 +179,7 @@ struct InlayHintsFeatureTests {
         let feature = InlayHintsFeature(request: { range in
             requests.append(range)
             return await withCheckedContinuation { completions.append($0) }
-        }, apply: { _ in applied += 1 }, clear: { cleared += 1 })
+        }, apply: { _, _ in applied += 1 }, clear: { cleared += 1 })
         let first = NSRange(location: 0, length: 3), last = NSRange(location: 10, length: 4)
         feature.refresh(range: first, debounce: .zero)
         for _ in 0..<100 where completions.isEmpty { try await Task.sleep(for: .milliseconds(5)) }

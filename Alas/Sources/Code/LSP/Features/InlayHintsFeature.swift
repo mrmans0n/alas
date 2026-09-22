@@ -25,7 +25,14 @@ struct InlayHintSettings: Codable, Equatable, Sendable {
 @MainActor
 final class InlayHintsFeature {
     private let request: (NSRange) async -> [LSPInlayHint]?
-    private let apply: ([LSPInlayHint]) -> Void
+    /// Hints answered so far, plus the ranges still outstanding — requested
+    /// but not yet answered. A range that already answered, even with zero
+    /// hints, is not outstanding: its old decoration must come from `values`
+    /// alone, or a hint the server has since dropped would linger forever. A
+    /// distant chunk from an abandoned viewport is not outstanding either —
+    /// nothing will ever answer or expire it, so it must not be carried
+    /// forward as if it were still in flight.
+    private let apply: ([LSPInlayHint], [NSRange]) -> Void
     private let clear: () -> Void
     private var generation = 0
     private var pending: [NSRange] = []
@@ -33,11 +40,15 @@ final class InlayHintsFeature {
     private var activeRange: NSRange?
     private var cached: [NSRange: [LSPInlayHint]] = [:]
     private var retryAfter: [NSRange: ContinuousClock.Instant] = [:]
+    /// The unfiltered range set from the latest `refresh(ranges:)` call —
+    /// what the current viewport actually wants, as opposed to `cached`'s
+    /// keys, which only grow as chunks answer.
+    private var requestedRanges: [NSRange] = []
     private var worker: Task<Void, Never>?
     private var workerID = UUID()
     private var presentationExpiry: Task<Void, Never>?
 
-    init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint]) -> Void, clear: @escaping () -> Void) {
+    init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint], [NSRange]) -> Void, clear: @escaping () -> Void) {
         self.request = request
         self.apply = apply
         self.clear = clear
@@ -52,6 +63,7 @@ final class InlayHintsFeature {
     }
 
     func refresh(ranges: [NSRange], debounce: Duration = .zero) {
+        requestedRanges = ranges
         let next = ranges.filter { cached[$0] == nil && $0 != activeRange && (retryAfter[$0].map { $0 <= .now } ?? true) }
         // Bounds notifications within a chunk must not keep postponing it.
         if next != pending {
@@ -82,8 +94,18 @@ final class InlayHintsFeature {
                 }
                 cached[range] = result
                 retryAfter[range] = nil
-                cancelPresentationExpiry()
-                apply(cached.keys.sorted { $0.location < $1.location }.flatMap { self.cached[$0] ?? [] })
+                // A response for one chunk is not evidence every chunk is
+                // healthy. Disarming the watchdog here would let another
+                // chunk's carried-over, now-stale decorations (see
+                // EditorInlayLayout's `covering`) sit unrepainted forever if
+                // that chunk keeps failing and nothing else ever calls
+                // refresh() again. Only stand down once nothing is left
+                // outstanding: no more queued work and no chunk parked in
+                // `retryAfter` waiting to be retried.
+                if pending.isEmpty, retryAfter.isEmpty { cancelPresentationExpiry() }
+                let answered = cached.keys.sorted { $0.location < $1.location }
+                let outstanding = requestedRanges.filter { cached[$0] == nil }
+                apply(answered.flatMap { self.cached[$0] ?? [] }, outstanding)
             }
         }
     }
@@ -99,12 +121,26 @@ final class InlayHintsFeature {
             clear()
         } else if presentationExpiry == nil {
             // Repeated edits must not keep old labels alive indefinitely when
-            // synchronization or the server stalls. Fresh results cancel this.
+            // synchronization or the server stalls. Fresh results cancel this
+            // (see refresh()'s cancelPresentationExpiry() call) once every
+            // outstanding chunk has resolved.
             presentationExpiry = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard !Task.isCancelled, let self else { return }
                 presentationExpiry = nil
-                clear()
+                // A chunk that already answered is confirmed, current data —
+                // wiping it out alongside a sibling that kept failing would
+                // be its own bug, and `cached` isn't re-requested once
+                // populated, so nothing would ever bring it back. Reapply
+                // what succeeded. Nothing is outstanding any more, though: the
+                // watchdog waiting this long means nothing will retry the
+                // range that never answered, so its carried-over presentation
+                // must not come back either — pass no outstanding ranges,
+                // rather than requestedRanges, so it is dropped for good.
+                guard !cached.isEmpty else { clear()
+                return }
+                let answered = cached.keys.sorted { $0.location < $1.location }
+                apply(answered.flatMap { self.cached[$0] ?? [] }, [])
             }
         }
     }
