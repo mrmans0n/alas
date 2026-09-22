@@ -116,6 +116,73 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.tabs.tabs(forWorktree: staleWorktreeID).isEmpty)
     }
 
+    @Test func checkoutDeletionConfirmationCountsSessionsForAMissingButOwnedMember() async throws {
+        // The confirmation must not undercount relative to what deletion
+        // actually does: a member that's `.missing` right now still has its
+        // stale sessions synthesized and closed by the deletion path, so the
+        // risk shown beforehand must count the same sessions.
+        let fixture = try await Fixture.make(suffix: "missing-member-risk", memberAvailability: .missing)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        let staleWorktreeID = Worktree.makeId(path: fixture.linked)
+        _ = fixture.state.tabs.appendTerminal(worktreeId: staleWorktreeID, title: "term", sessionId: "stale-session")
+
+        let confirmation = try await fixture.state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+
+        #expect(confirmation.risks.contains { $0.contains("session") })
+    }
+
+    @Test func deleteAndForgetNeverCleansRuntimeStateForASnapshotOnlyMember() async throws {
+        // A snapshot-only member (creation never produced a worktree) has no
+        // worktree this checkout ever owned. If its persisted path happens
+        // to coincide with something else entirely, deletion must never
+        // touch that unrelated worktree's tabs, terminals, or selection.
+        let fixture = try await Fixture.make(suffix: "snapshot-only-safety", includesCheckout: false)
+        defer { fixture.removeFiles() }
+        let checkoutID = UUID()
+        let memberID = UUID()
+        let unrelatedPath = "/tmp/alas-unrelated-\(UUID().uuidString)"
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature/snapshot-only",
+            rootPath: fixture.checkoutRoot.path,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: memberID,
+                    workspaceMemberID: UUID(),
+                    projectID: fixture.project.id,
+                    fallbackProjectName: "Release",
+                    fallbackRepositoryRoot: fixture.repo.path,
+                    worktreePath: unrelatedPath,
+                    availability: .pending,
+                    checkpoint: .planPersisted,
+                    cleanupOwnership: .init(worktreeCreated: false, branchOwnership: .unknown),
+                    plan: .init(
+                        checkoutMemberID: memberID,
+                        projectID: fixture.project.id,
+                        sourceRepositoryPath: fixture.repo.path,
+                        destinationPath: unrelatedPath,
+                        baseReference: "main",
+                        baseCommit: "abc",
+                        branchIntent: .reuse
+                    )
+                ),
+            ]
+        )
+        try await fixture.workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        await fixture.state.workspacesManager.refreshCheckoutSnapshots()
+        let unrelatedWorktreeID = Worktree.makeId(path: URL(fileURLWithPath: unrelatedPath))
+        _ = fixture.state.tabs.appendTerminal(worktreeId: unrelatedWorktreeID, title: "unrelated", sessionId: "unrelated-session")
+
+        let outcome = try await fixture.state.deleteAndForgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: true)
+
+        #expect(outcome == .forgotten)
+        #expect(!fixture.state.tabs.tabs(forWorktree: unrelatedWorktreeID).isEmpty)
+    }
+
     @Test func checkoutDeletionConfirmationCountsCheckoutOwnedSessionsAsARisk() async throws {
         // A terminal opened at the checkout root (not tied to any one
         // member) is owned by the checkout itself, not by a member worktree,

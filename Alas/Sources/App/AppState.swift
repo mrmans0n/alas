@@ -3409,7 +3409,16 @@ final class AppState {
     /// a live, verified `Worktree` — unlike dirty-buffer resolution, runtime
     /// session cleanup doesn't need that verification, only the id tabs would
     /// have been registered under.
-    private static func synthesizedWorktree(for member: WorkspaceCheckoutMember) -> Worktree {
+    ///
+    /// Only meaningful when this checkout actually owns the path: a
+    /// snapshot-only member (creation never produced a worktree) or an
+    /// already-deleted one (cleanup ownership is reset once its own deletion
+    /// completes) has `cleanupOwnership.worktreeCreated == false`, and that
+    /// path could since be occupied by something this checkout never
+    /// touched — closing tabs or clearing selection there would tear down
+    /// an unrelated worktree's runtime state instead of this member's own.
+    private static func synthesizedWorktreeIfOwned(for member: WorkspaceCheckoutMember) -> Worktree? {
+        guard member.cleanupOwnership.worktreeCreated else { return nil }
         let path = URL(fileURLWithPath: member.worktreePath)
         return Worktree(
             id: Worktree.makeId(path: path),
@@ -3486,7 +3495,14 @@ final class AppState {
             model.risks.append(contentsOf: preview.rootObservation.leftovers)
             requiresForce = requiresForce || preview.preflight.requiresForce
             risks.append(contentsOf: model.risks.map { "\(member.fallbackProjectName): \($0)" })
-            if let worktreeID = resolvedWorktreeIDs[member.id] {
+            // Mirrors the deletion path's own fallback: a member that's
+            // `.missing` right now (stale reconciliation) is skipped by the
+            // availability-gated resolution above, but deletion still
+            // synthesizes its path-derived id and closes whatever sessions
+            // are registered under it — so the risk shown here must count
+            // the same sessions it's about to silently terminate.
+            if let worktreeID = resolvedWorktreeIDs[member.id]
+                ?? (member.cleanupOwnership.worktreeCreated ? Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath)) : nil) {
                 let sessionCount = worktreeCleanupSessionIDs(worktreeId: worktreeID).count
                 if sessionCount > 0 {
                     risks.append("\(member.fallbackProjectName): \(sessionCount) \(sessionCount == 1 ? "session" : "sessions") will close")
@@ -3580,7 +3596,9 @@ final class AppState {
             await workspacesManager.refreshCheckoutSnapshots()
             if let refreshed = workspacesManager.checkout(id: id) {
                 for member in refreshed.members where member.availability == .explicitlyDeleted {
-                    await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktrees[member.id] ?? Self.synthesizedWorktree(for: member))
+                    if let worktree = resolvedWorktrees[member.id] ?? Self.synthesizedWorktreeIfOwned(for: member) {
+                        await cleanupDeletedWorkspaceMemberRuntime(worktree)
+                    }
                 }
             }
             throw error
@@ -3599,7 +3617,13 @@ final class AppState {
             // deletes it — and any stale terminal/ACP tabs left over from
             // before it went missing need closing too, keyed by the same
             // deterministic path-derived id those tabs were opened under.
-            await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktrees[member.id] ?? Self.synthesizedWorktree(for: member))
+            // Gated to members this checkout actually owned a worktree for,
+            // so a snapshot-only or already-cleaned-up member never tears
+            // down state for whatever unrelated worktree its old path might
+            // now hold.
+            if let worktree = resolvedWorktrees[member.id] ?? Self.synthesizedWorktreeIfOwned(for: member) {
+                await cleanupDeletedWorkspaceMemberRuntime(worktree)
+            }
         }
         await workspacesManager.refreshCheckoutSnapshots()
         switch outcome {
@@ -10810,6 +10834,11 @@ final class AppState {
         projectsManager.setOperationState(id: pending.id, state: .deleting)
 
         Task { @MainActor in
+            // This SwiftUI alert stays open for arbitrary user think-time —
+            // the same async gap the CLI and interactive paths already
+            // recheck ownership across, so this force-confirmation path
+            // needs the identical recheck immediately before removal.
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: pending.repoPath,
