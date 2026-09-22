@@ -37,6 +37,10 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     let startedAt: Date
     var rows: [GGLandingRow]
     var phase: GGLandingPhase
+    /// True between opening the session and gg emitting its first event: the
+    /// stack re-validation (`gg ls`) that precedes `gg land` hits the forge
+    /// and can take seconds, and the tab is already on screen by then.
+    var isPreparing: Bool = false
     var activeWait: GGLandWait?
     var warning: String?
     var result: GGLandResult?
@@ -85,6 +89,7 @@ final class GGLandingStore {
             startedAt: now,
             rows: seed.rows,
             phase: .running,
+            isPreparing: true,
             activeWait: nil,
             warning: nil,
             result: nil,
@@ -110,6 +115,8 @@ final class GGLandingStore {
         }
         guard session.phase == .running || session.phase == .cancelling || streamFailedAfterSummary
         else { return true }
+        // Any land event means gg is live; the pre-launch revalidation is over.
+        session.isPreparing = false
 
         switch event {
         case .start(let stack, let base, let totalEntries):
@@ -250,6 +257,7 @@ final class GGLandingStore {
             guard let phase = self.sessions[projectId]?.phase else { return }
             if phase == .cancelling {
                 self.sessions[projectId]?.phase = .cancelled
+                self.sessions[projectId]?.isPreparing = false
                 self.sessions[projectId]?.endedAt = Date()
                 self.sessions[projectId]?.activeWait = nil
                 self.sessions[projectId]?.warning = nil
@@ -312,6 +320,7 @@ final class GGLandingStore {
               session.phase == .running || (session.phase == .cancelling && operations[projectId] == nil)
         else { return }
         session.phase = session.phase == .cancelling ? .cancelled : .failed
+        session.isPreparing = false
         session.activeWait = nil
         session.warning = nil
         session.error = session.phase == .cancelled ? nil : message

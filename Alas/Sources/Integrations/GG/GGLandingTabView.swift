@@ -56,7 +56,8 @@ enum GGLandingPresentation {
         if session.phase == .failed { return "Not landed" }
         if isActive(row, in: session) {
             if let wait = row.wait { return detail(for: wait) }
-            return session.phase == .cancelling ? "Cancelling…" : "Landing…"
+            if session.phase == .cancelling { return "Cancelling…" }
+            return session.isPreparing ? "Checking stack…" : "Landing…"
         }
         return "Pending"
     }
@@ -120,6 +121,11 @@ struct GGLandingTabView: View {
                 HStack {
                     Text(GGLandingPresentation.progress(for: session))
                     runtime(session).monospacedDigit()
+                    if session.isPreparing, session.phase == .running {
+                        ProgressView().controlSize(.small)
+                        Text("Checking stack…")
+                            .accessibilityIdentifier("gg-landing-preparing")
+                    }
                 }
                 .foregroundStyle(.secondary)
             }

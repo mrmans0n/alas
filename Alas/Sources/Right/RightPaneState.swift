@@ -2080,25 +2080,27 @@ final class RightPaneState: GGSplitCommitServicing {
         pendingGGRestack = nil
     }
 
+    /// Stages the land confirmation from the stack already on screen so the
+    /// dialog appears immediately. The forge round-trip that `gg ls` needs to
+    /// re-validate the stack runs later, while the landing tab is visible —
+    /// preparing first made the menu click look frozen for seconds.
     func requestGGLand(_ request: GGLandRequest) {
-        guard let stack = ggStack,
+        guard let snapshot = cachedGGStackSnapshot,
+              let stack = snapshot.stack,
               let target = Self.ggLandUntilTarget(for: request, in: stack)
         else {
             ggActionState.setError("This stack is no longer ready to land.")
             return
         }
-        Task { @MainActor in
-            do {
-                let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
-                guard case .land(_, let readyCommits) = prepared.confirmation,
-                      readyCommits > 0 else {
-                    throw GGMutationError.staleConfirmation
-                }
-                pendingGGLandPrepared = prepared
-                pendingGGLand = request
-            } catch {
-                ggActionState.setError(GGErrorPresentation.message(for: error))
+        do {
+            let prepared = try ggMutationCoordinator.prepare(.land(target: target), using: snapshot)
+            guard case .land(_, let commits) = prepared.confirmation, commits > 0 else {
+                throw GGMutationError.staleConfirmation
             }
+            pendingGGLandPrepared = prepared
+            pendingGGLand = request
+        } catch {
+            ggActionState.setError(GGErrorPresentation.message(for: error))
         }
     }
 
@@ -2338,28 +2340,26 @@ final class RightPaneState: GGSplitCommitServicing {
         runGGMutation(.checkout(target: target))
     }
 
-    /// Pure landability check used both to stage the confirmation and to
-    /// re-verify against a freshly re-fetched stack before mutating.
+    /// Pure landability check: `.ready` needs at least one mergeable commit at
+    /// the bottom of the stack right now, while `.until` follows
+    /// `GGLandReadiness` — with a waiting-capable gg it starts on a review
+    /// nobody approved yet and lets gg poll for it.
     func ggLandTargetStillLandable(_ request: GGLandRequest, in stack: GGStack) -> Bool {
         switch request {
         case .ready:
             return !Self.ggLandReadyPrefix(in: stack).isEmpty
         case .until(let entryId, _):
-            guard let target = stack.entries.first(where: { $0.id == entryId }),
-                  Self.ggEntryIsReadyToLand(target)
-            else { return false }
-            return stack.entries
-                .filter { $0.position < target.position }
-                .allSatisfy(Self.ggEntryDoesNotBlockLand)
+            guard let target = stack.entries.first(where: { $0.id == entryId }) else { return false }
+            return GGLandReadiness.canStartLand(
+                target: target,
+                in: stack,
+                canWaitForReadiness: ggCapabilities().landJSONL
+            )
         }
     }
 
     static func ggEntryIsReadyToLand(_ entry: GGStackEntry) -> Bool {
-        entry.prState == .open && entry.approved && (entry.ciStatus == nil || entry.ciStatus == .success)
-    }
-
-    static func ggEntryDoesNotBlockLand(_ entry: GGStackEntry) -> Bool {
-        entry.prState == .merged || ggEntryIsReadyToLand(entry)
+        GGLandReadiness.isMergeable(entry)
     }
 
     static func ggLandReadyPrefix(in stack: GGStack) -> [GGStackEntry] {
@@ -2424,14 +2424,22 @@ final class RightPaneState: GGSplitCommitServicing {
 
     var pendingGGLandConfirmationMessage: String? {
         guard let request = pendingGGLand else { return nil }
-        guard case .land(_, let readyCommits) = pendingGGLandPrepared?.confirmation else {
+        guard case .land(let target, let commits) = pendingGGLandPrepared?.confirmation,
+              let stack = pendingGGLandPrepared?.stack,
+              let entry = stack.entries.first(where: { $0.id == target || $0.sha == target })
+        else {
             return Self.ggLandConfirmationMessage(for: request, stack: ggStack)
         }
         switch request {
         case .ready:
-            return "Merge \(readyCommits) approved, passing PR\(readyCommits == 1 ? "" : "s") from the bottom of the stack."
+            return "Merge \(commits) approved, passing PR\(commits == 1 ? "" : "s") from the bottom of the stack."
         case .until(_, let title):
-            return "Land the stack up to and including \u{201C}\(title)\u{201D}."
+            let scope = "Land the stack up to and including \u{201C}\(title)\u{201D}."
+            let waiting = GGLandReadiness.waitingEntries(upTo: entry, in: stack).count
+            guard waiting > 0 else { return scope }
+            let label = commitRemote?.kind.reviewRequestLabel ?? "PR"
+            let subject = waiting == 1 ? "1 \(label) isn't" : "\(waiting) \(label)s aren't"
+            return scope + " \(subject) ready yet — gg waits for approvals and CI, then merges in order."
         }
     }
 
@@ -2458,14 +2466,14 @@ final class RightPaneState: GGSplitCommitServicing {
                 ggLandingStore.startPreparation(projectId: worktree.projectId) { [self] in
                     await ggLandingStore.waitForOperation(projectId: worktree.projectId)
                     guard ggLandingStore.begin(seed) else { return }
-                    startGGLanding(prepared)
+                    startGGLanding(prepared, target: target)
                 }
             }
             appState.openGGLanding(projectId: worktree.projectId)
             return
         }
         appState.openGGLanding(projectId: worktree.projectId)
-        startGGLanding(prepared)
+        startGGLanding(prepared, target: target)
     }
 
     func restartGGLand(target: String) {
@@ -2500,7 +2508,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 else { throw GGMutationError.staleConfirmation }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
                 ggLandingStore.updatePendingRows(seed.rows, projectId: projectId)
-                startGGLanding(prepared)
+                startGGLanding(prepared, target: target)
             } catch {
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
                 ggLandingStore.fail(projectId: projectId, message: GGErrorPresentation.message(for: error))
@@ -2552,7 +2560,12 @@ final class RightPaneState: GGSplitCommitServicing {
         return currentIDs == originalIDs.filter { remainingIDs.contains($0) }
     }
 
-    private func startGGLanding(_ prepared: GGPreparedMutation) {
+    /// The confirmation is staged against the on-screen stack, so the session's
+    /// rows start out optimistic. `onPreflight` hands back the freshly
+    /// re-validated stack the command will actually run against — reseed the
+    /// rows from it, otherwise a row count that drifted since the last refresh
+    /// makes gg's `start` event look like a different stack.
+    private func startGGLanding(_ prepared: GGPreparedMutation, target: String) {
         Task { @MainActor in
             guard await checkpointMutationAllowedAfterJournalRevalidation() else {
                 ggLandingStore.fail(
@@ -2561,7 +2574,16 @@ final class RightPaneState: GGSplitCommitServicing {
                 )
                 return
             }
-            guard let operation = ggMutationCoordinator.startApplying(prepared) else {
+            guard let operation = ggMutationCoordinator.startApplying(
+                prepared.request,
+                confirmedAgainst: prepared.snapshot,
+                onPreflight: { [weak self] fresh in
+                    guard let self,
+                          let seed = self.ggLandingSeed(target: target, stack: fresh.stack)
+                    else { return }
+                    self.ggLandingStore.updatePendingRows(seed.rows, projectId: self.worktree.projectId)
+                }
+            ) else {
                 ggLandingStore.fail(
                     projectId: worktree.projectId,
                     message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
