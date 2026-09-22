@@ -809,6 +809,18 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// found, or recovering a plan that never reached storage at all via
     /// `insertRecovered`, exactly like every other row kind already does.
     private func applyReplayedPlan(_ entries: [ACPPlanEntry], at timestamp: Date) -> Set<Int> {
+        // A plan closes whatever prompt run is open, exactly like the live
+        // path (an intervening plan makes the prior user row non-trailing,
+        // so `userIndex`/`legacyTrailingUserIndex` stop matching it) —
+        // without this, a LATER prompt replayed after the plan (reusing the
+        // same id, or id-less) would wrongly extend the earlier, already-
+        // closed prompt bubble instead of starting its own. Deliberately
+        // NOT `closeLegacyRuns()`: that would also close an in-progress
+        // agent/thought run, but a plan can legitimately appear mid-turn
+        // while output is still streaming (see `kindsToFlush`), so those
+        // stay open.
+        legacyOpenUserRun = nil
+        openIdentifiedUserRun = nil
         let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
         let turnStart = (lastUserIndex(before: replayCursor) ?? -1) + 1
         for index in turnStart..<messages.count {

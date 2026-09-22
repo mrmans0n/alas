@@ -479,6 +479,61 @@ struct ACPSubagentRoutingTests {
         #expect(second == "second")
     }
 
+    @Test("a spawn missing right after an earlier turn's plan recovers there, not after a later turn's plan")
+    func replaySpawnAfterEarlierPlanRecoversInPlace() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Two turns' worth of history already persisted: prompt, plan,
+        // prompt, plan — the spawn that chronologically belongs right
+        // after the FIRST turn's plan never reached SQLite before the
+        // crash.
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "task one", attachments: []))
+        runner.session.transcript.appendMessage(
+            .plan(id: UUID(), [.init(content: "step one", status: "pending")]))
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "task two", attachments: []))
+        runner.session.transcript.appendMessage(
+            .plan(id: UUID(), [.init(content: "step two", status: "pending")]))
+        runner.persistIndices([0, 1, 2, 3])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 4)
+
+        // `session/load` resends the full chronological history in order:
+        // the first prompt, its plan, the missing spawn, the second
+        // prompt, then its plan.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("task one")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .plan([.init(content: "step one", priority: nil, status: "pending")])))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("task two")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .plan([.init(content: "step two", priority: nil, status: "pending")])))
+        await runner.flushPersistence()
+
+        // Before this fix, `transcript.currentPlanMessageIndex` resolved
+        // the FIRST turn's replayed plan to the array's overall newest
+        // (second turn's) plan, jumping the cursor past everything —
+        // the recovered spawn then landed at the tail, after the second
+        // turn's plan, instead of right after the first turn's.
+        #expect(runner.session.transcript.messages.count == 5)
+        guard case .user = runner.session.transcript.messages[0],
+              case .plan = runner.session.transcript.messages[1],
+              case .toolCall = runner.session.transcript.messages[2],
+              case .user = runner.session.transcript.messages[3],
+              case .plan = runner.session.transcript.messages[4] else {
+            Issue.record("expected the recovered spawn right after the first turn's plan")
+            return
+        }
+    }
+
     @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
     func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
         let (runner, store, _) = try makeRunner()

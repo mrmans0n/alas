@@ -1082,7 +1082,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 ?? firstIdLessMatch(of: .user, atOrAfter: suppressedReplayInsertionCursor)
         case .plan:
             dirty = []
-            matchedIndex = transcript.currentPlanMessageIndex
+            matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
         default:
             return []
         }
@@ -3020,6 +3020,21 @@ final class ACPSession: ObservableObject, Identifiable {
             case (.user, .user(_, nil, _, _, _)): return i
             default: continue
             }
+        }
+        return nil
+    }
+
+    /// The FIRST `.plan` row at or after `cursor` — the same forward-scan
+    /// shape as `firstIdLessMatch`, for the same reason: `transcript.
+    /// currentPlanMessageIndex` resolves to the array's OVERALL newest
+    /// (current-turn) plan, which during replay of an OLDER turn's plan can
+    /// belong to a later touch entirely, or be nil outright when the newest
+    /// turn has no plan yet — either way leaving the cursor unadvanced or
+    /// jumped past a turn it hasn't actually reconciled.
+    private func firstPlanMatch(atOrAfter cursor: Int) -> Int? {
+        let start = min(cursor, transcript.messages.count)
+        for i in start..<transcript.messages.count {
+            if case .plan = transcript.messages[i] { return i }
         }
         return nil
     }

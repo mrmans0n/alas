@@ -638,6 +638,66 @@ struct ACPSubagentSessionTests {
         #expect(plan.map(\.content) == ["step one"])
     }
 
+    @Test("replaying a plan closes the open identified prompt run so a later reuse of its id starts a new bubble")
+    func replayedPlanClosesOpenIdentifiedPromptRun() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Two turns already persisted correctly, reusing the same
+        // `messageId` — prompt, plan, second prompt.
+        run.restore(
+            messages: [
+                .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
+                .plan(id: UUID(), [.init(content: "step one", status: "pending")]),
+                .user(id: UUID(), messageId: "p1", text: "second task", attachments: [])
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        // `session/load` resends chronologically: the first prompt, its
+        // plan, then the second prompt (reusing "p1").
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
+        run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+        run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
+
+        // Before the fix, the plan replay left `openIdentifiedUserRun`
+        // pointed at the first prompt, so the second occurrence of "p1"
+        // matched it as a continuation and appended to row 0 instead of
+        // reconciling row 2 — losing "second task" as its own row.
+        #expect(run.messages.count == 3)
+        guard case .user(_, _, let first, _, _) = run.messages[0],
+              case .plan = run.messages[1],
+              case .user(_, _, let second, _, _) = run.messages[2] else {
+            Issue.record("expected the plan to close the first prompt so the second stays separate")
+            return
+        }
+        #expect(first == "first task")
+        #expect(second == "second task")
+    }
+
+    @Test("replaying a plan closes an open id-less prompt run too")
+    func replayedPlanClosesOpenIdLessPromptRun() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.restore(
+            messages: [
+                .user(id: UUID(), text: "first task", attachments: []),
+                .plan(id: UUID(), [.init(content: "step one", status: "pending")]),
+                .user(id: UUID(), text: "second task", attachments: [])
+            ],
+            createdAts: [Date(), Date(), Date()])
+
+        run.applyReplayed(.userMessageChunk(.init(content: .text("first task"))))
+        run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+        run.applyReplayed(.userMessageChunk(.init(content: .text("second task"))))
+
+        #expect(run.messages.count == 3)
+        guard case .user(_, nil, let first, _, _) = run.messages[0],
+              case .plan = run.messages[1],
+              case .user(_, nil, let second, _, _) = run.messages[2] else {
+            Issue.record("expected the plan to close the first id-less prompt so the second stays separate")
+            return
+        }
+        #expect(first == "first task")
+        #expect(second == "second task")
+    }
+
     @Test("replay of a reused prompt id matches the turn at the replay cursor, not the newest one")
     func replayMatchesReusedMessageIdByPosition() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
