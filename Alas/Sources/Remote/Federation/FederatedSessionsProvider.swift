@@ -52,8 +52,20 @@ final class FederatedSessionsProvider {
     /// can push a fresh `hello` (its `peers` list) to connected clients.
     var onPeerAvailabilityChanged: (@MainActor () -> Void)?
 
+    /// Holds a `FederatedDownstream` weakly. This provider does not own
+    /// downstream lifetime — the `RemoteSessionGateway` that created one does,
+    /// through its own strong `downstream` property — and it outlives every
+    /// gateway: it hangs off `AppState.remoteFederation`, which survives each
+    /// server start/stop cycle. A connection torn down without a clean
+    /// `detach(_:)` must therefore not pin its downstream, its subscriptions
+    /// or its share of the idle poll here forever. Entries whose value has
+    /// gone are pruned on the next read.
+    private struct WeakDownstream {
+        weak var value: FederatedDownstream?
+    }
+
     private let links: FederatedPeerLinks
-    private var downstreams: [UUID: FederatedDownstream] = [:]
+    private var downstreams: [UUID: WeakDownstream] = [:]
     /// Peers that carry sessions right now, by `serverId`.
     private var activePeers: [String: FederatedPeerInfo] = [:]
     /// Each active peer's last list, already loop-guarded, tagged and namespaced.
@@ -74,16 +86,40 @@ final class FederatedSessionsProvider {
     // MARK: - Downstreams
 
     func attach(_ downstream: FederatedDownstream) {
-        downstreams[downstream.id] = downstream
-        syncPollTimer()
+        downstreams[downstream.id] = WeakDownstream(value: downstream)
+        pruneDeadDownstreams()
     }
 
     func detach(_ downstream: FederatedDownstream) {
-        downstreams[downstream.id] = nil
-        for (namespaced, ids) in subscribers where ids.contains(downstream.id) {
-            removeSubscriber(downstream.id, from: namespaced)
+        forget(downstream.id)
+        pruneDeadDownstreams()
+    }
+
+    /// True while the idle peer-list poll is running: it needs both a live
+    /// downstream to tell and a session-carrying peer to ask.
+    var isPollingPeerLists: Bool { pollTimer != nil }
+
+    /// Forgets one downstream and everything it had asked for. The clean
+    /// `detach(_:)` path and the prune path are deliberately the same code:
+    /// a downstream that deallocated is a downstream that left.
+    ///
+    /// `removeSubscriber` only tells the peer to stop once the session has no
+    /// subscriber left, so releasing a gone downstream's interest can never
+    /// cancel a surviving downstream's subscription.
+    private func forget(_ id: UUID) {
+        downstreams[id] = nil
+        for (namespaced, ids) in subscribers where ids.contains(id) {
+            removeSubscriber(id, from: namespaced)
         }
-        syncPollTimer()
+    }
+
+    /// Drops entries whose downstream deallocated without detaching, then
+    /// re-evaluates the poll. Called from every site that reads
+    /// `downstreams`, so a leaked entry cannot outlive one round of traffic
+    /// and the map cannot grow across server restarts.
+    private func pruneDeadDownstreams() {
+        for (id, box) in downstreams where box.value == nil { forget(id) }
+        updatePollTimer()
     }
 
     /// Peer rows for the merged `sessionList`, grouped by peer name.
@@ -180,7 +216,7 @@ final class FederatedSessionsProvider {
         }
         if listChanged { notifySessionListChanged() }
         if Set(previous.keys) != Set(current.keys) { onPeerAvailabilityChanged?() }
-        syncPollTimer()
+        pruneDeadDownstreams()
     }
 
     private func requestPeerSessionLists() {
@@ -192,14 +228,20 @@ final class FederatedSessionsProvider {
         }
     }
 
-    /// Runs only while there is someone to tell and someone to ask.
-    private func syncPollTimer() {
-        let shouldRun = !downstreams.isEmpty && !activePeers.isEmpty
+    /// Runs only while there is someone to tell and someone to ask. Reads
+    /// liveness without mutating `downstreams`, so pruning can call it.
+    private func updatePollTimer() {
+        let shouldRun = downstreams.values.contains { $0.value != nil } && !activePeers.isEmpty
         if shouldRun, pollTimer == nil {
             pollTimer = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: UInt64(Self.listPollInterval * 1_000_000_000))
                     guard !Task.isCancelled, let self else { return }
+                    // Re-check first: the last downstream may have gone away
+                    // with its connection instead of detaching, and this tick
+                    // is then the thing that has to stop itself.
+                    self.pruneDeadDownstreams()
+                    guard !Task.isCancelled else { return }
                     self.requestPeerSessionLists()
                 }
             }
@@ -212,8 +254,11 @@ final class FederatedSessionsProvider {
     // MARK: - Fan-out
 
     private func fanOut(_ message: RemoteServerMessage, to namespaced: String) {
+        // Prune first: pruning releases the gone downstreams' subscriptions,
+        // so the set read below is the one that still has listeners.
+        pruneDeadDownstreams()
         for id in subscribers[namespaced] ?? [] {
-            downstreams[id]?.send(message)
+            downstreams[id]?.value?.send(message)
         }
     }
 
@@ -230,7 +275,8 @@ final class FederatedSessionsProvider {
     }
 
     private func notifySessionListChanged() {
-        for downstream in downstreams.values { downstream.sessionListChanged() }
+        pruneDeadDownstreams()
+        for box in downstreams.values { box.value?.sessionListChanged() }
     }
 }
 

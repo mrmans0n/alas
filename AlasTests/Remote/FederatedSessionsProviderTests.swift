@@ -37,6 +37,10 @@ struct FederatedSessionsProviderTests {
                 send: { [weak self] in self?.received.append($0) },
                 sessionListChanged: { [weak self] in self?.listRefreshes += 1 })
         }
+        /// Drops the downstream without detaching it, the way a connection
+        /// torn down by `RemoteServer.stop()` can. The client itself stays
+        /// around so the test can still see what it did or did not receive.
+        func loseDownstream() { downstream = nil }
     }
 
     private func row(_ id: String, serverId: String? = nil) -> RemoteSessionSummary {
@@ -206,6 +210,70 @@ struct FederatedSessionsProviderTests {
         links.sent.removeAll()
         provider.detach(client.downstream)
         #expect(links.sent.isEmpty)   // nothing left to unsubscribe
+    }
+
+    @Test func aDownstreamThatGoesAwayWithoutDetachingIsForgottenOnTheNextFrame() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
+        #expect(provider.isPollingPeerLists)
+        links.sent.removeAll()
+        client.loseDownstream()
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        // Nothing is delivered for a client that is gone, its subscription is
+        // released upstream, and the idle poll has nobody left to tell.
+        #expect(client.received.isEmpty)
+        #expect(links.sent(to: "srv-b") == [.unsubscribe(sessionId: "s1")])
+        #expect(!provider.isPollingPeerLists)
+    }
+
+    @Test func aDownstreamThatGoesAwayWithoutDetachingLeavesSurvivingSubscriptionsAlone() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let survivor = Client()
+        let lost = Client()
+        provider.attach(survivor.downstream)
+        provider.attach(lost.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: survivor.downstream)
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: lost.downstream)
+        links.sent.removeAll()
+        lost.loseDownstream()
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        #expect(survivor.received == [.stopPending(sessionId: "srv-b:s1")])
+        #expect(!links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
+        #expect(provider.isPollingPeerLists)
+        // The survivor leaving is still what ends the upstream subscription:
+        // the lost downstream no longer holds the set open.
+        provider.detach(survivor.downstream)
+        #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
+        #expect(!provider.isPollingPeerLists)
+    }
+
+    @Test func downstreamsLostAcrossServerRestartsDoNotAccumulate() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        links.goOnline("srv-b", name: "Mac B")
+        // One leaked downstream per restart; the provider outlives them all.
+        var clients: [Client] = []
+        for index in 0..<5 {
+            let client = Client()
+            provider.attach(client.downstream)
+            _ = provider.route(.subscribe(sessionId: "srv-b:s\(index)"), from: client.downstream)
+            clients.append(client)
+        }
+        links.sent.removeAll()
+        for client in clients { client.loseDownstream() }
+        // A single read clears all of them, releasing each subscription once.
+        links.receive(.stopPending(sessionId: "s0"), from: "srv-b")
+        #expect(clients.allSatisfy { $0.received.isEmpty })
+        let sent = links.sent(to: "srv-b")
+        #expect(sent.count == 5)
+        for index in 0..<5 { #expect(sent.contains(.unsubscribe(sessionId: "s\(index)"))) }
+        #expect(!provider.isPollingPeerLists)
     }
 
     @Test func availabilityCallbackFiresOnlyWhenTheSetOfCarryingPeersChanges() {
