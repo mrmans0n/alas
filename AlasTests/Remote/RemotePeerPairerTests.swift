@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Network
+import CryptoKit
 @testable import Alas
 
 struct RemotePeerPairerTests {
@@ -134,7 +135,7 @@ struct RemotePeerPairerTests {
         let recorder = Recorder()
         let p = pairer(["10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
-        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil, origin: "http://10.0.0.9:8765"))
         #expect(recorder.requests.count == 2)
         let body = try #require(recorder.requests.last?.httpBody)
         let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -156,7 +157,7 @@ struct RemotePeerPairerTests {
         let p = pairer(["10.0.0.1:8765": (401, #"{"error":"pairing failed"}"#),
                         "10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
-        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil, origin: "http://10.0.0.9:8765"))
         #expect(recorder.requests.count == 2)
     }
 
@@ -191,7 +192,7 @@ struct RemotePeerPairerTests {
         let p = pairer(["10.0.0.1:8765": (403, "{}"),
                         "10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: recorder)
         let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
-        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil, origin: "http://10.0.0.9:8765"))
         #expect(recorder.requests.count == 2)
     }
 
@@ -230,16 +231,140 @@ struct RemotePeerPairerTests {
         let outcome = await p.pair(
             origins: ["file:///etc/passwd", "ftp://10.0.0.1:21", "http://10.0.0.9:8765"],
             code: "ABC", deviceName: "Mac B", advertisement: ad)
-        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765"))
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil, origin: "http://10.0.0.9:8765"))
         // The two rejected origins must never have been dialed at all.
         #expect(recorder.requests.count == 1)
+    }
+
+    // MARK: identity binding
+
+    /// Replies to whatever challenge the pairer sent, signing with `key`
+    /// under `serverId`. `sign` false answers with a key it cannot back.
+    private func provingPairer(serverId: String, key: Curve25519.Signing.PrivateKey,
+                               sign: Bool = true, recorder: Recorder) -> RemotePeerPairer {
+        RemotePeerPairer(fetch: { req in
+            recorder.requests.append(req)
+            let body = try #require(req.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let challenge = try #require(object["challenge"] as? String)
+            let proof = try #require(RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key))
+            let signature = sign ? proof.signature : Data(repeating: 7, count: 64).base64EncodedString()
+            let reply = """
+                {"token":"tok","serverId":"\(serverId)","name":"Mac A",\
+                "publicKey":"\(proof.publicKey)","signature":"\(signature)"}
+                """
+            let http = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data(reply.utf8), http)
+        }, timeout: 1)
+    }
+
+    @Test func aProvedKeyIsReturnedWithThePairing() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let recorder = Recorder()
+        let p = provingPairer(serverId: "srv-a", key: key, recorder: recorder)
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A",
+                                   publicKey: RemoteIdentityCrypto.publicKeyString(key.publicKey),
+                                   origin: "http://10.0.0.9:8765"))
+    }
+
+    // The challenge has to be fresh per attempt, or a reply recorded from an
+    // earlier exchange would satisfy a later one.
+    @Test func everyAttemptSendsItsOwnChallenge() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let recorder = Recorder()
+        let p = provingPairer(serverId: "srv-a", key: key, recorder: recorder)
+        _ = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        _ = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        let challenges = try recorder.requests.map { request -> String in
+            let payload = try #require(request.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            return try #require(object["challenge"] as? String)
+        }
+        #expect(challenges.count == 2)
+        #expect(challenges[0] != challenges[1])
+    }
+
+    // Accepting a key on the strength of the reply naming it would pin the
+    // record to a string anyone can copy out of a public advertisement.
+    @Test func aKeyWithoutAValidSignatureIsRefused() async {
+        let key = Curve25519.Signing.PrivateKey()
+        let p = provingPairer(serverId: "srv-a", key: key, sign: false, recorder: Recorder())
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .identityUnproven)
+    }
+
+    // A signature over a DIFFERENT identity is not a proof for this one:
+    // the signed payload carries the serverId precisely so a proof made by
+    // one Mac cannot be presented as another's.
+    @Test func aSignatureMadeForAnotherIdentityIsRefused() async {
+        let key = Curve25519.Signing.PrivateKey()
+        let recorder = Recorder()
+        let p = RemotePeerPairer(fetch: { req in
+            recorder.requests.append(req)
+            let payload = try #require(req.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let challenge = try #require(object["challenge"] as? String)
+            // Signed as "srv-other" while the reply claims to be "srv-a".
+            let proof = try #require(RemoteIdentityCrypto.sign(serverId: "srv-other", challenge: challenge, with: key))
+            let reply = """
+                {"token":"tok","serverId":"srv-a","name":"Mac A",\
+                "publicKey":"\(proof.publicKey)","signature":"\(proof.signature)"}
+                """
+            let http = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data(reply.utf8), http)
+        }, timeout: 1)
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .identityUnproven)
+    }
+
+    // An origin that fails its proof disqualifies itself, not the attempt:
+    // a reassigned address must not strand a peer still reachable further
+    // down the list.
+    @Test func anUnprovenOriginDoesNotStopTheRemainingOnesFromBeingTried() async {
+        let key = Curve25519.Signing.PrivateKey()
+        let recorder = Recorder()
+        let p = RemotePeerPairer(fetch: { req in
+            recorder.requests.append(req)
+            let payload = try #require(req.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let challenge = try #require(object["challenge"] as? String)
+            let body: String
+            if req.url!.host == "10.0.0.1" {
+                body = #"{"token":"bad","serverId":"srv-a","name":"Impostor","publicKey":"\#(RemoteIdentityCrypto.publicKeyString(key.publicKey))","signature":"AAAA"}"#
+            } else {
+                let proof = try #require(RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: key))
+                body = """
+                    {"token":"tok","serverId":"srv-a","name":"Mac A",\
+                    "publicKey":"\(proof.publicKey)","signature":"\(proof.signature)"}
+                    """
+            }
+            let http = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data(body.utf8), http)
+        }, timeout: 1)
+        let outcome = await p.pair(origins: ["http://10.0.0.1:8765", "http://10.0.0.9:8765"],
+                                   code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A",
+                                   publicKey: RemoteIdentityCrypto.publicKeyString(key.publicKey),
+                                   origin: "http://10.0.0.9:8765"))
+    }
+
+    // A peer on an older build advertises no key at all. It still pairs —
+    // the record is simply left unverified — which is what keeps an upgrade
+    // from breaking every existing pairing.
+    @Test func aReplyWithNoKeyPairsUnverified() async {
+        let p = pairer(["10.0.0.9:8765": (200, #"{"token":"tok","serverId":"srv-a","name":"Mac A"}"#)], recorder: Recorder())
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .paired(token: "tok", serverId: "srv-a", name: "Mac A", publicKey: nil,
+                                   origin: "http://10.0.0.9:8765"))
     }
 
     // The synthesized enum description would print the token verbatim, so any
     // future interpolation of an outcome would leak a live bearer token.
     @Test func pairedDescriptionRedactsTheToken() {
         let outcome = RemotePeerPairer.Outcome.paired(
-            token: "s3cret-token", serverId: "srv-a", name: "Mac A", origin: "http://10.0.0.9:8765")
+            token: "s3cret-token", serverId: "srv-a", name: "Mac A", publicKey: nil,
+            origin: "http://10.0.0.9:8765")
         let text = "\(outcome)"
         #expect(!text.contains("s3cret-token"))
         #expect(text.contains("<redacted>"))

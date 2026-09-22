@@ -24,6 +24,12 @@ final class RemoteConnection: @unchecked Sendable {
     private let accessPolicy: RemoteAccessPolicy
     private let originPolicy: RemoteOriginPolicy
     private let makeHello: @MainActor () -> RemoteServerMessage?
+    /// Answers a peer's `helloAck` challenge with a signature proving this
+    /// Mac holds the key its peer records are pinned to. Nil (or a nil
+    /// result) means this build has no identity key, so the peer sees no
+    /// proof and refuses the socket — which is the correct outcome: an
+    /// unprovable Mac must not carry session traffic.
+    private let identityProof: @MainActor (String) -> RemoteIdentityProof?
     private let onAuthenticated: ((RemoteConnection, String) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
@@ -67,6 +73,9 @@ final class RemoteConnection: @unchecked Sendable {
     /// rather than occupying its own serialized slot. Removed once that
     /// message's `MessageProcessingTask` finishes. Mutated only on `queue`.
     private var inFlightFileRequests: Set<String> = []
+    /// How many identity challenges this socket has already answered. Bounded
+    /// by `maxIdentityProofs`; queue-confined like the rest of this state.
+    private var identityProofsSent = 0
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
@@ -82,6 +91,7 @@ final class RemoteConnection: @unchecked Sendable {
          originPolicy: RemoteOriginPolicy = .loopback,
          makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
          makeHello: @escaping @MainActor () -> RemoteServerMessage? = { nil },
+         identityProof: @escaping @MainActor (String) -> RemoteIdentityProof? = { _ in nil },
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
         self.conn = conn
@@ -92,6 +102,7 @@ final class RemoteConnection: @unchecked Sendable {
         self.originPolicy = originPolicy
         self.makeGateway = makeGateway
         self.makeHello = makeHello
+        self.identityProof = identityProof
         self.onAuthenticated = onAuthenticated
         self.onClose = onClose
     }
@@ -399,8 +410,15 @@ final class RemoteConnection: @unchecked Sendable {
     /// the previous. Independent tasks could otherwise interleave and, e.g., run
     /// a `sendPrompt` before the `takeOver` the client sent just before it.
     private func dispatchMessage(_ payload: Data) {
-        guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload),
-              let gateway else { return }
+        guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload) else { return }
+        // Answered here rather than in the gateway: proving who this Mac is
+        // belongs to the connection, not to the session surface, and the
+        // answer must be able to go out before any session work exists.
+        if case .helloAck(_, let challenge) = msg, let challenge, !challenge.isEmpty {
+            answerIdentityChallenge(challenge)
+            return
+        }
+        guard let gateway else { return }
         // Control messages (stop) are idempotent and latency-critical: they
         // don't extend `processingTail`, so messages arriving AFTER stop are
         // never blocked behind it. They still await the most recent DRIVE
@@ -485,6 +503,28 @@ final class RemoteConnection: @unchecked Sendable {
         if msg.isDriveOrdering {
             lastDriveActionTail = task.task
             lastDriveActionID = task.id
+        }
+    }
+
+    /// Signs one peer-supplied challenge, at most `maxIdentityProofs` times
+    /// per socket.
+    ///
+    /// The cap is not about cost: the signed payload is domain-separated and
+    /// carries this Mac's own `serverId`, so a signature obtained here is
+    /// useless anywhere else. It bounds the far side's ability to turn an
+    /// authenticated socket into an unlimited signing oracle — a legitimate
+    /// peer asks exactly once per connection, and a genuine retry after a
+    /// dropped frame costs one more.
+    private static let maxIdentityProofs = 8
+
+    private func answerIdentityChallenge(_ challenge: String) {
+        guard identityProofsSent < Self.maxIdentityProofs else { return }
+        identityProofsSent += 1
+        Task { @MainActor [weak self] in
+            guard let self, let proof = self.identityProof(challenge) else { return }
+            self.sendServerMessage(.identityProof(challenge: proof.challenge,
+                                                  publicKey: proof.publicKey,
+                                                  signature: proof.signature))
         }
     }
 

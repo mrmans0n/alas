@@ -95,6 +95,12 @@ extension Paths {
     static var remotePeersFile: URL {
         appSupportRoot.appendingPathComponent("remote-peers.json")
     }
+
+    /// Fallback home for remote credentials on builds the data protection
+    /// keychain refuses (see `RemoteKeychainSecretStore`). Owner-only.
+    static var remoteSecretsDir: URL {
+        appSupportRoot.appendingPathComponent("remote-secrets", isDirectory: true)
+    }
 }
 
 extension Paths {

@@ -19,6 +19,17 @@ final class RemotePeerManager {
         let serverId: String
         let name: String
         let origins: [String]
+        /// Base64 of this Mac's peer identity public key, advertised so the
+        /// far side can pin it. Empty when this build has no key, which
+        /// leaves the far side's record unverified rather than wrong.
+        let publicKey: String
+
+        init(serverId: String, name: String, origins: [String], publicKey: String = "") {
+            self.serverId = serverId
+            self.name = name
+            self.origins = origins
+            self.publicKey = publicKey
+        }
     }
 
     enum AddError: Error, Equatable {
@@ -41,6 +52,16 @@ final class RemotePeerManager {
         /// pairing failure would misrepresent what happened — the user's own
         /// Forget is why nothing was added, not anything about the exchange.
         case cancelled
+        /// Something answered with key material it could not prove it holds.
+        case identityUnproven
+        /// A record for this identity already exists and is pinned to a
+        /// DIFFERENT key. The exchange is refused rather than applied: this
+        /// is the shape an impersonation takes — a live pairing code
+        /// redeemed while advertising an established peer's `serverId` —
+        /// and it is also what a genuine key rotation looks like, which is
+        /// why the way out is the user's own Forget, never an automatic
+        /// re-key.
+        case identityRebindRefused
     }
 
     typealias MakeConnection = @MainActor (RemotePeer, @escaping @MainActor (RemotePeerConnection.Event) -> Void) -> any RemotePeerConnecting
@@ -99,7 +120,7 @@ final class RemotePeerManager {
     /// directly. Entries older than `reciprocalConfirmationTimeout` are
     /// pruned whenever a new one arrives, so a confirmation that is never
     /// claimed by any attempt does not accumulate forever.
-    @ObservationIgnored private var pendingReciprocalConfirmations: [String: (serverId: String, localDeviceId: String, receivedAt: Date)] = [:]
+    @ObservationIgnored private var pendingReciprocalConfirmations: [String: (serverId: String, publicKey: String?, localDeviceId: String, receivedAt: Date)] = [:]
     /// Counter-codes for `addPeer` attempts that already gave up — reported
     /// failure or timed out waiting — keyed to when that happened. The far
     /// side's own retries run on their own schedule and have no way to know
@@ -190,11 +211,16 @@ final class RemotePeerManager {
              // connection is refused, and the /health probe must report it
              // before a refused upgrade counts as "our token was revoked".
              // Without it, whatever answers a stored address decides both.
+             // `expectedPublicKey` is what turns that from a string
+             // comparison into proof: the socket has to sign this link's own
+             // challenge with the key the record was pinned to at pairing
+             // time. Nil only for records paired before that existed.
              RemotePeerConnection(
                  origins: peer.origins,
                  lastOrigin: peer.lastOrigin,
                  token: peer.token,
                  expectedServerId: peer.serverId,
+                 expectedPublicKey: peer.publicKey,
                  onEvent: onEvent)
          },
          now: @escaping () -> Date = { Date() }) {
@@ -222,7 +248,37 @@ final class RemotePeerManager {
     private func boundedIdentity() -> LocalIdentity {
         let me = localIdentity()
         return LocalIdentity(serverId: me.serverId, name: me.name,
-                             origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)))
+                             origins: Array(me.origins.prefix(RemotePairingLink.maxOrigins)),
+                             publicKey: me.publicKey)
+    }
+
+    /// This Mac's advertisement, with the key a peer should pin us to.
+    private func advertisement(counterCode: String?) -> RemotePeerAdvertisement {
+        let me = boundedIdentity()
+        return RemotePeerAdvertisement(
+            serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode,
+            publicKey: me.publicKey.isEmpty ? nil : me.publicKey)
+    }
+
+    /// Whether writing `publicKey` for `serverId` would re-key a record that
+    /// is already bound to different key material.
+    ///
+    /// This is the gate the whole issue turns on. A redeem only ever proves
+    /// the caller held a live pairing code; the peer STORE keys on
+    /// `serverId`, so without this check a code holder advertising an
+    /// established peer's identity would have its own token and origin
+    /// replace that peer's, and this Mac's outbound link would then dial the
+    /// claimant under the peer's name.
+    ///
+    /// Checked against the durable snapshot as well as the live row, so a
+    /// sibling attempt's provisional write cannot be used as cover for a
+    /// rebind. A record with nothing pinned yet is not protected by this —
+    /// there is no key to contradict — which is exactly why such records are
+    /// surfaced as unverified until the user re-pairs them.
+    private func wouldRebindIdentity(serverId: String, publicKey: String?) -> Bool {
+        let existing = peers.first(where: { $0.serverId == serverId }) ?? durableStateByServerId[serverId]
+        guard let pinned = existing?.publicKey, !pinned.isEmpty else { return false }
+        return publicKey != pinned
     }
 
     /// Pastes another Mac's pairing link: redeems its code there while
@@ -256,9 +312,9 @@ final class RemotePeerManager {
         // name.
         let startedAt = Date()
         let counterCode = pairing.beginPairing()
-        let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
+        let advertisement = advertisement(counterCode: counterCode)
         switch await pairer.pair(origins: origins, code: code, deviceName: me.name, advertisement: advertisement) {
-        case .paired(let token, let serverId, let name, let origin):
+        case .paired(let token, let serverId, let name, let publicKey, let origin):
             // An origin is an address, never an identity. Standing in for a
             // missing `serverId` with one would key the record — and the
             // `/health` probe's expected id, and the device records `forget`
@@ -285,6 +341,14 @@ final class RemotePeerManager {
                 endAttempt(counterCode: counterCode)
                 return .cancelled
             }
+            // Whoever answered proved a key, but not the one this identity's
+            // record is already bound to. Refusing here — before any write —
+            // is what stops one live pairing code from redirecting an
+            // established peer's link.
+            if wouldRebindIdentity(serverId: serverId, publicKey: publicKey) {
+                endAttempt(counterCode: counterCode)
+                return .identityRebindRefused
+            }
             // Snapshot the LAST GENUINELY DURABLE record for this identity,
             // if one exists — not `peers.first(where:)`, which could just as
             // easily show a still-uncommitted SIBLING attempt's own
@@ -300,7 +364,7 @@ final class RemotePeerManager {
             // rather than just undoing one sibling's edit into another's.
             let previousState = durableStateByServerId[serverId]
             upsert(serverId: serverId, name: name ?? origin, origins: origins,
-                   lastOrigin: origin, token: token, localDeviceId: nil)
+                   lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil)
             lastUpsertOwnerByServerId[serverId] = counterCode
             // `upsert` proves OUR call to A succeeded — nothing more. Our own
             // token is valid the instant A's HTTP reply arrives, so OUR
@@ -358,6 +422,9 @@ final class RemotePeerManager {
         case .originRejected:
             endAttempt(counterCode: counterCode)
             return .originRejected
+        case .identityUnproven:
+            endAttempt(counterCode: counterCode)
+            return .identityUnproven
         case .unreachable:
             // Our own leg failing does not mean the peer's did: A's reply to
             // us can be lost on the wire after A already redeemed our
@@ -416,17 +483,28 @@ final class RemotePeerManager {
     /// only learn which local device record represents the peer.
     func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
         if let counterCode = request.counterCode {
-            let me = boundedIdentity()
             // `startGenerationAtRedeem`, captured synchronously at
             // redemption time by `notePeerPairingArrived`, is authoritative
             // when present — it predates even the scheduling gap before
             // this function's own body started; capturing it here too is
             // only a fallback for callers (direct test invocations) that
-            // skip that earlier hook.
+            // skip that earlier hook. Consumed before any early return
+            // below, so a refused exchange leaves no entry behind.
             let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
                 ?? forgetGeneration(for: request.peerServerId)
-            let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: nil)
-            guard case .paired(let token, let repliedServerId, _, let origin) = await pairer.pair(
+            // A redeem that claims an identity this Mac already holds a
+            // pinned record for, with different key material, is refused
+            // before the pair-back is even attempted: nothing this request
+            // can go on to prove would make re-keying that record correct,
+            // and the device it minted must not survive the refusal.
+            if wouldRebindIdentity(serverId: request.peerServerId, publicKey: request.peerPublicKey) {
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
+            let me = boundedIdentity()
+            let advertisement = advertisement(counterCode: nil)
+            guard case .paired(let token, let repliedServerId, _, let repliedPublicKey, let origin) = await pairer.pair(
                 origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
             else {
                 // The peer already holds a token for this Mac: it was minted
@@ -448,6 +526,20 @@ final class RemotePeerManager {
                 onRevokeDevice?(request.localDeviceId)
                 return
             }
+            // Same reasoning one level deeper: the advertised key is a claim
+            // — public keys are public, so anyone can name someone else's —
+            // while `repliedPublicKey` is one the pair-back's own challenge
+            // PROVED. A request advertising one key whose endpoint then
+            // proves another is not reconciled in either direction; it is
+            // refused. And the proven key must not re-key an established
+            // record either, re-checked here because the pair-back's round
+            // trip gave a concurrent exchange time to pin one.
+            guard request.peerPublicKey == nil || request.peerPublicKey == repliedPublicKey,
+                  !wouldRebindIdentity(serverId: request.peerServerId, publicKey: repliedPublicKey) else {
+                pairing.revoke(deviceId: request.localDeviceId)
+                onRevokeDevice?(request.localDeviceId)
+                return
+            }
             // The generation changed since this exchange started: either
             // the user forgot this peer (this SAME attempt's own, or a
             // concurrent sibling's — e.g. a doubled add, or a retried
@@ -465,7 +557,8 @@ final class RemotePeerManager {
                 return
             }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
-                   lastOrigin: origin, token: token, localDeviceId: request.localDeviceId)
+                   lastOrigin: origin, token: token, publicKey: repliedPublicKey,
+                   localDeviceId: request.localDeviceId)
             lastUpsertOwnerByServerId[request.peerServerId] = counterCode
             // This branch's own upsert always carries a real
             // `localDeviceId` — the responder's own reciprocal round trip
@@ -522,7 +615,8 @@ final class RemotePeerManager {
                 now.timeIntervalSince($0.value) <= RemotePairingService.codeTTL
             }
             pendingReciprocalConfirmations[request.redeemedCode] = (
-                serverId: request.peerServerId, localDeviceId: request.localDeviceId, receivedAt: now)
+                serverId: request.peerServerId, publicKey: request.peerPublicKey,
+                localDeviceId: request.localDeviceId, receivedAt: now)
         }
     }
 
@@ -618,6 +712,19 @@ final class RemotePeerManager {
                 // device survive indefinitely even after the user forgets
                 // this peer.
                 guard buffered.serverId == peers[index].serverId else {
+                    pairing.revoke(deviceId: buffered.localDeviceId)
+                    onRevokeDevice?(buffered.localDeviceId)
+                    return false
+                }
+                // And it must name the same key the record is pinned to.
+                // The callback's key is only a claim, so this proves
+                // nothing on its own — the record's own key was proved by
+                // this attempt's `/pair` exchange. What it catches is a
+                // callback that agrees on the identity while naming
+                // different key material, which cannot be the same Mac the
+                // record was just pinned to.
+                if let pinned = peers[index].publicKey, !pinned.isEmpty,
+                   let claimed = buffered.publicKey, claimed != pinned {
                     pairing.revoke(deviceId: buffered.localDeviceId)
                     onRevokeDevice?(buffered.localDeviceId)
                     return false
@@ -740,12 +847,30 @@ final class RemotePeerManager {
             durableStateByServerId[peers[index].serverId] = peers[index]
             store.save(peers)
         case .message:
+            // Phase 3 (`FederatedSessionsProvider`) consumes these. Nothing
+            // may be consumed for a peer whose record is not bound to
+            // verified key material: an unverified record is only as strong
+            // as the address it was paired over, and session aggregation
+            // means transcripts, prompts, diffs and permission decisions.
+            // `carriesSessions(peerId:)` is that gate — a verified record's
+            // link has already proved possession on this very socket.
             break
         }
     }
 
+    /// Whether real session data may cross this peer's link.
+    ///
+    /// False for a record paired before identity verification shipped: such
+    /// a record has nothing pinned, so nobody proved anything to open its
+    /// link. The user's way out is to forget the peer and pair again, which
+    /// pins the key and flips this to true.
+    func carriesSessions(peerId: String) -> Bool {
+        guard let peer = peers.first(where: { $0.id == peerId }) else { return false }
+        return peer.isVerified && states[peerId] == .online
+    }
+
     private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String,
-                        token: String, localDeviceId: String?) {
+                        token: String, publicKey: String?, localDeviceId: String?) {
         // `localDeviceId` is resolved to exactly what the caller passed —
         // including `nil` from `addPeer`'s own call site, which must
         // actually CLEAR a re-paired record's old value: preserving it would
@@ -776,11 +901,18 @@ final class RemotePeerManager {
             peers[index].origins = merged
             peers[index].lastOrigin = lastOrigin
             peers[index].token = token
+            // Callers reach here only past `wouldRebindIdentity`, so this
+            // either re-asserts the same key or upgrades a record that had
+            // none — a pre-verification record the user just re-paired.
+            // Never cleared by a peer that stopped advertising a key: an
+            // established binding must not be droppable by the far side.
+            if let publicKey, !publicKey.isEmpty { peers[index].publicKey = publicKey }
             peers[index].localDeviceId = localDeviceId
             peer = peers[index]
         } else {
             peer = RemotePeer(id: UUID().uuidString, serverId: serverId, name: name, origins: origins,
-                              lastOrigin: lastOrigin, token: token, protocolVersion: nil,
+                              lastOrigin: lastOrigin, token: token, publicKey: publicKey,
+                              protocolVersion: nil,
                               localDeviceId: localDeviceId, addedAt: now())
             peers.append(peer)
         }

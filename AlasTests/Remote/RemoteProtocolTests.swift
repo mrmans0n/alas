@@ -35,6 +35,34 @@ struct RemoteProtocolTests {
         #expect(ack.isControl == false)
         #expect(ack.fileRequestDedupKey == nil)
         #expect(ack.isDriveOrdering == false)
+        // A browser's ack carries no challenge and must not invent one:
+        // an empty-but-present key would have the server sign for nothing.
+        #expect(object["challenge"] == nil)
+    }
+
+    @Test func helloAckCarriesAnIdentityChallengeWhenPinned() throws {
+        let ack = RemoteClientMessage.helloAck(protocolVersion: 1, challenge: "nonce-1")
+        #expect(try roundTrip(ack) == ack)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? [String: Any])
+        #expect(object["challenge"] as? String == "nonce-1")
+    }
+
+    // An older peer's ack has no `challenge` key at all; it must still
+    // decode rather than killing the socket.
+    @Test func helloAckWithoutAChallengeDecodes() throws {
+        let data = Data(#"{"type":"helloAck","protocolVersion":1}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteClientMessage.self, from: data)
+        #expect(decoded == .helloAck(protocolVersion: 1, challenge: nil))
+    }
+
+    @Test func identityProofRoundTripsAndEncodesItsFields() throws {
+        let proof = RemoteServerMessage.identityProof(challenge: "nonce-1", publicKey: "pk", signature: "sig")
+        #expect(try roundTrip(proof) == proof)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(proof)) as? [String: Any])
+        #expect(object["type"] as? String == "identityProof")
+        #expect(object["challenge"] as? String == "nonce-1")
+        #expect(object["publicKey"] as? String == "pk")
+        #expect(object["signature"] as? String == "sig")
     }
 
     @Test func worktreeCreationServerMessagesRoundTripAndEncodeRequiredFields() throws {

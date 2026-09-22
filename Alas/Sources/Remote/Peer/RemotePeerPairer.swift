@@ -7,10 +7,20 @@ import Foundation
 /// neither is trusted as a final answer until every origin has been tried.
 struct RemotePeerPairer {
     enum Outcome: Equatable, Sendable {
-        case paired(token: String, serverId: String?, name: String?, origin: String)
+        /// `publicKey` is set only when the reply carried one AND signed this
+        /// attempt's own challenge with it. Nil means the far side offered no
+        /// key at all (an older build), which pairs but leaves the record
+        /// unverified — never "offered one we could not check", which is
+        /// `identityUnproven` instead.
+        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String)
         case expiredCode
         case originRejected
         case unreachable
+        /// An origin answered with key material but did not prove it holds
+        /// the matching private key. Kept apart from `unreachable` because it
+        /// is not a network problem and retrying cannot fix it: something
+        /// there is claiming a key it does not have.
+        case identityUnproven
     }
 
     // Not `@Sendable`: tests inject closures that record into plain classes,
@@ -53,13 +63,22 @@ struct RemotePeerPairer {
             let code: String
             let deviceName: String
             let peer: RemotePeerAdvertisement?
+            let challenge: String
         }
         struct Reply: Decodable {
             let token: String
             let serverId: String?
             let name: String?
+            let publicKey: String?
+            let signature: String?
         }
-        let body = try? JSONEncoder().encode(Body(code: code, deviceName: deviceName, peer: advertisement))
+        // One challenge for the whole attempt, not one per origin: whichever
+        // origin answers has to sign THIS value, and it is never reused
+        // across attempts, so a reply recorded from an earlier exchange
+        // cannot be replayed into this one.
+        let challenge = RemoteIdentityCrypto.randomChallenge()
+        let body = try? JSONEncoder().encode(
+            Body(code: code, deviceName: deviceName, peer: advertisement, challenge: challenge))
         // A 401 or 403 only proves what THAT origin thinks: a stale advertised
         // address can have been reassigned to an unrelated Alas instance,
         // which correctly rejects a code it has never seen (401) or simply
@@ -71,6 +90,11 @@ struct RemotePeerPairer {
         // since fixing a setting on some other Mac would not help either way.
         var sawExpiredCode = false
         var sawOriginRejected = false
+        // Like the two above: an origin that fails its own proof disqualifies
+        // ITSELF, not the attempt — a stale address reassigned to something
+        // that answers with a key it cannot back must not stop a later origin
+        // where the real peer still lives. Reported only if nothing works.
+        var sawUnprovenIdentity = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -88,7 +112,26 @@ struct RemotePeerPairer {
             switch http.statusCode {
             case 200:
                 guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { continue }
-                return .paired(token: reply.token, serverId: reply.serverId, name: reply.name, origin: normalized)
+                var verifiedKey: String?
+                if let claimedKey = reply.publicKey {
+                    // A key came back, so it must be BACKED. Accepting it on
+                    // the strength of the reply alone would pin the record to
+                    // a string anyone can copy out of a public advertisement,
+                    // and every later socket would then be checked against a
+                    // key its supposed owner never had to possess.
+                    guard let serverId = reply.serverId, !serverId.isEmpty,
+                          let signature = reply.signature,
+                          RemoteIdentityCrypto.verify(
+                              RemoteIdentityProof(challenge: challenge, publicKey: claimedKey, signature: signature),
+                              serverId: serverId, expectedPublicKey: claimedKey, challenge: challenge)
+                    else {
+                        sawUnprovenIdentity = true
+                        continue
+                    }
+                    verifiedKey = claimedKey
+                }
+                return .paired(token: reply.token, serverId: reply.serverId, name: reply.name,
+                               publicKey: verifiedKey, origin: normalized)
             case 401:
                 sawExpiredCode = true
                 continue
@@ -101,6 +144,9 @@ struct RemotePeerPairer {
         }
         if sawExpiredCode { return .expiredCode }
         if sawOriginRejected { return .originRejected }
+        // Below the two above: a dead code and a peers-off setting are both
+        // more fundamental, and both are things the user can act on directly.
+        if sawUnprovenIdentity { return .identityUnproven }
         return .unreachable
     }
 }
@@ -112,14 +158,17 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
     /// string. Redact it at the type, so no caller has to remember.
     var description: String {
         switch self {
-        case .paired(_, let serverId, let name, let origin):
-            return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), origin: \(origin))"
+        case .paired(_, let serverId, let name, let publicKey, let origin):
+            return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), "
+                + "publicKey: \(publicKey ?? "nil"), origin: \(origin))"
         case .expiredCode:
             return "expiredCode"
         case .originRejected:
             return "originRejected"
         case .unreachable:
             return "unreachable"
+        case .identityUnproven:
+            return "identityUnproven"
         }
     }
 }

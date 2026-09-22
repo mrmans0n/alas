@@ -168,8 +168,11 @@ it has today. Three new pieces connect instances and clients.
 - Implementation plan for this section and the handshake:
   `docs/superpowers/plans/2026-09-19-federation-phase-1-peer-trust.md`.
 - The issuer stores the token hash; the paired client must hold the token to
-  authenticate. Native outbound credentials belong in Keychain before
-  hosted access ships. Cloud metadata must not contain either endpoint's
+  authenticate. Native outbound credentials live in the Keychain
+  (`RemoteSecretStore`): the peer identity private key, and the bearer tokens
+  peers issued to this Mac, which `FilePeerStore` keeps out of
+  `remote-peers.json`. Builds the data protection keychain refuses fall back
+  to owner-only files. Cloud metadata must not contain either endpoint's
   plaintext credentials.
 - Revocation uses the existing per-device revoke + live-socket disconnect
   (`RemotePairingService.revoke`, `RemoteServer.disconnectDevice`).
@@ -281,30 +284,37 @@ for the native sidebar without the phone hub being on.
   compromised gateway can exercise its delegated authority. The hosted
   relay must not receive that authority or those credentials.
 
-### Known gap: a peer identity is claimed, not proved
+### Peer identity is proved, not claimed
 
-`serverId` is self-reported, at pairing and on the wire. Nothing ties it to
-anything the claimant had to possess. So a holder of one live pairing code
-can redeem it while advertising an *existing* peer's `serverId`: the peer
-store keys on that identity, so the claimant's token and origin replace the
-row's, and this Mac's outbound link then dials the claimant instead of the
-peer whose name the row still carries.
+`serverId` is self-reported, at pairing and on the wire, so nothing in it
+alone ties a claimant to anything it had to possess. Each Mac therefore holds
+an Ed25519 peer identity key (`RemoteIdentityKeyProvider`, stored per §2),
+and every peer record is pinned to the far side's public key.
 
-Two smaller consequences are already closed. A link refuses a socket whose
-`hello` reports an id other than the one its record was paired with, so an
-address that has merely been reassigned cannot re-key a record; and a peer
-redeem no longer deletes earlier device records for the same identity, so the
-impersonated peer keeps its inbound access. Forgetting the peer revokes every
-device carrying the identity, which removes the claimant's access too.
+- **Committed at pairing time.** `POST /pair` carries a `challenge` the
+  caller minted; the reply carries the responder's `publicKey` and a
+  signature over that challenge, domain-separated and bound to the
+  responder's own `serverId`. A reply that names a key without signing for
+  it is refused (`identityUnproven`) — a public key is public, so naming
+  one proves nothing.
+- **Proved again on the socket that carries traffic.** A pinned link sends
+  its `helloAck` with a fresh challenge and refuses to go online until the
+  peer answers with a verifying `identityProof`. Nothing about the record —
+  not the name, not the origin — is adopted from a socket on its way to
+  being refused. A `/health` side channel could only ever say something
+  about the address, not about this connection.
+- **A record is never re-keyed.** An exchange claiming an identity already
+  pinned to different key material is refused outright, in both directions,
+  and the device its redeem minted is revoked. That is the impersonation
+  this closes: a holder of one live pairing code redeeming it while
+  advertising an existing peer's `serverId` used to replace that row's token
+  and origin, pointing this Mac's outbound link at the claimant. Genuine key
+  rotation takes the same path a user already has: Forget, then pair again.
 
-Phase 1 accepts the remaining gap: the flag is off by default, no session
-data crosses a peer link, and the actor must hold a code the user
-deliberately displayed, within its 120-second window. It does not stay
-acceptable. Bind each peer record to verified key material. The peer must
-prove possession of a key committed to at pairing time, with `serverId`
-derived from or pinned to it. This is a prerequisite for both aggregation
-and hosted access, not a property an account login can supply. No real
-session data may cross those links before that binding exists.
+Records paired before this shipped have no key. They are grandfathered
+rather than broken: their links still connect, Settings shows them as an
+unverified pairing, and `RemotePeerManager.carriesSessions` refuses to let
+session aggregation carry anything over them. Re-pairing pins the key.
 
 ## Hosted fleet tier
 
