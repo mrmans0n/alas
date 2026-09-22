@@ -683,8 +683,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 typography: host.typography,
                 trustedImageRoot: host.trustedImageRoot,
                 isForkEligible: host.session.canForkMessage(at: row.index),
-                forkTargets: host.forkTargets
+                forkTargets: host.forkTargets,
+                isLiveNarration: isLiveNarration(host: host, row: row)
             )
+        }
+
+        /// Whether `row` is the narration the agent is writing into right
+        /// now. Part of the row key (and so of its token) rather than read
+        /// by the mounted view: the flag flips on the OLD tail when a new
+        /// message lands after it, and nothing else about that row changes
+        /// in the same update.
+        private static func isLiveNarration(
+            host: ACPTranscriptScroller,
+            row: ACPTranscriptVisibleRow
+        ) -> Bool {
+            ACPNarrationLiveness.liveIndex(
+                messages: host.transcript.messages,
+                isStreaming: host.transcript.streamingState == .streaming,
+                lastContentTouchIndex: host.transcript.lastContentTouchIndex
+            ) == row.index
         }
 
         /// The "Ran N tools" / "Hide N tools" toggle row for a run of
@@ -781,6 +798,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
                 typography: host.typography,
                 trustedImageRoot: host.trustedImageRoot,
+                isLiveNarration: isLiveNarration(host: host, row: row),
                 transcript: host.transcript,
                 session: host.session,
                 onOpenDiff: host.onOpenDiff,

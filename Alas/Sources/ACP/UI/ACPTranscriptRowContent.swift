@@ -25,6 +25,12 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var availableTrailingGutterWidth: CGFloat?
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
+    /// Whether this row is the narration the agent is writing into right
+    /// now (`ACPNarrationLiveness`). Compared, so the row re-renders when
+    /// it stops being the live tail — otherwise a finished "Thinking…"
+    /// would keep shimmering until some unrelated field of its message
+    /// happened to change.
+    var isLiveNarration: Bool = false
     // Excluded from equality — reference-stable for the session's lifetime
     // (`transcript`/`session` are `let` properties on `ACPSession`, never
     // reassigned), or closures whose behavior only depends on already-compared
@@ -73,7 +79,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             availableTrailingGutterWidth: lhs.availableTrailingGutterWidth ?? .infinity,
             typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
-            isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
+            isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets,
+            isLiveNarration: lhs.isLiveNarration
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
@@ -84,7 +91,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             availableTrailingGutterWidth: rhs.availableTrailingGutterWidth ?? .infinity,
             typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
-            isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
+            isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets,
+            isLiveNarration: rhs.isLiveNarration
         )
     }
 
@@ -101,7 +109,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         typography: ACPChatTypography,
         trustedImageRoot: URL?,
         isForkEligible: Bool = false,
-        forkTargets: [ACPSessionForkTarget] = []
+        forkTargets: [ACPSessionForkTarget] = [],
+        isLiveNarration: Bool = false
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
@@ -111,7 +120,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
             availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
             typography: typography, trustedImageRoot: trustedImageRoot,
-            isForkEligible: isForkEligible, forkTargets: forkTargets
+            isForkEligible: isForkEligible, forkTargets: forkTargets,
+            isLiveNarration: isLiveNarration
         )
     }
 
@@ -127,6 +137,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         let trustedImageRoot: URL?
         let isForkEligible: Bool
         let forkTargets: [ACPSessionForkTarget]
+        let isLiveNarration: Bool
     }
 
     static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
@@ -195,7 +206,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                         messageId: stableId,
                         transcript: transcript,
                         buffer: buf,
-                        typography: typography
+                        typography: typography,
+                        isLive: isLiveNarration
                     )
                 } else {
                     AgentMessageRow(
@@ -207,7 +219,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 }
             }
         case .thought(_, _, let buf):
-            ACPThoughtView(buffer: buf)
+            ACPThoughtView(buffer: buf, isLive: isLiveNarration)
         case .toolCall(let tc):
             if let compaction = ACPContextCompaction(toolCall: tc) {
                 ACPContextCompactionView(compaction: compaction)

@@ -687,7 +687,22 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         }
         }()
-        return flushed.union(result)
+        let touched = flushed.union(result)
+        // A `.plan` row is a background tick alongside whatever narration or
+        // tool run is actually in progress — it must not steal or release
+        // `lastContentTouchIndex` from that in-progress row. Every other
+        // kind this switch can return IS real content, so excluding just
+        // plan rows here (rather than allowlisting kinds) stays correct as
+        // new update kinds are added.
+        let contentTouches = touched.filter { i in
+            guard transcript.messages.indices.contains(i) else { return false }
+            if case .plan = transcript.messages[i] { return false }
+            return true
+        }
+        if let latest = contentTouches.max() {
+            transcript.lastContentTouchIndex = latest
+        }
+        return touched
     }
 
     private func applyContextCompaction(_ update: ACPCompactionUpdate) -> Set<Int> {
@@ -2074,6 +2089,11 @@ final class ACPSession: ObservableObject, Identifiable {
         // since turn completion reaches here without an `ACPSessionUpdate`.
         _ = flushPendingReplayCandidates()
         transcript.completedOutputBoundaryMessageIds.removeAll()
+        // The turn's output is done, so nothing is being written into
+        // anymore — a stale pointer here would otherwise let the next
+        // turn's `.streaming` flip briefly re-light this turn's last
+        // narration row before its own first chunk lands.
+        transcript.lastContentTouchIndex = nil
         for message in transcript.messages.reversed() {
             switch message {
             case .agent, .thought:

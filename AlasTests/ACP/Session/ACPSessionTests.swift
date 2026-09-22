@@ -396,6 +396,30 @@ struct ACPSessionTests {
         #expect(finalID == "final-1")
         #expect(finalBuffer.value == "Done")
         #expect(finalBuffer.phase == .finalAnswer)
+        // The third chunk resumed the OLDER commentary row (index 0), not
+        // the trailing final-answer row (index 1) — `lastContentTouchIndex`
+        // must follow the row actually written to, not array order. Feeds
+        // `ACPNarrationLiveness.liveIndex`, which shimmers whichever row
+        // this points at.
+        #expect(session.transcript.lastContentTouchIndex == 0)
+    }
+
+    @Test("a plan update does not move lastContentTouchIndex off the in-progress row")
+    func planUpdateDoesNotMoveContentTouch() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentThoughtChunk(.text("thinking")))
+        #expect(session.transcript.lastContentTouchIndex == 0)
+        session.apply(.plan([.init(content: "Step 1", priority: nil, status: "pending")]))
+        #expect(session.transcript.lastContentTouchIndex == 0)
+    }
+
+    @Test("markCompletedOutputBoundary clears lastContentTouchIndex")
+    func completedBoundaryClearsContentTouch() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("hello")))
+        #expect(session.transcript.lastContentTouchIndex != nil)
+        session.markCompletedOutputBoundary()
+        #expect(session.transcript.lastContentTouchIndex == nil)
     }
 
     @Test("id-less phase transition starts a new agent row")
