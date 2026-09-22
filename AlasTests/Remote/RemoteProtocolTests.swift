@@ -906,4 +906,28 @@ struct RemoteProtocolTests {
         let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
         #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
     }
+
+    @Test func sessionSummaryOmitsServerFieldsWhenLocal() throws {
+        let local = RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: true)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(local)) as? [String: Any])
+        #expect(object["serverId"] == nil)
+        #expect(object["serverName"] == nil)
+        #expect(try roundTrip(local) == local)
+    }
+
+    @Test func sessionSummaryRoundTripsServerFieldsWhenFederated() throws {
+        let federated = RemoteSessionSummary(id: "srv-b:s1", title: "T", agentId: "claude", status: "idle",
+                                             canDrive: false, serverId: "srv-b", serverName: "Mac B")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(federated)) as? [String: Any])
+        #expect(object["serverId"] as? String == "srv-b")
+        #expect(object["serverName"] as? String == "Mac B")
+        #expect(try roundTrip(federated) == federated)
+    }
+
+    @Test func sessionSummaryDecodesWithoutServerFields() throws {
+        let legacy = Data(#"{"id":"s1","title":"T","agentId":"claude","status":"idle","canDrive":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: legacy)
+        #expect(decoded.serverId == nil)
+        #expect(decoded.serverName == nil)
+    }
 }
