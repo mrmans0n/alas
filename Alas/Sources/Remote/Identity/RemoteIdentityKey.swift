@@ -32,12 +32,17 @@ enum RemoteIdentityCrypto {
         Data("\(domain)\n\(serverId)\n\(challenge)".utf8)
     }
 
+    /// Byte length of every `randomChallenge()`. Exposed so a receiver can
+    /// reject anything hex-encoding to a different length before doing any
+    /// work over it — see `isPlausibleChallenge`.
+    static let challengeByteCount = 32
+
     /// A fresh 256-bit challenge, hex-encoded. Chosen by the VERIFIER on the
     /// socket that will carry traffic, which is what makes a proof
     /// non-replayable: a recorded proof is bound to a challenge that will
     /// never be asked again.
     static func randomChallenge() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
+        var bytes = [UInt8](repeating: 0, count: challengeByteCount)
         let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         // A CSPRNG failure would otherwise yield an all-zero, predictable
         // challenge — one an attacker could have a valid proof for in
@@ -45,6 +50,21 @@ enum RemoteIdentityCrypto {
         // (precondition fires in release too).
         precondition(status == errSecSuccess, "SecRandomCopyBytes failed: cannot generate an identity challenge")
         return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Whether `challenge` could be one this Mac (or a peer running this
+    /// same code) actually produced: exactly `challengeByteCount * 2`
+    /// lowercase hex characters. Any authenticated socket can otherwise send
+    /// a `helloAck` challenge up to the WebSocket message limit and have it
+    /// forwarded straight into CryptoKit signing — hashing and signing
+    /// attacker-controlled megabytes, repeatedly, on the main actor. This is
+    /// meant to be checked BEFORE scheduling a signature, not as a
+    /// correctness requirement of `verify` itself, which cares only about
+    /// the challenge matching and never depended on its shape.
+    static func isPlausibleChallenge(_ challenge: String) -> Bool {
+        let hex = challenge.utf8
+        guard hex.count == challengeByteCount * 2 else { return false }
+        return hex.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
     }
 
     static func publicKeyString(_ key: Curve25519.Signing.PublicKey) -> String {
@@ -131,6 +151,16 @@ final class RemoteIdentityKeyProvider: RemoteIdentitySigning {
         if let raw = store.secret(for: Self.keyAccount),
            let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) {
             cached = key
+            // Re-store the loaded bytes. A no-op when they already came
+            // from the primary store, but when `store` fell back to a
+            // pre-Keychain plaintext file — an ad-hoc build that later
+            // gains Keychain access — this is what actually migrates it:
+            // `RemoteKeychainSecretStore.setSecret` writes to Keychain and
+            // deletes the fallback copy. Unlike `FilePeerStore`, whose
+            // next ordinary `save()` migrates its tokens, nothing else
+            // ever calls `setSecret` again for this single long-lived key,
+            // so without this the plaintext file would linger indefinitely.
+            store.setSecret(raw, for: Self.keyAccount)
             return key
         }
         let fresh = Curve25519.Signing.PrivateKey()

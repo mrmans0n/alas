@@ -414,7 +414,15 @@ final class RemoteConnection: @unchecked Sendable {
         // Answered here rather than in the gateway: proving who this Mac is
         // belongs to the connection, not to the session surface, and the
         // answer must be able to go out before any session work exists.
-        if case .helloAck(_, let challenge) = msg, let challenge, !challenge.isEmpty {
+        //
+        // `isPlausibleChallenge` is checked before any signing work runs:
+        // any authenticated browser or peer can otherwise send a challenge
+        // up to the WebSocket message limit (16 MB) and have it forwarded
+        // into CryptoKit on the main actor, up to `maxIdentityProofs` times
+        // per connection — hashing and signing attacker-controlled
+        // megabytes while freezing UI work. A malformed challenge is simply
+        // dropped, not answered: it could never have verified anyway.
+        if case .helloAck(_, let challenge) = msg, let challenge, RemoteIdentityCrypto.isPlausibleChallenge(challenge) {
             answerIdentityChallenge(challenge)
             return
         }

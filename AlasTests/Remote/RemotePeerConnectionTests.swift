@@ -405,6 +405,34 @@ struct RemotePeerConnectionTests {
         #expect(!events.states.contains(.online))
     }
 
+    // Regression: `serverId` in `hello` is still just a claim at the point
+    // the version is read. An origin reporting the expected `serverId`
+    // alongside an INCOMPATIBLE version, but unable to prove the pinned
+    // key, must be skipped like any other unproven origin — not allowed to
+    // make the whole attempt terminal on the strength of an unverified
+    // version claim, which would strand a link whose real peer might still
+    // answer elsewhere.
+    @Test func anUnprovenOriginWithAnIncompatibleVersionIsSkippedNotTerminal() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
+        let (server, origin) = try await startServer(pairing: pairing, signer: StubSigner())
+        defer { server.stop() }
+        let pinned = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let events = Events()
+        // `localVersion: 99` makes this server's protocol version look
+        // incompatible too — the OLD code trusted the version check ahead
+        // of the identity proof and would settle on `.incompatible` (a
+        // terminal state) even though nothing here proved it was really
+        // the pinned peer.
+        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: token,
+                                        expectedServerId: "srv-a", expectedPublicKey: pinned,
+                                        config: fastConfig(localVersion: 99)) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { link.state == .identityUnproven }
+        #expect(!events.states.contains { if case .incompatible = $0 { return true } else { return false } })
+    }
+
     // Records paired before verification shipped have nothing pinned. They
     // must keep connecting exactly as before — an upgrade that silently
     // broke every existing pairing would be worse than the gap it closes —

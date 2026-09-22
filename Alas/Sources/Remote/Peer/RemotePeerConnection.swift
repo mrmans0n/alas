@@ -234,15 +234,38 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 lastIdentityFailure = .identityMismatch(expected: expectedServerId, actual: serverId)
                 continue
             }
-            // This origin's identity checked out, so any identity failure
-            // seen at an EARLIER origin in this same attempt no longer
-            // describes what's wrong: it would misreport a normal disconnect
-            // later in this block as an identity problem with the Mac we
-            // are, in fact, correctly talking to.
+            // This origin's `serverId` claim checked out, so any identity
+            // failure seen at an EARLIER origin in this same attempt no
+            // longer describes what's wrong: it would misreport a normal
+            // disconnect later in this block as an identity problem with
+            // the Mac we are, in fact, correctly talking to.
             lastIdentityFailure = nil
+            // The `helloAck` doubles as the challenge when this record is
+            // pinned to a key. Nothing about this socket is adopted — not
+            // the origin, not the name, not the protocol version — until
+            // the answer verifies: an impostor that got this far must not be
+            // able to rewrite the record on its way to being refused.
+            //
+            // Checked BEFORE the version check below, not after: `serverId`
+            // above is still just a claim, so a stale or malicious origin
+            // reporting the expected id alongside an arbitrary version could
+            // otherwise make the WHOLE attempt terminal — on the strength of
+            // an unverified claim — before a later origin holding the real
+            // peer's key is ever tried. Only a possession-proven endpoint's
+            // version may decide that.
+            if !(await proveIdentity(on: candidate, serverId: serverId)) {
+                candidate.cancel(with: .policyViolation, reason: nil)
+                if Task.isCancelled { return }
+                lastIdentityFailure = .identityUnproven
+                continue
+            }
+            if Task.isCancelled {
+                candidate.cancel(with: .goingAway, reason: nil)
+                return
+            }
             // Identity is confirmed at this point, so an incompatible
             // version genuinely means THIS peer cannot be talked to yet —
-            // unlike the identity check above, this is fatal for the whole
+            // unlike the identity checks above, this is fatal for the whole
             // attempt rather than just this origin.
             if version != config.localProtocolVersion {
                 candidate.cancel(with: .goingAway, reason: nil)
@@ -254,21 +277,6 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 // user toggles federation, restarts, or forgets and
                 // re-pairs.
                 scheduleReconnect(reportedState: .incompatible(remoteVersion: version))
-                return
-            }
-            // The `helloAck` doubles as the challenge when this record is
-            // pinned to a key. Nothing about this socket is adopted — not
-            // the origin, not the name, not the protocol version — until
-            // the answer verifies: an impostor that got this far must not be
-            // able to rewrite the record on its way to being refused.
-            if !(await proveIdentity(on: candidate, serverId: serverId)) {
-                candidate.cancel(with: .policyViolation, reason: nil)
-                if Task.isCancelled { return }
-                lastIdentityFailure = .identityUnproven
-                continue
-            }
-            if Task.isCancelled {
-                candidate.cancel(with: .goingAway, reason: nil)
                 return
             }
             socket = candidate
