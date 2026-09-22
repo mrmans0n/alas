@@ -70,6 +70,7 @@ struct RunScheduleDraft: Equatable {
     var createsWorktree = false
     var branchTemplate = RunScheduleComposition.defaultBranchTemplate
     var agentID: String?
+    var modelID: String?
     var prompt = ""
     var sendsPromptAutomatically = true
 
@@ -113,6 +114,7 @@ struct RunScheduleDraft: Equatable {
             createsWorktree = true
             branchTemplate = composition.branchTemplate
             agentID = composition.agentId
+            modelID = composition.modelId
             prompt = composition.prompt ?? ""
             sendsPromptAutomatically = composition.sendsPromptAutomatically
         }
@@ -186,6 +188,10 @@ struct RunScheduleDraft: Equatable {
         return RunScheduleComposition(
             branchTemplate: template.isEmpty ? RunScheduleComposition.defaultBranchTemplate : template,
             agentId: agentID,
+            // A model belongs to one agent; "Project default" is resolved at
+            // fire time, so a model picked for an earlier explicit choice
+            // would be sent to whichever agent that turns out to be.
+            modelId: agentID == nil ? nil : modelID,
             prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
             sendsPromptAutomatically: sendsPromptAutomatically
         )

@@ -215,6 +215,9 @@ final class AppState {
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler
+    /// The models each ACP agent last advertised, for surfaces that configure
+    /// a session before it exists (the schedule editor's model picker).
+    let acpModelCatalog: ACPAgentModelCatalog
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -1237,6 +1240,7 @@ final class AppState {
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         runScheduler: RunScheduler? = nil,
+        acpModelCatalog: ACPAgentModelCatalog? = nil,
         tabsManager: TabsManager? = nil,
         lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
@@ -1281,6 +1285,7 @@ final class AppState {
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runHistoryStore = runHistoryStore
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
+        self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
@@ -4216,7 +4221,8 @@ final class AppState {
 
     /// Opens whatever `launchSurface` asks for. Returns the terminal tab it
     /// opened, when it opened one, so a caller that has more to say to that
-    /// terminal (a scheduled prompt) can find its session.
+    /// terminal (a scheduled prompt) can find its session. A chat session is
+    /// found through its prepared prompt's session id instead.
     @discardableResult
     func launchWorktreeSurface(
         _ launchSurface: WorktreeLaunchSurface,
@@ -11400,6 +11406,12 @@ final class AppState {
             onSessionEnded: { [weak self] sessionId in
                 self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
+            onModelsObserved: { [weak self] agentId, models in
+                self?.acpModelCatalog.record(
+                    agentID: agentId,
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                )
+            },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,
                       let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath),
@@ -11736,6 +11748,12 @@ final class AppState {
             frozenMCPAttachmentProvider: { [weak self] in
                 guard let self else { return nil }
                 return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
+            },
+            onModelsObserved: { [weak self] agentId, models in
+                self?.acpModelCatalog.record(
+                    agentID: agentId,
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                )
             }
         )
         manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
@@ -12143,6 +12161,20 @@ final class AppState {
             agentId: agentID,
             autoRunDefault: config.harness.acpAutoRunByDefault
         )
+        // Picked up by `attach` before the queued prompt goes out, so the
+        // first message already runs on the requested model.
+        if let modelID = preparedPrompt.modelID {
+            manager.pendingModel[session.id] = modelID
+        }
+        let queuedPrompt: String?
+        if preparedPrompt.text.isEmpty {
+            queuedPrompt = nil
+        } else if preparedPrompt.sendsAutomatically {
+            queuedPrompt = preparedPrompt.text
+        } else {
+            queuedPrompt = nil
+            manager.persistComposerDraft(ACPComposerDraft(segments: [.text(preparedPrompt.text)]), for: session)
+        }
         let tab = tabs.append(
             acpSession: ACPSessionTabState(
                 sessionId: preparedPrompt.sessionID,
@@ -12157,7 +12189,7 @@ final class AppState {
                 sessionID: preparedPrompt.sessionID,
                 agentID: agentID,
                 promptID: preparedPrompt.promptID,
-                prompt: preparedPrompt.text
+                prompt: queuedPrompt
             )
         } catch {
             manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
