@@ -3935,6 +3935,17 @@ extension ACPSessionManager {
                 // `stop()` owns the teardown instead.
                 if runners[sessionId] !== runner {
                     runner.cancelAuthStatusListening()
+                    // A notification consumed before this attach failed may
+                    // already have enqueued a fenced authStatus write onto
+                    // this runner's own persistence queue (`applyAuthStatus`
+                    // → `enqueuePersistence`). `releaseWriterLease` below
+                    // only flushes *registered* runners via
+                    // `flushAllPersistence`, so an abandoned runner's
+                    // pending write would otherwise race the lease release
+                    // and get rejected by the fence — silently losing the
+                    // very status this fix exists to capture. Flush it here
+                    // before the runner goes out of scope.
+                    await runner.flushPersistence()
                 }
             }
             if shouldSuppressLoadReplay {

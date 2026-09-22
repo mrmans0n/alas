@@ -777,6 +777,70 @@ struct ACPSessionManagerTests {
         }
     }
 
+    @Test("a non-auth session-creation failure durably persists the agent's fresh authStatus")
+    func nonAuthSessionCreationFailurePersistsFreshAuthStatus() async throws {
+        // Regression (#1389, Codex review on this fix): the listener now
+        // starts before session creation and enqueues its fenced authStatus
+        // write onto the *runner's own* persistence queue — but a runner
+        // that never gets registered (this failure path) is invisible to
+        // `flushAllPersistence()`, which only walks registered runners.
+        // Without an explicit flush of the abandoned runner before
+        // `releaseWriterLease` releases the fence, that write races
+        // `ACPSessionPersistence`'s actor mailbox against `releaseLease` and
+        // can be silently rejected — correct in memory for this process, but
+        // reverting to the stale status on the next restore. (The race is on
+        // actor-call ordering, not wall-clock time, so it isn't reliably
+        // reproducible by delaying this test; the flush closes it
+        // unconditionally instead of relying on scheduling luck.) Assert the
+        // durable side: a fresh manager instance over the same store must
+        // see the live status, not the stale persisted one.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-auth-status-nonauth-durable-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(client)
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.authStatus = .init(kind: .none, label: "Not logged in")
+        await mgr.flushAllPersistence()
+        client.scriptAsync(method: "session/new") { _ in
+            client.emitAuthStatus(.init(kind: .account, label: "Claude Max"))
+            for _ in 0 ..< 200 {
+                if await MainActor.run(body: {
+                    session.authStatus?.kind == ACPAuthStatus.Kind.account
+                }) { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            throw JSONRPCError(code: -32000, message: "connection reset by peer", data: nil)
+        }
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        await mgr.releaseAllOwnedLeases()
+
+        let secondClient = ACPMockClient()
+        scriptInitializeAdvertisingAuthStatus(secondClient)
+        let secondManager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: secondClient) }
+        )
+        guard let secondSession = secondManager.placeholderSession(id: "session") else {
+            Issue.record("expected a placeholder session to hydrate from the persisted row")
+            return
+        }
+        await secondManager.hydrateIfNeeded(id: secondSession.id)
+
+        #expect(secondSession.authStatus?.label == "Claude Max")
+    }
+
     @Test("a non-auth session-creation failure keeps a restored signed-out banner")
     func nonAuthSessionCreationFailureKeepsRestoredSignedOutBanner() async throws {
         // The flip side of the test above: when the failing attach produces no
