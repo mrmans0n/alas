@@ -276,16 +276,27 @@ struct FederatedSessionsProviderTests {
         #expect(!provider.isPollingPeerLists)
     }
 
-    @Test func availabilityCallbackFiresOnlyWhenTheSetOfCarryingPeersChanges() {
+    @Test func availabilityCallbackFiresOnEveryReconciliationIncludingNonCarryingTransitions() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
         var fired = 0
         provider.onPeerAvailabilityChanged = { fired += 1 }
         links.goOnline("srv-b", name: "Mac B")
         #expect(fired == 1)
-        links.onFederationEvent?(.availabilityChanged(serverId: "srv-b"))   // same set
-        #expect(fired == 1)
         links.goOffline("srv-b")
         #expect(fired == 2)
+        // A peer that never carries sessions (e.g. mid-handshake, or a
+        // record that failed verification) still has a place in `hello`'s
+        // `peers` list, so a transition among its own non-carrying states
+        // — invisible to `sessionCarryingPeers`, which only ever reports
+        // "srv-c" once it's online AND verified — must still refresh it.
+        // `RemotePeerManager` itself never re-signals an unchanged state
+        // (`RemotePeerConnection.setState` guards on it), so this is a
+        // realistic, non-redundant sequence of distinct transitions, not a
+        // repeat of the same one.
+        links.onFederationEvent?(.availabilityChanged(serverId: "srv-c"))
+        #expect(fired == 3)
+        links.onFederationEvent?(.availabilityChanged(serverId: "srv-c"))
+        #expect(fired == 4)
     }
 }
