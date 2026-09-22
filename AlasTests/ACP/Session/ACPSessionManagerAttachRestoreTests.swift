@@ -2676,9 +2676,15 @@ struct ACPSessionManagerAttachRestoreTests {
         to store: ACPSessionStore,
         seq: Int64
     ) throws {
+        // Matches `ACPSessionRunner.persistIndices`'s own id convention
+        // (`msg-<sessionId>-<index>`) — a row hydrated under any OTHER id
+        // looks, to that same convention, like a DIFFERENT row at this
+        // array position, so a live reconciliation that persists the
+        // position it resolved to (correctly, since that write is real)
+        // creates a duplicate instead of updating this one.
         try store.appendMessage(
             sessionId: "local",
-            id: "m\(seq)",
+            id: "msg-local-\(seq)",
             kind: message.kind,
             seq: seq,
             payload: ACPMessageCodec.encode(message),
