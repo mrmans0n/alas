@@ -84,6 +84,20 @@ import Testing
         #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
     }
 
+    @Test func missingMemberWhoseDeletionFailedOffersTheDeletionRetryNotFindExisting() {
+        // A missing-but-owned member's own deletion attempt can itself fail
+        // (e.g. clearing a stale Git registration) without ever changing
+        // availability away from `.missing`. The detail text already says
+        // to delete again; the action must match, not Find Existing /
+        // Resume Creation.
+        var failed = member(name: "App", availability: .missing, checkpoint: .setupComplete, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        let checkout = checkout(members: [failed])
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
     @Test func deletionFailureTakesPrecedenceOverAnEarlierSetupFailure() {
         // A member whose setup already failed (checkpoint == .failed) and
         // whose subsequent deletion attempt also failed must show the more

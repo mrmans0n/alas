@@ -2039,6 +2039,9 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let command = await runner.commands.joined(separator: "\n")
         #expect(command.contains("[ -f \"$p\" ]"))
+        // `test -f` follows symlinks, so a symlink to a regular file
+        // elsewhere must be excluded separately or it would also pass.
+        #expect(command.contains("[ ! -L \"$p\" ]"))
     }
 
     @Test func remoteRootCleanupOnlySkipsFinderMetadataThatIsARegularFile() async throws {
@@ -2059,6 +2062,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let command = await runner.commands.joined(separator: "\n")
         #expect(command.contains("[ -f \"$p\" ]"))
+        #expect(command.contains("[ ! -L \"$p\" ]"))
     }
 
     @Test func remoteRootInspectionIgnoresFinderMetadata() async throws {

@@ -2900,7 +2900,10 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 [ -e "$p" ] || [ -L "$p" ] || continue
                 case "${p##*/}" in
                   \(Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: "|")))
-                    [ -f "$p" ] || leftovers=1
+                    # `test -f` follows symlinks, so a symlink to a regular
+                    # file elsewhere would otherwise pass — excluding it
+                    # separately keeps only a genuine regular file disposable.
+                    [ -f "$p" ] && [ ! -L "$p" ] || leftovers=1
                     ;;
                   *) leftovers=1 ;;
                 esac
@@ -2972,7 +2975,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
           for managed in \(managedList); do [ "$n" = "$managed" ] && skip=1; done
           if [ "$skip" = 0 ]; then
             for ignored in \(ignoredList); do
-              [ "$n" = "$ignored" ] && [ -f "$p" ] && skip=1
+              [ "$n" = "$ignored" ] && [ -f "$p" ] && [ ! -L "$p" ] && skip=1
             done
           fi
           [ "$skip" = 1 ] || printf '%s\\n' "$n"

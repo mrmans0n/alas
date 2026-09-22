@@ -285,6 +285,14 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return [.init(.findExisting, title: "Find Existing"), .init(.deleteMember, title: "Delete Snapshot", isDestructive: true)]
         case .explicitlyDeleted:
             return [.init(.recreateMember, title: "Recreate from Frozen Plan")]
+        case .missing, .unavailable where member.deletionFailed:
+            // A missing-but-owned member's own deletion attempt can itself
+            // fail (e.g. clearing a stale Git registration) without ever
+            // changing availability away from `.missing`. The detail text
+            // already says to delete again; the action must offer that
+            // instead of Find Existing / Resume Creation, neither of which
+            // retries the thing that actually failed.
+            return [.init(.deleteMember, title: "Delete Worktree", isDestructive: true)]
         case .missing, .unavailable:
             return [.init(.findExisting, title: "Find Existing"), .init(.resumeCreation, title: "Resume Creation")]
         case .available where member.deletionFailed:
