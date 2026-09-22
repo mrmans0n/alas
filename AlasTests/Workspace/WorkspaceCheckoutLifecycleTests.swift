@@ -1896,6 +1896,38 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(inspection.leftovers == ["notes.txt"])
     }
 
+    @Test func localRootInspectionTreatsANonRegularFileNamedFinderMetadataAsARealLeftover() async throws {
+        // A FIFO, socket, or device node sharing Finder's metadata filename
+        // is not disposable metadata either — "not a directory" is not the
+        // same contract as "is a regular file".
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        let member = root.appendingPathComponent("a")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: member, withIntermediateDirectories: true)
+        let fifoPath = root.appendingPathComponent(".DS_Store").path
+        let mkfifoResult = try await Process.run("/usr/bin/mkfifo", args: [fifoPath])
+        #expect(mkfifoResult.exitCode == 0)
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [member.path],
+            worktreePath: member.path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let inspection = await WorkspaceCheckoutLifecycleOperator().inspectRoot(plan)
+
+        #expect(inspection.leftovers == [".DS_Store"])
+    }
+
     @Test func localRootInspectionTreatsADirectoryNamedFinderMetadataAsARealLeftover() async throws {
         // A directory happening to share Finder's metadata filename (a
         // copied folder, a deliberate rename) is not disposable metadata —

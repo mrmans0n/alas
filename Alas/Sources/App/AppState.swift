@@ -3059,6 +3059,13 @@ final class AppState {
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
                 }
             }
+            // The atomic requireNoCheckouts guard's refusal is the one error
+            // here actionable by the user (something still needs deleting),
+            // not a storage failure — preserve it through the rollback
+            // rather than flattening it into the generic case below.
+            if case WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved = error {
+                throw error
+            }
             throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
         }
         await workspacesManager.refreshCheckoutSnapshots()

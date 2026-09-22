@@ -414,7 +414,11 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         )
         try await workspaceStore.mutate { state in state.checkouts.append(lateCheckout) }
 
-        await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
+        // The specific refusal survives the Space-placement rollback rather
+        // than being flattened into the generic storage-failure case: it's
+        // the one error here the user can actually act on ("a checkout
+        // still needs attention"), not a storage problem.
+        await #expect(throws: WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved) {
             try await state.deleteWorkspaceDefinition(id: workspace.id, requireNoCheckouts: true)
         }
 
@@ -424,6 +428,7 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         }
         #expect(stored.workspaces.contains { $0.id == workspace.id })
         #expect(stored.checkouts.contains { $0.id == lateCheckout.id && $0.workspaceID == workspace.id })
+        #expect(state.spacesManager.space(id: "space")?.members?.contains(.workspace(workspace.id)) == true)
     }
 
     /// Avoids touching real app-support files: `deleteWorkspaceDefinition`

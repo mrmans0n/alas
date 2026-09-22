@@ -2083,10 +2083,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     /// unconfirmed, recursively, along with everything inside it.
     private static func isDisposableFinderMetadataEntry(_ name: String, in directory: URL) -> Bool {
         guard ignoredRootEntries.contains(name) else { return false }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path, isDirectory: &isDirectory)
-        else { return false }
-        return !isDirectory.boolValue
+        // Not just "not a directory": a FIFO, socket, or device node named
+        // `.DS_Store` isn't Finder metadata either. Only a genuine regular
+        // file qualifies, matching the remote path's `-f` check.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(name).path)
+        return attributes?[.type] as? FileAttributeType == .typeRegular
     }
     private static let staleRegistrationTombstoneMarker = "alas-stale-registration-tombstone"
     private static let staleRegistrationOriginalNameMarker = "alas-stale-registration-original-name"
