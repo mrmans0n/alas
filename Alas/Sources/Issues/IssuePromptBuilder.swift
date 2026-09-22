@@ -1,16 +1,14 @@
 import Foundation
 
 enum IssueBranchName {
-    static func make(displayReference: String?, title: String, prefix: String) -> String {
+    /// The issue's branch *name*, without any configured branch prefix.
+    /// Dialogs compose the prefix themselves (the same way gg composes
+    /// `<username>/`), so a seeded name never carries the prefix twice.
+    static func make(displayReference: String?, title: String) -> String {
         let referenceComponent = displayReference.map(slug).flatMap { $0.isEmpty ? nil : $0 }
         let titleComponent = slug(title)
         let components = [referenceComponent, titleComponent].compactMap { $0 }
-        return "\(prefix)\(components.joined(separator: "-"))"
-    }
-
-    static func make(issueNumber: Int, title: String, prefix: String) -> String {
-        let legacyTitle = slug(title).isEmpty ? "issue" : title
-        return make(displayReference: "#\(issueNumber)", title: legacyTitle, prefix: prefix)
+        return components.joined(separator: "-")
     }
 
     private static func slug(_ value: String) -> String {

@@ -115,8 +115,7 @@ struct NewWorktreeDialogTests {
 
     @Test func completedGGProbeCarriesImmediateBranchInputIntoEmptyStackDraft() {
         let stackName = NewWorktreeDialog.stackNameAfterGGAvailabilityProbe(
-            branch: "nacho/feature",
-            branchPrefix: "nacho/",
+            branch: "feature",
             currentStackName: ""
         )
 
@@ -125,8 +124,7 @@ struct NewWorktreeDialogTests {
 
     @Test func completedGGProbePreservesExistingStackDraft() {
         let stackName = NewWorktreeDialog.stackNameAfterGGAvailabilityProbe(
-            branch: "nacho/regular-draft",
-            branchPrefix: "nacho/",
+            branch: "regular-draft",
             currentStackName: "stack-draft"
         )
 
@@ -289,34 +287,17 @@ struct NewWorktreeDialogTests {
 
     @Test func issueAttachmentSeedsOnlyTheActiveBranchOrStackInput() {
         #expect(NewWorktreeDialog.namesAfterIssueAttach(
-            branchSeed: "feature/42-fix-sync",
-            branchPrefix: "feature/",
+            branchSeed: "42-fix-sync",
             createsGGStack: false,
             branch: "manual-branch",
             stackName: "manual-stack"
-        ) == (branch: "feature/42-fix-sync", stackName: "manual-stack"))
+        ) == (branch: "42-fix-sync", stackName: "manual-stack"))
         #expect(NewWorktreeDialog.namesAfterIssueAttach(
-            branchSeed: "feature/42-fix-sync",
-            branchPrefix: "feature/",
+            branchSeed: "42-fix-sync",
             createsGGStack: true,
             branch: "manual-branch",
             stackName: "manual-stack"
         ) == (branch: "manual-branch", stackName: "42-fix-sync"))
-    }
-
-    /// gg prepends its own `<branch_username>/` when composing the stack
-    /// branch, so a seeded stack name carrying the configured worktree
-    /// prefix would double it up (`nacho/nacho/42-…`).
-    @Test func issueAttachmentStripsTheBranchPrefixFromTheSeededStackName() {
-        #expect(NewWorktreeDialog.stackNameSeed(
-            branchSeed: "nacho/42-fix-sync", branchPrefix: "nacho/"
-        ) == "42-fix-sync")
-        #expect(NewWorktreeDialog.stackNameSeed(
-            branchSeed: "nacho/42-fix-sync", branchPrefix: ""
-        ) == "nacho/42-fix-sync")
-        #expect(NewWorktreeDialog.stackNameSeed(
-            branchSeed: "42-fix-sync", branchPrefix: "feature/"
-        ) == "42-fix-sync")
     }
 
     @Test func issueAttachmentSelectsTheFirstEnabledACPCapableAgent() {
@@ -706,14 +687,26 @@ struct NewWorktreeDialogTests {
         #expect(NewWorktreeDialog.ggModeFieldLabel == "Stacked Diffs Mode")
     }
 
-    @Test func ggBranchPreviewIncludesPinnedBase() {
-        #expect(NewWorktreeDialog.ggBranchPreview(branch: "nacho/feature", base: "main") ==
+    @Test func branchPreviewIncludesPinnedBase() {
+        #expect(NewWorktreeDialog.branchPreview(branch: "nacho/feature", base: "main") ==
             "Branch: nacho/feature, based on main")
     }
 
-    @Test func ggBranchPreviewOmitsMissingBase() {
-        #expect(NewWorktreeDialog.ggBranchPreview(branch: "nacho/feature", base: nil) ==
-            "Branch: nacho/feature")
+    @Test func branchPreviewOmitsMissingBase() {
+        #expect(NewWorktreeDialog.branchPreview(branch: "feature/login-fix", base: nil) ==
+            "Branch: feature/login-fix")
+    }
+
+    @Test func composedBranchPrependsTheConfiguredPrefix() {
+        #expect(NewWorktreeDialog.composedBranch(prefix: "feature/", name: "login-fix") ==
+            "feature/login-fix")
+        #expect(NewWorktreeDialog.composedBranch(prefix: "", name: "login-fix") == "login-fix")
+    }
+
+    /// The prefix is composed, never typed, so an empty field must not
+    /// render as a bare prefix — Create stays disabled on emptiness alone.
+    @Test func composedBranchIsEmptyWhileTheNameIsEmpty() {
+        #expect(NewWorktreeDialog.composedBranch(prefix: "feature/", name: "").isEmpty)
     }
 
     @Test(arguments: [

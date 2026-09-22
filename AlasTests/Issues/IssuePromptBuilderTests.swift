@@ -3,28 +3,25 @@ import Testing
 @testable import Alas
 
 struct IssuePromptBuilderTests {
-    @Test func manualSourceBranchUsesOnlyPrefixAndTitle() {
+    @Test func manualSourceBranchUsesOnlyTitleSlug() {
         #expect(IssueBranchName.make(
             displayReference: nil,
-            title: "Fix login timeout",
-            prefix: "nacho/"
-        ) == "nacho/fix-login-timeout")
+            title: "Fix login timeout"
+        ) == "fix-login-timeout")
     }
 
     @Test func emptyDisplayReferenceUsesOnlyTitleSlug() {
         #expect(IssueBranchName.make(
             displayReference: "",
-            title: "Fix login timeout",
-            prefix: "nacho/"
-        ) == "nacho/fix-login-timeout")
+            title: "Fix login timeout"
+        ) == "fix-login-timeout")
     }
 
-    @Test func emptyManualSourceTitleDoesNotUseIssueFallback() {
+    @Test func emptyManualSourceTitleYieldsEmptySeed() {
         #expect(IssueBranchName.make(
             displayReference: nil,
-            title: "---",
-            prefix: "nacho/"
-        ) == "nacho/")
+            title: "---"
+        ).isEmpty)
     }
 
     @Test func manualSourcePromptUsesIssueTerminology() {
@@ -56,17 +53,18 @@ struct IssuePromptBuilderTests {
         #expect(!prompt.localizedCaseInsensitiveContains("work item"))
     }
 
-    @Test func branchNameUsesConfiguredPrefixAndSanitizedTitle() {
+    @Test func branchNameJoinsReferenceAndSanitizedTitle() {
         #expect(IssueBranchName.make(
-            issueNumber: 1842,
-            title: "Fix offline sync conflicts!",
-            prefix: "feature/"
-        ) == "feature/1842-fix-offline-sync-conflicts")
+            displayReference: "#1842",
+            title: "Fix offline sync conflicts!"
+        ) == "1842-fix-offline-sync-conflicts")
     }
 
-    @Test func branchNameStripsDiacriticsAndUsesEmptyTitleFallback() {
-        #expect(IssueBranchName.make(issueNumber: 9, title: "  Réparer l’API  ", prefix: "fix/") == "fix/9-reparer-l-api")
-        #expect(IssueBranchName.make(issueNumber: 9, title: "---", prefix: "fix/") == "fix/9-issue")
+    @Test func branchNameStripsDiacritics() {
+        #expect(IssueBranchName.make(
+            displayReference: "ALAS-9",
+            title: "  Réparer l’API  "
+        ) == "alas-9-reparer-l-api")
     }
 
     @Test func promptContainsStableStructuredContext() {

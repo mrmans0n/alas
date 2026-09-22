@@ -318,7 +318,12 @@ struct CreateWorkspaceCheckoutDialog: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 14) {
             DialogField(label: "Shared branch") {
-                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "feature/my-change", monospaced: true, focusOnAppear: true)
+                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "my-change", monospaced: true, focusOnAppear: true, disablesAutomaticTextSubstitutions: true)
+            }
+            if !model.composedBranch.isEmpty {
+                Text("Branch: \(model.composedBranch)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {

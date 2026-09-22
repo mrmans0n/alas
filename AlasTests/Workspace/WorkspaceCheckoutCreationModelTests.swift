@@ -4,10 +4,20 @@ import Testing
 
 @Suite("Workspace checkout creation model")
 struct WorkspaceCheckoutCreationModelTests {
-    @Test func initializesBranchWithConfiguredPrefix() {
+    /// The configured prefix is composed, never seeded into the field, so an
+    /// untouched dialog requests no branch at all.
+    @Test func emptyBranchFieldRequestsNoBranchEvenWithAPrefix() {
         let model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
 
-        #expect(model.request().branch == "feature/")
+        #expect(model.branch.isEmpty)
+        #expect(model.request().branch.isEmpty)
+    }
+
+    @Test func requestedBranchComposesThePrefixWithTheTypedName() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
+        model.setBranch(" my-change ")
+
+        #expect(model.request().branch == "feature/my-change")
     }
 
     @Test func checkoutFolderForSelectedParentIncludesBranch() {
@@ -28,24 +38,24 @@ struct WorkspaceCheckoutCreationModelTests {
         )
     }
 
-    @Test func selectedCheckoutParentDerivesRootWhenBranchIsEnteredLater() {
-        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+    @Test func selectedCheckoutParentDerivesRootFromTheComposedBranch() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
 
         model.selectCheckoutParent("/checkouts")
         #expect(model.rootPath.isEmpty)
 
-        model.setBranch("feature/my-change")
+        model.setBranch("my-change")
         #expect(model.rootPath == "/checkouts/feature-my-change")
     }
 
     @Test func returningToDetailsPreservesSelectedCheckoutParent() {
-        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
         model.selectCheckoutParent("/checkouts")
-        model.setBranch("feature/first")
+        model.setBranch("first")
         #expect(model.advance() == .success)
 
         model.returnToDetails()
-        model.setBranch("feature/second")
+        model.setBranch("second")
 
         #expect(model.rootPath == "/checkouts/feature-second")
     }
@@ -82,7 +92,7 @@ struct WorkspaceCheckoutCreationModelTests {
     @Test func selectsOnlyAfterFrozenPlanWasPersistedAndProgressComesFromCheckout() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, branch: "release/1091", rootPath: "/checkouts/release", baseReference: "main")
-        let plan = FrozenWorkspaceCheckoutPlan(checkoutID: UUID(), workspaceID: workspace.id, executionLocation: .local, branch: model.branch, rootPath: model.rootPath, members: [])
+        let plan = FrozenWorkspaceCheckoutPlan(checkoutID: UUID(), workspaceID: workspace.id, executionLocation: .local, branch: model.composedBranch, rootPath: model.rootPath, members: [])
         model.receivePreflight(.success(plan))
 
         let beganCreation = model.beginCreation()

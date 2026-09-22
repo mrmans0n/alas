@@ -20,9 +20,10 @@ struct NewWorktreeDialog: View {
     var presetProjectId: String?
 
     @State private var projectId: String
-    // Defaults are seeded from the persisted Worktrees settings in .onAppear
-    // (these literals are placeholders only — the real defaults come from
-    // state.config.worktrees.{baseBranch,branchPrefix}).
+    // `base` is seeded from the persisted Worktrees settings in .onAppear
+    // (this literal is a placeholder only — the real default comes from
+    // state.config.worktrees.baseBranch). `branch`/`stackName` hold a bare
+    // name: the branch prefix is composed in `effectiveBranch`, never typed.
     @State private var base: String = ""
     @State private var branch: String = ""
     @State private var stackName: String = ""
@@ -111,6 +112,11 @@ struct NewWorktreeDialog: View {
                         disablesAutomaticTextSubstitutions: true
                     )
                 }
+                if let preview = branchPreviewText {
+                    Text(preview)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
                 HStack(spacing: 10) {
                     AlasToggle(on: $runStartup)
                     Text("Run startup script after create").font(.system(size: 12))
@@ -125,16 +131,9 @@ struct NewWorktreeDialog: View {
                         .foregroundColor(theme.color("fg-dim"))
                     if createsGGStack, case .disabled(let hint) = ggStackAvailability {
                         Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
-                    } else if createsGGStack, case .enabled(let username) = ggStackAvailability, !stackName.isEmpty {
-                        Text(Self.ggBranchPreview(
-                            branch: GGConfigReader.composeStackBranch(username: username, stackName: stackName),
-                            base: stackPinnedBase
-                        ))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(theme.color("fg-dim"))
                     }
                 }
-                if let validationMessage = branchValidationMessage, activeName != state.config.worktrees.branchPrefix {
+                if let validationMessage = branchValidationMessage {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
                 issueAttachmentSection
@@ -178,9 +177,6 @@ struct NewWorktreeDialog: View {
                     stackPinnedBase: stackPinnedBase
                 )
             }
-            if branch.isEmpty {
-                branch = state.config.worktrees.branchPrefix
-            }
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
@@ -217,7 +213,6 @@ struct NewWorktreeDialog: View {
             // Carry that input forward without coupling later manual mode toggles.
             stackName = Self.stackNameAfterGGAvailabilityProbe(
                 branch: branch,
-                branchPrefix: state.config.worktrees.branchPrefix,
                 currentStackName: stackName
             )
         }
@@ -256,14 +251,31 @@ struct NewWorktreeDialog: View {
         )
     }
 
+    /// Nil while the field is empty: an untouched dialog should not shout a
+    /// red "cannot be empty" — the disabled Create button already says so.
+    /// Validates the composed branch, not the typed name, since the prefix
+    /// (gg's `<username>/` or the configured worktree prefix) is part of the
+    /// ref git will be asked to create.
     private var branchValidationMessage: String? {
-        let result = GitNameValidator.validateBranchName(activeName)
-        switch result {
+        guard !activeName.isEmpty else { return nil }
+        switch GitNameValidator.validateBranchName(effectiveBranch) {
         case .valid:
             return nil
         case .invalid(let message):
             return message
         }
+    }
+
+    /// The composed branch shown under the name field, so the prefix that is
+    /// no longer typed stays visible. Hidden while the name is empty or the
+    /// composition cannot be resolved (gg enabled without a branch username).
+    private var branchPreviewText: String? {
+        guard !activeName.isEmpty else { return nil }
+        if createsGGStack {
+            guard case .enabled = ggStackAvailability else { return nil }
+            return Self.branchPreview(branch: effectiveBranch, base: stackPinnedBase)
+        }
+        return Self.branchPreview(branch: effectiveBranch, base: nil)
     }
 
     private var ggStackAvailability: GGStackCreateMode.Availability {
@@ -308,14 +320,15 @@ struct NewWorktreeDialog: View {
         return false
     }
 
-    /// The branch actually created. In stack mode the real branch follows
-    /// gg's `<username>/<name>` convention; otherwise the plain branch field
-    /// is used verbatim (including its seeded global branch prefix).
+    /// The branch actually created. Neither prefix is ever typed into the
+    /// name field: in stack mode the branch follows gg's `<username>/<name>`
+    /// convention, otherwise the configured worktree branch prefix is
+    /// composed with the typed name.
     private var effectiveBranch: String {
         if createsGGStack, case .enabled(let username) = ggStackAvailability {
             return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
-        return branch
+        return Self.composedBranch(prefix: state.config.worktrees.branchPrefix, name: branch)
     }
 
     /// When creating a gg stack, the worktree base is pinned to gg's
@@ -455,8 +468,7 @@ struct NewWorktreeDialog: View {
                 try await loader.suggestions(projectID: projectID, limit: limit)
             },
             selectedProjectID: projectId,
-            projects: { state.projects },
-            configuredBranchPrefix: { _ in state.config.worktrees.branchPrefix }
+            projects: { state.projects }
         )
     }
 
@@ -482,7 +494,6 @@ struct NewWorktreeDialog: View {
         }
         let names = Self.namesAfterIssueAttach(
             branchSeed: effects.branchSeed,
-            branchPrefix: state.config.worktrees.branchPrefix,
             createsGGStack: createsGGStack,
             branch: branch,
             stackName: stackName
@@ -639,7 +650,11 @@ struct NewWorktreeDialog: View {
         stackPinnedBase ?? configuredDefault
     }
 
-    nonisolated static func ggBranchPreview(branch: String, base: String?) -> String {
+    nonisolated static func composedBranch(prefix: String, name: String) -> String {
+        name.isEmpty ? "" : prefix + name
+    }
+
+    nonisolated static func branchPreview(branch: String, base: String?) -> String {
         guard let base else { return "Branch: \(branch)" }
         return "Branch: \(branch), based on \(base)"
     }
@@ -652,14 +667,13 @@ struct NewWorktreeDialog: View {
         createsGGStack ? stackName : branch
     }
 
+    /// Carries a name typed before gg's availability probe resolved into the
+    /// stack field. Both fields hold a bare name, so this is a plain carry.
     nonisolated static func stackNameAfterGGAvailabilityProbe(
         branch: String,
-        branchPrefix: String,
         currentStackName: String
     ) -> String {
-        guard currentStackName.isEmpty else { return currentStackName }
-        guard branch.hasPrefix(branchPrefix) else { return branch }
-        return String(branch.dropFirst(branchPrefix.count))
+        currentStackName.isEmpty ? branch : currentStackName
     }
 
     nonisolated static func resolvedPresetProject(
@@ -731,28 +745,18 @@ struct NewWorktreeDialog: View {
         return preferredProjectID
     }
 
+    /// `branchSeed` is a bare name (no configured prefix, no gg username), so
+    /// it drops straight into whichever field is active.
     nonisolated static func namesAfterIssueAttach(
         branchSeed: String,
-        branchPrefix: String,
         createsGGStack: Bool,
         branch: String,
         stackName: String
     ) -> (branch: String, stackName: String) {
         if createsGGStack {
-            return (branch, stackNameSeed(branchSeed: branchSeed, branchPrefix: branchPrefix))
+            return (branch, branchSeed)
         }
         return (branchSeed, stackName)
-    }
-
-    /// gg composes the real branch as `<gg username>/<stack name>`, so the
-    /// configured worktree branch prefix must not be baked into a seeded
-    /// stack name: a `nacho/` prefix plus a `nacho` gg username would
-    /// otherwise produce `nacho/nacho/42-…`. Mirrors
-    /// `stackNameAfterGGAvailabilityProbe`, which strips the same prefix
-    /// when the branch field's seeded value is carried into stack mode.
-    nonisolated static func stackNameSeed(branchSeed: String, branchPrefix: String) -> String {
-        guard !branchPrefix.isEmpty, branchSeed.hasPrefix(branchPrefix) else { return branchSeed }
-        return String(branchSeed.dropFirst(branchPrefix.count))
     }
 
     nonisolated static func issueLaunchAgent(from agents: [AgentDefinition], preferredAgentID: String? = nil) -> String {
