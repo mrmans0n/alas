@@ -24,6 +24,10 @@ struct RemoteOriginPolicyTests {
         }
     }
 
+    @Test func allowsAZoneCarryingLinkLocalIpv6Origin() {
+        #expect(policy.allows(originHeader: "http://[fe80::1%25en0]:8765"))
+    }
+
     @Test func allowsDotLocalAndHostAllowlistedNames() {
         #expect(policy.allows(originHeader: "http://nacho-mbp.local:8765"))
         #expect(policy.allows(originHeader: "https://proxy.example.com"))

@@ -121,10 +121,14 @@ struct RemoteNetworkTests {
     @Test func allowedHostCandidatesIncludeOwnInterfaceLinkLocalAddresses() {
         // The self-assigned APIPA/link-local range two Macs land on when
         // connected directly with no DHCP server — exactly the scenario
-        // Bonjour discovery is meant to work on.
+        // Bonjour discovery is meant to work on. `getnameinfo` reports the
+        // IPv6 one with its interface zone, as `interfaces()` actually
+        // returns it; the allowlist entry must be the bare address, since a
+        // connecting peer's own Host header carries a zone naming one of
+        // ITS interfaces, never this Mac's.
         let interfaces = [
             RemoteNetworkInterface(name: "en5", host: "169.254.12.34", isLoopback: false),
-            RemoteNetworkInterface(name: "en6", host: "fe80::1234", isLoopback: false),
+            RemoteNetworkInterface(name: "en6", host: "fe80::1234%en6", isLoopback: false),
         ]
 
         let hosts = RemoteNetwork.allowedHostCandidates(
@@ -135,6 +139,14 @@ struct RemoteNetworkTests {
 
         #expect(hosts.contains("169.254.12.34"))
         #expect(hosts.contains("fe80::1234"))
+        #expect(!hosts.contains("fe80::1234%en6"))
+    }
+
+    @Test func stripLinkLocalZoneDropsARawOrPercentEncodedZone() {
+        #expect(RemoteNetwork.stripLinkLocalZone("fe80::1234%en0") == "fe80::1234")
+        #expect(RemoteNetwork.stripLinkLocalZone("fe80::1234%25en0") == "fe80::1234")
+        #expect(RemoteNetwork.stripLinkLocalZone("fd7a:115c:a1e0::1") == "fd7a:115c:a1e0::1")
+        #expect(RemoteNetwork.stripLinkLocalZone("192.168.1.1") == "192.168.1.1")
     }
 
     @Test func allowedHostCandidatesExcludePublicInterfaceIpsUnlessConfigured() {
