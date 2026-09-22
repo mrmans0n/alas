@@ -96,6 +96,45 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID) == nil)
     }
 
+    @Test func checkoutDeletionConfirmationCountsCheckoutOwnedSessionsAsARisk() async throws {
+        // A terminal opened at the checkout root (not tied to any one
+        // member) is owned by the checkout itself, not by a member worktree,
+        // so the per-member session count never sees it — but `forget` still
+        // tears it down.
+        let fixture = try await Fixture.make(suffix: "checkout-session-risk")
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        guard let checkout = fixture.state.workspacesManager.checkout(id: checkoutID) else {
+            Issue.record("Expected checkout")
+            return
+        }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        _ = fixture.state.tabs.appendTerminal(owner: owner, title: "term", sessionId: "checkout-session-1")
+
+        let confirmation = try await fixture.state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+
+        #expect(confirmation.risks.contains { $0.contains("checkout session") })
+    }
+
+    @Test func deleteAndForgetReconcilesAlreadyDeletedMembersWhenTheFinalCleanupStepThrows() async throws {
+        // A manifest that doesn't belong to this checkout makes the final
+        // root-artifact cleanup throw `cleanupIdentityConflict` — but every
+        // member worktree has already been durably deleted by that point.
+        let fixture = try await Fixture.make(suffix: "reconcile-on-throw")
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        let rogueManifest = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: fixture.checkoutRoot.path, branch: "other", members: [])
+        try JSONEncoder().encode(rogueManifest).write(to: fixture.checkoutRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            _ = try await fixture.state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.linked.path))
+        #expect(fixture.state.workspacesManager.checkout(id: checkoutID)?.members.first?.availability == .explicitlyDeleted)
+        #expect(!fixture.state.projectsManager.worktrees(projectId: fixture.project.id).contains { $0.id == fixture.worktree.id })
+    }
+
     @Test func forgetConfirmationAndForgetSucceedForASnapshotOnlyMemberWithNoCleanupRecord() async throws {
         // A member whose creation attempt never produced a worktree is
         // discarded with `cleanup == nil` rather than a cleanup record. The

@@ -3451,7 +3451,26 @@ final class AppState {
                 }
             }
         }
+        // A checkout-owned terminal or ACP tab (opened at the checkout root,
+        // not tied to any one member) has no worktree to key off, so the
+        // per-member loop above never sees it — but `forget` still tears it
+        // down, so it belongs in the risk count too.
+        let checkoutSessionCount = workspaceCheckoutOwnedSessionIDs(checkout).count
+        if checkoutSessionCount > 0 {
+            risks.append("\(checkoutSessionCount) checkout \(checkoutSessionCount == 1 ? "session" : "sessions") will close")
+        }
         return WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: risks, requiresForce: requiresForce)
+    }
+
+    private func workspaceCheckoutOwnedSessionIDs(_ checkout: WorkspaceCheckout) -> Set<String> {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        return Set(tabs.tabs(for: owner).flatMap { tab -> [String] in
+            switch tab {
+            case .terminal(let state): return state.root.leaves().map(\.sessionId)
+            case .acpSession(let state): return [state.sessionId]
+            default: return []
+            }
+        })
     }
 
     func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
@@ -3502,11 +3521,30 @@ final class AppState {
         for worktree in resolvedWorktrees.values {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
         }
-        let outcome = try await workspaceCoordinator().deleteCheckoutAndForget(
-            checkoutID: id,
-            confirmingRisks: confirmingRisks,
-            confirmedPreserveArtifacts: confirmedPreserveArtifacts
-        )
+        let outcome: WorkspaceCheckoutDeletionOutcome
+        do {
+            outcome = try await workspaceCoordinator().deleteCheckoutAndForget(
+                checkoutID: id,
+                confirmingRisks: confirmingRisks,
+                confirmedPreserveArtifacts: confirmedPreserveArtifacts
+            )
+        } catch {
+            // Member worktrees can already be durably removed even when this
+            // later stage (session teardown, root-artifact cleanup) throws —
+            // the coordinator commits each member's deletion independently as
+            // it goes. Reconcile the runtime and the cached snapshot against
+            // whatever actually got persisted before surfacing the error, so
+            // tabs and terminals for now-deleted worktrees don't linger.
+            await workspacesManager.refreshCheckoutSnapshots()
+            if let refreshed = workspacesManager.checkout(id: id) {
+                for member in refreshed.members where member.availability == .explicitlyDeleted {
+                    if let worktree = resolvedWorktrees[member.id] {
+                        await cleanupDeletedWorkspaceMemberRuntime(worktree)
+                    }
+                }
+            }
+            throw error
+        }
         let removedMemberIDs: Set<UUID>
         switch outcome {
         case .forgotten:
@@ -10263,6 +10301,19 @@ final class AppState {
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
         Task { @MainActor in
+            // The checkpoint discovery and git preflight above each yielded
+            // the main actor at least once; a Workspace checkout could have
+            // been unarchived (or newly claimed this worktree) in that
+            // window. Recheck immediately before the real removal, the same
+            // way the batch delete path re-validates ownership right before
+            // its own removal.
+            guard workspaceOwnershipDeletionRefusal(for: worktree) == nil else {
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: "Worktree changed since confirmation")
+                )
+                return
+            }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
