@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Internal
+
+- Keep real Bonjour integration checks off hosted runners and isolate rename formatting tests from large ordinary Swift batches.
+
 ## [0.19.3] - 2026-09-22
 
 ### ✨ Features
