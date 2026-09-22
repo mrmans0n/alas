@@ -788,6 +788,27 @@ struct ACPSubagentSessionTests {
         #expect(session.transcript.messages.count == 1)
     }
 
+    @Test("a replayed spawn recovers at the chronological position, not the tail, when later parent messages already persisted")
+    func replayRecoversSpawnAtChronologicalPosition() {
+        let session = makeSession()
+        // Hydration restored a message that chronologically FOLLOWED the
+        // spawn, even though the spawn's own row never reached SQLite.
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("later reply")))
+        session.beginSuppressedReplaySideEffects()
+
+        let dirty = session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        #expect(dirty == [0])
+        #expect(session.transcript.messages.count == 2)
+        guard case .toolCall(let spawnRow) = session.transcript.messages[0],
+              case .agent = session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn row before the already-persisted later message")
+            return
+        }
+        #expect(ACPSubagentRowDescriptor(toolCall: spawnRow)?.subagentSessionId == "child-1")
+    }
+
     // MARK: - Row projection
 
     @Test("a subagent row is never folded into a tool-call bundle")

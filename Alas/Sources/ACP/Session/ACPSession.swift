@@ -235,6 +235,14 @@ final class ACPSession: ObservableObject, Identifiable {
     private var liveUserChunkMessageIds: Set<String> = []
     private var legacyUserChunkMessageIds: Set<UUID> = []
     private var replayCreatedMetadataTerminalIds: Set<String> = []
+    /// Array position suppressed-replay reconciliation has reached, in
+    /// chronological order — advanced past whichever row every reconciled
+    /// update (matched OR recovered) resolves to. A row recovered because
+    /// it's genuinely missing (a subagent spawn whose own write never
+    /// reached SQLite) is INSERTED here rather than appended, so it lands
+    /// relative to its chronological neighbours instead of always at the
+    /// tail. See `applySuppressedReplaySideEffects`/`registerSubagent`.
+    private var suppressedReplayInsertionCursor = 0
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -1021,43 +1029,55 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
+        let dirty: Set<Int>
         switch update {
         case .toolCall(let payload):
             guard let touched = updateToolCall(id: payload.toolCallId, { tc in
                 Self.applyToolCallPayloadFields(payload, to: &tc)
             }) else { return [] }
             applyToolCallMetadata(payload.metadata, replaying: true)
-            return [touched]
+            dirty = [touched]
         case .toolCallUpdate(let update):
             guard let touched = updateToolCall(id: update.toolCallId, { tc in
                 Self.applyToolCallUpdateFields(update, to: &tc, allowFinalSnapshotReplacement: false)
             }) else { return [] }
             applyToolCallMetadata(update.metadata, replaying: true)
-            return [touched]
+            dirty = [touched]
         case .subagentSpawned(let spawn):
             // Registration is keyed by child session id, so a replayed
             // spawn for a child already restored from SQLite merges into
             // it rather than duplicating its row — and a child whose row
             // never made it to disk is genuinely missing, so adding it
             // here is what keeps its later updates routable.
-            return registerSubagent(spawn, flushingReplayCandidates: false)
+            dirty = registerSubagent(spawn, flushingReplayCandidates: false)
         case .subagentStateUpdate(let update):
             // A terminal state that the previous process never committed
             // arrives only in this replay. Dropping it would leave the row
             // spinning against a child that finished long ago.
-            return applySubagentState(update, replaying: true)
+            dirty = applySubagentState(update, replaying: true)
         default:
             return []
         }
+        // Advances past whichever row this update resolved to (matched OR
+        // recovered), so a LATER recovered row — a subagent spawn whose own
+        // write never reached SQLite while later messages did — inserts at
+        // the correct chronological position instead of the tail. See
+        // `registerSubagent`.
+        if let touchedMax = dirty.max() {
+            suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedMax + 1)
+        }
+        return dirty
     }
 
     func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        suppressedReplayInsertionCursor = 0
         for run in subagents.values { run.beginReplayReconciliation() }
     }
 
     func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        suppressedReplayInsertionCursor = 0
         for run in subagents.values { run.endReplayReconciliation() }
     }
 
@@ -1716,17 +1736,27 @@ final class ACPSession: ObservableObject, Identifiable {
         // call does, so held replay candidates must land ahead of it —
         // except while replay is being suppressed, where materialising a
         // candidate is exactly what suppression exists to prevent.
+        let row = ACPMessage.toolCall(descriptor(for: run).toolCall(
+            executionStartedAt: timestamp,
+            executionFinishedAt: nil))
+        let index: Int
         if flushingReplayCandidates {
             flushPendingReplayCandidates()
+            transcript.appendMessage(row, createdAt: timestamp)
+            index = transcript.messages.count - 1
+        } else {
+            // Reaching here during suppressed replay means this child was
+            // never hydrated at all — its row is genuinely missing from
+            // SQLite. `session/load` can replay this spawn before LATER
+            // messages that DID persist; appending it would place the
+            // child's row after output that chronologically preceded it.
+            // Insert at the replay position instead.
+            index = min(suppressedReplayInsertionCursor, transcript.messages.count)
+            transcript.insertMessage(row, at: index, createdAt: timestamp)
         }
-        transcript.appendMessage(
-            .toolCall(descriptor(for: run).toolCall(
-                executionStartedAt: timestamp,
-                executionFinishedAt: nil)),
-            createdAt: timestamp)
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
-        return [transcript.messages.count - 1]
+        return [index]
     }
 
     /// Applies a child's lifecycle transition, updating its row.
