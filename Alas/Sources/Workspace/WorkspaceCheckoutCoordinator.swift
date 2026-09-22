@@ -423,6 +423,11 @@ actor WorkspaceCheckoutCoordinator {
                 current.members[index].cleanupOwnership = .init()
                 current.members[index].recreationSourceCheckpoint = nil
                 current.members[index].recreationWorktreeCreationBegan = false
+                // Every successful deletion clears its own stale failure
+                // diagnostic here, whether reached through the whole-checkout
+                // loop or a direct per-member retry from the details view —
+                // a resolved error must not keep showing as unresolved.
+                current.diagnostics.removeAll { $0.isDeletionFailure(for: memberID) }
                 if !checkoutOperationAlreadyClaimed {
                     current.operation = .idle
                     current.stopAfterCurrentOperations = false

@@ -773,6 +773,27 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(result.diagnostics.contains { $0.memberID == fixture.checkout.members[1].id } == false)
     }
 
+    @Test func directMemberRetryClearsTheEarlierWholeCheckoutFailureDiagnostic() async throws {
+        // A whole-checkout deletion records a failure diagnostic for a
+        // member that couldn't be removed. The details view offers that
+        // member its own direct "Delete Worktree" retry, which calls
+        // deleteMember directly rather than going through the whole-checkout
+        // loop — a successful retry there must still clear the diagnostic,
+        // not just a retry of the whole checkout.
+        let fixture = try await Fixture.make(memberCount: 2)
+        let failing = fixture.checkout.members[0]
+        let failingLifecycle = FixtureLifecycle(failingMember: failing.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: failingLifecycle)
+        let afterFailure = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        #expect(afterFailure.diagnostics.contains { $0.memberID == failing.id })
+
+        let retryCoordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: FixtureLifecycle())
+        let afterRetry = try await retryCoordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: failing.id)
+
+        #expect(!afterRetry.diagnostics.contains { $0.memberID == failing.id })
+        #expect(afterRetry.members.first(where: { $0.id == failing.id })?.availability == .explicitlyDeleted)
+    }
+
     @Test func wholeDeletionReplacesTheEarlierFailureDiagnosticWhenRetried() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
         let failing = fixture.checkout.members[0]
