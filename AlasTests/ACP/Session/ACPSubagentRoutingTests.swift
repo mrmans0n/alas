@@ -356,6 +356,47 @@ struct ACPSubagentRoutingTests {
         #expect(acknowledged.value == true)
     }
 
+    @Test("replaying already-persisted ordinary rows advances the cursor so a later recovered spawn inserts after them")
+    func replayOrdinaryRowsAdvanceCursorBeforeSpawnRecovery() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Hydrate two ordinary rows exactly as they would already exist
+        // in memory after a normal `session/load` restore from SQLite.
+        runner.session.apply(.userMessageChunk(.init(messageId: "u1", content: .text("hello"))))
+        runner.session.apply(.agentMessageChunk(.init(messageId: "a1", content: .text("hi"))))
+        runner.persistIndices([0, 1])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 2)
+
+        // `session/load` resends the full chronological history: the two
+        // rows that already matched, THEN a subagent spawn whose own
+        // write never reached SQLite before the crash.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(messageId: "u1", content: .text("hello")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .agentMessageChunk(.init(messageId: "a1", content: .text("hi")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Before the fix, replaying the two ordinary rows left the cursor
+        // at 0 — their case in `applySuppressedReplaySideEffects` fell to
+        // `default: return []`, which advances nothing — so the recovered
+        // spawn inserted BEFORE both instead of after, reordering the
+        // transcript out of chronological order.
+        #expect(runner.session.transcript.messages.count == 3)
+        guard case .user = runner.session.transcript.messages[0],
+              case .agent = runner.session.transcript.messages[1],
+              case .toolCall = runner.session.transcript.messages[2] else {
+            Issue.record("expected the recovered spawn AFTER the already-matched ordinary rows")
+            return
+        }
+    }
+
     @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
     func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
         let (runner, store, _) = try makeRunner()
@@ -620,6 +661,40 @@ struct ACPSubagentRoutingTests {
         // broker must redeliver so a later attempt can recover the spawn.
         #expect(!(try store.loadSubagentMessages(sessionId: "s")).isEmpty)
         #expect(acknowledged.value == false)
+    }
+
+    @Test("a child-addressed permission-decision write opts out of the lifecycle batch")
+    func permissionDecisionWriteIsNotPoisonedByPriorLifecycleFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Same poisoning setup as `nonParticipatingWriteIsNotPoisonedByPriorLifecycleFailure`:
+        // a spawn whose own write fails, registering the child in memory
+        // while leaving `lastQueuedPersistenceSucceeded` poisoned.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // Give the child a row, then persist it exactly the way
+        // `persistPermissionDecision` does for a child-addressed decision
+        // — opted out via `participatesInLifecycleBatch: false`. A
+        // permission write is never paired with a trailing ack-carrying
+        // update the way an OpenCode spawn/status pair is, so it must
+        // report its own outcome regardless of an unrelated earlier
+        // failure in the same lease's write queue.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("permission granted"))))
+
+        let acknowledged = Acknowledged()
+        _ = runner.persistSubagentIndices(
+            [0], subagentSessionId: "child-1", participatesInLifecycleBatch: false,
+            completion: { acknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == true)
     }
 
     @Test("a no-op update rejected by the lease fence is not acknowledged either")

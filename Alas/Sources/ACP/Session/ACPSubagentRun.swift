@@ -168,7 +168,15 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         // earlier nonterminal frame, or a later replayed terminal frame
         // would then overwrite its persisted `finishedAt` with the
         // reattach time, inflating the displayed duration on every reattach.
-        if replaying, state.isTerminal, !newState.isTerminal { return }
+        // `.disconnected` is excluded: unlike completed/failed/cancelled,
+        // it is never an outcome the agent reports as final — it is what
+        // `markSubagentsDisconnected` synthesizes locally when Alas loses
+        // the connection and genuinely does not know what happened to the
+        // child. Treating it as equally authoritative would let a lost
+        // connection permanently strand a still-running child's row;
+        // replay reporting the child's real (non-terminal) status is
+        // strictly more informed and should win.
+        if replaying, state.isTerminal, state != .disconnected, !newState.isTerminal { return }
         guard state != newState else { return }
         state = newState
         if newState.isTerminal {
@@ -211,12 +219,33 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             let text = Self.text(of: chunk.content)
             let attachments = Self.attachments(of: chunk.content)
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
-            if let messageId = chunk.messageId,
-               let index = userIndex(messageId: messageId),
+            if let messageId = chunk.messageId {
+                if let index = userIndex(messageId: messageId),
+                   case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] {
+                    messages[index] = .user(
+                        id: id,
+                        messageId: messageId,
+                        text: existingText + text,
+                        attachments: existingAttachments + attachments.filter {
+                            !existingAttachments.contains($0)
+                        },
+                        delegatedSource: source)
+                    return [index]
+                }
+                return [append(.user(
+                    id: UUID(), messageId: messageId, text: text, attachments: attachments), at: timestamp)]
+            }
+            // No messageId to key off, but a prompt without one still
+            // arrives as one update per content block (text then an
+            // image, say) — mirror the identified branch above and the
+            // replay path's `legacyOpenUserRun` by extending the trailing
+            // open id-less row instead of fragmenting each block into its
+            // own bubble.
+            if let index = legacyTrailingUserIndex(),
                case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] {
                 messages[index] = .user(
                     id: id,
-                    messageId: messageId,
+                    messageId: nil,
                     text: existingText + text,
                     attachments: existingAttachments + attachments.filter {
                         !existingAttachments.contains($0)
@@ -225,10 +254,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 return [index]
             }
             return [append(.user(
-                id: UUID(),
-                messageId: chunk.messageId,
-                text: text,
-                attachments: attachments), at: timestamp)]
+                id: UUID(), messageId: nil, text: text, attachments: attachments), at: timestamp)]
         case .toolCall(let payload):
             // Normally the first event for this id, so appending
             // unconditionally would usually be safe — except a permission
@@ -334,6 +360,22 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             return [index]
         case .plan(let entries):
             return applyReplayedPlan(entries, at: timestamp)
+        case .toolCallUpdate:
+            // `.toolCallUpdate`'s own live handling already looks its
+            // target up by id at any position, so it needs no bespoke
+            // replay variant — but unlike `.toolCall`/`.plan` above, it
+            // must still advance the cursor past whatever row it touched.
+            // A child tool call materialized ONLY via a permission
+            // snapshot (see `mergePermissionDecision`) can receive its
+            // very first `.toolCallUpdate` with no preceding `.toolCall`
+            // at all; without this, the cursor stays behind that row, and
+            // a later id-less prompt/text candidate at or before it is
+            // wrongly treated as still missing and duplicated.
+            let dirty = apply(update, at: timestamp)
+            if let index = dirty.first {
+                replayCursor = max(replayCursor, index + 1)
+            }
+            return dirty
         default:
             return apply(update, at: timestamp)
         }
@@ -882,6 +924,20 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             }
         }
         return nil
+    }
+
+    /// The trailing id-less `.user` row still open for continuation.
+    /// Bound to the literal last message, exactly like `userIndex(messageId:)`
+    /// is for an identified prompt — NOT `legacyTrailingIndex`'s "skip past
+    /// a plan or notice" rule, which exists for agent/thought text
+    /// streaming, a different concern. A plan between two id-less prompts
+    /// closes the first turn just as surely as a tool call or agent reply
+    /// would: without this, a second turn's id-less prompt following its
+    /// predecessor's plan would silently concatenate into the FIRST
+    /// turn's bubble instead of starting its own.
+    private func legacyTrailingUserIndex() -> Int? {
+        guard case .user(_, nil, _, _, _) = messages.last else { return nil }
+        return messages.count - 1
     }
 
     private func append(_ message: ACPMessage, at timestamp: Date) -> Int {

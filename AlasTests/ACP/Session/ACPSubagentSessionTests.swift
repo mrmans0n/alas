@@ -331,6 +331,41 @@ struct ACPSubagentSessionTests {
         #expect(second.value == "second")
     }
 
+    @Test("replay of a bare tool-call update, with no creation event of its own, still advances the cursor past its row")
+    func replayToolCallUpdateAdvancesCursorPastMaterializedPlaceholder() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // The tool call was originally materialized ONLY via a permission
+        // decision (see `mergePermissionDecision`) — no `.toolCall`
+        // creation event was ever sent for it, only its update. Both rows
+        // already persisted, in this order.
+        run.restore(
+            messages: [
+                .toolCall(.init(toolCallId: "t1", title: "Run command", status: "completed")),
+                .agent(id: UUID(), StreamingText("only"))
+            ],
+            createdAts: [Date(), Date()])
+
+        // `session/load` resends the full chronological history: the tool
+        // call's own (and only) update, then the row already persisted
+        // right after it.
+        run.applyReplayed(.toolCallUpdate(.init(toolCallId: "t1", status: "completed")))
+        run.applyReplayed(.agentMessageChunk(.text("only")))
+
+        // Before the fix, the cursor stayed at 0 after the toolCallUpdate
+        // (it fell through to the generic default with no bespoke replay
+        // handling), so the already-persisted "only" row — stored at
+        // index 1, strictly ahead of the stuck cursor — looked like it
+        // belonged to a LATER, not-yet-reached touch, and was duplicated
+        // via `insertRecovered` instead of matched in place.
+        #expect(run.messages.count == 2)
+        guard case .toolCall = run.messages[0],
+              case .agent(_, nil, let only) = run.messages[1] else {
+            Issue.record("expected the tool call followed by the single reconciled row")
+            return
+        }
+        #expect(only.value == "only")
+    }
+
     @Test("a child prompt's blocks reassemble into one bubble with its attachments")
     func childPromptBlocksReassemble() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
@@ -348,6 +383,72 @@ struct ACPSubagentSessionTests {
         #expect(text == "Review this file")
         #expect(attachments.count == 1)
         #expect(attachments.first?.uri == "file:///tmp/a.swift")
+    }
+
+    @Test("a live id-less child prompt's blocks reassemble into one bubble, like an identified prompt does")
+    func liveIdLessChildPromptBlocksReassemble() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.init(content: .text("Review "))))
+        run.apply(.userMessageChunk(.init(
+            content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift"))))
+        run.apply(.userMessageChunk(.init(content: .text("this file"))))
+
+        #expect(run.messages.count == 1)
+        guard case .user(_, nil, let text, let attachments, _) = run.messages[0] else {
+            Issue.record("expected one prompt bubble")
+            return
+        }
+        #expect(text == "Review this file")
+        #expect(attachments.count == 1)
+        #expect(attachments.first?.uri == "file:///tmp/a.swift")
+    }
+
+    @Test("a tool call between id-less child prompt blocks starts a new bubble instead of merging")
+    func liveIdLessChildPromptClosedByToolCall() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.init(content: .text("first"))))
+        run.apply(.toolCall(.init(toolCallId: "t1", title: "Read", kind: "read", status: "completed")))
+        run.apply(.userMessageChunk(.init(content: .text("second"))))
+
+        #expect(run.messages.count == 3)
+        guard case .user(_, nil, let first, _, _) = run.messages[0],
+              case .toolCall = run.messages[1],
+              case .user(_, nil, let second, _, _) = run.messages[2] else {
+            Issue.record("expected two separate prompt bubbles around the tool call")
+            return
+        }
+        #expect(first == "first")
+        #expect(second == "second")
+    }
+
+    @Test("replay revives a locally-synthesized disconnected child back to its real reported state")
+    func replayRevivesLocallyDisconnectedChild() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        // Alas synthesizes `.disconnected` locally when the connection to
+        // the agent drops (`markSubagentsDisconnected`) — the agent
+        // itself never reports this state, so it must not be treated as
+        // authoritative once replay resumes and reports the truth.
+        run.apply(state: .disconnected)
+        #expect(run.state == .disconnected)
+
+        run.apply(state: .running, replaying: true)
+
+        #expect(run.state == .running)
+    }
+
+    @Test("replay does not regress a genuinely terminal state the agent already reported")
+    func replayDoesNotReviveGenuinelyTerminalChild() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(state: .completed)
+        #expect(run.state == .completed)
+
+        // An earlier, nonterminal frame from the same replayed history
+        // must not regress an already-known-complete child — unlike
+        // `.disconnected`, `.completed` is an outcome the agent itself
+        // reported, so it stays authoritative.
+        run.apply(state: .running, replaying: true)
+
+        #expect(run.state == .completed)
     }
 
     @Test("a live prompt closed by agent output does not reopen when its id is reused")

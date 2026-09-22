@@ -1030,6 +1030,16 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
         let dirty: Set<Int>
+        // Rows this update MATCHES but does not itself mutate — ordinary
+        // content is trusted as already fully hydrated during suppressed
+        // replay, so it is never re-applied here, only located. Without
+        // this, replaying a run of already-persisted user/agent/thought/
+        // plan rows would leave the cursor exactly where it was, and a
+        // LATER recovered row (e.g. a subagent spawn whose write never
+        // reached SQLite) would insert before them instead of after.
+        // Read-only lookups, so a miss just leaves the cursor unmoved
+        // rather than risking a wrong mutation.
+        var matchedIndex: Int?
         switch update {
         case .toolCall(let payload):
             guard let touched = updateToolCall(id: payload.toolCallId, { tc in
@@ -1055,6 +1065,21 @@ final class ACPSession: ObservableObject, Identifiable {
             // arrives only in this replay. Dropping it would leave the row
             // spinning against a child that finished long ago.
             dirty = applySubagentState(update, replaying: true)
+        case .agentMessageChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) } ?? lastAgent()
+        case .agentThoughtChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) } ?? lastThought()
+        case .userMessageChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
+        case .plan:
+            dirty = []
+            matchedIndex = transcript.currentPlanMessageIndex
         default:
             return []
         }
@@ -1067,7 +1092,7 @@ final class ACPSession: ObservableObject, Identifiable {
         // every later row re-persisted because the insertion shifted its
         // position — the cursor must land right after the recovered row
         // itself, not after that whole shifted (already-reconciled) tail.
-        if let touchedIndex = dirty.min() {
+        if let touchedIndex = dirty.min() ?? matchedIndex {
             suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedIndex + 1)
         }
         return dirty

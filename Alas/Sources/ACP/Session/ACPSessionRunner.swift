@@ -689,7 +689,11 @@ final class ACPSessionRunner {
             subagentSessionId: subagentSessionId
         ) else { return }
         if let subagentSessionId {
-            persistSubagentIndices([index], subagentSessionId: subagentSessionId)
+            // Not part of any OpenCode dual-write lifecycle batch — a
+            // transient failure here must not withhold a LATER, unrelated
+            // child update's own durable acknowledgement.
+            persistSubagentIndices(
+                [index], subagentSessionId: subagentSessionId, participatesInLifecycleBatch: false)
         } else {
             persistIndices([index], requiresLease: true)
         }
@@ -1107,6 +1111,7 @@ final class ACPSessionRunner {
     func persistSubagentIndices(
         _ indices: Set<Int>,
         subagentSessionId: String,
+        participatesInLifecycleBatch: Bool = true,
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         guard holdsLeaseForWrite() else { return false }
@@ -1167,6 +1172,10 @@ final class ACPSessionRunner {
             // still registers as activity at both ends.
             if persisted == true {
                 self.onPersist?()
+            }
+            guard participatesInLifecycleBatch else {
+                completion?(persisted == true)
+                return
             }
             // Combine with the PRECEDING queued write's outcome (read
             // before this overwrites it) rather than record only this
