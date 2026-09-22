@@ -968,6 +968,36 @@ struct AppStateRunScheduleTests {
         #expect(posted.values.map(\.content.title).contains { $0.contains("Nightly") && $0.contains("did not run") })
     }
 
+    /// A schedule removed while its ACP-capable agent is launching must
+    /// not enqueue the prompt or attach the agent — the worktree may already
+    /// be gone by the time either would run. Mirrors the terminal path's own
+    /// `Task.isCancelled` guards in `deliverScheduledPrompt`, which this test
+    /// exercises through the same `launchWorktreeSurface` entry point a
+    /// schedule uses, with the enclosing task cancelled before it runs.
+    @Test func aCancelledScheduleNeverQueuesOrAttachesTheChatSession() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["omp"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let prepared = PreparedWorktreeACPPrompt(
+            sessionID: "cancelled-session", promptID: UUID(), text: "Do the thing", sendsAutomatically: true
+        )
+
+        let task = Task {
+            try await state.launchWorktreeSurface(
+                .acp(agentId: "omp", preparedPrompt: prepared), worktree: main, project: project
+            )
+        }
+        task.cancel()
+        _ = try? await task.value
+
+        let manager = try #require(state.acpManager(forWorktreeId: main.id))
+        let session = try #require(manager.liveSession(for: prepared.sessionID))
+        #expect(session.queue.isEmpty)
+        #expect(session.agentState == .idle)
+    }
+
     @Test func aChatPromptNotSentAutomaticallyIsLeftInTheComposer() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

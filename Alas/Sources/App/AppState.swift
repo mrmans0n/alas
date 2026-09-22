@@ -12183,6 +12183,13 @@ final class AppState {
             to: worktree.id
         )
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        // The schedule that asked for this session can be removed while the
+        // admission checks above were suspended. Unlike the terminal path
+        // (whose PTY only receives a scheduled prompt after its own
+        // `Task.isCancelled` guards in `deliverScheduledPrompt`), the ACP
+        // route would otherwise enqueue the prompt and attach the agent
+        // regardless, continuing to act on a worktree the user just deleted.
+        guard !Task.isCancelled else { return }
         do {
             _ = try await startACPSession(
                 worktree: worktree,
