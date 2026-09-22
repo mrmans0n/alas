@@ -644,6 +644,69 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    // Regression (issue #1417): `stop()` must close a live socket
+    // synchronously, not merely queue the teardown. The table clear below
+    // drops the last strong reference to each `RemoteConnection` in the same
+    // turn; `cancel()`'s queued teardown used to lose that race, so the
+    // socket died by ARC without ever sending a FIN — and a peer whose link
+    // was open kept seeing this Mac as online indefinitely. This is the path
+    // `syncRemoteServer()`'s disabled branch hits when Remote Control is
+    // toggled off while the app keeps running.
+    @Test func stopClosesALiveSocketSynchronouslySoThePeerSeesTheClose() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: FakeSessionsProvider(),
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+        )
+        try server.start(port: 0)
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let task = URLSession.shared.webSocketTask(
+            with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
+        task.resume()
+        // Drain the `hello` so the upgrade has fully completed and the
+        // connection is live and authenticated when `stop()` runs.
+        _ = try await receiveServerMessage(task)
+
+        server.stop()
+
+        // The next read must fail: `stop()` closed the socket out from under
+        // this client. With the bug the socket stayed open indefinitely — no
+        // FIN, no close frame — and a bare `receive()` would hang forever
+        // (the exact failure mode the issue describes), so race the read
+        // against a deadline: a frame or an error decides, and the deadline
+        // — only reachable with the bug — records the failure.
+        let closed: Bool = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { () -> Bool in
+                do {
+                    _ = try await task.receive()
+                    return false   // a frame arrived: the socket is still open
+                } catch {
+                    return true    // the read failed: the server closed the socket
+                }
+            }
+            group.addTask { () -> Bool in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return false       // deadline: the socket is still open
+            }
+            let verdict = await group.next() ?? false
+            group.cancelAll()
+            if !verdict {
+                // Deadline won — unblock the stuck receive so the group can exit.
+                task.cancel(with: .goingAway, reason: nil)
+            }
+            return verdict
+        }
+        #expect(closed, "expected the peer's WS to close after server.stop()")
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
     // A peer's token predates the toggle, so it must not keep opening new
     // sockets once federation is off — only browser/phone devices are exempt
     // from this gate.

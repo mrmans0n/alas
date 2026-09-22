@@ -147,7 +147,14 @@ final class RemoteServer {
         listener = nil
         port = nil
         // Deterministically close in-flight sockets rather than relying on ARC
-        // to drop the NWConnections when the table clears.
+        // to drop the NWConnections when the table clears. `cancel()` only
+        // queues teardown on the connection's queue, and the table clear below
+        // drops the last strong reference in this same turn — so the queued
+        // teardown can lose the race and the socket would die without ever
+        // sending a FIN, leaving a peer whose link was open looking online
+        // indefinitely. Force-close the socket first; teardown still runs on
+        // the queue and is harmless on an already-cancelled connection.
+        for conn in connections.values { conn.forceClose() }
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
         connectionDevice.removeAll()
