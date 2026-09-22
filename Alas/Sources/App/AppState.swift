@@ -513,6 +513,12 @@ final class AppState {
         }
         return manager
     }()
+    /// Nearby Alas instances. Lazy like `remotePeers`; started and stopped by
+    /// the Peers section while it is on screen, never app-wide.
+    @ObservationIgnored
+    private(set) lazy var remotePeerBrowser = RemotePeerBrowser(localServerId: { [weak self] in
+        self?.config.remote.serverId ?? ""
+    })
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -597,6 +603,25 @@ final class AppState {
             hubEnabled: config.remote.hubEnabled,
             federationEnabled: config.remote.federationEnabled
         )
+    }
+
+    /// What this Mac registers with Bonjour, or nil when it must not be
+    /// discoverable.
+    private func remoteBonjourAdvertisement() -> RemoteBonjourAdvertisement? {
+        RemoteBonjourAdvertisement.forSettings(
+            config.remote,
+            displayName: remoteDisplayName,
+            model: RemoteBonjourService.hardwareModel())
+    }
+
+    /// Re-registers the Bonjour advertisement after the discoverable toggle
+    /// or the display name changes, and drops the browsed list when
+    /// discovery turns off so no stale rows outlive the toggle.
+    func syncRemoteDiscovery() {
+        syncRemotePeers()
+        if !config.remote.discoverable, remoteServer != nil {
+            remotePeerBrowser.stop()
+        }
     }
 
     func refreshRemoteAccessState() {
@@ -702,7 +727,8 @@ final class AppState {
     }
 
     /// Keeps peer links alive only while the server is up and the experiment
-    /// is on; peers stay stored either way.
+    /// is on; peers stay stored either way. The Bonjour advertisement follows
+    /// the same lifecycle, gated further by `discoverable`.
     func syncRemotePeers() {
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
@@ -719,6 +745,7 @@ final class AppState {
             // flipped.
             remoteServer?.disconnectAllPeerDevices()
         }
+        remoteServer?.advertise(remoteBonjourAdvertisement())
     }
 
     /// Revokes a paired device and immediately drops any live connection(s) it

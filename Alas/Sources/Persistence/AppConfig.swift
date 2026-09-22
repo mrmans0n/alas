@@ -76,6 +76,9 @@ struct AppConfig: Codable, Equatable {
         var hubEnabled: Bool = false
         /// Experiment: lets this Mac pair with other Macs running Alas.
         var federationEnabled: Bool = false
+        /// Advertise this Mac on the local network with Bonjour and browse for
+        /// other Alas instances there. Only meaningful with `federationEnabled`.
+        var discoverable: Bool = false
 
         init(
             enabled: Bool = false,
@@ -86,7 +89,8 @@ struct AppConfig: Codable, Equatable {
             serverId: String = "",
             displayName: String = "",
             hubEnabled: Bool = false,
-            federationEnabled: Bool = false
+            federationEnabled: Bool = false,
+            discoverable: Bool = false
         ) {
             self.enabled = enabled
             self.port = port
@@ -97,11 +101,12 @@ struct AppConfig: Codable, Equatable {
             self.displayName = displayName
             self.hubEnabled = hubEnabled
             self.federationEnabled = federationEnabled
+            self.discoverable = discoverable
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, hubEnabled, federationEnabled
+            case allowedOrigins, serverId, displayName, hubEnabled, federationEnabled, discoverable
         }
 
         init(from decoder: Decoder) throws {
@@ -115,6 +120,7 @@ struct AppConfig: Codable, Equatable {
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
             hubEnabled = (try? c.decode(Bool.self, forKey: .hubEnabled)) ?? false
             federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
+            discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
         }
 
         /// Assigns a fresh UUID when `serverId` is empty. Returns true when it changed.

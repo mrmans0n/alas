@@ -135,4 +135,22 @@ struct RemoteConfigTests {
         let back = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(back.remote.federationEnabled == false)
     }
+
+    @Test func discoverableDefaultsOffAndRoundTrips() throws {
+        #expect(AppConfig.defaults.remote.discoverable == false)
+        var cfg = AppConfig.defaults
+        cfg.remote.discoverable = true
+        let back = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+        #expect(back.remote.discoverable == true)
+    }
+
+    @Test func oldRemoteConfigWithoutDiscoverableKeyDecodesFalse() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var remote = try #require(json["remote"] as? [String: Any])
+        remote.removeValue(forKey: "discoverable")
+        json["remote"] = remote
+        let back = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(back.remote.discoverable == false)
+    }
 }
