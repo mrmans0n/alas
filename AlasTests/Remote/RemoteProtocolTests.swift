@@ -950,4 +950,22 @@ struct RemoteProtocolTests {
         #expect(decoded.serverId == nil)
         #expect(decoded.serverName == nil)
     }
+
+    @Test func errorOmitsSessionIdWhenUnscoped() throws {
+        let unscoped = RemoteServerMessage.error(message: "m")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(unscoped)) as? [String: Any])
+        #expect(object["sessionId"] == nil)
+        #expect(try roundTrip(unscoped) == unscoped)
+
+        let legacy = Data(#"{"type":"error","message":"m"}"#.utf8)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
+        #expect(decoded == .error(message: "m"))
+    }
+
+    @Test func errorRoundTripsSessionIdWhenScoped() throws {
+        let scoped = RemoteServerMessage.error(message: "m", sessionId: "s1")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(scoped)) as? [String: Any])
+        #expect(object["sessionId"] as? String == "s1")
+        #expect(try roundTrip(scoped) == scoped)
+    }
 }

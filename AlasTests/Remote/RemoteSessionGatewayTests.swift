@@ -1598,7 +1598,12 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.renamed.map(\.id) == ["missing"])
         #expect(provider.renamed.map(\.title) == ["Name"])
-        #expect(sent.contains { if case .error(let message) = $0 { return message.contains("rename") } else { return false } })
+        #expect(sent.contains {
+            if case .error(let message, let sessionId) = $0 {
+                return message.contains("rename") && sessionId == "missing"
+            }
+            return false
+        })
     }
 
     @Test func subscribeEmitsSessionConfig() async throws {

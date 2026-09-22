@@ -69,8 +69,12 @@ extension RemoteServerMessage {
         switch self {
         case .hello, .identityProof, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
-             .createSessionFailed, .error:
+             .createSessionFailed:
             return nil
+        case .error(_, let sessionId):
+            // Conditionally scoped: nil when the error isn't about any one
+            // session (most callers), the failing session's id otherwise.
+            return sessionId
         case .transcriptSnapshot(let id, _, _, _, _, _, _, _), .transcriptDelta(let id, _, _, _, _, _),
              .transcriptPage(let id, _, _, _), .stopPending(let id), .permissionRequest(let id, _),
              .permissionResolved(let id, _), .questionRequest(let id, _), .questionResolved(let id, _),
@@ -91,8 +95,14 @@ extension RemoteServerMessage {
         switch self {
         case .hello, .identityProof, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
-             .createSessionFailed, .error:
+             .createSessionFailed:
             return self
+        case .error(let message, let sessionId):
+            // An error with no session id has nothing to rewrite; leaving it
+            // unchanged (rather than adopting `new`) matches every other
+            // unscoped case and keeps `replacingSessionId` a no-op on it.
+            guard sessionId != nil else { return self }
+            return .error(message: message, sessionId: new)
         case .transcriptSnapshot(_, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision):
             return .transcriptSnapshot(sessionId: new, streamingState: st, canDrive: cd, messages: m,
                                        firstIndex: firstIndex, totalCount: totalCount, epoch: epoch, revision: revision)

@@ -453,7 +453,12 @@ enum RemoteServerMessage: Equatable, Sendable {
     case sessionRenamed(sessionId: String, title: String)
     case queueState(sessionId: String, items: [RemoteQueuedPrompt])
     case queueEditRestored(sessionId: String, itemId: String, text: String)
-    case error(message: String)
+    /// `sessionId` is set when the error is about a specific session (e.g. a
+    /// failed rename), so a gateway forwarding it from a peer's home Mac can
+    /// route it back to whichever federated client asked — an unscoped error
+    /// has nowhere to be routed and is only ever shown on the connection that
+    /// triggered it. Nil for every non-session-specific error.
+    case error(message: String, sessionId: String? = nil)
     case changeList(
         sessionId: String, comparisonRef: String?, metricsAvailable: Bool,
         files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
@@ -611,7 +616,10 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 itemId: try c.decode(String.self, forKey: .itemId),
                 text: try c.decode(String.self, forKey: .text))
-        case "error": self = .error(message: try c.decode(String.self, forKey: .message))
+        case "error":
+            self = .error(
+                message: try c.decode(String.self, forKey: .message),
+                sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId))
         case "changeList":
             self = .changeList(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -808,8 +816,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(id, forKey: .sessionId)
             try c.encode(itemId, forKey: .itemId)
             try c.encode(text, forKey: .text)
-        case .error(let m): try c.encode("error", forKey: .type)
+        case .error(let m, let sessionId): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
+        try c.encodeIfPresent(sessionId, forKey: .sessionId)
         case .changeList(let s, let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
             try c.encode("changeList", forKey: .type)
             try c.encode(s, forKey: .sessionId)

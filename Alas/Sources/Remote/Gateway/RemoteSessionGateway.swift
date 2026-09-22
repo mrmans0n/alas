@@ -233,7 +233,7 @@ final class RemoteSessionGateway {
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             guard provider.renameSession(for: id, title: trimmed) else {
-                send(.error(message: "Could not rename session."))
+                send(.error(message: "Could not rename session.", sessionId: id))
                 return
             }
             send(.sessionRenamed(sessionId: id, title: trimmed))

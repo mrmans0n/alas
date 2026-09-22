@@ -76,6 +76,7 @@ struct RemoteMessageSessionScopeTests {
             .fileTreeFailed(sessionId: "a", path: nil, reason: .sessionUnknown, message: nil),
             .fileContents(sessionId: "a", path: "p", text: "", truncated: false),
             .fileUnavailable(sessionId: "a", path: "p", reason: .sessionUnknown, byteSize: nil, message: nil),
+            .error(message: "m", sessionId: "a"),
         ]
         for message in scoped {
             #expect(message.sessionId == "a", "\(message)")
@@ -102,5 +103,20 @@ struct RemoteMessageSessionScopeTests {
             #expect(message.sessionId == nil, "\(message)")
             #expect(message.replacingSessionId("b") == message, "\(message)")
         }
+    }
+
+    /// `.error` is the one case that is scoped or not depending on its own
+    /// payload: most callers have nothing to blame on a single session, but
+    /// a federated verb (e.g. renameSession) that fails on the home Mac
+    /// needs its error routed back to the asking client the same way any
+    /// other reply is, which only works when the error carries an id.
+    @Test func errorIsScopedOnlyWhenItCarriesASessionId() {
+        let unscopedError = RemoteServerMessage.error(message: "m")
+        #expect(unscopedError.sessionId == nil)
+        #expect(unscopedError.replacingSessionId("b") == unscopedError)
+
+        let scopedError = RemoteServerMessage.error(message: "m", sessionId: "a")
+        #expect(scopedError.sessionId == "a")
+        #expect(scopedError.replacingSessionId("b") == .error(message: "m", sessionId: "b"))
     }
 }
