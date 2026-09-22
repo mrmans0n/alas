@@ -89,6 +89,34 @@ final class ACPSessionRunner {
     private var persistedMessageCount: Int
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
+    /// Outcome of the most recently COMPLETED write queued via
+    /// `persistIndices` or `persistSubagentIndices` that has not yet
+    /// reached an acknowledgement boundary, regardless of whether that
+    /// write itself carried a durable acknowledgement.
+    ///
+    /// Consulted (and reset) by `acknowledgeAfterQueuedPersistence`'s
+    /// barrier and by the two `persistIndices`/`persistSubagentIndices`
+    /// completions themselves. A barrier's own fence re-check only proves
+    /// the writer lease is STILL valid right now — it says nothing about
+    /// whether an earlier queued write (the synthetic spawn's row,
+    /// typically, in the SAME batch) actually succeeded on its own terms.
+    /// A transient failure unrelated to the lease (a SQLite `step` error,
+    /// say) would otherwise slip past the fence check alone, and the
+    /// barrier would acknowledge a row that was never stored.
+    ///
+    /// Set unconditionally inside each write's own completion — not the
+    /// caller-supplied one, which is nil whenever that particular update
+    /// carries no ack of its own (the spawn half of an OpenCode-normalized
+    /// batch, always) — so it reflects every real write, acked or not.
+    ///
+    /// Reset to `true` the moment a write DOES carry the caller's own
+    /// completion — i.e. the moment a batch reaches its acknowledgement
+    /// boundary — rather than left to linger. Without the reset, one
+    /// transient failure anywhere would AND itself into every later
+    /// `succeeded` check forever, permanently withholding every subsequent
+    /// acknowledgement for the rest of this runner's lifetime — far worse
+    /// than the narrow, single-batch hazard this flag exists to close.
+    private var lastQueuedPersistenceSucceeded = true
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
     private var stopped = false
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
@@ -292,6 +320,9 @@ final class ACPSessionRunner {
                 let startedRecovery = self.session.beginConnectionRecovery()
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
+                // A child session cannot outlive the connection that
+                // carried it; stop its row spinning.
+                self.persistIndices(self.session.markSubagentsDisconnected())
                 // No flushQueueIfIdle() here: the connection is dead, so
                 // the next prompt would just fail. The queue stays put
                 // and drains naturally on the next successful reattach.
@@ -645,19 +676,35 @@ final class ACPSessionRunner {
             chosenOption = nil
             wasCancelled = true
         }
+        // A permission request can name a registered child's own session,
+        // not the root — its resulting row belongs in that child's own
+        // transcript. See `ACPSession.mergePermissionDecision`.
+        let subagentSessionId = session.subagentRun(params.sessionId) != nil ? params.sessionId : nil
         guard let index = session.mergePermissionDecision(
             toolCall: params.toolCall,
             presentation: ACPPermissionPresentation(metadata: params.metadata),
             chosenOption: chosenOption,
             mcpServerName: params.toolCall.mcpServerName,
-            wasCancelled: wasCancelled
+            wasCancelled: wasCancelled,
+            subagentSessionId: subagentSessionId
         ) else { return }
-        persistIndices([index], requiresLease: true)
+        if let subagentSessionId {
+            // Not part of any OpenCode dual-write lifecycle batch — a
+            // transient failure here must not withhold a LATER, unrelated
+            // child update's own durable acknowledgement.
+            persistSubagentIndices(
+                [index], subagentSessionId: subagentSessionId, participatesInLifecycleBatch: false)
+        } else {
+            persistIndices([index], requiresLease: true)
+        }
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
         let receivedWhileHoldingLease = holdsLeaseForWrite()
-        if receivedWhileHoldingLease {
+        // A child session's update never touches a parent row, so it must
+        // not capture a compare-and-swap base for one (its tool-call ids
+        // live in the child's own transcript).
+        if receivedWhileHoldingLease, !isSubagentUpdate(update) {
             capturePersistedBasesForIncomingUpdate(update.update)
         }
         pendingIncomingUpdates.append(.init(
@@ -714,7 +761,7 @@ final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
             return []
         }
     }
@@ -747,6 +794,20 @@ final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
+        if isSubagentUpdate(params) {
+            applySubagentUpdate(
+                params,
+                durableConsumptionAcknowledgement: durableConsumptionAcknowledgement)
+            // A child update still advances `appliedUpdateCount`, so it can
+            // be the one that satisfies a boundary deferred until the
+            // buffered updates drain. Skipping the check here would leave
+            // the boundary pending — and the queue unflushed — whenever a
+            // turn's last buffered notification is child-scoped.
+            if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
+                flushQueueIfIdle()
+            }
+            return
+        }
         let preAppliedSessionInfoDirty: Set<Int>?
         if case .sessionInfoUpdate(let info) = params.update {
             flushStreamingPersist()
@@ -766,8 +827,43 @@ final class ACPSessionRunner {
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                 )
             } else {
-                _ = session.applySuppressedReplaySideEffects(params.update)
-                durableConsumptionAcknowledgement?()
+                // `.toolCall`/`.toolCallUpdate` reconciliation (pre-existing)
+                // and root-level subagent lifecycle reconciliation both
+                // return dirty parent-row indices now — persist them and
+                // acknowledge only after that succeeds, exactly like the
+                // nested (child-addressed) lifecycle branch below already
+                // does. Discarding the result and acking unconditionally
+                // let a broker-backed reattach advance its cursor without
+                // ever storing the row replay just recovered.
+                let dirty = session.applySuppressedReplaySideEffects(params.update)
+                if dirty.isEmpty {
+                    // This specific update produced nothing to persist, but
+                    // an EARLIER one in the same replayed batch (the
+                    // recovered spawn, typically, for an OpenCode status
+                    // frame) can still have a write queued and not yet
+                    // complete. Acking immediately here — as a plain,
+                    // unconditional call — could advance the broker cursor
+                    // before that write lands, or after it fails, either of
+                    // which loses the row replay just recovered. Route
+                    // through the same queued + fence-revalidating barrier
+                    // the nested (child-addressed) branch already uses.
+                    acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+                } else {
+                    // This call site is shared by ordinary `.toolCall`/
+                    // `.toolCallUpdate` reconciliation and root-level
+                    // subagent lifecycle reconciliation — only the latter
+                    // is genuinely part of the OpenCode dual-write batch.
+                    let isSubagentLifecycleUpdate: Bool
+                    switch params.update {
+                    case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
+                    default: isSubagentLifecycleUpdate = false
+                    }
+                    persistIndices(
+                        dirty,
+                        participatesInLifecycleBatch: isSubagentLifecycleUpdate,
+                        completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+                    )
+                }
             }
             if let target = loadReplaySuppressionTarget,
                observedUpdateCount >= target {
@@ -826,6 +922,11 @@ final class ACPSessionRunner {
                 } else {
                     hasConfigBackedModel = false
                 }
+                let isSubagentLifecycleUpdate: Bool
+                switch params.update {
+                case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
+                default: isSubagentLifecycleUpdate = false
+                }
                 if case .sessionConfigOptionsUpdate = params.update,
                    hadConfigBackedModel || hasConfigBackedModel {
                     persistIndices(dirty)
@@ -834,9 +935,24 @@ final class ACPSessionRunner {
                             durableConsumptionAcknowledgement?()
                         }
                     }
+                } else if isSubagentLifecycleUpdate, dirty.isEmpty {
+                    // A ROOT-addressed subagent lifecycle update — the
+                    // shape both OpenCode-normalized updates take — can be
+                    // the trailing half of a batch sharing one wire frame's
+                    // ack with an earlier update whose real write (the
+                    // synthetic spawn, typically) is still queued.
+                    // `persistIndices`' empty-indices fast path below acks
+                    // synchronously without waiting for that write or
+                    // re-checking the fence; this barrier does both.
+                    acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
                 } else {
+                    // This IS genuinely part of the OpenCode dual-write
+                    // lifecycle batch when the update is spawn/state — every
+                    // other kind (plan, toolCall, etc.) is ordinary content
+                    // unrelated to any batch and must not couple with one.
                     persistIndices(
                         dirty,
+                        participatesInLifecycleBatch: isSubagentLifecycleUpdate,
                         completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                     )
                 }
@@ -845,6 +961,240 @@ final class ACPSessionRunner {
         if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
             flushQueueIfIdle()
         }
+    }
+
+    /// Whether an incoming update belongs to a native subagent rather than
+    /// to this session.
+    ///
+    /// An ALLOWLIST on purpose: only a session id Alas has already seen
+    /// announced by `subagent_spawned` counts as a child. The runner has
+    /// never filtered on `sessionId`, and agents that ignore the subagent
+    /// capability must keep behaving exactly as before, so anything
+    /// unrecognized still flows into the parent transcript.
+    private func isSubagentUpdate(_ params: ACPSessionUpdateParams) -> Bool {
+        session.subagentRun(params.sessionId) != nil
+    }
+
+    /// Applies a child-scoped update to its own transcript. Child rows are
+    /// deliberately kept out of the parent's streaming-persist machinery:
+    /// they have their own table, their own row ids, and they can never be
+    /// the row a prompt's completion boundary is waiting on.
+    private func applySubagentUpdate(
+        _ params: ACPSessionUpdateParams,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        defer {
+            if suppressingLoadReplay,
+               let target = loadReplaySuppressionTarget,
+               observedUpdateCount >= target {
+                finishLoadReplaySuppression()
+            }
+        }
+        switch params.update {
+        case .subagentSpawned, .subagentStateUpdate:
+            // A nested collaborator is announced on ITS parent's session,
+            // which is a child of ours. Register it flat on the root rather
+            // than dropping it: otherwise its own session id never enters
+            // the allowlist and its output would be applied to the root
+            // transcript as ordinary parent output. This is the same shape
+            // the OpenCode variant already produces, where every
+            // descendant is reported against the root regardless of depth.
+            //
+            // Lifecycle updates are reconciled even while replay is
+            // suppressed — they are idempotent and keyed by child session
+            // id, and the replay may carry the only copy of a terminal
+            // state the previous process never committed. Root-level
+            // spawns already take that path via
+            // `applySuppressedReplaySideEffects`; a nested one must not
+            // behave differently just because it is addressed one level
+            // down.
+            let dirty = suppressingLoadReplay
+                ? session.applySuppressedReplaySideEffects(params.update)
+                : session.apply(params.update)
+            if dirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+            } else {
+                // This IS genuinely part of the OpenCode dual-write
+                // lifecycle batch — a nested spawn/state update sharing an
+                // ack with a sibling write in the same normalized pair.
+                persistIndices(
+                    dirty,
+                    participatesInLifecycleBatch: true,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            }
+        default:
+            // The child transcript was restored from SQLite at hydration,
+            // so a `session/load` replay of its content is USUALLY a pure
+            // duplicate — but persistence is asynchronous, and a chunk the
+            // agent already sent (and therefore resends during replay) can
+            // be missing from SQLite if the app quit before its queued
+            // write landed. `applySubagentReplayedUpdate` resets a row on
+            // its first replayed touch and rebuilds it from what replay
+            // actually sends, so an already-complete row is unaffected and
+            // a partially- or fully-lost one is recovered.
+            let dirty = suppressingLoadReplay
+                ? session.applySubagentReplayedUpdate(
+                    params.update, subagentSessionId: params.sessionId)
+                : session.applySubagentUpdate(
+                    params.update, subagentSessionId: params.sessionId)
+            if dirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+            } else {
+                persistSubagentIndices(
+                    dirty,
+                    subagentSessionId: params.sessionId,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+            }
+        }
+    }
+
+    /// Acknowledges a durable subagent lifecycle update that wrote nothing
+    /// itself, but only once everything already queued has been written
+    /// AND the writer lease still checks out at that point.
+    ///
+    /// Both call sites are batch tails: a root-addressed spawn/state update
+    /// (OpenCode's `ACPOpenCodeChildUpdate.normalized` puts the ack on the
+    /// LAST of several updates sharing one wire frame) and a nested
+    /// lifecycle update reconciled during suppressed replay. In both cases
+    /// an earlier update's real write (the synthetic spawn row, typically)
+    /// can still be queued. Persistence operations are serialized through
+    /// `enqueuePersistence`, so waiting behind the queue orders this
+    /// correctly against that write — but ordering alone doesn't prove the
+    /// write succeeded: if a takeover invalidated the fence in that same
+    /// window, the earlier write stored nothing, and acknowledging anyway
+    /// would tell the broker we consumed a row that was never persisted.
+    ///
+    /// So this re-validates the SAME fence with an empty write of its own,
+    /// exactly like `persistSubagentIndices`' real writes do — an empty
+    /// array is a no-op for `upsertSubagentMessages`, but `withLeaseFence`
+    /// still checks the fence against the live lease row before running it,
+    /// so the round trip is a genuine, current answer rather than the
+    /// cached `canWrite()` snapshot this method also uses as a fast bail.
+    ///
+    /// That alone still isn't the whole story: the fence only proves the
+    /// LEASE is fine, not that the preceding write itself succeeded — a
+    /// transient failure unrelated to the lease (a SQLite `step` error,
+    /// say) would pass this barrier's own fence check while the earlier
+    /// write stored nothing. So the completion also folds in
+    /// `lastQueuedPersistenceSucceeded`, which every real write updates
+    /// unconditionally regardless of whether IT carried a durable ack.
+    private func acknowledgeAfterQueuedPersistence(
+        _ acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else { return }
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        enqueuePersistence({ persistence in
+            try await persistence.persistSubagentMessages([], fence: fence)
+        }, completion: { [weak self] persisted in
+            guard let self else { return }
+            // Combine with the PRECEDING queued write's outcome (read
+            // before this line overwrites it) rather than just this
+            // barrier's own fence check: a batch's real write can fail for
+            // a reason unrelated to the lease, which this barrier's own
+            // empty write — valid fence, nothing to actually store — would
+            // not surface on its own.
+            let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+            // This call always carries a real acknowledgement (the guard
+            // above returns otherwise), so it is ALWAYS the acknowledgement
+            // boundary of its batch — reset unconditionally, regardless of
+            // outcome, so a failure here can't block a later, unrelated one.
+            self.lastQueuedPersistenceSucceeded = true
+            if succeeded {
+                acknowledgement()
+            }
+        })
+    }
+
+    /// Persists the named rows of a child transcript.
+    @discardableResult
+    func persistSubagentIndices(
+        _ indices: Set<Int>,
+        subagentSessionId: String,
+        participatesInLifecycleBatch: Bool = true,
+        completion: ((Bool) -> Void)? = nil
+    ) -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        guard let run = session.subagentRun(subagentSessionId), !indices.isEmpty else {
+            completion?(true)
+            return true
+        }
+        let messages = run.messages
+        var rows: [ACPStoredSubagentMessage] = []
+        for index in indices.sorted() {
+            guard index >= 0, index < messages.count else { continue }
+            let message = messages[index]
+            guard let payload = try? ACPMessageCodec.encode(message) else { continue }
+            // The row's SQL seq, NOT its array index: persistence can leave
+            // gaps, and using the index here would let a row recovered by
+            // replay — appended at whatever position it lands in the
+            // compacted in-memory array — overwrite an unrelated row still
+            // holding that index's old seq. See `ACPSubagentRun.restore`.
+            let seq = run.seq(at: index)
+            rows.append(ACPStoredSubagentMessage(
+                id: ACPStoredSubagentMessage.rowId(
+                    sessionId: sessionId,
+                    subagentSessionId: subagentSessionId,
+                    seq: seq),
+                sessionId: sessionId,
+                subagentSessionId: subagentSessionId,
+                kind: message.kind,
+                seq: seq,
+                payload: payload,
+                createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970)))
+        }
+        guard !rows.isEmpty else {
+            completion?(true)
+            return true
+        }
+        let fence = leaseFenceProvider()
+        let subagentRows = rows
+        enqueuePersistence({ persistence in
+            // Return the fence's verdict rather than discarding it: a write
+            // rejected because ownership moved mid-flight stores nothing and
+            // must NOT acknowledge the durable update, or the child's output
+            // is dropped instead of being replayed to the new writer.
+            try await persistence.persistSubagentMessages(subagentRows, fence: fence)
+        }, completion: { [weak self] persisted in
+            guard let self else { return }
+            // Mirrors learn about new rows through this notifier — gated on
+            // THIS write's own outcome alone, not the batch-combined
+            // `succeeded` below. A child that streams without touching its
+            // synthetic parent row would otherwise stay invisible to
+            // another instance until the next parent-row write (its
+            // terminal state, at the earliest).
+            //
+            // Deliberately NOT `onMessageActivity`: that moves the recents
+            // ordering by bumping `updatedAt` in memory, while
+            // `upsertSubagentMessages` — unlike `upsertMessages` — does not
+            // bump it in SQLite, so the two would disagree. The spawn and
+            // the terminal state both write parent rows, so a subagent run
+            // still registers as activity at both ends.
+            if persisted == true {
+                self.onPersist?()
+            }
+            guard participatesInLifecycleBatch else {
+                completion?(persisted == true)
+                return
+            }
+            // Combine with the PRECEDING queued write's outcome (read
+            // before this overwrites it) rather than record only this
+            // write's own result: an OpenCode batch's spawn write can fail
+            // for a reason this write's own success says nothing about, and
+            // this write's own completion — unlike the barrier's — is what
+            // acknowledges the batch's shared cursor when it carries the ack.
+            let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+            // `completion` (the caller's, not this closure) is non-nil
+            // exactly when THIS write carries the batch's real acknowledgement
+            // — i.e. this is the batch's boundary — so only reset there.
+            // A nil `completion` means more of the same batch is still
+            // coming (the spawn half of an OpenCode pair, typically), and
+            // this write's outcome must propagate forward to it rather
+            // than being cleared here.
+            self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
+            completion?(succeeded)
+        })
+        return true
     }
 
     private func persistenceCompletion(
@@ -901,6 +1251,14 @@ final class ACPSessionRunner {
         )
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
+        // Teardown always shuts this runner's connection down (see
+        // `tearDownSession`: the `detach()` path has no runner), so every
+        // child dies with it. Marking them here — after the streaming
+        // flush, so it cannot cancel that write's debounce — is what stops
+        // a reopened session from showing a subagent spinning forever.
+        // `persistIndices` requires the writer lease, so an instance that
+        // lost it in a takeover records nothing.
+        persistIndices(session.markSubagentsDisconnected())
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
@@ -1383,6 +1741,22 @@ final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// Cancels one native subagent. `session/cancel` addressed to the CHILD
+    /// session id, so the parent turn keeps running — that is the whole
+    /// point of the row's Cancel action.
+    ///
+    /// The child's terminal state comes back as a `subagent_state_update`;
+    /// nothing is assumed locally, because an agent may finish the child
+    /// normally in the window before the cancel lands.
+    func cancelSubagent(subagentSessionId: String) async {
+        guard let run = session.subagentRun(subagentSessionId),
+              run.capabilities.supportsCancel,
+              run.isRunning
+        else { return }
+        guard await hasConfirmedLeaseForSideEffect() else { return }
+        try? await connection.cancel(sessionId: subagentSessionId)
+    }
+
     /// Legacy callsite shim: defaults to `.auto` intent (immediate send
     /// when idle, queue when busy).
     func send(text: String, attachments: [ACPMessage.Attachment]) {
@@ -2445,7 +2819,7 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
             return false
         }
     }
@@ -2572,26 +2946,33 @@ extension ACPSessionRunner {
         let acknowledgements = pendingStreamingPersistAcknowledgements
         pendingStreamingPersistAcknowledgements.removeAll(keepingCapacity: true)
         streamingPersistInFlightIndices.formUnion(indices)
-        if persistIndices(indices, requiresLease: true, completion: { [weak self] succeeded in
-            guard let self else { return }
-            self.streamingPersistInFlightIndices.subtract(indices)
-            if succeeded {
-                for acknowledgement in acknowledgements {
-                    acknowledgement()
+        // This flush's own completion is not part of any subagent lifecycle
+        // batch — an unrelated earlier failure must not report a spurious
+        // `false` here, which would be misread below as the write lease
+        // having moved and stop scheduling the rest of this prompt's output.
+        if persistIndices(
+            indices, requiresLease: true, participatesInLifecycleBatch: false,
+            completion: { [weak self] succeeded in
+                guard let self else { return }
+                self.streamingPersistInFlightIndices.subtract(indices)
+                if succeeded {
+                    for acknowledgement in acknowledgements {
+                        acknowledgement()
+                    }
+                    for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
+                        self.pendingStreamingPersistIndices.remove(index)
+                        self.pendingStreamingPersistRevisions.removeValue(forKey: index)
+                    }
+                    if !self.pendingStreamingPersistIndices.isEmpty, !self.streamingLeaseLost {
+                        self.flushStreamingPersist()
+                    }
+                    return
                 }
-                for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
-                    self.pendingStreamingPersistIndices.remove(index)
-                    self.pendingStreamingPersistRevisions.removeValue(forKey: index)
-                }
-                if !self.pendingStreamingPersistIndices.isEmpty, !self.streamingLeaseLost {
-                    self.flushStreamingPersist()
-                }
-                return
+                self.freezeStreamingPersistSnapshots()
+                self.streamingLeaseLost = true
+                self.persistStreamingPersistSnapshots()
             }
-            self.freezeStreamingPersistSnapshots()
-            self.streamingLeaseLost = true
-            self.persistStreamingPersistSnapshots()
-        }) {
+        ) {
             return
         }
         streamingPersistInFlightIndices.subtract(indices)
@@ -2696,6 +3077,7 @@ extension ACPSessionRunner {
     func persistIndices(
         _ indices: Set<Int>,
         requiresLease: Bool = true,
+        participatesInLifecycleBatch: Bool = false,
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         streamingPersistTask?.cancel()
@@ -2728,12 +3110,38 @@ extension ACPSessionRunner {
                 try await persistence.persistMessages(messageRows, fence: fence)
             }, completion: { [weak self] persisted in
                 guard let self else { return }
-                guard persisted == true else {
-                    completion?(false)
+                // This write's own bookkeeping — what Alas now believes is
+                // actually on disk — reflects ONLY this write's own outcome,
+                // regardless of any other write's combined `succeeded` below.
+                if persisted == true {
+                    self.commitPersistedMessageRows(messageRows)
+                }
+                // `lastQueuedPersistenceSucceeded` combining exists to
+                // couple an OpenCode-normalized dual-write batch (a spawn
+                // with no ack of its own, followed by a trailing update
+                // that carries the real one) — live or replayed. A caller
+                // whose write has nothing to do with that batch, like
+                // `flushStreamingPersist`'s own non-durable completion on
+                // every streaming flush, opts out via
+                // `participatesInLifecycleBatch: false`: an unrelated
+                // EARLIER batch's transient failure must not make THIS
+                // write's own success report back as `false`, which
+                // `flushStreamingPersist` reads as its write lease having
+                // moved and stops scheduling further output.
+                guard participatesInLifecycleBatch else {
+                    completion?(persisted == true)
                     return
                 }
-                self.commitPersistedMessageRows(messageRows)
-                completion?(true)
+                // See the matching comment in `persistSubagentIndices`:
+                // combine with the preceding write's outcome rather than
+                // record only this one, so a batch's earlier failure isn't
+                // erased by a later write's own success — but reset once a
+                // write that carries the caller's own completion concludes
+                // (the batch's acknowledgement boundary), so a transient
+                // failure can't block every later, unrelated batch forever.
+                let succeeded = persisted == true && self.lastQueuedPersistenceSucceeded
+                self.lastQueuedPersistenceSucceeded = completion == nil ? succeeded : true
+                completion?(succeeded)
             })
         } else {
             completion?(true)

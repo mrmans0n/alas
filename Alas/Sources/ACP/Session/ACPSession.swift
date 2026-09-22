@@ -170,6 +170,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// This is never persisted; restored sessions derive their UI from
     /// persisted session fields instead.
     @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
+    /// Native subagents (child ACP sessions) spawned during this session,
+    /// keyed by child session id. Each parent-transcript subagent row reads
+    /// its live child transcript from here; `subagentOrder` keeps spawn
+    /// order for the rare consumer that wants the list rather than a row.
+    @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
+    private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
@@ -229,6 +235,14 @@ final class ACPSession: ObservableObject, Identifiable {
     private var liveUserChunkMessageIds: Set<String> = []
     private var legacyUserChunkMessageIds: Set<UUID> = []
     private var replayCreatedMetadataTerminalIds: Set<String> = []
+    /// Array position suppressed-replay reconciliation has reached, in
+    /// chronological order — advanced past whichever row every reconciled
+    /// update (matched OR recovered) resolves to. A row recovered because
+    /// it's genuinely missing (a subagent spawn whose own write never
+    /// reached SQLite) is INSERTED here rather than appended, so it lands
+    /// relative to its chronological neighbours instead of always at the
+    /// tail. See `applySuppressedReplaySideEffects`/`registerSubagent`.
+    private var suppressedReplayInsertionCursor = 0
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -496,7 +510,8 @@ final class ACPSession: ObservableObject, Identifiable {
             kindsToFlush = [.agent, .thought]
         } else {
             switch update {
-            case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk:
+            case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk,
+                 .subagentSpawned:
                 kindsToFlush = [.agent, .thought]
             default:
                 kindsToFlush = []
@@ -590,47 +605,18 @@ final class ACPSession: ObservableObject, Identifiable {
                     return diffTouched.union([touched])
                 }
             }
-            let items = payload.content ?? []
-            let raw = Self.flatten(items)
-            let full = Self.stripWrappingFence(raw,
-                                               isFinal: Self.isFinalStatus(payload.status))
-            let terminalIds = Self.mergeTerminalIds(
-                Self.extractTerminalIds(items),
-                Self.extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
-            let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
-            transcript.appendMessage(.toolCall(.init(
-                toolCallId: payload.toolCallId,
-                title: payload.title,
-                kind: payload.kind,
-                status: payload.status,
-                content: full,
-                preview: Self.previewLine(full),
-                contentLanguage: Self.wrappingFenceLanguage(raw),
-                rawInput: Self.metadataString(payload.rawInput),
-                rawOutput: Self.metadataString(payload.rawOutput),
-                metadata: payload.metadata,
-                assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
-                locations: payload.locations?.map(\.path) ?? [],
-                terminalIds: terminalIds,
-                executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
-                name: payload.name)),
+            transcript.appendMessage(
+                .toolCall(Self.makeToolCall(from: payload, at: timestamp)),
                 createdAt: timestamp)
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
-            return applyDiffStatsFromToolCallContent(items, worktreeRoot: worktreeRoot)
+            return applyDiffStatsFromToolCallContent(payload.content ?? [], worktreeRoot: worktreeRoot)
                 .union([transcript.messages.count - 1])
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
-                Self.applyToolCallUpdateFields(u, to: &tc)
-                if tc.status == "in_progress", tc.executionStartedAt == nil {
-                    tc.executionStartedAt = timestamp
-                }
-                if Self.isFinalStatus(tc.status), tc.executionStartedAt != nil,
-                   tc.executionFinishedAt == nil {
-                    tc.executionFinishedAt = timestamp
-                }
+                Self.applyToolCallUpdate(u, to: &tc, at: timestamp)
             }
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
@@ -693,6 +679,10 @@ final class ACPSession: ObservableObject, Identifiable {
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
             return []
+        case .subagentSpawned(let spawn):
+            return registerSubagent(spawn, at: timestamp)
+        case .subagentStateUpdate(let update):
+            return applySubagentState(update, at: timestamp)
         case .unknown:
             return []
         }
@@ -856,7 +846,8 @@ final class ACPSession: ObservableObject, Identifiable {
         presentation: ACPPermissionPresentation?,
         chosenOption: ACPPermissionOption?,
         mcpServerName: String?,
-        wasCancelled: Bool
+        wasCancelled: Bool,
+        subagentSessionId: String? = nil
     ) -> Int? {
         let toolCallId = toolCall.toolCallId
         let facts = Self.permissionDecisionMetadata(
@@ -866,6 +857,12 @@ final class ACPSession: ObservableObject, Identifiable {
         // going stale is a correctness issue, independent of whether the
         // adapter also attached any `_meta.permission` presentation.
         guard facts != nil || wasCancelled else { return nil }
+        // The request named a registered child's session, not the root —
+        // its resulting row belongs in that child's own transcript. See
+        // `ACPSubagentRun.mergePermissionDecision`.
+        if let subagentSessionId, let run = subagents[subagentSessionId] {
+            return run.mergePermissionDecision(toolCall: toolCall, facts: facts, wasCancelled: wasCancelled)
+        }
         if let index = updateToolCall(id: toolCallId, { tc in
             if let facts { tc.metadata = Self.mergeMetadata(tc.metadata, facts) }
             // `$/cancel_request` cancellation (unlike Stop) never routes
@@ -1032,33 +1029,91 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
+        let dirty: Set<Int>
+        // Rows this update MATCHES but does not itself mutate — ordinary
+        // content is trusted as already fully hydrated during suppressed
+        // replay, so it is never re-applied here, only located. Without
+        // this, replaying a run of already-persisted user/agent/thought/
+        // plan rows would leave the cursor exactly where it was, and a
+        // LATER recovered row (e.g. a subagent spawn whose write never
+        // reached SQLite) would insert before them instead of after.
+        // Read-only lookups, so a miss just leaves the cursor unmoved
+        // rather than risking a wrong mutation.
+        var matchedIndex: Int?
         switch update {
         case .toolCall(let payload):
             guard let touched = updateToolCall(id: payload.toolCallId, { tc in
                 Self.applyToolCallPayloadFields(payload, to: &tc)
             }) else { return [] }
             applyToolCallMetadata(payload.metadata, replaying: true)
-            return [touched]
+            dirty = [touched]
         case .toolCallUpdate(let update):
             guard let touched = updateToolCall(id: update.toolCallId, { tc in
                 Self.applyToolCallUpdateFields(update, to: &tc, allowFinalSnapshotReplacement: false)
             }) else { return [] }
             applyToolCallMetadata(update.metadata, replaying: true)
-            return [touched]
+            dirty = [touched]
+        case .subagentSpawned(let spawn):
+            // Registration is keyed by child session id, so a replayed
+            // spawn for a child already restored from SQLite merges into
+            // it rather than duplicating its row — and a child whose row
+            // never made it to disk is genuinely missing, so adding it
+            // here is what keeps its later updates routable.
+            dirty = registerSubagent(spawn, flushingReplayCandidates: false)
+        case .subagentStateUpdate(let update):
+            // A terminal state that the previous process never committed
+            // arrives only in this replay. Dropping it would leave the row
+            // spinning against a child that finished long ago.
+            dirty = applySubagentState(update, replaying: true)
+        case .agentMessageChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+                ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
+        case .agentThoughtChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
+                ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
+        case .userMessageChunk(let chunk):
+            dirty = []
+            matchedIndex = chunk.messageId
+                .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
+                ?? firstIdLessMatch(of: .user, atOrAfter: suppressedReplayInsertionCursor)
+        case .plan:
+            dirty = []
+            matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
         default:
             return []
         }
+        // Advances past whichever row this update itself resolved to
+        // (matched OR recovered), so a LATER recovered row — a subagent
+        // spawn whose own write never reached SQLite while later messages
+        // did — inserts at the correct chronological position instead of
+        // the tail. See `registerSubagent`. `dirty.min()`, not `.max()`:
+        // `registerSubagent`'s own dirty set spans the recovered row AND
+        // every later row re-persisted because the insertion shifted its
+        // position — the cursor must land right after the recovered row
+        // itself, not after that whole shifted (already-reconciled) tail.
+        if let touchedIndex = dirty.min() ?? matchedIndex {
+            suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedIndex + 1)
+        }
+        return dirty
     }
 
     func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        suppressedReplayInsertionCursor = 0
+        for run in subagents.values { run.beginReplayReconciliation() }
     }
 
     func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
+        suppressedReplayInsertionCursor = 0
+        for run in subagents.values { run.endReplayReconciliation() }
     }
 
-    private static func applyToolCallPayloadFields(
+    static func applyToolCallPayloadFields(
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
     ) {
@@ -1550,6 +1605,52 @@ final class ACPSession: ObservableObject, Identifiable {
         return lines.joined(separator: "\n")
     }
 
+    /// Projects a `tool_call` payload into a transcript row. Shared with
+    /// `ACPSubagentRun`, which renders a child session's tool calls with
+    /// exactly the same fence stripping, asset and terminal-id extraction
+    /// as the parent transcript — the two must never drift.
+    static func makeToolCall(from payload: ACPToolCallPayload, at timestamp: Date) -> ACPMessage.ToolCall {
+        let items = payload.content ?? []
+        let raw = flatten(items)
+        let full = stripWrappingFence(raw, isFinal: isFinalStatus(payload.status))
+        let terminalIds = mergeTerminalIds(
+            extractTerminalIds(items),
+            extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
+        let rawOutputAssets = extractRawOutputAssets(payload.rawOutput)
+        return .init(
+            toolCallId: payload.toolCallId,
+            title: payload.title,
+            kind: payload.kind,
+            status: payload.status,
+            content: full,
+            preview: previewLine(full),
+            contentLanguage: wrappingFenceLanguage(raw),
+            rawInput: metadataString(payload.rawInput),
+            rawOutput: metadataString(payload.rawOutput),
+            metadata: payload.metadata,
+            assets: mergeAssets(extractAssets(items), rawOutputAssets),
+            locations: payload.locations?.map(\.path) ?? [],
+            terminalIds: terminalIds,
+            executionStartedAt: payload.status == "in_progress" ? timestamp : nil,
+            name: payload.name)
+    }
+
+    /// Applies a `tool_call_update` to an existing row, including the
+    /// execution-timing bookkeeping. Companion to `makeToolCall`.
+    static func applyToolCallUpdate(
+        _ update: ACPToolCallUpdate,
+        to tc: inout ACPMessage.ToolCall,
+        at timestamp: Date
+    ) {
+        applyToolCallUpdateFields(update, to: &tc)
+        if tc.status == "in_progress", tc.executionStartedAt == nil {
+            tc.executionStartedAt = timestamp
+        }
+        if isFinalStatus(tc.status), tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+            tc.executionFinishedAt = timestamp
+        }
+    }
+
     private static func applyToolCallUpdateFields(
         _ update: ACPToolCallUpdate,
         to tc: inout ACPMessage.ToolCall,
@@ -1629,6 +1730,235 @@ final class ACPSession: ObservableObject, Identifiable {
         flushPendingReplayCandidates()
         transcript.appendMessage(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
+    }
+
+    // MARK: - Native subagents
+
+    /// Registers (or refreshes) a child session and makes sure the parent
+    /// transcript carries its row. Idempotent: OpenCode has no explicit
+    /// spawn notification, so Alas synthesizes one per child update.
+    ///
+    /// Returns the transcript indices to persist, or an empty set when the
+    /// spawn told us nothing new.
+    @discardableResult
+    func registerSubagent(
+        _ spawn: ACPSubagentSpawn,
+        at timestamp: Date = Date(),
+        flushingReplayCandidates: Bool = true
+    ) -> Set<Int> {
+        let id = spawn.subagentSessionId
+        guard !id.isEmpty else { return [] }
+        if let existing = subagents[id] {
+            let before = descriptor(for: existing)
+            existing.merge(spawn: spawn)
+            let after = descriptor(for: existing)
+            guard before != after else { return [] }
+            return refreshSubagentRow(for: existing, at: timestamp)
+        }
+        let run = ACPSubagentRun(
+            subagentSessionId: id,
+            name: spawn.name,
+            task: spawn.task,
+            capabilities: spawn.capabilities,
+            startedAt: timestamp)
+        subagents[id] = run
+        subagentOrder.append(id)
+        clearRestoredContextRecoveryStatus()
+        // A subagent row closes the current output run the same way a tool
+        // call does, so held replay candidates must land ahead of it —
+        // except while replay is being suppressed, where materialising a
+        // candidate is exactly what suppression exists to prevent.
+        let row = ACPMessage.toolCall(descriptor(for: run).toolCall(
+            executionStartedAt: timestamp,
+            executionFinishedAt: nil))
+        let dirty: Set<Int>
+        if flushingReplayCandidates {
+            flushPendingReplayCandidates()
+            transcript.appendMessage(row, createdAt: timestamp)
+            dirty = [transcript.messages.count - 1]
+        } else {
+            // Reaching here during suppressed replay means this child was
+            // never hydrated at all — its row is genuinely missing from
+            // SQLite. `session/load` can replay this spawn before LATER
+            // messages that DID persist; appending it would place the
+            // child's row after output that chronologically preceded it.
+            // Insert at the replay position instead.
+            let index = min(suppressedReplayInsertionCursor, transcript.messages.count)
+            transcript.insertMessage(row, at: index, createdAt: timestamp)
+            // `persistIndices` keys a parent row by its ARRAY POSITION
+            // (`msg-<session>-<index>`, seq == index) — unlike a child
+            // transcript, which stores a seq independent of array position
+            // specifically so it can tolerate this. Inserting here shifts
+            // every later row's position without touching its stored SQL
+            // row, so the ENTIRE shifted suffix must be re-persisted too,
+            // not just the inserted row — otherwise persisting only the
+            // new row's index overwrites whatever was previously stored
+            // under that id (the row now one position later, unrelated to
+            // the spawn), and the row that shifted into it is never
+            // rewritten at its own new position at all.
+            dirty = Set(index..<transcript.messages.count)
+        }
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return dirty
+    }
+
+    /// Applies a child's lifecycle transition, updating its row.
+    @discardableResult
+    func applySubagentState(
+        _ update: ACPSubagentStateUpdate,
+        at timestamp: Date = Date(),
+        replaying: Bool = false
+    ) -> Set<Int> {
+        guard let run = subagents[update.subagentSessionId] else { return [] }
+        run.apply(state: update.state, error: update.error, at: timestamp, replaying: replaying)
+        return refreshSubagentRow(for: run, at: timestamp)
+    }
+
+    /// Routes one child-scoped `session/update` into its child transcript.
+    /// Returns the child row indices that changed, for persistence.
+    @discardableResult
+    func applySubagentUpdate(
+        _ update: ACPSessionUpdate,
+        subagentSessionId: String,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        guard let run = subagents[subagentSessionId] else { return [] }
+        let dirty = run.apply(update, at: timestamp)
+        applySubagentToolCallMetadataSideEffects(update, dirty: dirty)
+        return dirty
+    }
+
+    /// Reconciles one child-scoped `session/update` received while
+    /// `session/load` replay is suppressed for the parent transcript.
+    ///
+    /// Unlike `applySubagentUpdate` (the live path), replayed content is
+    /// reconciled against whatever hydration already restored rather than
+    /// being dropped outright: child persistence is asynchronous, so a
+    /// chunk the agent already sent — and that the agent's own replay
+    /// therefore resends — can be missing from SQLite if the app quit
+    /// before its queued write landed. See `ACPSubagentRun.applyReplayed`
+    /// for how a row is reset once per identity and rebuilt from what
+    /// replay actually sends, recovering only what was genuinely lost.
+    @discardableResult
+    func applySubagentReplayedUpdate(
+        _ update: ACPSessionUpdate,
+        subagentSessionId: String,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        guard let run = subagents[subagentSessionId] else { return [] }
+        let dirty = run.applyReplayed(update, at: timestamp)
+        applySubagentToolCallMetadataSideEffects(update, dirty: dirty, replaying: true)
+        return dirty
+    }
+
+    /// Terminal side effects are NOT part of building either card: an
+    /// agent that streams a terminal through `_meta` (Codex's shape) feeds
+    /// `terminalHost` from here, and the child's card reads that same
+    /// host. Without this a child's terminal card would render an id and
+    /// no output. Mirrors the parent's `.toolCall` / `.toolCallUpdate`
+    /// handling, including only applying an update's metadata when it
+    /// actually touched a row.
+    private func applySubagentToolCallMetadataSideEffects(
+        _ update: ACPSessionUpdate,
+        dirty: Set<Int>,
+        replaying: Bool = false
+    ) {
+        switch update {
+        case .toolCall(let payload):
+            applyToolCallMetadata(payload.metadata, replaying: replaying)
+        case .toolCallUpdate(let update) where !dirty.isEmpty:
+            applyToolCallMetadata(update.metadata, replaying: replaying)
+        default:
+            break
+        }
+    }
+
+    func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {
+        subagents[subagentSessionId]
+    }
+
+    var orderedSubagents: [ACPSubagentRun] {
+        subagentOrder.compactMap { subagents[$0] }
+    }
+
+    /// Rebuilds subagents from persisted state after hydration.
+    ///
+    /// `rows` must be every subagent row of the WHOLE persisted transcript,
+    /// not just the hydrated tail: tail-first hydration leaves older rows
+    /// behind the render window, and a row that scrolls into view later
+    /// still has to find its child transcript already loaded (a SwiftUI body
+    /// cannot materialise one without mutating state mid-render).
+    func restoreSubagents(
+        rows: [ACPMessage.ToolCall],
+        messages restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]]
+    ) {
+        var rebuilt: [String: ACPSubagentRun] = [:]
+        var order: [String] = []
+        for toolCall in rows {
+            guard let descriptor = ACPSubagentRowDescriptor(toolCall: toolCall),
+                  rebuilt[descriptor.subagentSessionId] == nil
+            else { continue }
+            // Reuse the existing run when there is one: a read-only mirror
+            // re-hydrates on every refresh, and replacing the object would
+            // collapse the row the reader had expanded.
+            let run = subagents[descriptor.subagentSessionId]
+                ?? ACPSubagentRun(
+                    subagentSessionId: descriptor.subagentSessionId,
+                    startedAt: toolCall.executionStartedAt ?? Date())
+            run.adopt(descriptor, startedAt: toolCall.executionStartedAt)
+            if let rows = restored[descriptor.subagentSessionId] {
+                run.restore(
+                    messages: rows.map(\.message),
+                    createdAts: rows.map(\.createdAt),
+                    seqs: rows.map(\.seq))
+            }
+            rebuilt[descriptor.subagentSessionId] = run
+            order.append(descriptor.subagentSessionId)
+        }
+        subagents = rebuilt
+        subagentOrder = order
+    }
+
+    /// Marks every still-running child as disconnected when the agent
+    /// connection drops. Without this the row would spin forever against a
+    /// child that can no longer produce output. Returns the parent rows to
+    /// persist.
+    @discardableResult
+    func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
+        var dirty: Set<Int> = []
+        for run in orderedSubagents where run.isRunning {
+            run.apply(state: .disconnected, at: timestamp)
+            dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
+        }
+        return dirty
+    }
+
+    private func descriptor(for run: ACPSubagentRun) -> ACPSubagentRowDescriptor {
+        .init(
+            subagentSessionId: run.subagentSessionId,
+            name: run.name,
+            task: run.task,
+            state: run.state,
+            capabilities: run.capabilities,
+            lastError: run.lastError)
+    }
+
+    private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        let toolCallId = ACPSubagentRowDescriptor.toolCallId(
+            subagentSessionId: run.subagentSessionId)
+        guard let index = transcript.toolCallIndex(toolCallId: toolCallId),
+              case .toolCall(let existing) = transcript.messages[index]
+        else { return [] }
+        let refreshed = descriptor(for: run).toolCall(
+            executionStartedAt: existing.executionStartedAt ?? run.startedAt,
+            executionFinishedAt: run.finishedAt ?? existing.executionFinishedAt)
+        guard refreshed != existing else { return [] }
+        replaceTranscriptMessage(
+            at: index,
+            with: .toolCall(refreshed),
+            createdAt: transcript.createdAt(forMessageAt: index) ?? timestamp)
+        return [index]
     }
 
     /// Stores a `session/prompt` response's decoded `_meta.quota` as the
@@ -2112,7 +2442,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
+    static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
         guard var merged = Self.metadataObject(existing),
               let updateObject = Self.metadataObject(update) else {
             return update
@@ -2670,6 +3000,45 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
+    /// The FIRST id-less row of `kind` at or after `cursor`, for
+    /// `applySuppressedReplaySideEffects`'s cursor tracking only — unlike
+    /// `lastAgent()`/`lastThought()`, this is not a live-continuation
+    /// decision (nothing here is being merged into), so it does not stop at
+    /// a boundary. It scans FORWARD from the cursor rather than backward
+    /// from the tail: replayed content arrives in the same chronological
+    /// order it was hydrated in, so the row this specific touch matches is
+    /// the NEAREST one at or after wherever reconciliation currently
+    /// stands — never the array's overall newest, which can belong to a
+    /// LATER touch and, if matched now, would advance the cursor past an
+    /// earlier row still pending and a spawn recovered between them.
+    private func firstIdLessMatch(of kind: TextMessageKind, atOrAfter cursor: Int) -> Int? {
+        let start = min(cursor, transcript.messages.count)
+        for i in start..<transcript.messages.count {
+            switch (kind, transcript.messages[i]) {
+            case (.agent, .agent(_, nil, _)): return i
+            case (.thought, .thought(_, nil, _)): return i
+            case (.user, .user(_, nil, _, _, _)): return i
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    /// The FIRST `.plan` row at or after `cursor` — the same forward-scan
+    /// shape as `firstIdLessMatch`, for the same reason: `transcript.
+    /// currentPlanMessageIndex` resolves to the array's OVERALL newest
+    /// (current-turn) plan, which during replay of an OLDER turn's plan can
+    /// belong to a later touch entirely, or be nil outright when the newest
+    /// turn has no plan yet — either way leaving the cursor unadvanced or
+    /// jumped past a turn it hasn't actually reconciled.
+    private func firstPlanMatch(atOrAfter cursor: Int) -> Int? {
+        let start = min(cursor, transcript.messages.count)
+        for i in start..<transcript.messages.count {
+            if case .plan = transcript.messages[i] { return i }
+        }
+        return nil
+    }
+
     private enum TextMessageKind: Hashable {
         case user
         case agent
@@ -3082,7 +3451,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lowercase (a real English word ending a sentence, not a CamelCase
     /// token) and not look like the tail of a URL or path (no `/` or `://`
     /// in the run of non-whitespace preceding the punctuation).
-    private static func streamingSeparator(between previous: String, and next: String) -> String {
+    static func streamingSeparator(between previous: String, and next: String) -> String {
         guard let last = previous.last, let first = next.first else { return "" }
         if last.isWhitespace || first.isWhitespace { return "" }
         guard last == "." || last == "!" || last == "?" else { return "" }

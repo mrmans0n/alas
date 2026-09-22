@@ -84,11 +84,14 @@ enum ACPToolCallGrouping {
     }
 
     /// Finished ordinary tool calls only. Active calls, context-compaction
-    /// cards, file edits, and every other message kind end a run.
+    /// cards, subagent rows, file edits, and every other message kind end a
+    /// run. A subagent row is excluded even when its child has finished:
+    /// folding a whole child transcript into "Ran N tools" would bury it.
     static func isCollapsible(_ message: ACPMessage) -> Bool {
         guard case .toolCall(let toolCall) = message,
               isFinished(status: toolCall.status),
-              ACPContextCompaction(toolCall: toolCall) == nil
+              ACPContextCompaction(toolCall: toolCall) == nil,
+              ACPSubagentRowDescriptor(toolCall: toolCall) == nil
         else { return false }
         return true
     }

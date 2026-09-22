@@ -58,6 +58,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
+    /// Cancels one native subagent by child session id. Nil when the host
+    /// can't cancel (read-only mirror), which also hides the action.
+    var onCancelSubagent: ((String) -> Void)?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
@@ -208,6 +211,22 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         case .toolCall(let tc):
             if let compaction = ACPContextCompaction(toolCall: tc) {
                 ACPContextCompactionView(compaction: compaction)
+            } else if let descriptor = ACPSubagentRowDescriptor(toolCall: tc),
+                      let run = session.subagentRun(descriptor.subagentSessionId) {
+                ACPSubagentRowView(
+                    descriptor: descriptor,
+                    run: run,
+                    typography: typography,
+                    trustedImageRoot: trustedImageRoot,
+                    onCancel: onCancelSubagent.map { cancel in
+                        { cancel(descriptor.subagentSessionId) }
+                    })
+                    // A child's terminal-backed tool calls are served by the
+                    // same host as the parent's — terminals belong to the
+                    // connection, not to the session that asked for one — so
+                    // the expanded child card needs it in the environment
+                    // exactly like the ordinary tool-call path below.
+                    .environment(\.acpTerminalHost, session.terminalHost)
             } else {
                 ACPToolCallCard(
                     toolCall: tc,

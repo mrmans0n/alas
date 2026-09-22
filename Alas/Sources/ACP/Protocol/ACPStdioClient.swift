@@ -234,6 +234,28 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                     durableConsumptionAcknowledgement: onConsumed
                 ))
             }
+        case ACPOpenCodeChildUpdate.method:
+            // One notification normalizes to several standard updates; the
+            // durable acknowledgement belongs to the LAST one, so the frame
+            // is only acked once the whole batch has been applied.
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<AnyCodable>.self, from: data),
+               let raw = env.params,
+               let payload = try? JSONEncoder().encode(raw) {
+                let normalized = ACPOpenCodeChildUpdate.normalize(params: payload)
+                guard !normalized.isEmpty else { break }
+                stateLock.lock()
+                _yieldedUpdateCount += normalized.count
+                stateLock.unlock()
+                acknowledgeAfterDispatch = false
+                for (offset, update) in normalized.enumerated() {
+                    let isLast = offset == normalized.count - 1
+                    updatesCont.yield(.init(
+                        sessionId: update.sessionId,
+                        update: update.update,
+                        durableConsumptionAcknowledgement: isLast ? onConsumed : nil
+                    ))
+                }
+            }
         case "session/request_permission":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),
                let id = env.id, let p = env.params {

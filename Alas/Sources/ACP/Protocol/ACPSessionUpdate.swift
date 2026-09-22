@@ -54,6 +54,8 @@ enum ACPSessionUpdate: Codable, Equatable {
     case compactionUpdate(ACPCompactionUpdate)
     case compactionSummaryChunk(ACPCompactionSummaryChunk)
     case notice(ACPSessionNotice)
+    case subagentSpawned(ACPSubagentSpawn)
+    case subagentStateUpdate(ACPSubagentStateUpdate)
     case unknown(String)
 
     static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -119,6 +121,10 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .compactionSummaryChunk(try ACPCompactionSummaryChunk(from: decoder))
         case "notice":
             self = .notice(try ACPSessionNotice(from: decoder))
+        case "subagent_spawned":
+            self = .subagentSpawned(try ACPSubagentSpawn(from: decoder))
+        case "subagent_state_update":
+            self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -172,6 +178,12 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .sessionInfoUpdate(let info):
             try c.encode("session_info_update", forKey: .sessionUpdate)
             try info.encodeFields(to: encoder)
+        case .subagentSpawned(let spawn):
+            try c.encode("subagent_spawned", forKey: .sessionUpdate)
+            try spawn.encode(to: encoder)
+        case .subagentStateUpdate(let state):
+            try c.encode("subagent_state_update", forKey: .sessionUpdate)
+            try state.encode(to: encoder)
         case .availableCommandsUpdate:
             break
         case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,

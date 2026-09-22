@@ -1,0 +1,948 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@MainActor
+@Suite("ACP subagent routing")
+struct ACPSubagentRoutingTests {
+    @Test("an update addressed to a known child never reaches the parent transcript")
+    func childUpdateIsRoutedToItsChild() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("child output"))))
+
+        // One row: the subagent row itself. The child's prose is inside it.
+        #expect(runner.session.transcript.messages.count == 1)
+        #expect(runner.session.subagentRun("child-1")?.messages.count == 1)
+    }
+
+    @Test("an update for an unknown session still lands in the parent, as before")
+    func unknownSessionKeepsLegacyBehaviour() async throws {
+        let (runner, _, _) = try makeRunner()
+
+        // An agent that ignores the capability may address updates with a
+        // session id Alas never saw announced. The runner has never
+        // filtered on session id, so this must keep working.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "some-other-session",
+            update: .agentMessageChunk(.text("still mine"))))
+
+        #expect(runner.session.transcript.messages.count == 1)
+        guard case .agent(_, _, let buffer) = runner.session.transcript.messages[0] else {
+            Issue.record("expected the chunk to land on the parent transcript")
+            return
+        }
+        #expect(buffer.value == "still mine")
+        #expect(runner.session.subagents.isEmpty)
+    }
+
+    @Test("child transcripts are persisted and restored across a reload")
+    func childTranscriptsSurviveReload() async throws {
+        let (runner, store, path) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(
+                subagentSessionId: "child-1",
+                name: "Explore",
+                task: "Find the router",
+                capabilities: .cancellable))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("persisted output"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .toolCall(.init(
+                toolCallId: "t1", title: "Read", kind: "read", status: "completed"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .completed))))
+        await runner.flushPersistence()
+
+        let stored = try store.loadSubagentMessages(sessionId: "s")
+        #expect(stored.count == 2)
+        #expect(stored.allSatisfy { $0.subagentSessionId == "child-1" })
+        #expect(stored.map(\.kind) == ["agent", "tool_call"])
+
+        // Reload the way a relaunch does: hydrate, then rebuild the runs.
+        let hydrated = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
+        #expect(hydrated.subagentMessages.count == 2)
+
+        let reopened = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var rows: [ACPMessage.ToolCall] = []
+        for message in hydrated.messages {
+            if case .toolCall(let toolCall) = message.wire { rows.append(toolCall) }
+        }
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
+        for message in hydrated.subagentMessages {
+            restored[message.subagentSessionId, default: []]
+                .append((message.wire.toMessage(), message.createdAt, message.seq))
+        }
+        reopened.restoreSubagents(rows: rows, messages: restored)
+
+        let run = try #require(reopened.subagentRun("child-1"))
+        #expect(run.name == "Explore")
+        #expect(run.task == "Find the router")
+        #expect(run.state == .completed)
+        #expect(run.capabilities.supportsCancel)
+        #expect(run.messages.count == 2)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the child's restored prose")
+            return
+        }
+        #expect(buffer.value == "persisted output")
+    }
+
+    @Test("a child row is rewritten in place rather than appended per chunk")
+    func childRowsAreRewrittenInPlace() async throws {
+        let (runner, store, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        for chunk in ["a", "b", "c"] {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "child-1",
+                update: .agentMessageChunk(.text(chunk))))
+        }
+        await runner.flushPersistence()
+
+        let stored = try store.loadSubagentMessages(sessionId: "s")
+        #expect(stored.count == 1)
+        let decoded = try #require(try? JSONDecoder().decode(
+            StoredText.self, from: stored[0].payload))
+        #expect(decoded.text == "abc")
+    }
+
+    @Test("a nested collaborator announced on a child session is registered on the root")
+    func nestedSpawnIsRegisteredFlat() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+
+        // The grandchild is announced on ITS parent, which is our child.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentSpawned(.init(subagentSessionId: "grandchild", name: "Deeper"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("nested output"))))
+
+        // Two rows on the root, one per subagent, and the nested output
+        // went to the grandchild rather than leaking into the parent.
+        #expect(runner.session.transcript.messages.count == 2)
+        #expect(runner.session.subagentRun("grandchild")?.name == "Deeper")
+        #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
+        #expect(runner.session.subagentRun("child-1")?.messages.isEmpty == true)
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentStateUpdate(.init(
+                subagentSessionId: "grandchild", state: .completed))))
+        #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+    }
+
+    @Test("session/load replay recovers a child chunk that never reached SQLite")
+    func replayRecoversUnpersistedChildContent() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        // Only the first chunk made it into memory (and, in the real
+        // failure this models, to SQLite) before the app quit.
+        runner.session.applySubagentUpdate(
+            .agentMessageChunk(.init(messageId: "m1", content: .text("hello "))),
+            subagentSessionId: "child-1")
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        // `session/load` resends the message from scratch, not just the
+        // missing suffix.
+        for chunk in ["hello", " world"] {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: "child-1",
+                update: .agentMessageChunk(.init(messageId: "m1", content: .text(chunk)))))
+        }
+
+        let run = try #require(runner.session.subagentRun("child-1"))
+        #expect(run.messages.count == 1)
+        guard case .agent(_, _, let buffer) = run.messages[0] else {
+            Issue.record("expected the row to be rebuilt from replay")
+            return
+        }
+        #expect(buffer.value == "hello world")
+    }
+
+    @Test("a row recovered after a seq gap never collides with an existing seq")
+    func recoveredRowAfterSeqGapDoesNotCollide() async throws {
+        let (runner, store, path) = try makeRunner()
+        // Seq 1 never made it to disk (its write failed); seq 0 and seq 2
+        // did. Insert directly — this is the state persistence can
+        // legitimately leave behind, not something the live/replay path
+        // produces on its own.
+        try store.upsertSubagentMessages([
+            .init(
+                id: ACPStoredSubagentMessage.rowId(sessionId: "s", subagentSessionId: "child-1", seq: 0),
+                sessionId: "s", subagentSessionId: "child-1",
+                kind: "agent", seq: 0,
+                payload: try ACPMessageCodec.encode(
+                    .agent(id: UUID(), messageId: "m0", StreamingText("first"))),
+                createdAt: 10),
+            .init(
+                id: ACPStoredSubagentMessage.rowId(sessionId: "s", subagentSessionId: "child-1", seq: 2),
+                sessionId: "s", subagentSessionId: "child-1",
+                kind: "agent", seq: 2,
+                payload: try ACPMessageCodec.encode(
+                    .agent(id: UUID(), messageId: "m2", StreamingText("third"))),
+                createdAt: 30)
+        ])
+        runner.session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+
+        // Hydrate the way a relaunch does, and restore from that snapshot —
+        // this is what threads the STORED seq (0, 2) into the run rather
+        // than compacted array positions (0, 1).
+        let hydrated = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
+        #expect(hydrated.subagentMessages.map(\.seq).sorted() == [0, 2])
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
+        for stored in hydrated.subagentMessages {
+            restored[stored.subagentSessionId, default: []]
+                .append((stored.wire.toMessage(), stored.createdAt, stored.seq))
+        }
+        let run = try #require(runner.session.subagentRun("child-1"))
+        run.restore(
+            messages: restored["child-1"]!.map(\.message),
+            createdAts: restored["child-1"]!.map(\.createdAt),
+            seqs: restored["child-1"]!.map(\.seq))
+        #expect(run.seq(at: 0) == 0)
+        #expect(run.seq(at: 1) == 2)
+
+        // `session/load` replays the child's FULL history chronologically —
+        // "first" (m0), then the missing "second" (m1), then "third" (m2) —
+        // not just the recovered message in isolation.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m0", content: .text("first")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m1", content: .text("second")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.init(messageId: "m2", content: .text("third")))))
+        await runner.flushPersistence()
+
+        // The recovered row lands BETWEEN its chronological neighbours —
+        // both in memory and in its assigned seq — not always at the tail.
+        #expect(run.messages.count == 3)
+        guard case .agent(_, "m1", let recovered) = run.messages[1] else {
+            Issue.record("expected the recovered row between m0 and m2")
+            return
+        }
+        #expect(recovered.value == "second")
+        #expect(run.seq(at: 0) == 0)
+        #expect(run.seq(at: 1) == 1)
+        #expect(run.seq(at: 2) == 2)
+
+        // The persisted rows must reflect that: seq 2's original content
+        // (`m2`/"third") must be untouched, not overwritten by the
+        // recovered row, which lands at the gap's own seq (1).
+        let rows = try store.loadSubagentMessages(sessionId: "s")
+        #expect(rows.map(\.seq).sorted() == [0, 1, 2])
+        let seqTwoRow = try #require(rows.first { $0.seq == 2 })
+        #expect(String(data: seqTwoRow.payload, encoding: .utf8)?.contains("third") == true)
+        let seqOneRow = try #require(rows.first { $0.seq == 1 })
+        #expect(String(data: seqOneRow.payload, encoding: .utf8)?.contains("second") == true)
+    }
+
+    @Test("a barrier ack is withheld when the preceding write failed for a non-lease reason")
+    func barrierWithholdsAckOnUnrelatedPriorFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the PARENT table so the spawn's own write throws instead
+        // of merely being rejected by the fence — a failure the barrier's
+        // own fence re-check alone cannot see, since the lease is fine.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // The trailing half of the SAME batch: a `running` state against a
+        // run that already starts `.running`, so `dirty` is empty and this
+        // reaches the barrier. Its OWN fence check succeeds (nothing about
+        // the lease changed), so only the carried-forward prior outcome
+        // can withhold the ack.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed OpenCode-style trailing no-op waits behind its spawn's write")
+    func replayEmptyDirtyRootUpdateWaitsBehindSpawn() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the parent table so the SPAWN's write throws. The spawn
+        // itself carries no ack (mirroring `ACPOpenCodeChildUpdate`'s own
+        // shape), so nothing acks it directly — the only signal is what
+        // the TRAILING update below does with it. Left broken (not
+        // restored) until after both updates are sent: persistence is
+        // queued asynchronously, so restoring earlier would let the
+        // spawn's write land successfully once the queue finally drains.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+
+        // The trailing `running` state matches what a freshly-registered
+        // run already defaults to, so it produces NO dirty rows and
+        // reaches the empty-dirty branch directly — the exact path that
+        // used to acknowledge immediately, unconditionally, regardless of
+        // whether the spawn it followed ever made it to disk.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed root-level spawn is not acknowledged unless it persists")
+    func replayRootSpawnAckRequiresPersistence() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the parent table so the recovered row's write throws.
+        // Before the fix, `applySuppressedReplaySideEffects`'s dirty
+        // result was discarded (`_ = ...`) and the durable event was
+        // acknowledged unconditionally right after — this proves the two
+        // are now coupled the same way the live path already couples them.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a replayed root-level spawn is persisted before it is acknowledged")
+    func replayRootSpawnPersistsBeforeAck() async throws {
+        let (runner, store, _) = try makeRunner()
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.contains { $0.kind == "tool_call" })
+        #expect(acknowledged.value == true)
+    }
+
+    @Test("replaying already-persisted ordinary rows advances the cursor so a later recovered spawn inserts after them")
+    func replayOrdinaryRowsAdvanceCursorBeforeSpawnRecovery() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Hydrate two ordinary rows exactly as they would already exist
+        // in memory after a normal `session/load` restore from SQLite.
+        runner.session.apply(.userMessageChunk(.init(messageId: "u1", content: .text("hello"))))
+        runner.session.apply(.agentMessageChunk(.init(messageId: "a1", content: .text("hi"))))
+        runner.persistIndices([0, 1])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 2)
+
+        // `session/load` resends the full chronological history: the two
+        // rows that already matched, THEN a subagent spawn whose own
+        // write never reached SQLite before the crash.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(messageId: "u1", content: .text("hello")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .agentMessageChunk(.init(messageId: "a1", content: .text("hi")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Before the fix, replaying the two ordinary rows left the cursor
+        // at 0 — their case in `applySuppressedReplaySideEffects` fell to
+        // `default: return []`, which advances nothing — so the recovered
+        // spawn inserted BEFORE both instead of after, reordering the
+        // transcript out of chronological order.
+        #expect(runner.session.transcript.messages.count == 3)
+        guard case .user = runner.session.transcript.messages[0],
+              case .agent = runner.session.transcript.messages[1],
+              case .toolCall = runner.session.transcript.messages[2] else {
+            Issue.record("expected the recovered spawn AFTER the already-matched ordinary rows")
+            return
+        }
+    }
+
+    @Test("replaying an already-persisted id-less prompt advances the cursor so a later recovered spawn inserts after it")
+    func replayIdLessPromptAdvancesCursorBeforeSpawnRecovery() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Hydrate one ordinary, id-less prompt row, exactly as it would
+        // already exist in memory after a normal `session/load` restore.
+        runner.session.apply(.userMessageChunk(.init(content: .text("hello"))))
+        runner.persistIndices([0])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 1)
+
+        // `session/load` resends the full chronological history: the
+        // already-matched id-less prompt, THEN a subagent spawn whose own
+        // write never reached SQLite before the crash.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("hello")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Before the fix, an id-less `.userMessageChunk` never located a
+        // `matchedIndex` at all (only the identified branch did), so the
+        // cursor stayed at 0 and the recovered spawn inserted BEFORE the
+        // already-matched prompt instead of after it.
+        #expect(runner.session.transcript.messages.count == 2)
+        guard case .user = runner.session.transcript.messages[0],
+              case .toolCall = runner.session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn AFTER the already-matched id-less prompt")
+            return
+        }
+    }
+
+    @Test("a spawn missing between two already-persisted id-less prompts recovers between them, not after both")
+    func replaySpawnBetweenTwoIdLessPromptsRecoversInPlace() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Two ordinary, id-less prompt rows, already persisted adjacently
+        // — the spawn that chronologically belongs between them never
+        // reached SQLite before the crash. Appended directly rather than
+        // via `.apply(.userMessageChunk(...))` twice in a row, which would
+        // merge the second into the first as a continuation of the same
+        // live id-less run (see `legacyTrailingUserIndex`-equivalent
+        // merge in `appendUserChunk`) instead of producing two rows.
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "first", attachments: []))
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "second", attachments: []))
+        runner.persistIndices([0, 1])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 2)
+
+        // `session/load` resends the full chronological history in order:
+        // "first", the missing spawn, then "second".
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("first")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("second")))))
+        await runner.flushPersistence()
+
+        // Before this fix, the id-less fallback scanned backward from the
+        // tail unconditionally, so replaying "first" matched the array's
+        // globally NEWEST id-less prompt ("second") instead of "first"
+        // itself, advancing the cursor past BOTH rows — the recovered
+        // spawn then landed after "second" instead of between the two.
+        #expect(runner.session.transcript.messages.count == 3)
+        guard case .user(_, _, let first, _, _) = runner.session.transcript.messages[0],
+              case .toolCall = runner.session.transcript.messages[1],
+              case .user(_, _, let second, _, _) = runner.session.transcript.messages[2] else {
+            Issue.record("expected the recovered spawn BETWEEN the two already-matched id-less prompts")
+            return
+        }
+        #expect(first == "first")
+        #expect(second == "second")
+    }
+
+    @Test("a spawn missing right after an earlier turn's plan recovers there, not after a later turn's plan")
+    func replaySpawnAfterEarlierPlanRecoversInPlace() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Two turns' worth of history already persisted: prompt, plan,
+        // prompt, plan — the spawn that chronologically belongs right
+        // after the FIRST turn's plan never reached SQLite before the
+        // crash.
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "task one", attachments: []))
+        runner.session.transcript.appendMessage(
+            .plan(id: UUID(), [.init(content: "step one", status: "pending")]))
+        runner.session.transcript.appendMessage(.user(id: UUID(), text: "task two", attachments: []))
+        runner.session.transcript.appendMessage(
+            .plan(id: UUID(), [.init(content: "step two", status: "pending")]))
+        runner.persistIndices([0, 1, 2, 3])
+        await runner.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").count == 4)
+
+        // `session/load` resends the full chronological history in order:
+        // the first prompt, its plan, the missing spawn, the second
+        // prompt, then its plan.
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("task one")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .plan([.init(content: "step one", priority: nil, status: "pending")])))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .userMessageChunk(.init(content: .text("task two")))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .plan([.init(content: "step two", priority: nil, status: "pending")])))
+        await runner.flushPersistence()
+
+        // Before this fix, `transcript.currentPlanMessageIndex` resolved
+        // the FIRST turn's replayed plan to the array's overall newest
+        // (second turn's) plan, jumping the cursor past everything —
+        // the recovered spawn then landed at the tail, after the second
+        // turn's plan, instead of right after the first turn's.
+        #expect(runner.session.transcript.messages.count == 5)
+        guard case .user = runner.session.transcript.messages[0],
+              case .plan = runner.session.transcript.messages[1],
+              case .toolCall = runner.session.transcript.messages[2],
+              case .user = runner.session.transcript.messages[3],
+              case .plan = runner.session.transcript.messages[4] else {
+            Issue.record("expected the recovered spawn right after the first turn's plan")
+            return
+        }
+    }
+
+    @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
+    func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A later parent message already persisted (as hydration would
+        // restore it) BEFORE the spawn — whose own row never reached
+        // SQLite — is replayed.
+        runner.session.appendSystemNotice("later notice")
+        runner.persistIndices([0])
+        await runner.flushPersistence()
+        let before = try store.loadMessages(sessionId: "s")
+        #expect(before.count == 1)
+        #expect(before[0].seq == 0)
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // In memory: the recovered spawn lands BEFORE the notice.
+        #expect(runner.session.transcript.messages.count == 2)
+        guard case .toolCall = runner.session.transcript.messages[0],
+              case .systemNotice = runner.session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn before the already-persisted notice")
+            return
+        }
+
+        // On disk: BOTH rows must be re-persisted at their new positions —
+        // not just the recovered one — or the notice's content is either
+        // overwritten by the spawn's (same seq, same id) or never rewritten
+        // at its own new seq at all.
+        let after = try store.loadMessages(sessionId: "s")
+        #expect(after.count == 2)
+        let seqZero = try #require(after.first { $0.seq == 0 })
+        let seqOne = try #require(after.first { $0.seq == 1 })
+        #expect(seqZero.kind == "tool_call")
+        #expect(seqOne.kind == "system")
+        #expect(String(data: seqOne.payload, encoding: .utf8)?.contains("later notice") == true)
+    }
+
+    @Test("a replayed nested lifecycle update is reconciled, its content is not")
+    func replayReconcilesNestedLifecycleOnly() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentSpawned(.init(subagentSessionId: "grandchild"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("restored output"))))
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+
+        // Replayed content is dropped — the child transcript already came
+        // back from SQLite — but the lifecycle state is the one thing the
+        // replay may hold that the store does not.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .agentMessageChunk(.text("duplicate"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .subagentStateUpdate(.init(
+                subagentSessionId: "grandchild", state: .completed))))
+
+        #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
+        #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+    }
+
+    @Test("tearing the runner down stops running children and records it")
+    func stopMarksChildrenDisconnected() async throws {
+        let (runner, store, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+
+        runner.stop()
+        await runner.flushPersistence()
+
+        #expect(runner.session.subagentRun("child-1")?.state == .disconnected)
+        let rows = try store.loadMessages(sessionId: "s")
+        let toolCall = try #require(rows.compactMap {
+            try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload)
+        }.first)
+        let descriptor = try #require(ACPSubagentRowDescriptor(toolCall: toolCall))
+        #expect(descriptor.state == .disconnected)
+        #expect(toolCall.status == "failed")
+    }
+
+    @Test("a child write rejected by the lease fence is not acknowledged")
+    func rejectedChildWriteIsNotAcknowledged() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-fence-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: "s", instanceId: "ME", pid: Int64(getpid()), now: now)
+        let ourLease = try #require(try store.loadLease(sessionId: "s"))
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.remoteSessionId = "remote-parent"
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                .init(sessionId: "s", ownerInstance: "ME", token: ourLease.token)
+            })
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+
+        // Ownership moves: the cached `canWrite` still admits the write, but
+        // the persistence actor sees a stale token and stores nothing. The
+        // durable update must stay unacknowledged so the new writer replays
+        // it rather than losing the child's output.
+        try store.seizeLease(sessionId: "s", instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("dropped")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(try store.loadSubagentMessages(sessionId: "s").isEmpty)
+        #expect(acknowledged.value == false)
+    }
+
+    /// Box so the acknowledgement closure can report back without capturing
+    /// a `var` across the `@Sendable` boundary.
+    private final class Acknowledged: @unchecked Sendable {
+        var value = false
+    }
+
+    @Test("a transient failure does not permanently block later, unrelated acknowledgements")
+    func transientFailureDoesNotPoisonFutureBatches() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A one-off, TERMINAL failure (it carries its own ack — a solo
+        // spawn, not paired with a trailing update): break the table, take
+        // one write through it, restore the table. This write's own ack
+        // decision is fully made and communicated right here — nothing
+        // about it should still be "pending" for the future.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        let firstAcknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "stale-failure")),
+            durableConsumptionAcknowledgement: { firstAcknowledged.value = true }))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+        #expect(firstAcknowledged.value == false)
+
+        // A LATER, fully independent batch: its own spawn write succeeds
+        // outright, so its ack must fire regardless of the earlier,
+        // unrelated failure — before the fix, the stuck flag would have
+        // silently withheld this one too, forever, for the rest of the
+        // runner's lifetime.
+        let secondAcknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "unrelated")),
+            durableConsumptionAcknowledgement: { secondAcknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(secondAcknowledged.value == true)
+    }
+
+    @Test("a write that opts out of the lifecycle batch is not poisoned by an unrelated prior failure")
+    func nonParticipatingWriteIsNotPoisonedByPriorLifecycleFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A subagent spawn with no ack of its own (the OpenCode-style
+        // dual-write shape) whose write fails — poisons
+        // `lastQueuedPersistenceSucceeded`.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // A LATER, unrelated write that explicitly opts out of the
+        // lifecycle batch coupling — exactly what `flushStreamingPersist`
+        // does for its own non-durable completion on every streaming flush.
+        // Before the fix, every `persistIndices` completion combined with
+        // the stale poisoned flag regardless of the caller, so this write's
+        // own success still reported back as `false` — which
+        // `flushStreamingPersist` reads as its write lease having moved,
+        // dropping the rest of the prompt's output.
+        let liveWriteAcknowledged = Acknowledged()
+        _ = runner.persistIndices(
+            [0], participatesInLifecycleBatch: false,
+            completion: { liveWriteAcknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(liveWriteAcknowledged.value == true)
+    }
+
+    @Test("an ordinary local write is not poisoned by an unrelated prior lifecycle-batch failure, by default")
+    func ordinaryLocalWriteDoesNotParticipateInLifecycleBatchByDefault() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Same poisoning setup as above, but this time the LATER write is a
+        // completely ordinary `persistIndices` call with NO explicit
+        // `participatesInLifecycleBatch` argument — e.g. what
+        // `cancelInFlightToolCalls`'s or a checkpoint attach's own write
+        // does. It must be immune by default, not just when a caller
+        // remembers to opt out explicitly.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        let ordinaryWriteAcknowledged = Acknowledged()
+        _ = runner.persistIndices([0], completion: { ordinaryWriteAcknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(ordinaryWriteAcknowledged.value == true)
+    }
+
+    @Test("a spawn's failure is not erased by the child write that follows it")
+    func spawnFailureSurvivesSuccessfulChildWrite() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Break the PARENT table so the spawn's own write throws — a
+        // failure unrelated to the lease, exactly like
+        // `barrierWithholdsAckOnUnrelatedPriorFailure`, but this time
+        // followed by a CHILD write that succeeds on its own.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // The child's own table is intact, so THIS write succeeds — but it
+        // must not acknowledge on its own success alone, since the batch's
+        // earlier spawn write never landed and the orphaned child
+        // transcript has no parent row to render.
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("orphaned output")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        // The child row DOES get written (its own write succeeded) — only
+        // the acknowledgement is withheld, which is the whole point: the
+        // broker must redeliver so a later attempt can recover the spawn.
+        #expect(!(try store.loadSubagentMessages(sessionId: "s")).isEmpty)
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("a child-addressed permission-decision write opts out of the lifecycle batch")
+    func permissionDecisionWriteIsNotPoisonedByPriorLifecycleFailure() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // Same poisoning setup as `nonParticipatingWriteIsNotPoisonedByPriorLifecycleFailure`:
+        // a spawn whose own write fails, registering the child in memory
+        // while leaving `lastQueuedPersistenceSucceeded` poisoned.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+
+        // Give the child a row, then persist it exactly the way
+        // `persistPermissionDecision` does for a child-addressed decision
+        // — opted out via `participatesInLifecycleBatch: false`. A
+        // permission write is never paired with a trailing ack-carrying
+        // update the way an OpenCode spawn/status pair is, so it must
+        // report its own outcome regardless of an unrelated earlier
+        // failure in the same lease's write queue.
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1",
+            update: .agentMessageChunk(.text("permission granted"))))
+
+        let acknowledged = Acknowledged()
+        _ = runner.persistSubagentIndices(
+            [0], subagentSessionId: "child-1", participatesInLifecycleBatch: false,
+            completion: { acknowledged.value = $0 })
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == true)
+    }
+
+    @Test("a no-op update rejected by the lease fence is not acknowledged either")
+    func rejectedNoOpUpdateIsNotAcknowledged() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-fence-noop-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: "s", instanceId: "ME", pid: Int64(getpid()), now: now)
+        let ourLease = try #require(try store.loadLease(sessionId: "s"))
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.remoteSessionId = "remote-parent"
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                .init(sessionId: "s", ownerInstance: "ME", token: ourLease.token)
+            })
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // Ownership moves. A repeated, identical spawn changes nothing
+        // (`dirty` is empty), so it takes the barrier path rather than a
+        // real write — that path must still refuse to acknowledge once the
+        // fence it re-checks no longer matches the live lease.
+        try store.seizeLease(sessionId: "s", instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+
+        #expect(acknowledged.value == false)
+    }
+
+    @Test("cancel is a no-op unless the child advertised it and is still running")
+    func cancelRequiresCapabilityAndLiveChild() async throws {
+        let (runner, _, _) = try makeRunner()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "plain"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(
+                subagentSessionId: "cancellable", capabilities: .cancellable))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentStateUpdate(.init(
+                subagentSessionId: "cancellable", state: .completed))))
+
+        // Neither is eligible: one never advertised cancel, the other has
+        // already finished. Both must leave the agent alone.
+        await runner.cancelSubagent(subagentSessionId: "plain")
+        await runner.cancelSubagent(subagentSessionId: "cancellable")
+        await runner.cancelSubagent(subagentSessionId: "ghost")
+
+        #expect(runner.session.subagentRun("cancellable")?.state == .completed)
+    }
+
+    @Test("a live cancellable child sends session/cancel addressed to the child")
+    func cancelAddressesTheChildSession() async throws {
+        let (runner, _, _) = try makeRunner()
+        let mock = try #require(runner.connection.client as? ACPMockClient)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(
+                subagentSessionId: "child-1", capabilities: .cancellable))))
+
+        await runner.cancelSubagent(subagentSessionId: "child-1")
+
+        let cancels = mock.sent.filter { $0.method == "session/cancel" }
+        #expect(cancels.count == 1)
+        let params = try #require(cancels.first?.params as? ACPSessionCancelParams)
+        #expect(params.sessionId == "child-1")
+    }
+
+    private struct StoredText: Decodable {
+        let text: String
+    }
+
+    private func makeRunner() throws -> (ACPSessionRunner, ACPSessionStore, String) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagent-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.remoteSessionId = "remote-parent"
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path)
+        return (runner, store, url.path)
+    }
+}

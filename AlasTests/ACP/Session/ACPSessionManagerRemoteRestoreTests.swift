@@ -367,9 +367,15 @@ struct ACPSessionManagerRemoteRestoreTests {
             archived: false
         ))
         if let localMessage {
+            // Matches `ACPSessionRunner.persistIndices`'s own id convention
+            // (`msg-<sessionId>-<index>`) — a row hydrated under any OTHER
+            // id looks, to that same convention, like a DIFFERENT row at
+            // this array position, so a live reconciliation that persists
+            // the position it resolved to (correctly, since that write is
+            // real) creates a duplicate instead of updating this one.
             try store.appendMessage(
                 sessionId: "local-id",
-                id: "message-0",
+                id: "msg-local-id-0",
                 kind: localMessage.kind,
                 seq: 0,
                 payload: ACPMessageCodec.encode(localMessage),

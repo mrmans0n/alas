@@ -27,6 +27,10 @@ final class ACPTranscript: ObservableObject {
         case append(ACPMessage)
         case replace(index: Int, old: ACPMessage, new: ACPMessage)
         case prepend(count: Int)
+        /// One message inserted at an arbitrary (not necessarily 0 or tail)
+        /// position — unlike `prepend`, every OTHER index only shifts if it
+        /// was already `>= index`. See `insertMessage`.
+        case insert(index: Int)
         case planNeutral
     }
     private var pendingMessagesMutation: MessagesMutation?
@@ -191,6 +195,20 @@ final class ACPTranscript: ObservableObject {
         messages.append(message)
     }
 
+    /// Inserts a message recovered mid-replay at its correct chronological
+    /// position, rather than at the tail — e.g. a subagent spawn whose row
+    /// never reached SQLite while LATER messages did: appending it would
+    /// place the child after output that chronologically preceded it.
+    /// `index` is clamped to the current bounds, so a caller-tracked replay
+    /// position that has drifted past the array's current size still lands
+    /// somewhere valid instead of trapping.
+    func insertMessage(_ message: ACPMessage, at index: Int, createdAt: Date = Date()) {
+        let index = min(max(index, 0), messages.count)
+        messageCreatedAts[stableId(for: message)] = createdAt
+        pendingMessagesMutation = .insert(index: index)
+        messages.insert(message, at: index)
+    }
+
     func replaceMessage(at index: Int, with message: ACPMessage, createdAt: Date? = nil) {
         let old = messages[index]
         let oldStableId = stableId(for: old)
@@ -301,7 +319,7 @@ final class ACPTranscript: ObservableObject {
             }
         case .planNeutral:
             break
-        case .prepend, nil:
+        case .prepend, .insert, nil:
             rebuildMessageIndexCaches()
         }
     }
@@ -396,6 +414,18 @@ final class ACPTranscript: ObservableObject {
                     if case .user = $0 { return true }
                     return false
                 }
+            }
+            publishPlanCaches()
+        case .insert(let index):
+            // Unlike `.prepend`, only indices AT OR AFTER the insertion
+            // point shift — an insertion elsewhere in the array leaves an
+            // earlier plan/prompt's index untouched.
+            latestPlanMessageIndex = latestPlanMessageIndex.map { $0 >= index ? $0 + 1 : $0 }
+            latestUserMessageIndex = latestUserMessageIndex.map { $0 >= index ? $0 + 1 : $0 }
+            switch messages[index] {
+            case .plan where latestPlanMessageIndex == nil: latestPlanMessageIndex = index
+            case .user where latestUserMessageIndex == nil: latestUserMessageIndex = index
+            default: break
             }
             publishPlanCaches()
         case .planNeutral:
