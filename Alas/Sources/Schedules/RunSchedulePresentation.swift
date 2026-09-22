@@ -24,6 +24,139 @@ enum RunSchedulePresentation {
         }
     }
 
+    /// One run of the editor's live summary line. Emphasised segments are the
+    /// values the user just picked; the rest is connective text.
+    struct SummarySegment: Equatable {
+        let text: String
+        let isEmphasized: Bool
+    }
+
+    /// "Runs *weekdays* at *09:00*" / "Runs *every 2 hours* while Alas is
+    /// open", as segments so the view can weight them differently.
+    ///
+    /// `selectedWeekdays` is the editor's live selection, which a trigger
+    /// cannot stand in for: a stored trigger holds the empty set to mean
+    /// every day, and a draft with nothing ticked produces that same empty
+    /// set. Without the selection the two are indistinguishable, and the
+    /// default dialog state would describe itself as running never.
+    static func triggerSummarySegments(
+        _ trigger: RunScheduleTrigger,
+        selectedWeekdays: Set<Int>? = nil,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [SummarySegment] {
+        switch trigger {
+        case .interval(let seconds):
+            return [
+                SummarySegment(text: "Runs ", isEmphasized: false),
+                SummarySegment(text: "every \(intervalLabel(seconds))", isEmphasized: true),
+                SummarySegment(text: " while Alas is open", isEmphasized: false),
+            ]
+        case let .timeOfDay(hour, minute, storedWeekdays):
+            // Without a live selection the stored empty set is read the way
+            // the model defines it, as every day.
+            let shown = selectedWeekdays ?? (storedWeekdays.isEmpty ? Set(1...7) : storedWeekdays)
+            return [
+                SummarySegment(text: "Runs ", isEmphasized: false),
+                SummarySegment(text: weekdaysLabel(shown, calendar: calendar), isEmphasized: true),
+                SummarySegment(text: " at ", isEmphasized: false),
+                SummarySegment(text: String(format: "%02d:%02d", hour, minute), isEmphasized: true),
+            ]
+        }
+    }
+
+    /// Describes exactly the set it is given, lower-case so it can sit
+    /// mid-sentence: "every day", "weekdays", "weekends", "Mon, Wed", or
+    /// "never" when nothing is in it.
+    ///
+    /// Literal on purpose. A *stored* trigger uses the empty set to mean
+    /// every day, so callers holding one normalize before asking; an
+    /// editor's selection means what it says.
+    static func weekdaysLabel(_ weekdays: Set<Int>, calendar: Calendar = .autoupdatingCurrent) -> String {
+        if weekdays.isEmpty { return "never" }
+        if weekdays.count == 7 { return "every day" }
+        if weekdays == Set(2...6) { return "weekdays" }
+        if weekdays == [1, 7] { return "weekends" }
+        let symbols = calendar.shortWeekdaySymbols
+        return weekdays.sorted().compactMap { day -> String? in
+            guard (1...7).contains(day) else { return nil }
+            return symbols[day - 1]
+        }.joined(separator: ", ")
+    }
+
+    /// "Next: Today, 09:00" for the editor, where the schedule does not exist
+    /// yet and there is no state to read a next fire from. Empty when the
+    /// draft has no valid trigger.
+    static func nextFirePreviewLabel(_ next: Date?, now: Date, calendar: Calendar = .autoupdatingCurrent) -> String {
+        guard let next else { return "" }
+        let time = DateFormatter()
+        time.calendar = calendar
+        time.timeZone = calendar.timeZone
+        time.locale = Locale(identifier: "en_US_POSIX")
+        time.dateFormat = "HH:mm"
+        let day: String
+        if calendar.isDate(next, inSameDayAs: now) {
+            day = "Today"
+        } else if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(next, inSameDayAs: tomorrow) {
+            day = "Tomorrow"
+        } else {
+            // Fixed order, localized names: "Sat 26 Sep" wherever you are.
+            let date = DateFormatter()
+            date.calendar = calendar
+            date.timeZone = calendar.timeZone
+            date.locale = calendar.locale ?? Locale(identifier: "en_US_POSIX")
+            date.dateFormat = "EEE d MMM"
+            day = date.string(from: next)
+        }
+        return "Next: \(day), \(time.string(from: next))"
+    }
+
+    /// Which next fire the editor should show.
+    ///
+    /// Saving an unchanged trigger keeps the occurrence the scheduler is
+    /// already holding, because `RunScheduler.update` only recomputes when
+    /// the trigger itself changed. Anchoring every edit at `now` would tell
+    /// an hourly schedule due in five minutes that it runs in an hour, then
+    /// contradict itself the moment the sheet closed.
+    static func editorNextFireDate(
+        existingTrigger: RunScheduleTrigger?,
+        draftTrigger: RunScheduleTrigger,
+        storedNextFireAt: Date?,
+        computedNextFireAt: Date?
+    ) -> Date? {
+        // A draft with no computable occurrence has nothing to preview, even
+        // when its trigger still equals the saved one. Deselecting every
+        // weekday is exactly that case: an empty set is how a daily schedule
+        // is stored, so the two compare equal while the draft is invalid.
+        guard computedNextFireAt != nil else { return nil }
+        guard let existingTrigger, existingTrigger == draftTrigger else { return computedNextFireAt }
+        return storedNextFireAt
+    }
+
+    /// Whether a scheduled prompt can be delivered to an agent on `host`.
+    ///
+    /// Only to agents on this Mac. A prompt is typed into the agent's
+    /// terminal and is sent only once the harness detector confirms the
+    /// agent owns that terminal, but a remote terminal runs `ssh` locally
+    /// and the detector classifies that local process. The agent itself
+    /// lives in the remote PTY, out of its reach, so readiness could never
+    /// be confirmed and every firing would wait out the timeout.
+    static func deliversPrompt(host: String?) -> Bool {
+        host == nil
+    }
+
+    /// Why a remote schedule's prompt was not sent. Said once per firing,
+    /// because the user configured a prompt that is not going to arrive.
+    static func remotePromptSkippedMessage(scheduleName: String, host: String) -> String {
+        "\(scheduleName): the agent runs on \(host), where Alas cannot tell when it is ready, so the prompt was not sent."
+    }
+
+    /// What ticking "send automatically" changes, in one line under it.
+    static func promptDeliveryHint(sendsAutomatically: Bool) -> String {
+        sendsAutomatically
+            ? "The agent starts working without waiting for you."
+            : "The prompt is pre-filled in the terminal; you press Enter to send it."
+    }
+
     static func intervalLabel(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         if total % 86_400 == 0 { return plural(total / 86_400, "day") }
@@ -142,7 +275,10 @@ enum RunSchedulePresentation {
         var parts: [String] = []
         if composition != nil { parts.append("New worktree") }
         if let scriptName { parts.append("Run \(scriptName)") }
-        if composition != nil { parts.append("Launch \(agentName ?? "default agent")") }
+        if let composition {
+            let launch = "Launch \(agentName ?? "default agent")"
+            parts.append(composition.prompt == nil ? launch : "\(launch) with a prompt")
+        }
         return parts.joined(separator: " → ")
     }
 

@@ -173,6 +173,230 @@ struct RunSchedulePresentationTests {
         #expect(hours.intervalUnit == .hours)
     }
 
+    @Test func draftCarriesThePromptAndDropsABlankOne() {
+        let original = RunSchedule(
+            id: "s1",
+            name: "Morning",
+            target: .allProjects,
+            scriptKey: nil,
+            trigger: .interval(seconds: 3_600),
+            composition: RunScheduleComposition(agentId: "claude", prompt: "Run the tests.", sendsPromptAutomatically: false)
+        )
+        var draft = RunScheduleDraft(schedule: original)
+        #expect(draft.prompt == "Run the tests.")
+        #expect(!draft.sendsPromptAutomatically)
+        #expect(draft.makeSchedule(existing: original) == original)
+
+        // Whitespace is not a prompt; the agent should just open.
+        draft.prompt = "  \n"
+        #expect(draft.composition?.prompt == nil)
+        draft.prompt = "  Fix the build  "
+        #expect(draft.composition?.prompt == "Fix the build")
+
+        // Older files predate the prompt fields and still have to decode,
+        // or the lenient schedule decoder drops the whole schedule.
+        let legacy = Data(#"{"branchTemplate":"nightly","agentId":"claude"}"#.utf8)
+        let decoded = try? JSONDecoder().decode(RunScheduleComposition.self, from: legacy)
+        #expect(decoded == RunScheduleComposition(branchTemplate: "nightly", agentId: "claude"))
+        #expect(decoded?.sendsPromptAutomatically == true)
+    }
+
+    @Test func weekdayPresetsNameTheRowAndTogglingLeavesThem() {
+        var draft = RunScheduleDraft()
+        #expect(draft.weekdayPreset == .everyDay)
+        draft.apply(.weekdays)
+        #expect(draft.weekdays == Set(2...6))
+        #expect(draft.weekdayPreset == .weekdays)
+        draft.toggleWeekday(2)
+        #expect(draft.weekdayPreset == nil)
+        draft.toggleWeekday(2)
+        #expect(draft.weekdayPreset == .weekdays)
+        draft.apply(.weekends)
+        #expect(draft.weekdays == [1, 7])
+        #expect(draft.weekdayPreset == .weekends)
+    }
+
+    @Test func triggerSummariesReadAsASentence() {
+        func plain(_ trigger: RunScheduleTrigger, selected: Set<Int>? = nil) -> String {
+            RunSchedulePresentation.triggerSummarySegments(trigger, selectedWeekdays: selected, calendar: calendar)
+                .map(\.text).joined()
+        }
+        func emphasized(_ trigger: RunScheduleTrigger) -> [String] {
+            RunSchedulePresentation.triggerSummarySegments(trigger, calendar: calendar).filter(\.isEmphasized).map(\.text)
+        }
+        #expect(plain(.timeOfDay(hour: 9, minute: 0, weekdays: Set(2...6))) == "Runs weekdays at 09:00")
+        #expect(emphasized(.timeOfDay(hour: 9, minute: 0, weekdays: Set(2...6))) == ["weekdays", "09:00"])
+        #expect(plain(.timeOfDay(hour: 22, minute: 30, weekdays: [1, 7])) == "Runs weekends at 22:30")
+        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [2, 4])) == "Runs Mon, Wed at 07:05")
+        // A stored trigger keeps the empty set to mean every day, so that is
+        // how it reads without an editor selection to consult.
+        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [])) == "Runs every day at 07:05")
+        #expect(plain(.interval(seconds: 7_200)) == "Runs every 2 hours while Alas is open")
+        #expect(emphasized(.interval(seconds: 3_600)) == ["every 1 hour"])
+        #expect(RunSchedulePresentation.weekdaysLabel(Set(1...7)) == "every day")
+    }
+
+    /// The trigger cannot describe the editor on its own: seven weekdays
+    /// ticked and none ticked both normalize to the stored empty set, so the
+    /// live selection decides. Without this the dialog's own default state
+    /// announced that it runs never.
+    @Test func theSummaryFollowsTheWeekdaysActuallyTicked() {
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+
+        func summary(_ draft: RunScheduleDraft) -> String {
+            RunSchedulePresentation.triggerSummarySegments(
+                draft.trigger,
+                selectedWeekdays: draft.weekdays,
+                calendar: calendar
+            ).map(\.text).joined()
+        }
+
+        // The default: every weekday ticked, which the trigger stores empty.
+        #expect(draft.weekdays == Set(1...7))
+        #expect(draft.trigger == .timeOfDay(hour: 9, minute: 0, weekdays: []))
+        #expect(summary(draft) == "Runs every day at 09:00")
+
+        // Nothing ticked stores the same empty set and must not read alike.
+        draft.weekdays = []
+        #expect(draft.trigger == .timeOfDay(hour: 9, minute: 0, weekdays: []))
+        #expect(summary(draft) == "Runs never at 09:00")
+
+        draft.apply(.weekdays)
+        #expect(summary(draft) == "Runs weekdays at 09:00")
+    }
+
+    @Test func nextFirePreviewNamesTodayTomorrowOrTheDay() throws {
+        var calendar = self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        // Monday 21 September 2026, 20:25.
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 20, minute: 25)))
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+        draft.apply(.weekdays)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Tomorrow, 09:00")
+        draft.hour = 21
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Today, 21:00")
+        draft.apply(.weekends)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Sat 26 Sep, 21:00")
+        draft.weekdays = []
+        #expect(draft.nextFireDate(now: now, calendar: calendar) == nil)
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(nil, now: now, calendar: calendar) == "")
+
+        // An interval schedule is anchored on creation, so its first
+        // occurrence is one interval out.
+        draft.triggerKind = .interval
+        draft.intervalValue = 2
+        draft.intervalUnit = .hours
+        #expect(RunSchedulePresentation.nextFirePreviewLabel(draft.nextFireDate(now: now, calendar: calendar), now: now, calendar: calendar) == "Next: Today, 22:25")
+        draft.intervalValue = 0
+        #expect(draft.nextFireDate(now: now, calendar: calendar) == nil)
+    }
+
+    /// Interval occurrences sit on a grid from the anchor, and
+    /// `RunScheduler.update` anchors an edited trigger on the last fire.
+    /// Previewing from now instead would promise a later run than saving
+    /// actually schedules.
+    @Test func anEditedIntervalPreviewUsesTheLastFireAsItsAnchor() throws {
+        var calendar = self.calendar
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let lastFired = now.addingTimeInterval(-30 * 60)
+
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .interval
+        draft.intervalValue = 1
+        draft.intervalUnit = .hours
+
+        // Anchored on the last fire, an hourly schedule run 30 minutes ago
+        // is due in 30 minutes.
+        #expect(draft.nextFireDate(now: now, anchor: lastFired, calendar: calendar) == now.addingTimeInterval(30 * 60))
+        // A schedule that has never fired anchors at now, as creation does.
+        #expect(draft.nextFireDate(now: now, anchor: nil, calendar: calendar) == now.addingTimeInterval(60 * 60))
+
+        // A time-of-day trigger names a wall-clock time and ignores it.
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+        draft.apply(.everyDay)
+        #expect(
+            draft.nextFireDate(now: now, anchor: lastFired, calendar: calendar)
+                == draft.nextFireDate(now: now, anchor: nil, calendar: calendar)
+        )
+    }
+
+    @Test func promptHintsAndKeystrokes() {
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: true) == "The agent starts working without waiting for you.")
+        #expect(RunSchedulePresentation.promptDeliveryHint(sendsAutomatically: false).contains("press Enter"))
+        // Typed into a TUI, a line break is Enter; the prompt has to arrive
+        // as one message.
+        #expect(RunScheduleComposition.terminalText(for: "Fix the build.\n\nThen open a PR.\r\n") == "Fix the build. Then open a PR.")
+        // A tab would trigger completion and an escape would leave the input
+        // and turn the rest into key bindings, so neither reaches the PTY.
+        #expect(RunScheduleComposition.terminalText(for: "Fix\tthe build.") == "Fix the build.")
+        #expect(RunScheduleComposition.terminalText(for: "Fix\u{1B}[Athe build.\u{07}") == "Fix[Athe build.")
+        #expect(RunScheduleComposition.terminalText(for: "\t\u{1B}\u{07}") == "")
+        // Ordinary text, including non-ASCII, is left alone.
+        #expect(RunScheduleComposition.terminalText(for: "Arregla el build ✅") == "Arregla el build ✅")
+        let withPrompt = RunScheduleComposition(agentId: "claude", prompt: "hi")
+        #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: withPrompt, agentName: "Claude") == "New worktree → Launch Claude with a prompt")
+    }
+
+    /// Saving an unchanged trigger keeps the occurrence the scheduler
+    /// already holds, so the editor has to show that one. Recomputing from
+    /// now would tell an hourly schedule due in five minutes that it runs in
+    /// an hour, then contradict itself once the sheet closed.
+    @Test func editingAnUnchangedTriggerKeepsTheStoredNextFire() {
+        let stored = Date(timeIntervalSince1970: 1_800_000_300)
+        let computed = Date(timeIntervalSince1970: 1_800_003_600)
+        let trigger = RunScheduleTrigger.interval(seconds: 3_600)
+
+        // Editing a name or prompt leaves the trigger alone.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: trigger, draftTrigger: trigger,
+            storedNextFireAt: stored, computedNextFireAt: computed
+        ) == stored)
+
+        // Changing the trigger re-anchors, so the fresh one is right.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: trigger, draftTrigger: .interval(seconds: 7_200),
+            storedNextFireAt: stored, computedNextFireAt: computed
+        ) == computed)
+
+        // A new schedule has nothing stored to preserve.
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: nil, draftTrigger: trigger,
+            storedNextFireAt: nil, computedNextFireAt: computed
+        ) == computed)
+
+        // Deselecting every weekday leaves an invalid draft whose trigger
+        // still compares equal to a saved daily one, because both store the
+        // empty set. The preview must go blank rather than show the stored
+        // date beside "Pick at least one weekday".
+        let daily = RunScheduleTrigger.timeOfDay(hour: 9, minute: 0, weekdays: [])
+        #expect(RunSchedulePresentation.editorNextFireDate(
+            existingTrigger: daily, draftTrigger: daily,
+            storedNextFireAt: stored, computedNextFireAt: nil
+        ) == nil)
+    }
+
+    /// A remote terminal runs `ssh` on this Mac, so the harness detector
+    /// classifies `ssh` and never the agent inside the remote PTY. Readiness
+    /// cannot be confirmed there, so the prompt is dropped at once rather
+    /// than after a two-minute wait that could only ever time out.
+    @Test func promptsAreOnlyDeliveredToAgentsOnThisMac() {
+        #expect(RunSchedulePresentation.deliversPrompt(host: nil))
+        #expect(!RunSchedulePresentation.deliversPrompt(host: "devbox"))
+        let message = RunSchedulePresentation.remotePromptSkippedMessage(scheduleName: "Nightly", host: "devbox")
+        #expect(message.contains("Nightly"))
+        #expect(message.contains("devbox"))
+        #expect(message.contains("not sent"))
+    }
+
     // MARK: - History
 
     @Test func historyHeadingCarriesItsCount() {

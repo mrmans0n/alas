@@ -228,6 +228,16 @@ final class AppState {
     @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
         await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
     }
+    /// Waits until the agent launched in a terminal session is the one
+    /// reading its input, so a scheduled prompt lands in the agent and not in
+    /// the shell that is still starting it. Returns false on timeout. Nil
+    /// uses the harness detector; tests inject one because their sessions
+    /// have no process behind them.
+    @ObservationIgnored var scheduledAgentReadiness: ((String) async -> Bool)?
+    /// Types text into a terminal session, as if from the keyboard. Returns
+    /// false when the session is gone. Nil types into the session's Ghostty
+    /// surface; tests inject one because theirs have no surface.
+    @ObservationIgnored var terminalTextSender: ((String, String) -> Bool)?
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
@@ -4167,15 +4177,19 @@ final class AppState {
         }
     }
 
+    /// Opens whatever `launchSurface` asks for. Returns the terminal tab it
+    /// opened, when it opened one, so a caller that has more to say to that
+    /// terminal (a scheduled prompt) can find its session.
+    @discardableResult
     func launchWorktreeSurface(
         _ launchSurface: WorktreeLaunchSurface,
         worktree: Worktree,
         project: ProjectConfig,
         refreshAvailability: Bool = false
-    ) async throws {
+    ) async throws -> Tab? {
         switch launchSurface {
         case .none, .delegated:
-            break
+            return nil
         case .terminal(let agentId):
             let suffix = try await worktreeAgentStartupSuffix(
                 agentId: agentId,
@@ -4183,7 +4197,7 @@ final class AppState {
                 project: project,
                 refreshAvailability: refreshAvailability
             )
-            _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+            return try await openTerminalTabPreparingRemoteZmxIfNeeded(
                 for: worktree,
                 startupScriptSuffix: suffix
             )
@@ -4200,9 +4214,10 @@ final class AppState {
                     preparedPrompt: preparedPrompt
                 )
             } else {
-                guard let manager = acpManager(for: worktree) else { return }
+                guard let manager = acpManager(for: worktree) else { return nil }
                 openNewACPSession(agentID: agentId, owner: manager.owner)
             }
+            return nil
         }
     }
 

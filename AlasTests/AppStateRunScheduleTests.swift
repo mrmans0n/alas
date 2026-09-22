@@ -815,6 +815,89 @@ struct AppStateRunScheduleTests {
         #expect(locations.locations.isEmpty)
     }
 
+    /// The prompt is typed into the agent's own terminal once the agent is
+    /// up, and submitted only when the schedule says so.
+    @Test func compositionTypesThePromptIntoTheAgentTerminal() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let typed = TypedTextBox()
+        state.scheduledAgentReadiness = { _ in true }
+        state.terminalTextSender = { sessionID, text in
+            typed.append(sessionID: sessionID, text: text)
+            return true
+        }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(agentId: "claude", prompt: "Fix the\nbuild.", sendsPromptAutomatically: true)
+        )).outcome
+        await state.flushRunHistoryPersistence()
+        #expect(outcome == .succeeded)
+        // One message, then Enter.
+        #expect(typed.values.map { $0.text } == ["Fix the build.", "\r"])
+        let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        guard case .terminal(let terminal)? = state.tabs.tabs(forWorktree: created.id).first else {
+            Issue.record("Expected the agent's terminal tab on the new worktree")
+            return
+        }
+        #expect(typed.values.map { $0.sessionID } == Array(repeating: terminal.root.firstLeaf().sessionId, count: 2))
+    }
+
+    @Test func aPromptNotSentAutomaticallyIsLeftInTheInput() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let typed = TypedTextBox()
+        state.scheduledAgentReadiness = { _ in true }
+        state.terminalTextSender = { sessionID, text in
+            typed.append(sessionID: sessionID, text: text)
+            return true
+        }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(agentId: "claude", prompt: "Fix the build.", sendsPromptAutomatically: false)
+        )).outcome
+        await state.flushRunHistoryPersistence()
+        #expect(outcome == .succeeded)
+        #expect(typed.values.map { $0.text } == ["Fix the build."])
+    }
+
+    /// An agent that never shows up in its terminal gets no prompt typed at
+    /// it: the text would land in the shell instead, and with auto-send it
+    /// would run there as a command. The launch itself still counts.
+    @Test func aPromptIsNotTypedIntoAShellThatNeverStartedTheAgent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["claude"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let typed = TypedTextBox()
+        state.scheduledAgentReadiness = { _ in false }
+        state.terminalTextSender = { sessionID, text in
+            typed.append(sessionID: sessionID, text: text)
+            return true
+        }
+
+        let outcome = await state.runSchedule(schedule(
+            target: .project(id: project.id),
+            scriptKey: nil,
+            composition: RunScheduleComposition(agentId: "claude", prompt: "rm -rf everything", sendsPromptAutomatically: true)
+        )).outcome
+        await state.flushRunHistoryPersistence()
+        #expect(outcome == .succeeded)
+        #expect(typed.values.isEmpty)
+        let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
+        // The user was not watching, so the undelivered prompt is reported.
+        #expect(state.inAppNotifications.notifications(in: created.id).contains { $0.severity == .error && $0.message.contains("prompt") })
+    }
+
     @Test func unavailableAgentLeavesTheWorktreeRetryableAndReportsLaunchFailure() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -884,6 +967,20 @@ struct AppStateRunScheduleTests {
 
 private final class LocationBox: @unchecked Sendable {
     var locations: [RunScriptCaptureLocation] = []
+}
+
+/// Everything a scheduled run typed into a terminal, in order.
+private final class TypedTextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(sessionID: String, text: String)] = []
+
+    var values: [(sessionID: String, text: String)] {
+        lock.withLock { storage }
+    }
+
+    func append(sessionID: String, text: String) {
+        lock.withLock { storage.append((sessionID, text)) }
+    }
 }
 
 /// Records every destination the scheduler asked about, and which host it
