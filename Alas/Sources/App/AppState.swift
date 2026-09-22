@@ -12156,6 +12156,15 @@ final class AppState {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
         guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else { return }
         guard let manager = acpManager(for: worktree) else { return }
+        // The schedule that asked for this session can be removed while the
+        // admission checks above were suspended. Unlike the terminal path
+        // (whose PTY only receives a scheduled prompt after its own
+        // `Task.isCancelled` guards in `deliverScheduledPrompt`), the ACP
+        // route would otherwise create the session, persist a composer
+        // draft, enqueue the prompt, and attach the agent regardless,
+        // continuing to act on a worktree the user just deleted. Checked
+        // before any of that state is touched, not just before attach.
+        guard !Task.isCancelled else { return }
         let session = manager.createSession(
             id: preparedPrompt.sessionID,
             agentId: agentID,
@@ -12183,13 +12192,6 @@ final class AppState {
             to: worktree.id
         )
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
-        // The schedule that asked for this session can be removed while the
-        // admission checks above were suspended. Unlike the terminal path
-        // (whose PTY only receives a scheduled prompt after its own
-        // `Task.isCancelled` guards in `deliverScheduledPrompt`), the ACP
-        // route would otherwise enqueue the prompt and attach the agent
-        // regardless, continuing to act on a worktree the user just deleted.
-        guard !Task.isCancelled else { return }
         do {
             _ = try await startACPSession(
                 worktree: worktree,
