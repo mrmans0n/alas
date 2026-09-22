@@ -130,6 +130,18 @@ final class RemoteConnection: @unchecked Sendable {
         onQueue { [weak self] in self?.teardown() }
     }
 
+    /// Synchronously cancels the underlying `NWConnection`, for callers about
+    /// to drop their last strong reference to this connection in the same
+    /// turn (server `stop()` clearing its table). `cancel()` only queues the
+    /// teardown, so a caller that releases the connection immediately after
+    /// would deallocate it before teardown ever ran — the socket would die by
+    /// ARC without ever sending a FIN, and a peer whose link was open would
+    /// keep seeing it as online indefinitely. `NWConnection.cancel()` is
+    /// thread-safe and idempotent; `teardown()` also cancels, harmlessly.
+    func forceClose() {
+        conn.cancel()
+    }
+
     /// Pushes a fresh `hello` outside the initial handshake — e.g. when the
     /// server's advertised identity (like `hubEnabled`) changes while a
     /// client is already connected. `framesEnabled` is confined to `queue`,

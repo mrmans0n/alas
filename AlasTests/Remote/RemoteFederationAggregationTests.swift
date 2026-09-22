@@ -89,14 +89,14 @@ struct RemoteFederationAggregationTests {
         }
 
         /// Drops every federation socket this Mac has — the links it dialled
-        /// and the ones its peers dialled into it — which is what the far
-        /// side sees when this Mac shuts down or turns peers off.
-        ///
-        /// Not `stop()`: that also drops the server's connection table in the
-        /// same turn it asks each connection to cancel, and the cancel only
-        /// reaches the socket on a later queue hop — so the released
-        /// connection can be gone before its FIN ever goes out, leaving the
-        /// far side holding a socket nobody will ever close.
+        /// and the ones its peers dialled into it — without stopping the
+        /// listener. Used when a test needs the far side to see the link go
+        /// down BEFORE the listener stops: a link whose socket closed while
+        /// the far side is still listening would simply redial after its
+        /// backoff. `stop()` closes inbound sockets synchronously as well
+        /// (issue #1417), but it also stops the listener, so a peer's redial
+        /// would fail rather than find the Mac gone — which the
+        /// `aPeerGoingAwayClosesItsSessionsForThePhone` test needs to avoid.
         func dropFederationLinks() {
             peers.disconnectAll()
             server.disconnectAllPeerDevices()
@@ -347,7 +347,11 @@ struct RemoteFederationAggregationTests {
         // listener only once A has actually seen the link go down: a link
         // whose socket closed while the far side is still listening simply
         // redials it after its backoff, and B would be back before the
-        // assertions below ever ran.
+        // assertions below ever ran. `dropFederationLinks()` rather than
+        // plain `stop()` keeps B's listener up through that window — this
+        // is test ordering, no longer a workaround for #1417: `stop()`
+        // closes inbound sockets synchronously now, so a peer's socket
+        // would already be dead by the time B stopped listening.
         b.dropFederationLinks()
         try await waitUntil { a.peers.sessionCarryingPeers.isEmpty }
         b.stop()
