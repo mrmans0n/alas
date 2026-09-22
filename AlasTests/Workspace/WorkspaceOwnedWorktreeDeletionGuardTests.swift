@@ -269,6 +269,32 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(state.tabs.tabs(forWorktree: staleWorktreeID).isEmpty)
     }
 
+    @Test func checkoutDeletionConfirmationCountsLiveRegisteredSessionsNotYetPersistedAsTabs() async throws {
+        // `stopWorkspaceCheckoutSessions` (the real teardown) terminates
+        // sessions from two sources: persisted tabs, and the terminal
+        // registry directly, which is authoritative for a freshly opened
+        // terminal whose tab hasn't been persisted yet. The risk count must
+        // match that, not just the tabs half.
+        let fixture = try await Fixture.make(suffix: "live-registry-risk")
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        guard let checkout = fixture.state.workspacesManager.checkout(id: checkoutID) else {
+            Issue.record("Expected checkout")
+            return
+        }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        let session = TerminalSession(
+            id: "live-session", owner: owner, surface: surface, executable: "/bin/zsh", args: [], zmxSessionName: "zmx-live"
+        )
+        fixture.state.terminal.registry.register(session)
+        // Deliberately no tab persisted for this session.
+
+        let confirmation = try await fixture.state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+
+        #expect(confirmation.risks.contains { $0.contains("checkout session") })
+    }
+
     @Test func checkoutDeletionConfirmationCountsCheckoutOwnedSessionsAsARisk() async throws {
         // A terminal opened at the checkout root (not tied to any one
         // member) is owned by the checkout itself, not by a member worktree,

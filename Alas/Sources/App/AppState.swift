@@ -3529,13 +3529,21 @@ final class AppState {
 
     private func workspaceCheckoutOwnedSessionIDs(_ checkout: WorkspaceCheckout) -> Set<String> {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-        return Set(tabs.tabs(for: owner).flatMap { tab -> [String] in
+        let persistedSessionIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
             switch tab {
             case .terminal(let state): return state.root.leaves().map(\.sessionId)
             case .acpSession(let state): return [state.sessionId]
             default: return []
             }
-        })
+        }
+        // Mirrors `stopWorkspaceCheckoutSessions`'s own two sources: the
+        // registry is authoritative for a freshly opened terminal whose tab
+        // hasn't been persisted yet, so a risk count built from tabs alone
+        // can undercount relative to what teardown actually terminates.
+        let liveTerminalSessionIDs = terminal.registry.all
+            .filter { $0.owner == owner && $0.zmxSessionName != nil }
+            .map(\.id)
+        return Set(persistedSessionIDs + liveTerminalSessionIDs)
     }
 
     func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
