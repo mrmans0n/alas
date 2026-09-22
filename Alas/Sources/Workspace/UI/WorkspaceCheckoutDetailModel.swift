@@ -237,7 +237,12 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
     }
 
     private func detail(for member: WorkspaceCheckoutMember) -> String {
-        if member.deletionFailed, member.checkpoint != .failed {
+        // A deletion failure is always the more recent, more actionable
+        // concern: it means the user already asked to remove this member and
+        // that attempt failed. That holds even when an earlier setup attempt
+        // also failed — the stale setup-failure message and "Retry Setup"
+        // would otherwise hide both the real reason and the working retry.
+        if member.deletionFailed {
             if let diagnostic = checkout.diagnostics.last(where: { $0.isDeletionFailure(for: member.id) }) {
                 return [diagnostic.message, diagnostic.detail ?? ""]
                     .filter { !$0.isEmpty }
@@ -282,6 +287,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return [.init(.recreateMember, title: "Recreate from Frozen Plan")]
         case .missing, .unavailable:
             return [.init(.findExisting, title: "Find Existing"), .init(.resumeCreation, title: "Resume Creation")]
+        case .available where member.deletionFailed:
+            return [.init(.deleteMember, title: "Delete Worktree", isDestructive: true)]
         case .available where member.checkpoint == .failed:
             return [.init(.retrySetup, title: "Retry Setup")]
         case .available:

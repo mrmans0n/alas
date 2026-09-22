@@ -96,6 +96,26 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID) == nil)
     }
 
+    @Test func deleteAndForgetClosesStaleSessionsForAMemberThatWasAlreadyMissing() async throws {
+        // A member already `.missing` before deletion started (stale
+        // reconciliation, or the worktree came back before the checkout
+        // caught up) is never resolved into `resolvedWorktrees` — that
+        // resolution only trusts a verified `.available` worktree. The
+        // coordinator still deletes it, and any terminal tab left open from
+        // before it went missing must still be closed, not orphaned.
+        let fixture = try await Fixture.make(suffix: "missing-member-sessions", memberAvailability: .missing)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        let staleWorktreeID = Worktree.makeId(path: fixture.linked)
+        _ = fixture.state.tabs.appendTerminal(worktreeId: staleWorktreeID, title: "term", sessionId: "stale-session")
+        #expect(!fixture.state.tabs.tabs(forWorktree: staleWorktreeID).isEmpty)
+
+        let outcome = try await fixture.state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+
+        #expect(outcome == .forgotten)
+        #expect(fixture.state.tabs.tabs(forWorktree: staleWorktreeID).isEmpty)
+    }
+
     @Test func checkoutDeletionConfirmationCountsCheckoutOwnedSessionsAsARisk() async throws {
         // A terminal opened at the checkout root (not tied to any one
         // member) is owned by the checkout itself, not by a member worktree,
@@ -287,7 +307,8 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         static func make(
             suffix: String,
             includesCheckout: Bool = true,
-            checkoutArchived: Bool = false
+            checkoutArchived: Bool = false,
+            memberAvailability: WorkspaceCheckoutMemberAvailability = .available
         ) async throws -> Fixture {
             let repo = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
@@ -335,7 +356,7 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
                             fallbackRepositoryRoot: repo.path,
                             worktreePath: linked.path,
                             gitLineageID: WorktreeService.existingLocalLineageID(forWorktreeAt: linked),
-                            availability: .available,
+                            availability: memberAvailability,
                             checkpoint: .setupComplete,
                             cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .reused),
                             plan: .init(

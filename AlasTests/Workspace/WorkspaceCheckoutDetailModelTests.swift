@@ -84,6 +84,24 @@ import Testing
         #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
     }
 
+    @Test func deletionFailureTakesPrecedenceOverAnEarlierSetupFailure() {
+        // A member whose setup already failed (checkpoint == .failed) and
+        // whose subsequent deletion attempt also failed must show the more
+        // recent deletion failure and its working retry, not the stale
+        // setup-failure message with a "Retry Setup" that doesn't address
+        // what's actually blocking it now.
+        var failed = member(name: "App", availability: .available, checkpoint: .failed, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        var checkout = checkout(members: [failed])
+        checkout.diagnostics = [
+            .init(severity: .error, message: "Could not delete App.", memberID: failed.id, detail: "worktree is locked"),
+        ]
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(model.memberRows[0].detail == "Could not delete App. worktree is locked")
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
     @Test func reportsLiveProgressAndStopBoundary() {
         let creating = checkout(operation: .creating, members: [
             member(name: "One", availability: .available, checkpoint: .setupComplete),
@@ -233,6 +251,11 @@ import Testing
             )
         )
         if let diagnostic {
+            // Only attaches a cleanup record for the caller to further shape
+            // (e.g. setting `.cleanup?.checkpoint = .failed` to model a
+            // deletion failure); it must not default to `.failed` itself, or
+            // every setup-failure fixture using this parameter would also
+            // read as a deletion failure via `member.deletionFailed`.
             member.cleanup = WorkspaceCheckoutMemberCleanup(
                 plan: WorkspaceCheckoutCleanupPlan(
                     checkoutID: UUID(),
@@ -248,8 +271,7 @@ import Testing
                     branch: "release/1091",
                     expectedLineageID: "lineage-\(name)",
                     branchOwnership: .created
-                ),
-                checkpoint: .failed
+                )
             )
             _ = diagnostic
         }

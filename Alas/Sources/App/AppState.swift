@@ -3404,6 +3404,24 @@ final class AppState {
         }
     }
 
+    /// A worktree id is nothing but its own standardized path (`Worktree.makeId`),
+    /// so it's always derivable from a member's persisted path without needing
+    /// a live, verified `Worktree` — unlike dirty-buffer resolution, runtime
+    /// session cleanup doesn't need that verification, only the id tabs would
+    /// have been registered under.
+    private static func synthesizedWorktree(for member: WorkspaceCheckoutMember) -> Worktree {
+        let path = URL(fileURLWithPath: member.worktreePath)
+        return Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: member.projectID,
+            name: member.fallbackProjectName,
+            branch: "",
+            path: path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+    }
+
     func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().deleteMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
@@ -3562,24 +3580,26 @@ final class AppState {
             await workspacesManager.refreshCheckoutSnapshots()
             if let refreshed = workspacesManager.checkout(id: id) {
                 for member in refreshed.members where member.availability == .explicitlyDeleted {
-                    if let worktree = resolvedWorktrees[member.id] {
-                        await cleanupDeletedWorkspaceMemberRuntime(worktree)
-                    }
+                    await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktrees[member.id] ?? Self.synthesizedWorktree(for: member))
                 }
             }
             throw error
         }
-        let removedMemberIDs: Set<UUID>
+        let removedMembers: [WorkspaceCheckoutMember]
         switch outcome {
         case .forgotten:
-            removedMemberIDs = Set(resolvedWorktrees.keys)
+            removedMembers = before.members
         case .artifactsNeedConfirmation(let checkout), .retained(let checkout, _):
-            removedMemberIDs = Set(checkout.members.filter { $0.availability == .explicitlyDeleted }.map(\.id))
+            removedMembers = checkout.members.filter { $0.availability == .explicitlyDeleted }
         }
-        for memberID in removedMemberIDs {
-            if let worktree = resolvedWorktrees[memberID] {
-                await cleanupDeletedWorkspaceMemberRuntime(worktree)
-            }
+        for member in removedMembers {
+            // A member already `.missing` before deletion started is never
+            // resolved into `resolvedWorktrees` (that resolution only trusts
+            // a verified `.available` worktree) but the coordinator still
+            // deletes it — and any stale terminal/ACP tabs left over from
+            // before it went missing need closing too, keyed by the same
+            // deterministic path-derived id those tabs were opened under.
+            await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktrees[member.id] ?? Self.synthesizedWorktree(for: member))
         }
         await workspacesManager.refreshCheckoutSnapshots()
         switch outcome {
