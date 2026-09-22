@@ -33,7 +33,17 @@ enum RunSchedulePresentation {
 
     /// "Runs *weekdays* at *09:00*" / "Runs *every 2 hours* while Alas is
     /// open", as segments so the view can weight them differently.
-    static func triggerSummarySegments(_ trigger: RunScheduleTrigger, calendar: Calendar = .autoupdatingCurrent) -> [SummarySegment] {
+    ///
+    /// `selectedWeekdays` is the editor's live selection, which a trigger
+    /// cannot stand in for: a stored trigger holds the empty set to mean
+    /// every day, and a draft with nothing ticked produces that same empty
+    /// set. Without the selection the two are indistinguishable, and the
+    /// default dialog state would describe itself as running never.
+    static func triggerSummarySegments(
+        _ trigger: RunScheduleTrigger,
+        selectedWeekdays: Set<Int>? = nil,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [SummarySegment] {
         switch trigger {
         case .interval(let seconds):
             return [
@@ -41,20 +51,26 @@ enum RunSchedulePresentation {
                 SummarySegment(text: "every \(intervalLabel(seconds))", isEmphasized: true),
                 SummarySegment(text: " while Alas is open", isEmphasized: false),
             ]
-        case let .timeOfDay(hour, minute, weekdays):
+        case let .timeOfDay(hour, minute, storedWeekdays):
+            // Without a live selection the stored empty set is read the way
+            // the model defines it, as every day.
+            let shown = selectedWeekdays ?? (storedWeekdays.isEmpty ? Set(1...7) : storedWeekdays)
             return [
                 SummarySegment(text: "Runs ", isEmphasized: false),
-                SummarySegment(text: weekdaysLabel(weekdays, calendar: calendar), isEmphasized: true),
+                SummarySegment(text: weekdaysLabel(shown, calendar: calendar), isEmphasized: true),
                 SummarySegment(text: " at ", isEmphasized: false),
                 SummarySegment(text: String(format: "%02d:%02d", hour, minute), isEmphasized: true),
             ]
         }
     }
 
-    /// Lower-case so it can sit mid-sentence: "every day", "weekdays",
-    /// "weekends", "Mon, Wed", or "never" for an empty set (an empty set is
-    /// stored as "every day" on a saved schedule, but the editor shows what
-    /// is actually ticked).
+    /// Describes exactly the set it is given, lower-case so it can sit
+    /// mid-sentence: "every day", "weekdays", "weekends", "Mon, Wed", or
+    /// "never" when nothing is in it.
+    ///
+    /// Literal on purpose. A *stored* trigger uses the empty set to mean
+    /// every day, so callers holding one normalize before asking; an
+    /// editor's selection means what it says.
     static func weekdaysLabel(_ weekdays: Set<Int>, calendar: Calendar = .autoupdatingCurrent) -> String {
         if weekdays.isEmpty { return "never" }
         if weekdays.count == 7 { return "every day" }

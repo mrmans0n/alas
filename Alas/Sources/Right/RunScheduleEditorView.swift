@@ -288,7 +288,11 @@ struct RunScheduleEditorView: View {
     }
 
     private var summaryText: Text {
-        RunSchedulePresentation.triggerSummarySegments(draft.trigger, calendar: calendar)
+        RunSchedulePresentation.triggerSummarySegments(
+            draft.trigger,
+            selectedWeekdays: draft.weekdays,
+            calendar: calendar
+        )
             .reduce(Text("")) { partial, segment in
                 partial + Text(segment.text)
                     .fontWeight(segment.isEmphasized ? .medium : .regular)

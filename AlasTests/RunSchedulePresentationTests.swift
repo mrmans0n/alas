@@ -217,8 +217,9 @@ struct RunSchedulePresentationTests {
     }
 
     @Test func triggerSummariesReadAsASentence() {
-        func plain(_ trigger: RunScheduleTrigger) -> String {
-            RunSchedulePresentation.triggerSummarySegments(trigger, calendar: calendar).map(\.text).joined()
+        func plain(_ trigger: RunScheduleTrigger, selected: Set<Int>? = nil) -> String {
+            RunSchedulePresentation.triggerSummarySegments(trigger, selectedWeekdays: selected, calendar: calendar)
+                .map(\.text).joined()
         }
         func emphasized(_ trigger: RunScheduleTrigger) -> [String] {
             RunSchedulePresentation.triggerSummarySegments(trigger, calendar: calendar).filter(\.isEmphasized).map(\.text)
@@ -227,10 +228,44 @@ struct RunSchedulePresentationTests {
         #expect(emphasized(.timeOfDay(hour: 9, minute: 0, weekdays: Set(2...6))) == ["weekdays", "09:00"])
         #expect(plain(.timeOfDay(hour: 22, minute: 30, weekdays: [1, 7])) == "Runs weekends at 22:30")
         #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [2, 4])) == "Runs Mon, Wed at 07:05")
-        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [])) == "Runs never at 07:05")
+        // A stored trigger keeps the empty set to mean every day, so that is
+        // how it reads without an editor selection to consult.
+        #expect(plain(.timeOfDay(hour: 7, minute: 5, weekdays: [])) == "Runs every day at 07:05")
         #expect(plain(.interval(seconds: 7_200)) == "Runs every 2 hours while Alas is open")
         #expect(emphasized(.interval(seconds: 3_600)) == ["every 1 hour"])
         #expect(RunSchedulePresentation.weekdaysLabel(Set(1...7)) == "every day")
+    }
+
+    /// The trigger cannot describe the editor on its own: seven weekdays
+    /// ticked and none ticked both normalize to the stored empty set, so the
+    /// live selection decides. Without this the dialog's own default state
+    /// announced that it runs never.
+    @Test func theSummaryFollowsTheWeekdaysActuallyTicked() {
+        var draft = RunScheduleDraft()
+        draft.triggerKind = .timeOfDay
+        draft.hour = 9
+        draft.minute = 0
+
+        func summary(_ draft: RunScheduleDraft) -> String {
+            RunSchedulePresentation.triggerSummarySegments(
+                draft.trigger,
+                selectedWeekdays: draft.weekdays,
+                calendar: calendar
+            ).map(\.text).joined()
+        }
+
+        // The default: every weekday ticked, which the trigger stores empty.
+        #expect(draft.weekdays == Set(1...7))
+        #expect(draft.trigger == .timeOfDay(hour: 9, minute: 0, weekdays: []))
+        #expect(summary(draft) == "Runs every day at 09:00")
+
+        // Nothing ticked stores the same empty set and must not read alike.
+        draft.weekdays = []
+        #expect(draft.trigger == .timeOfDay(hour: 9, minute: 0, weekdays: []))
+        #expect(summary(draft) == "Runs never at 09:00")
+
+        draft.apply(.weekdays)
+        #expect(summary(draft) == "Runs weekdays at 09:00")
     }
 
     @Test func nextFirePreviewNamesTodayTomorrowOrTheDay() throws {
