@@ -555,10 +555,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
         guard let body = try? JSONEncoder().encode(response) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            try? self.respond(id: id, body: body)
-        }
+        try? respond(id: id, body: body)
     }
 
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
