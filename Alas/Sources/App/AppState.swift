@@ -3415,10 +3415,20 @@ final class AppState {
         return model
     }
 
+    /// Every entry point this preview feeds — the row menu and the details
+    /// sheet — leads straight into deletion, so unarchiving here (rather
+    /// than leaving it to a later step) is preparing that one action, not a
+    /// surprising side effect of a read. The coordinator refuses to touch an
+    /// archived checkout at all, so without this the preview itself would
+    /// throw before the user ever sees a confirmation.
     func workspaceCheckoutDeletionConfirmation(checkoutID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+        guard var checkout = workspacesManager.checkout(id: checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        if checkout.archivedAt != nil {
+            checkout = try await workspaceCoordinator().unarchive(checkoutID: checkoutID)
+            await workspacesManager.refreshCheckoutSnapshots()
         }
         let resolvedWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
         var risks: [String] = []
@@ -3466,6 +3476,12 @@ final class AppState {
     ) async throws -> WorkspaceCheckoutDeletionOutcome {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        // Archived is a settled state, not a lock: deletion always
+        // supersedes it. The coordinator itself refuses to touch an
+        // archived checkout, so unarchive first rather than dead-ending.
+        if before.archivedAt != nil {
+            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+        }
         let activeMembers = spacesManager.activeSpace?.members
             ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
             ?? []
@@ -3525,6 +3541,13 @@ final class AppState {
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        // Same reasoning as `deleteAndForgetWorkspaceCheckout`: a checkout
+        // can be archived after its members were already deleted, and
+        // forgetting that record is still a stronger, terminal action than
+        // archiving — it must not be blocked by the archived guard.
+        if workspacesManager.checkout(id: id)?.archivedAt != nil {
+            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+        }
         let activeMembers = spacesManager.activeSpace?.members
             ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
             ?? []
@@ -9350,7 +9373,11 @@ final class AppState {
         ) else {
             return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
         }
-        guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first else { return nil }
+        // Only a checkout still actively managing this worktree's lifecycle
+        // owns the delete. An archived or Former Workspace checkout no
+        // longer does, and the row's own removal actions are the only way
+        // to clear those — refusing here would make them dead ends.
+        guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) else { return nil }
         return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
     }
 
