@@ -363,15 +363,7 @@ final class ACPSessionRunner {
             }
         }
 
-        authStatusTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for await event in self.connection.client.authStatusUpdates {
-                self.applyAuthStatus(
-                    event.status,
-                    acknowledging: event.durableConsumptionAcknowledgement
-                )
-            }
-        }
+        startAuthStatusListening()
 
         // Agent-spawned terminals must see the exact env the agent
         // itself was launched with — same augmented PATH (npm / cargo
@@ -572,6 +564,56 @@ final class ACPSessionRunner {
                 await self.handleTerminalRequest(req)
             }
         }
+    }
+
+    /// Starts the `_auth/status_update` listener on its own, ahead of the
+    /// rest of `start()`.
+    ///
+    /// `ACPSessionManager.performAttach` calls this as soon as the runner
+    /// exists — before the fallible `session/new`/`session/load`/
+    /// `session/resume` call — so the agent's fresh status lands regardless of
+    /// how that call ends. Deferring it to `start()` meant a session-creation
+    /// failure unrelated to auth (network drop, timeout) left the notification
+    /// buffered in the client forever, so a restored signed-out banner stayed
+    /// up even though the live adapter had already reported being signed in.
+    ///
+    /// Idempotent, because `start()` calls it too and `authStatusUpdates` has
+    /// a single consumer: a second iteration would split the events between
+    /// two loops rather than replace the first.
+    func startAuthStatusListening() {
+        guard authStatusTask == nil else { return }
+        authStatusTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await event in self.connection.client.authStatusUpdates {
+                self.applyAuthStatus(
+                    event.status,
+                    acknowledging: event.durableConsumptionAcknowledgement
+                )
+            }
+        }
+    }
+
+    /// Tears down a listener started by `startAuthStatusListening()` on an
+    /// attach that never committed this runner. The task retains the runner
+    /// while suspended on the stream, so an abandoned attach has to cancel it
+    /// explicitly. `stop()` is the wrong tool here: it also kills terminals
+    /// and marks subagents disconnected, side effects a runner that never
+    /// started owns nothing of.
+    ///
+    /// Awaits the task rather than just requesting cancellation: `.cancel()`
+    /// only sets a flag, so a `for await` iteration already past its
+    /// suspension point (an event was yielded and the loop body is running
+    /// `applyAuthStatus`, which synchronously enqueues the fenced
+    /// persistence write) keeps running to completion regardless. A caller
+    /// that flushes persistence right after `.cancel()` without waiting can
+    /// observe no pending write yet and flush too early, letting that write
+    /// land — or the status be dropped entirely by the loop exiting — after
+    /// the flush already returned.
+    func cancelAuthStatusListening() async {
+        let task = authStatusTask
+        authStatusTask = nil
+        task?.cancel()
+        await task?.value
     }
 
     /// Applies a `_auth/status_update` notification. Unlike a failed-prompt
