@@ -15,6 +15,9 @@ import Combine
 @MainActor
 final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
+    private let federation: FederatedSessionsProvider?
+    /// This gateway's registration with `federation`; nil without one.
+    private var downstream: FederatedDownstream?
     private let send: (RemoteServerMessage) -> Void
     private var subscriptions: [String: AnyCancellable] = [:]
     private var configSubscriptions: [String: AnyCancellable] = [:]
@@ -44,12 +47,24 @@ final class RemoteSessionGateway {
     private var inFlightFileRequests: Set<String> = []
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
-    init(provider: RemoteSessionsProvider, send: @escaping (RemoteServerMessage) -> Void) {
+    init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
+         send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
+        self.federation = federation
         self.send = send
+        guard let federation else { return }
+        // A peer's cached list moving refreshes this client even if it has
+        // never asked for the list, which matches what `renameSession`
+        // already does locally.
+        let downstream = FederatedDownstream(
+            send: { message in send(message) },
+            sessionListChanged: { [weak self] in self?.refreshSessionList() })
+        self.downstream = downstream
+        federation.attach(downstream)
     }
 
     func handle(_ message: RemoteClientMessage) async {
+        if let federation, let downstream, federation.route(message, from: downstream) { return }
         switch message {
         case .helloAck:
             // Version acknowledgement from an Alas peer; nothing to do server-side.
@@ -360,7 +375,7 @@ final class RemoteSessionGateway {
         sessionListRefresh?.cancel()
         sessionListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let summaries = await provider.sessionSummaries()
+            let summaries = await provider.sessionSummaries() + (federation?.peerSessionSummaries ?? [])
             guard !Task.isCancelled, generation == sessionListGeneration else { return }
             send(.sessionList(sessions: summaries))
         }
@@ -465,6 +480,8 @@ final class RemoteSessionGateway {
 
     /// Tear down all observation (called when the connection closes).
     func close() {
+        if let federation, let downstream { federation.detach(downstream) }
+        self.downstream = nil
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()

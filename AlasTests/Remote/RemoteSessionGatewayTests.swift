@@ -2908,4 +2908,68 @@ struct RemoteSessionGatewayTests {
         #expect(provider.fileDiffRequests.count == 1)   // still just the one real call
         #expect(sent == [.fileDiffResult(sessionId: "s1", path: "a.txt", hunks: [], truncated: false)])
     }
+
+    @Test func sessionListMergesLocalAndPeerRows() async {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "local", title: "L", agentId: "claude", status: "idle", canDrive: true)]
+        let links = FederatedSessionsProviderTests.FakeLinks()
+        let federation = FederatedSessionsProvider(links: links)
+        var out: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { out.append($0) }
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.sessionList(sessions: [
+            RemoteSessionSummary(id: "s1", title: "B1", agentId: "claude", status: "idle", canDrive: false)
+        ]), from: "srv-b")
+        // The cache update itself asks the gateway to refresh; the explicit
+        // request supersedes that refresh (same generation counter) and its
+        // list is what lands. Same single yield as `listSessionsEmitsSummaries`.
+        await gateway.handle(.listSessions)
+        await Task.yield()
+        guard case .sessionList(let rows) = out.last else {
+            Issue.record("expected sessionList, got \(String(describing: out.last))")
+            return
+        }
+        #expect(rows.map(\.id) == ["local", "srv-b:s1"])
+        #expect(rows.last?.serverId == "srv-b")
+        #expect(links.sent(to: "srv-b").filter { $0 == .listSessions }.count >= 1)
+        gateway.close()
+    }
+
+    @Test func aPeerSessionSubscribeIsRoutedAwayFromTheLocalProvider() async {
+        let provider = FakeSessionsProvider()
+        let links = FederatedSessionsProviderTests.FakeLinks()
+        let federation = FederatedSessionsProvider(links: links)
+        var out: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { out.append($0) }
+        links.goOnline("srv-b", name: "Mac B")
+        await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
+        // Not handled locally: no sessionClosed for an unknown local session.
+        #expect(!out.contains(.sessionClosed(sessionId: "srv-b:s1")))
+        #expect(links.sent(to: "srv-b").contains(.subscribe(sessionId: "s1")))
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        #expect(out.contains(.stopPending(sessionId: "srv-b:s1")))
+        // A local id still goes to the local provider.
+        await gateway.handle(.subscribe(sessionId: "nope"))
+        #expect(out.contains(.sessionClosed(sessionId: "nope")))
+        gateway.close()
+    }
+
+    @Test func closingTheGatewayUnsubscribesUpstream() async {
+        let provider = FakeSessionsProvider()
+        let links = FederatedSessionsProviderTests.FakeLinks()
+        let federation = FederatedSessionsProvider(links: links)
+        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { _ in }
+        links.goOnline("srv-b", name: "Mac B")
+        await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
+        gateway.close()
+        #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
+    }
+
+    @Test func aGatewayWithoutFederationTreatsPrefixedIdsAsLocal() async {
+        let provider = FakeSessionsProvider()
+        var out: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { out.append($0) }
+        await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
+        #expect(out == [.sessionClosed(sessionId: "srv-b:s1")])
+    }
 }
