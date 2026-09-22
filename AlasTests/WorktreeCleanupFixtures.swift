@@ -40,11 +40,20 @@ struct WorktreeCleanupFixture {
 /// the main worktree at position 0, so `fixture.worktrees[0]` is always main
 /// and the rest are ordinary feature worktrees named `feature-1`, `feature-2`, ….
 ///
+/// `worktreeCleanupLauncher` lets a test observe the point inside a deletion
+/// that runs after the removal succeeded but before the refresh that
+/// reconciles the removed row away.
+///
 /// Modeled on `WorktreeServiceTests.makeRepo` (repo + sibling worktrees) and
 /// `AppStateCleanupTests` (an `AppState` with a project registered against a
 /// real temporary repo).
 @MainActor
-func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixture {
+func makeCleanupFixture(
+    worktreeCount: Int,
+    worktreeCleanupLauncher: @escaping AppState.WorktreeCleanupLauncher = {
+        try WorktreeTrashCleaner.launch($0)
+    }
+) async throws -> WorktreeCleanupFixture {
     precondition(worktreeCount >= 1, "a fixture needs at least the main worktree")
 
     let temporaryRoot = FileManager.default.temporaryDirectory
@@ -69,6 +78,7 @@ func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixtu
 
         let state = AppState(
             store: persistence,
+            worktreeCleanupLauncher: worktreeCleanupLauncher,
             attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence)
         )
         let project = try await state.projectsManager.addProject(

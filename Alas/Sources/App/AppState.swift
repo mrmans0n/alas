@@ -9874,6 +9874,16 @@ final class AppState {
         for projectId in touchedProjectIds {
             _ = try? await refreshProjectWorktrees(projectId: projectId)
         }
+        // Each item held its `.deleting` claim through the batch so the stale
+        // row it describes never resolved as an ordinary one; the refresh
+        // above releases it for rows git no longer lists. This is the
+        // fallback for a refresh that failed, so a removed worktree never
+        // keeps a permanent claim.
+        for result in results where result.outcome == .deleted {
+            if projectsManager.operationState(for: result.worktreeId) == .deleting {
+                projectsManager.setOperationState(id: result.worktreeId, state: nil)
+            }
+        }
         // Per-item deletion skipped selection reconciliation because the list
         // was still stale at that point. Now that every touched project has
         // been refreshed, drop a selection that points at a deleted worktree.
@@ -10887,9 +10897,13 @@ final class AppState {
                 WorktreeTrashCleaner.sweep(projects: cleanupProjects)
             }
         }
-        // Always clear the deleting state after a successful remove,
-        // even if the subsequent refresh fails.
-        projectsManager.setOperationState(id: worktree.id, state: nil)
+        // The `.deleting` claim must outlive the stale-row window: the removed
+        // row stays in the visible list until the refresh below reconciles it
+        // away, and everything keyed off the claim (session admission, the
+        // right pane collapsing for this worktree only) must keep seeing it
+        // until the row it describes is gone. The refresh clears it on its own
+        // for a row git no longer lists; batches skip this per-item refresh
+        // and release their claims at their own trailing refresh.
         removePersistedGGWorktreeMode(
             projectId: worktree.projectId,
             worktreeId: worktree.id
@@ -10900,6 +10914,12 @@ final class AppState {
         // themselves afterwards.
         if refreshAfter {
             _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+            // Reconciliation normally clears the claim above; this is the
+            // fallback for a refresh that failed, so a removed worktree never
+            // keeps a permanent claim behind.
+            if projectsManager.operationState(for: worktree.id) == .deleting {
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+            }
             if selectedWorktreeId == worktree.id {
                 selectWorktree(id: selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,

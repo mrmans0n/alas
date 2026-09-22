@@ -146,6 +146,73 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(FileManager.default.fileExists(atPath: target.path.path))
     }
 
+    /// A batch skips per-item refreshes, so each item's `.deleting` claim is
+    /// held until the batch's single trailing refresh releases it together
+    /// with the reconciled row. A claim that outlived the batch would block
+    /// session admission for that id forever.
+    @Test func batchReleasesHeldDeletingClaimsWhenItReturns() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        defer { fixture.cleanUpAfterTest() }
+        let targets = Array(fixture.worktrees.dropFirst())
+
+        let results = await fixture.state.batchDeleteWorktrees(targets, keepBranch: false)
+
+        let deletedIDs = results.filter { $0.outcome == .deleted }.map(\.worktreeId)
+        #expect(deletedIDs.count == targets.count)
+        #expect(deletedIDs.allSatisfy {
+            fixture.state.projectsManager.operationState(for: $0) == nil
+        })
+    }
+
+    /// A batch holds each item's `.deleting` claim past the removal itself.
+    /// The stale row stays in the visible list until the batch's trailing
+    /// refresh, so releasing the claim per item would let that row resolve as
+    /// an ordinary worktree — remounting the right pane this deletion
+    /// collapsed, and re-admitting sessions into a worktree already gone.
+    ///
+    /// Observed at the second item's cleanup launch: the one point inside the
+    /// batch that runs after the first item's removal completed and before
+    /// the trailing refresh.
+    @Test func batchHoldsAnEarlierItemsDeletingClaimUntilTheTrailingRefresh() async throws {
+        @MainActor
+        final class BatchObservation {
+            var state: AppState?
+            var firstID = ""
+            var projectID = ""
+            var firstClaimAtLaunch: [WorktreeOperationState?] = []
+            var firstListedAtLaunch: [Bool] = []
+        }
+        let observation = BatchObservation()
+        let fixture = try await makeCleanupFixture(worktreeCount: 3) { _ in
+            guard let state = observation.state else { return }
+            observation.firstClaimAtLaunch.append(
+                state.projectsManager.operationState(for: observation.firstID)
+            )
+            observation.firstListedAtLaunch.append(
+                state.projectsManager.worktrees(projectId: observation.projectID)
+                    .contains { $0.id == observation.firstID }
+            )
+        }
+        defer { fixture.cleanUpAfterTest() }
+        let first = fixture.worktrees[1]
+        let second = fixture.worktrees[2]
+        observation.state = fixture.state
+        observation.firstID = first.id
+        observation.projectID = fixture.project.id
+
+        let results = await fixture.state.batchDeleteWorktrees([first, second], keepBranch: false)
+
+        #expect(results.map(\.outcome) == [.deleted, .deleted])
+        try #require(observation.firstClaimAtLaunch.count == 2)
+        // The first item's row is still listed while the second one is being
+        // removed, and must still read as deleting.
+        #expect(observation.firstListedAtLaunch == [true, true])
+        #expect(observation.firstClaimAtLaunch[1] == .deleting)
+        // The claim is released once the trailing refresh reconciles the row.
+        #expect(fixture.state.projectsManager.operationState(for: first.id) == nil)
+        #expect(fixture.state.projectsManager.operationState(for: second.id) == nil)
+    }
+
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }
