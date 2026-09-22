@@ -146,6 +146,13 @@ struct ACPStdioQuestionDispatchTests {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
 
+        // Cursor extension replies must be sent synchronously while the
+        // frame is dispatched, in the order the frames arrived — not
+        // handed off to a separately scheduled Task, whose completion
+        // order (and latency under CI's contended scheduler) isn't
+        // guaranteed. See #1391.
+        #expect(responses.map { $0["id"] as? Int } == [1, 2, 3])
+
         let todosResponse = try #require(responses.first { $0["id"] as? Int == 1 })
         let todos = try #require(todosResponse["result"] as? [String: Any])
         let todoOutcome = try #require(todos["outcome"] as? [String: Any])
@@ -178,6 +185,11 @@ struct ACPStdioQuestionDispatchTests {
         let responses = try transport.sentFrames.map {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
+
+        // Replies must land in send order — see the ordering note in
+        // acknowledgesCursorExtensionRequests() above.
+        #expect(responses.map { $0["id"] as? Int } == [1, 2])
+
         let response = try #require(responses.first { $0["id"] as? Int == 2 })
         let result = try #require(response["result"] as? [String: Any])
         let outcome = try #require(result["outcome"] as? [String: Any])
