@@ -3062,11 +3062,25 @@ final class AppState {
     /// rather than orphaning the rest into Former Workspace.
     func deleteWorkspaceDefinitionAndCheckouts(id workspaceID: UUID) async throws {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        let checkoutIDs = workspacesManager.checkouts.filter { $0.workspaceID == workspaceID }.map(\.id)
-        for checkoutID in checkoutIDs {
-            let outcome = try await deleteAndForgetWorkspaceCheckout(id: checkoutID)
-            guard outcome == .forgotten else {
-                throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+        // Re-scan after every pass rather than snapshotting the checkout list
+        // once: a checkout can be persisted under this Workspace while an
+        // earlier one is still being deleted (an already-open creation dialog
+        // completing mid-loop). Without this, `deleteWorkspaceDefinition`
+        // below would silently detach that new checkout into Former
+        // Workspace instead of it being part of "delete everything".
+        var processedCheckoutIDs = Set<UUID>()
+        while true {
+            await workspacesManager.refreshCheckoutSnapshots()
+            let pending = workspacesManager.checkouts
+                .filter { $0.workspaceID == workspaceID && !processedCheckoutIDs.contains($0.id) }
+                .map(\.id)
+            guard !pending.isEmpty else { break }
+            for checkoutID in pending {
+                let outcome = try await deleteAndForgetWorkspaceCheckout(id: checkoutID)
+                guard outcome == .forgotten else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
+                processedCheckoutIDs.insert(checkoutID)
             }
         }
         try await deleteWorkspaceDefinition(id: workspaceID)
@@ -9420,6 +9434,19 @@ final class AppState {
         return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
     }
 
+    /// Both the CLI and interactive delete paths confirm well before the
+    /// actual removal — a modal alert's nested run loop and a CLI's checkpoint
+    /// discovery and git preflight each yield the main actor at least once
+    /// in between, wide enough for a checkout to get unarchived in the gap.
+    /// Called as the first statement of the scheduled deletion, right before
+    /// the real removal, mirroring the batch-delete path's own
+    /// re-validation-right-before-execution pattern.
+    private func recheckWorkspaceOwnershipBeforeRemoval(_ worktree: Worktree) -> Bool {
+        guard let refusal = workspaceOwnershipDeletionRefusal(for: worktree) else { return true }
+        projectsManager.setOperationState(id: worktree.id, state: .deleteFailed(message: refusal))
+        return false
+    }
+
     func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
         if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
             showFileActionError(title: "Delete Failed", message: refusal)
@@ -10219,6 +10246,7 @@ final class AppState {
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
 
         Task { @MainActor in
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
@@ -10301,19 +10329,7 @@ final class AppState {
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
         Task { @MainActor in
-            // The checkpoint discovery and git preflight above each yielded
-            // the main actor at least once; a Workspace checkout could have
-            // been unarchived (or newly claimed this worktree) in that
-            // window. Recheck immediately before the real removal, the same
-            // way the batch delete path re-validates ownership right before
-            // its own removal.
-            guard workspaceOwnershipDeletionRefusal(for: worktree) == nil else {
-                projectsManager.setOperationState(
-                    id: worktree.id,
-                    state: .deleteFailed(message: "Worktree changed since confirmation")
-                )
-                return
-            }
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,

@@ -178,6 +178,54 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID) == nil)
     }
 
+    @Test func deleteWorkspaceDefinitionAndCheckoutsRemovesEveryCheckoutUnderTheWorkspace() async throws {
+        // Regression coverage for the re-scanning loop: it must still
+        // converge and remove every checkout when there is more than one,
+        // not just the first it happens to see.
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delete-workspace-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        let firstCheckout = WorkspaceCheckout(
+            workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
+            branch: "release/a", rootPath: "/checkouts/a", members: []
+        )
+        let secondCheckout = WorkspaceCheckout(
+            workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
+            branch: "release/b", rootPath: "/checkouts/b", members: []
+        )
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace], checkouts: [firstCheckout, secondCheckout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let spaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
+        ])
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
+
+        #expect(state.workspacesManager.workspaces.isEmpty)
+        #expect(state.workspacesManager.checkouts.isEmpty)
+    }
+
+    /// Avoids touching real app-support files: `deleteWorkspaceDefinition`
+    /// persists the Space placement change through this store.
+    private final class InMemoryWorkspaceDeletionStore: PersistenceStoreProtocol, @unchecked Sendable {
+        private var spacesFile: SpacesFile
+        init(spacesFile: SpacesFile) { self.spacesFile = spacesFile }
+        func write<T: Encodable>(_ value: T, to _: URL) throws {
+            if let spaces = value as? SpacesFile { spacesFile = spaces }
+        }
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == SpacesFile.self ? spacesFile as? T : nil
+        }
+    }
+
     @MainActor
     private struct Fixture {
         let state: AppState
