@@ -77,15 +77,13 @@ struct RemoteDiscoveredInstanceResolver {
     }
 
     /// Opens a TCP connection to the Bonjour endpoint and reads the address
-    /// it landed on. IPv4 only: a link-local IPv6 address would not pass the
-    /// far side's Host allowlist, and the peer's own advertised addresses
-    /// come back from `/remote-info` anyway.
+    /// it landed on. Lets Network pick the address family — an IPv6-only LAN
+    /// or a ULA/Tailscale-only peer must still resolve, and both are already
+    /// accepted by `RemoteNetwork`'s Host policy. `hostString` below keeps a
+    /// link-local IPv6 address's `%interface` zone rather than stripping it,
+    /// since the origin built from it needs the zone to be dialable again.
     static func resolveOverTCP(_ endpoint: NWEndpoint, timeout: TimeInterval) async throws -> (host: String, port: UInt16) {
-        let params = NWParameters.tcp
-        if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
-            ip.version = .v4
-        }
-        let connection = NWConnection(to: endpoint, using: params)
+        let connection = NWConnection(to: endpoint, using: .tcp)
         let queue = DispatchQueue(label: "io.alas.remote.resolve")
         return try await withThrowingTaskGroup(of: (host: String, port: UInt16).self) { group in
             group.addTask {
@@ -136,8 +134,12 @@ struct RemoteDiscoveredInstanceResolver {
         switch host {
         case .ipv4(let address): return "\(address)"
         case .ipv6(let address):
-            // Description carries the zone as `%en0`; keep the address only.
-            return "\(address)".split(separator: "%", maxSplits: 1).first.map(String.init) ?? "\(address)"
+            // Description already carries a link-local address's zone as
+            // `%en0`; keep it. `urlHost` below brackets the whole thing, and
+            // `RemotePairingLink.normalizeOrigin` round-trips a bracketed
+            // `[addr%zone]` host through `URLComponents` unchanged, so the
+            // resulting origin is dialable again, zone and all.
+            return "\(address)"
         case .name(let name, _): return name
         @unknown default: return "\(host)"
         }

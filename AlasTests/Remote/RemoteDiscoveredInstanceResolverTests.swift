@@ -95,6 +95,15 @@ struct RemoteDiscoveredInstanceResolverTests {
         #expect(outcome == .success(["http://[fd00::5]:8765"]))
     }
 
+    @Test func linkLocalIPv6ZoneIsPreservedInTheOrigin() async {
+        // `resolveOverTCP` returns the raw `NWEndpoint.Host` description,
+        // which for link-local IPv6 carries the interface as `%en0`; the
+        // resolved origin must keep it, or a later dial has no way to know
+        // which interface to use.
+        let outcome = await resolver(host: "fe80::1%en0", body: info(serverId: "srv-a", addresses: [])).origins(for: instance)
+        #expect(outcome == .success(["http://[fe80::1%en0]:8765"]))
+    }
+
     @Test func fallsBackToTheNextEndpointWhenTheFirstFailsToResolve() async {
         let endpointA = NWEndpoint.hostPort(host: "10.0.0.1", port: 8765)
         let endpointB = NWEndpoint.hostPort(host: "10.0.0.2", port: 8765)

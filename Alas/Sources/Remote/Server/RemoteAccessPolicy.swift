@@ -19,6 +19,12 @@ struct RemoteAccessPolicy: Equatable, Sendable {
         return allowedHosts.contains(normalized)
     }
 
+    /// A Host header's IPv6 literal may carry a link-local zone (`fe80::1%en0`,
+    /// or `%25en0` per RFC 6874) — the zone names an interface on whichever
+    /// Mac reported it, never the same string on both ends of a connection,
+    /// so `RemoteNetwork.stripLinkLocalZone` drops it before comparison, the
+    /// same way `allowedHostCandidates` stores its own interfaces' addresses
+    /// with the zone already stripped.
     static func normalizedHost(from hostHeader: String?) -> String? {
         guard var raw = hostHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
@@ -32,7 +38,7 @@ struct RemoteAccessPolicy: Equatable, Sendable {
                 return nil
             }
             let inside = raw[raw.index(after: raw.startIndex)..<close]
-            let host = String(inside)
+            let host = RemoteNetwork.stripLinkLocalZone(String(inside))
             guard Self.isIPv6Literal(host) else { return nil }
             return host
         }

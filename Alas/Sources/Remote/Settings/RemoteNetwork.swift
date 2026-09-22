@@ -43,6 +43,10 @@ enum RemoteNetwork {
         case tailnet
     }
 
+    /// Includes link-local addresses (`fe80::/10` — `getnameinfo` reports
+    /// these with a `%zone` suffix, e.g. `fe80::1%en0`). `classification`
+    /// does not recognize them, so `advertisedAddresses` never lists one;
+    /// `allowedHostCandidates` does, via `isLinkLocal`.
     static func interfaces() -> [RemoteNetworkInterface] {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let first = head else { return [] }
@@ -74,7 +78,7 @@ enum RemoteNetwork {
             // `String(cString:)` is deprecated for arrays; getnameinfo NUL-terminates,
             // so decode up to the terminator rather than the whole fixed buffer.
             let value = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-            guard !value.isEmpty, !value.hasPrefix("fe80:") else { continue }
+            guard !value.isEmpty else { continue }
             output.append(RemoteNetworkInterface(
                 name: name,
                 host: value,
@@ -154,7 +158,13 @@ enum RemoteNetwork {
         var hosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
         for iface in interfaces {
             if iface.isLoopback || classification(for: iface.host) != nil || isLinkLocal(iface.host) {
-                hosts.insert(normalizedHost(iface.host))
+                // A link-local address's zone (`%en0`) names an interface on
+                // THIS Mac; whatever zone a connecting peer's own Host header
+                // carries names one of ITS interfaces instead, so comparing
+                // zones would never match. Store the bare address — the
+                // incoming side strips its own zone the same way before
+                // comparing (`RemoteAccessPolicy.normalizedHost(from:)`).
+                hosts.insert(normalizedHost(stripLinkLocalZone(iface.host)))
             }
         }
         for host in normalizedHosts(allowedHosts) {
@@ -272,8 +282,23 @@ enum RemoteNetwork {
         return octets
     }
 
+    /// Drops a link-local zone suffix (`%en0`, or its percent-encoded
+    /// `%25en0` form per RFC 6874) from an IPv6 literal. The zone names an
+    /// interface on whichever machine reported it, so it is never part of
+    /// the address value itself: every caller that treats an IPv6 host as a
+    /// comparable or classifiable value strips it first.
+    static func stripLinkLocalZone(_ host: String) -> String {
+        if let range = host.range(of: "%25") {
+            return String(host[host.startIndex..<range.lowerBound])
+        }
+        if let index = host.firstIndex(of: "%") {
+            return String(host[host.startIndex..<index])
+        }
+        return host
+    }
+
     private static func ipv6Bytes(_ host: String) -> [UInt8]? {
-        let normalized = normalizedHost(host)
+        let normalized = stripLinkLocalZone(normalizedHost(host))
         guard normalized.contains(":") else { return nil }
 
         var address = in6_addr()

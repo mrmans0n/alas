@@ -84,4 +84,21 @@ struct RemoteAccessPolicyTests {
         #expect(RemoteAccessPolicy.normalizedHost(from: "example.com::8765") == nil)
         #expect(RemoteAccessPolicy.normalizedHost(from: "2001:db8::1") == "2001:db8::1")
     }
+
+    @Test func stripsALinkLocalZoneFromABracketedIpv6HostBeforeMatching() {
+        let policy = RemoteAccessPolicy(allowedHosts: ["fe80::1234"])
+
+        // The zone names an interface on whichever Mac reported it — a
+        // connecting peer's own zone label, never guaranteed to match this
+        // Mac's — so only the bare address is compared.
+        #expect(policy.allows(hostHeader: "[fe80::1234%en0]:8765"))
+        #expect(policy.allows(hostHeader: "[fe80::1234%25en0]:8765"))
+        #expect(policy.allows(hostHeader: "[fe80::1234%en3]"))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[fe80::1234%en0]:8765") == "fe80::1234")
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[fe80::1234%25en0]:8765") == "fe80::1234")
+    }
+
+    @Test func rejectsAZoneSuffixedHostThatIsNotAValidIpv6Literal() {
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[not-an-address%en0]") == nil)
+    }
 }
