@@ -1376,9 +1376,10 @@ struct RemoteWebAssetTests {
     // address was even tried.
     @Test func pairingContinuesPastAnUnrelatedOriginsError() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4000) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const tryAt = (index, bestError) => {"))
-        #expect(pair.contains("return isAuthoritative(origin) ? Promise.reject(err) : tryAt(index + 1, err);"))
+        #expect(pair.contains("if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }"))
+        #expect(pair.contains("return tryAt(index + 1, err);"))
         #expect(pair.contains("return tryAt(0, null);"))
     }
 
@@ -1396,7 +1397,7 @@ struct RemoteWebAssetTests {
     @Test func pairingDoesNotChargeTheSameTargetsRateLimitOncePerAddress() throws {
         let js = try asset("hub-links.js")
         #expect(js.contains("const isLoopback = globalThis.RemoteHubRegistry.isLoopbackOrigin;"))
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4000) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const err = bestError || pairError(\"expired\");"))
         #expect(pair.contains("const err = bestError || pairError(\"origin\");"))
     }
@@ -1412,10 +1413,26 @@ struct RemoteWebAssetTests {
     // at all keeps the original loopback-only check.
     @Test func onlyLanAndTailnetOriginKindsAreTreatedAsAuthoritative() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4000) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("const isAuthoritative = (origin) => {"))
         #expect(pair.contains("if (kind) return kind === \"lan\" || kind === \"tailnet\";"))
         #expect(pair.contains("return !isLoopback(origin);"))
+    }
+
+    // Regression (#1341, Codex finding on PR #1396): a
+    // non-authoritative origin's 401/403 can still become the `bestError`
+    // eventually reported (if every LATER origin — authoritative or not —
+    // also fails for some other reason, e.g. a network timeout), but that
+    // is never a CONFIRMED answer: no authoritative lan/tailnet origin
+    // ever actually agreed. Only the immediate rejection at an
+    // authoritative origin sets `err.confirmed`, so a caller (see
+    // attemptFirstPairing's fallback) can tell a genuinely terminal
+    // answer apart from an inconclusive one that leaked through.
+    @Test func onlyAnAuthoritativeOriginsRejectionIsMarkedConfirmed() throws {
+        let js = try asset("hub-links.js")
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
+        #expect(pair.contains("if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }"))
+        #expect(!pair.contains("bestError.confirmed"), "confirmation must not be forced onto an inherited bestError from a non-authoritative origin")
     }
 
     // Regression: a 2xx from an unrelated responder (a
@@ -1425,7 +1442,7 @@ struct RemoteWebAssetTests {
     // or accept a garbage, tokenless registry entry as success.
     @Test func pairFallsThroughAfterAnInvalidOrTokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4000) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(pair.contains("if (!body || typeof body.token !== \"string\" || !body.token) return tryAt(index + 1, bestError);"))
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }
@@ -1441,7 +1458,7 @@ struct RemoteWebAssetTests {
     // parse, never a later tryAt() call's own rejection.
     @Test func pairDoesNotDoubleRetryRemainingOriginsAfterATokenlessResponse() throws {
         let js = try asset("hub-links.js")
-        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4000) })
+        let pair = try #require(js.range(of: "function pair(origins, code, deviceName, originKinds) {").map { js[$0.lowerBound...].prefix(4800) })
         #expect(!pair.contains(".catch(() => tryAt(index + 1, bestError));"), "must not use .then().catch() around the recursive call")
         #expect(pair.contains("return Promise.resolve(res.json()).then("))
     }
@@ -1475,7 +1492,7 @@ struct RemoteWebAssetTests {
     // shouldn't matter when there's already a session to fall back to.
     @Test func failedScannedPairingFallsBackToTheExistingSessionWhenOneExists() throws {
         let js = try asset("app.js")
-        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1900) })
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(2200) })
         #expect(attempt.contains("if (hub.activeId) {"))
         #expect(attempt.contains("switchServer(hub.activeId);"))
         let activeIdIndex = try #require(attempt.range(of: "if (hub.activeId) {"))
@@ -1489,19 +1506,34 @@ struct RemoteWebAssetTests {
     // never become valid by retrying. A later outage on the fallback Mac
     // then retried the definitely-invalid original scan forever instead of
     // ever retrying the fallback itself. The scan is now preserved into
-    // the fallback only for a transient ("net") failure — a terminal one
-    // is cleared before the fallback runs, exactly like the non-fallback
-    // branch below already treats it.
-    @Test func fallbackToExistingSessionOnlyPreservesThePendingScanForATransientFailure() throws {
+    // the fallback for a transient ("net") failure.
+    @Test func fallbackToExistingSessionPreservesThePendingScanForATransientFailure() throws {
         let js = try asset("app.js")
-        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(1900) })
-        let activeIdBlock = try #require(attempt.range(of: "if (hub.activeId) {").map { attempt[$0.lowerBound...].prefix(700) })
-        #expect(activeIdBlock.contains(#"if (err && err.reason !== "net") pendingFirstPairing = null;"#))
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(2200) })
+        let activeIdBlock = try #require(attempt.range(of: "if (hub.activeId) {").map { attempt[$0.lowerBound...].prefix(1200) })
+        #expect(activeIdBlock.contains(#"if (err && err.reason !== "net" && err.confirmed) pendingFirstPairing = null;"#))
         let clearIndex = try #require(activeIdBlock.range(of: "pendingFirstPairing = null;"))
         let switchIndex = try #require(activeIdBlock.range(of: "switchServer(hub.activeId);"))
-        #expect(clearIndex.lowerBound < switchIndex.lowerBound, "a terminal failure must clear the pending scan before falling back, not after")
+        #expect(clearIndex.lowerBound < switchIndex.lowerBound, "a confirmed terminal failure must clear the pending scan before falling back, not after")
         let onOpen = try #require(js.range(of: "function onActiveOpen() {").map { js[$0.lowerBound...].prefix(120) })
         #expect(onOpen.contains("pendingFirstPairing = null;"))
+    }
+
+    // Regression (#1341, Codex finding on PR #1396): a stale
+    // "custom" origin's 401 can still become the reported "expired"/
+    // "origin" reason (pair()'s bestError-carries-forward semantics) even
+    // when NO authoritative lan/tailnet origin ever actually confirmed
+    // it — e.g. every authoritative address then failed for an unrelated
+    // reason (network, timeout). Such an unconfirmed "expired"/"origin"
+    // result is no more trustworthy than a plain "net" failure, so it
+    // must NOT clear the pending scan either — only pair()'s `confirmed`
+    // flag, set exclusively when an authoritative origin itself rejects,
+    // may do that.
+    @Test func fallbackToExistingSessionAlsoPreservesAnUnconfirmedTerminalFailure() throws {
+        let js = try asset("app.js")
+        let attempt = try #require(js.range(of: "function attemptFirstPairing(input) {").map { js[$0.lowerBound...].prefix(2200) })
+        let activeIdBlock = try #require(attempt.range(of: "if (hub.activeId) {").map { attempt[$0.lowerBound...].prefix(1200) })
+        #expect(activeIdBlock.contains("err.confirmed"), "the clearing decision must require pair()'s confirmed flag, not err.reason alone")
     }
 
     // Regression: switching between servers reset session

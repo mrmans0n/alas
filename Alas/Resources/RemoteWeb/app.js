@@ -3987,14 +3987,20 @@ function attemptFirstPairing(input) {
     // once onActiveOpen() fires — any successful active connection makes a
     // stale scan-retry intent moot.
     if (hub.activeId) {
-      // Preserve the scan only for a transient ("net") failure, so a later
+      // Preserve the scan for a transient ("net") failure, so a later
       // outage on the fallback Mac retries the originally scanned Mac
-      // rather than hammering the fallback (see the comment above). A
-      // terminal failure ("expired"/"origin") can never succeed by
-      // retrying, so it must not survive to poison a future fallback retry
-      // — clear it immediately, exactly as the non-fallback path below
-      // already does for the same two reasons.
-      if (err && err.reason !== "net") pendingFirstPairing = null;
+      // rather than hammering the fallback (see the comment above) — and
+      // ALSO for an "expired"/"origin" failure pair() never actually
+      // CONFIRMED with an authoritative lan/tailnet origin (err.confirmed
+      // unset): e.g. a stale custom host's 401 becoming the reported
+      // reason only because every authoritative address then failed for
+      // some other cause (network, timeout) is no more trustworthy than a
+      // plain net failure. Only a CONFIRMED terminal failure can never
+      // succeed by retrying, so only that one is cleared immediately,
+      // exactly as the non-fallback path below already does for a
+      // (necessarily confirmed, since nothing else fell back) terminal
+      // failure.
+      if (err && err.reason !== "net" && err.confirmed) pendingFirstPairing = null;
       switchServer(hub.activeId);
       return;
     }

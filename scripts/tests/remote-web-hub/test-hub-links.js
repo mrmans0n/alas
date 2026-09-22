@@ -552,7 +552,9 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
   }
   {
     // A "lan"/"tailnet" origin's 401 remains terminal even when its kind is
-    // known explicitly, not merely inferred from "non-loopback".
+    // known explicitly, not merely inferred from "non-loopback" — and its
+    // rejection is marked `confirmed`, since an authoritative origin
+    // itself is the one answering.
     const calls = [];
     const { links } = harness({
       fetchImpl: (url) => {
@@ -567,9 +569,37 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
         "phone",
         { "http://10.0.0.1:8765": "lan", "http://10.0.0.2:8765": "tailnet" }
       ),
-      (err) => err.reason === "expired"
+      (err) => err.reason === "expired" && err.confirmed === true
     );
     assert.deepEqual(calls, ["http://10.0.0.1:8765/pair"], "a known lan/tailnet origin's 401 must still stop the search immediately");
+  }
+  {
+    // Regression (#1341, Codex finding on PR #1396): a
+    // non-authoritative "custom" origin's 401 sets `bestError`, but if
+    // every authoritative "lan"/"tailnet" origin afterward fails for an
+    // unrelated reason (here, a network error) rather than confirming or
+    // denying the code, the reported "expired" reason never actually came
+    // from an authoritative source. `err.confirmed` must stay falsy so a
+    // caller (attemptFirstPairing's fallback) does not treat it as
+    // certainly terminal.
+    const calls = [];
+    const { links } = harness({
+      fetchImpl: (url) => {
+        calls.push(url);
+        if (url.startsWith("http://stale-proxy")) return Promise.resolve({ ok: false, status: 401 });
+        return Promise.reject(new Error("net"));
+      },
+    });
+    await assert.rejects(
+      links.pair(
+        ["http://stale-proxy.example:8765", "http://10.0.0.1:8765"],
+        "CODE",
+        "phone",
+        { "http://stale-proxy.example:8765": "custom", "http://10.0.0.1:8765": "lan" }
+      ),
+      (err) => err.reason === "expired" && !err.confirmed
+    );
+    assert.deepEqual(calls, ["http://stale-proxy.example:8765/pair", "http://10.0.0.1:8765/pair"]);
   }
   {
     // If every origin in the link is non-authoritative (only custom/

@@ -477,11 +477,22 @@ function createLinks(deps, hooks) {
           (res) => {
             if (res.status === 401) {
               const err = bestError || pairError("expired");
-              return isAuthoritative(origin) ? Promise.reject(err) : tryAt(index + 1, err);
+              // A non-authoritative origin's 401 can still become the
+              // `bestError` carried to the very end (if every later origin
+              // — authoritative or not — also fails for some other
+              // reason), but that's never a CONFIRMED answer: no
+              // authoritative origin ever actually agreed. Only mark it
+              // `confirmed` at the moment an authoritative origin itself
+              // is the one rejecting — see `attemptFirstPairing`'s use of
+              // this to decide whether a scan failure is safe to treat as
+              // permanently terminal.
+              if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }
+              return tryAt(index + 1, err);
             }
             if (res.status === 403) {
               const err = bestError || pairError("origin");
-              return isAuthoritative(origin) ? Promise.reject(err) : tryAt(index + 1, err);
+              if (isAuthoritative(origin)) { err.confirmed = true; return Promise.reject(err); }
+              return tryAt(index + 1, err);
             }
             if (!res.ok) return tryAt(index + 1, bestError);
             // A 2xx from an unrelated responder (a captive portal, a
