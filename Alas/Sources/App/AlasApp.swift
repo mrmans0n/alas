@@ -6,10 +6,12 @@ struct AlasApp: App {
     @NSApplicationDelegateAdaptor(AlasApplicationDelegate.self) private var appDelegate
     @State private var state: AppState
     @State private var editorCommandAvailability = EditorCommandAvailability.shared
+    @State private var fullScreenMenu = FullScreenMenuState()
 
     private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
     init() {
+        AppKitMenuInjection.registerOptOut()
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())
         } else {
@@ -248,6 +250,11 @@ struct AlasApp: App {
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(!state.hasActiveCodeEditorTab)
+            Divider()
+            Button(SystemMenuItems.emojiAndSymbolsTitle) {
+                SystemMenuItems.showEmojiAndSymbols()
+            }
+            .keyboardShortcut(SystemMenuItems.emojiAndSymbolsShortcut)
         }
         CommandGroup(after: .toolbar) {
             Button("Toggle Sidebar") {
@@ -469,6 +476,11 @@ struct AlasApp: App {
                 NSApp.sendAction(#selector(FontSizeResponder.resetFontSize(_:)), to: nil, from: nil)
             }
             .keyboardShortcut(state.shortcut(for: .resetFontSize))
+            Divider()
+            Button(SystemMenuItems.fullScreenTitle(isFullScreen: fullScreenMenu.isKeyWindowFullScreen)) {
+                SystemMenuItems.toggleFullScreen()
+            }
+            .keyboardShortcut(SystemMenuItems.fullScreenShortcut)
         }
         #if DEBUG
         CommandMenu("Debug") {

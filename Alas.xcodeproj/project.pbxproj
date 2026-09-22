@@ -1379,6 +1379,7 @@
 		B6713CE9BFA38B7F1D089E5A /* CopilotInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */; };
 		B6B861A60445F450FB94A0CF /* ACPComposerFocusPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1494739C8FBECE52DAAAE3 /* ACPComposerFocusPolicy.swift */; };
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
+		B6F2CB1BF88B4EF50FD9E1F7 /* SystemMenuItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 150400FC33D86F2828A33E66 /* SystemMenuItems.swift */; };
 		B7067A1BBEB1B1B5B9867BEA /* DiffPreferenceBindings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8435ABAF423A6F5BC28E4C /* DiffPreferenceBindings.swift */; };
 		B736E17293E8D8F114B9982C /* HighlightSpanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D88FF0751011A91008BFC78 /* HighlightSpanCache.swift */; };
 		B7542C247255B91CEC68004F /* ChatFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2AC43D07BE4012DB52A2D1B /* ChatFontCatalog.swift */; };
@@ -1903,6 +1904,7 @@
 		F71446E57FF4879C9A9B0686 /* RightPaneStatePullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B1ED890A8A45244572D8A3 /* RightPaneStatePullTests.swift */; };
 		F717D6756F3144A55B7AE61E /* ACPToolCallGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED8531E9844F52DF7EAD0A5 /* ACPToolCallGrouping.swift */; };
 		F71CCC2F7C54581558929E78 /* ACPPermissionToolCallContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D66E65143A9A61326FE5BBE1 /* ACPPermissionToolCallContentTests.swift */; };
+		F720F079D9E683D5C039F702 /* SystemMenuItemsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BECD2D2CDE71A9275AE857F3 /* SystemMenuItemsTests.swift */; };
 		F72AFDC819B805B3F1FFFB9A /* CommitReviewLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */; };
 		F73063B2384B650C227BD09E /* ACPHistorySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C5BD0110EB8EDE7BB4ED93 /* ACPHistorySidebar.swift */; };
 		F7C010994E85C805815654A7 /* ACPDictationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE5299FFB65B9D72EF1682B /* ACPDictationState.swift */; };
@@ -2147,6 +2149,7 @@
 		14CEB6C5C076B4147D587909 /* ReviewThreadMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewThreadMutations.swift; sourceTree = "<group>"; };
 		14D1ECA099BBDCB5BB2EEC67 /* DiffReviewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModels.swift; sourceTree = "<group>"; };
 		14F66BCE35B7AABBCF3D7485 /* RunScheduleDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScheduleDraft.swift; sourceTree = "<group>"; };
+		150400FC33D86F2828A33E66 /* SystemMenuItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMenuItems.swift; sourceTree = "<group>"; };
 		1513AFD842F4CF16F8DEEA31 /* ChangesPreparationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesPreparationCard.swift; sourceTree = "<group>"; };
 		1516FF03487DABCD05C51EC3 /* RemotePairingLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingLinkTests.swift; sourceTree = "<group>"; };
 		152EB5D0C23CAEB13283C634 /* GGRestackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGRestackSheet.swift; sourceTree = "<group>"; };
@@ -3426,6 +3429,7 @@
 		BEBCF3820A017BBF33B0AB07 /* ACPProtocolVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPProtocolVersion.swift; sourceTree = "<group>"; };
 		BEBFA80B52FFFE5496164177 /* IndentationHelperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndentationHelperTests.swift; sourceTree = "<group>"; };
 		BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarView.swift; sourceTree = "<group>"; };
+		BECD2D2CDE71A9275AE857F3 /* SystemMenuItemsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMenuItemsTests.swift; sourceTree = "<group>"; };
 		BEE5299FFB65B9D72EF1682B /* ACPDictationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPDictationState.swift; sourceTree = "<group>"; };
 		BEFDCAF3F099FE539D9737E9 /* InstallSplitButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSplitButton.swift; sourceTree = "<group>"; };
 		BF3AC3A1F7C5649E75015293 /* CreatingWorktreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatingWorktreeView.swift; sourceTree = "<group>"; };
@@ -4612,6 +4616,7 @@
 				DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */,
 				CF5143046167375A802ED378 /* SurfaceViewKeyboardTests.swift */,
 				D2935EB661338757C478CD86 /* SurfaceViewShortcutTests.swift */,
+				BECD2D2CDE71A9275AE857F3 /* SystemMenuItemsTests.swift */,
 				07BC4D03723CEB1B6C2F9D15 /* TabActivityIconTintTests.swift */,
 				C7DD2CA21EC45168D6E43564 /* TabActivityPulseTests.swift */,
 				9F650CFAC8E61B1EC99CD04A /* TabActivityPulseTransitionTests.swift */,
@@ -7081,6 +7086,7 @@
 				B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */,
 				69024633944E9FFF6DA76FAE /* RootView.swift */,
 				51B868809675C4110044C92E /* SpacesManager.swift */,
+				150400FC33D86F2828A33E66 /* SystemMenuItems.swift */,
 				E3CA4AD69CDACE0D41821742 /* WorktreeCreationCompletion.swift */,
 				941BC60920D6A87164610273 /* WorktreeLaunchSurface.swift */,
 				DCD333CD0765908F6657E824 /* WorktreePathTemplateRenderer.swift */,
@@ -8319,6 +8325,7 @@
 				523568D4D67F61ACA677EE44 /* SubHeader.swift in Sources */,
 				B9F3258E4AE2DB1E7481690A /* SubprocessRunner.swift in Sources */,
 				4565825A901B119DCD1037ED /* SymbolsFeature.swift in Sources */,
+				B6F2CB1BF88B4EF50FD9E1F7 /* SystemMenuItems.swift in Sources */,
 				D397C3E94E3F00F012CBE5AE /* Tab.swift in Sources */,
 				BE4E46595AF10611CE0B1C6B /* TabActivityPulse.swift in Sources */,
 				B8B0B60C8096F691F8401D31 /* TabBarView.swift in Sources */,
@@ -9235,6 +9242,7 @@
 				3D711A767050DB05E4C77548 /* SurfaceViewKeyboardTests.swift in Sources */,
 				CF81F0AE28C56D1DF5AD871B /* SurfaceViewShortcutTests.swift in Sources */,
 				B092D71B3D727B89EAF5D753 /* SymbolsFeatureTests.swift in Sources */,
+				F720F079D9E683D5C039F702 /* SystemMenuItemsTests.swift in Sources */,
 				6DDB5FC604A28D699350C3BD /* TabActivityIconTintTests.swift in Sources */,
 				6A639AFB741004AA32C9D81A /* TabActivityPulseTests.swift in Sources */,
 				90F619F67402DB675E2614CC /* TabActivityPulseTransitionTests.swift in Sources */,
