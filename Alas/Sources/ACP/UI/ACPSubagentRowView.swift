@@ -152,7 +152,10 @@ struct ACPSubagentRowView: View {
                 // equivalent gate, and the trailing narration is live for
                 // as long as the child is still working.
                 let liveIndex = run.isRunning
-                    ? ACPNarrationLiveness.liveIndex(messages: run.messages, streamingState: .streaming)
+                    ? ACPNarrationLiveness.liveIndex(
+                        messages: run.messages,
+                        isStreaming: true,
+                        lastContentTouchIndex: run.lastContentTouchIndex)
                     : nil
                 ForEach(Array(run.messages.enumerated()), id: \.element.rowViewIdentity) { index, message in
                     ACPSubagentMessageRow(
@@ -183,7 +186,7 @@ private struct ACPSubagentMessageRow: View {
     var body: some View {
         switch message {
         case .agent(_, _, let buffer):
-            ACPSubagentTextRow(buffer: buffer, typography: typography)
+            ACPSubagentTextRow(buffer: buffer, typography: typography, isLive: isLiveNarration)
         case .thought(_, _, let buffer):
             ACPThoughtView(buffer: buffer, isLive: isLiveNarration)
         case .user(_, _, let text, let attachments, _):
@@ -253,12 +256,45 @@ private struct ACPSubagentPromptRow: View {
 /// A child's prose. Rendered without the parent's markdown block cache:
 /// the cache is keyed per parent message and a child row has no entry of
 /// its own, so it renders straight from the buffer.
-private struct ACPSubagentTextRow: View {
+/// Not `private`: measured directly by `ACPNarrationShimmerTests`, same
+/// reasoning as `ACPToolCallGroupHeaderRow`/`ACPToolCallGroupLane`.
+struct ACPSubagentTextRow: View {
     @ObservedObject var buffer: StreamingText
     let typography: ACPChatTypography
+    /// Whether this is the row the child is currently writing into —
+    /// meaningful only for `.commentary` (see below), passed through
+    /// regardless since the buffer's own phase is what decides.
+    var isLive: Bool = false
+    @Environment(\.theme) private var theme
 
     var body: some View {
-        ACPMarkdownText(raw: buffer.value, typography: typography)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        if buffer.phase == .commentary {
+            // Mirrors the parent transcript's `ACPCommentaryRow` — same
+            // "Working…" affordance and shimmer, minus the gutter (fork,
+            // quote, checkpoint) that only makes sense on a parent message.
+            HStack(alignment: .top, spacing: 12) {
+                Rectangle()
+                    .fill(theme.color("bg-4"))
+                    .frame(width: 1.5)
+                    .acpNarrationShimmer(isActive: isLive, axis: .vertical)
+                    .padding(.vertical, 2)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "hammer")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-faint"))
+                        Text("Working…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-faint"))
+                    }
+                    .acpNarrationShimmer(isActive: isLive)
+                    ACPMarkdownText(raw: buffer.value, typography: typography)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } else {
+            ACPMarkdownText(raw: buffer.value, typography: typography)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

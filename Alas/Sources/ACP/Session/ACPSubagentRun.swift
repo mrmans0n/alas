@@ -36,6 +36,13 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// The child's own transcript, in arrival order.
     @Published private(set) var messages: [ACPMessage] = []
 
+    /// Index of the row most recently touched by a LIVE (non-replayed)
+    /// `apply(_:at:)`, excluding `.plan`. Mirrors
+    /// `ACPTranscript.lastContentTouchIndex` — see its doc comment for why
+    /// this is not always the trailing row, and why `ACPNarrationLiveness`
+    /// reads it directly instead of scanning from the tail.
+    private(set) var lastContentTouchIndex: Int?
+
     /// Set the first time a terminal state lands, so the row can show how
     /// long the child ran without re-deriving it from message timestamps.
     private(set) var startedAt: Date
@@ -188,9 +195,23 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
 
     /// Applies one child-scoped `session/update`, returning the indices of
     /// the child transcript rows it touched so the caller can persist
-    /// exactly those.
+    /// exactly those. Also updates `lastContentTouchIndex` — see its doc
+    /// comment for why `.plan` is excluded.
     @discardableResult
     func apply(_ update: ACPSessionUpdate, at timestamp: Date = Date()) -> Set<Int> {
+        let touched = applyLiveUpdate(update, at: timestamp)
+        let contentTouches = touched.filter { i in
+            guard messages.indices.contains(i) else { return false }
+            if case .plan = messages[i] { return false }
+            return true
+        }
+        if let latest = contentTouches.max() {
+            lastContentTouchIndex = latest
+        }
+        return touched
+    }
+
+    private func applyLiveUpdate(_ update: ACPSessionUpdate, at timestamp: Date) -> Set<Int> {
         switch update {
         case .agentMessageChunk(let chunk):
             return appendStreaming(
@@ -420,6 +441,9 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         seqs = storedSeqs ?? Array(0..<Int64(restored.count))
         nextSeq = (seqs.max() ?? -1) + 1
         if let first = timestamps.first { startedAt = min(startedAt, first) }
+        // An index into the OLD array is meaningless once the whole array
+        // is swapped out from under it — see `ACPTranscript.replaceMessages`.
+        lastContentTouchIndex = nil
     }
 
     func createdAt(at index: Int) -> Date {

@@ -221,6 +221,28 @@ struct ACPSubagentSessionTests {
         }
         #expect(a.value == "a1 a2")
         #expect(b.value == "b1")
+        // Same fix as the parent transcript's `lastContentTouchIndex`: the
+        // third chunk resumed row A (index 0), not the trailing row B, so
+        // narration liveness must follow index 0.
+        #expect(run.lastContentTouchIndex == 0)
+    }
+
+    @Test("a tool call moves lastContentTouchIndex off the prior narration row")
+    func toolCallMovesChildContentTouch() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.agentThoughtChunk(.text("thinking")))
+        #expect(run.lastContentTouchIndex == 0)
+        run.apply(.toolCall(.init(toolCallId: "t1", title: "Read", kind: "read", status: "in_progress")))
+        #expect(run.lastContentTouchIndex == 1)
+    }
+
+    @Test("a plan update does not move the child's lastContentTouchIndex")
+    func planUpdateDoesNotMoveChildContentTouch() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.agentThoughtChunk(.text("thinking")))
+        #expect(run.lastContentTouchIndex == 0)
+        run.apply(.plan([.init(content: "Step 1", priority: nil, status: "pending")]))
+        #expect(run.lastContentTouchIndex == 0)
     }
 
     @Test("replay reconciles a historical prompt, not only the newest one")

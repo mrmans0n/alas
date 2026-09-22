@@ -699,7 +699,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         ) -> Bool {
             ACPNarrationLiveness.liveIndex(
                 messages: host.transcript.messages,
-                streamingState: host.transcript.streamingState
+                isStreaming: host.transcript.streamingState == .streaming,
+                lastContentTouchIndex: host.transcript.lastContentTouchIndex
             ) == row.index
         }
 

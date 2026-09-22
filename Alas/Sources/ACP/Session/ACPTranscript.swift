@@ -124,6 +124,26 @@ final class ACPTranscript: ObservableObject {
     /// directly to any completed output.
     var completedOutputBoundaryMessageIds: Set<String> = []
 
+    /// Index of the row most recently touched by real transcript content —
+    /// set at the end of every `ACPSession.apply(_:)` call from whichever
+    /// index it actually mutated, EXCLUDING `.plan` (a plan update is a
+    /// background tick alongside whatever narration or tool run is
+    /// actually in progress, not content of its own, and must not steal or
+    /// release liveness).
+    ///
+    /// This is NOT always the trailing message. `ACPSession.appendStreaming`
+    /// locates a chunk's target row by `messageId` regardless of array
+    /// position, so an identified commentary stream can resume into an
+    /// OLDER row after a later `.agent` row has already been appended
+    /// after it (see `interleavedPhasedChunks`). `ACPNarrationLiveness`
+    /// reads this directly instead of scanning from the tail so that case
+    /// still shimmers the row actually being written to.
+    ///
+    /// Cleared by `ACPSession.markCompletedOutputBoundary()` so a stale
+    /// pointer from a finished turn can never register as live before the
+    /// next turn's first chunk lands and sets it fresh.
+    var lastContentTouchIndex: Int?
+
     // MARK: - Per-message markdown caches
 
     private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
@@ -239,6 +259,10 @@ final class ACPTranscript: ObservableObject {
             messageCreatedAts[stableId] = createdAt
         }
         self.messageIndexOffset = max(0, messageIndexOffset)
+        // An index into the OLD array is meaningless once the whole array
+        // is swapped out from under it (hydration, fork restore, …) — the
+        // next real chunk sets it fresh.
+        lastContentTouchIndex = nil
         messages = newMessages
     }
 

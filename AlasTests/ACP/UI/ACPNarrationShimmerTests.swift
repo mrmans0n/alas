@@ -26,48 +26,72 @@ struct ACPNarrationLivenessTests {
         .plan(id: UUID(), [])
     }
 
-    @Test("a trailing thought is live while the transcript streams")
-    func trailingThoughtIsLive() {
+    @Test("the last-touched row is live while the transcript streams")
+    func lastTouchedThoughtIsLive() {
         let messages = [Self.commentary(), Self.thought()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: .streaming) == 1)
+        #expect(liveIndex(messages, touched: 1, streaming: true) == 1)
     }
 
-    @Test("a trailing commentary row is live while the transcript streams")
-    func trailingCommentaryIsLive() {
+    @Test("a last-touched commentary row is live while the transcript streams")
+    func lastTouchedCommentaryIsLive() {
         let messages = [Self.thought(), Self.commentary()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: .streaming) == 1)
+        #expect(liveIndex(messages, touched: 1, streaming: true) == 1)
     }
 
-    @Test("a plan after the narration does not close it")
-    func planIsSkipped() {
+    /// Regression for a real Codex finding: `ACPSession.appendStreaming`
+    /// locates a chunk's target row by `messageId` regardless of array
+    /// position, so an identified commentary stream can resume into an
+    /// OLDER row after a later `.agent` row has already been appended —
+    /// exactly what `ACPSessionTests.interleavedPhasedChunks` exercises at
+    /// the session layer. A tail scan would report nothing live here; the
+    /// pointer must still find the row actually being written to.
+    @Test("a resumed commentary row stays live even with a later agent row after it")
+    func resumedCommentaryBehindALaterRowIsLive() {
+        let messages = [Self.commentary(), Self.finalAnswer()]
+        #expect(liveIndex(messages, touched: 0, streaming: true) == 0)
+    }
+
+    @Test("a plan touch does not move or close the live row")
+    func planTouchDoesNotMoveLiveness() {
         let messages = [Self.thought(), Self.plan()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: .streaming) == 0)
+        // The plan row itself is never the touched index — `ACPSession.apply`
+        // excludes `.plan` from `lastContentTouchIndex` — so the pointer
+        // stays on the thought that was actually last written to.
+        #expect(liveIndex(messages, touched: 0, streaming: true) == 0)
     }
 
-    @Test("a tool call after the narration closes it")
-    func toolCallClosesNarration() {
+    @Test("a tool call becoming the touched row closes the prior narration")
+    func toolCallTouchClosesNarration() {
         let messages = [Self.thought(), Self.toolCall()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: .streaming) == nil)
+        #expect(liveIndex(messages, touched: 1, streaming: true) == nil)
     }
 
-    @Test("the final answer is never narration")
+    @Test("the final answer is never narration even when it is the touched row")
     func finalAnswerIsNotLive() {
         let messages = [Self.thought(), Self.finalAnswer()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: .streaming) == nil)
+        #expect(liveIndex(messages, touched: 1, streaming: true) == nil)
     }
 
-    @Test(
-        "nothing is live unless the transcript is streaming",
-        arguments: [ACPSession.StreamingState.idle, .sending, .awaitingPermission, .awaitingInput]
-    )
-    func quietOutsideStreaming(state: ACPSession.StreamingState) {
+    @Test("nothing is live unless the transcript is streaming")
+    func quietOutsideStreaming() {
         let messages = [Self.thought()]
-        #expect(ACPNarrationLiveness.liveIndex(messages: messages, streamingState: state) == nil)
+        #expect(liveIndex(messages, touched: 0, streaming: false) == nil)
+    }
+
+    @Test("nothing is live with no touched index, even while streaming")
+    func quietWithNoTouch() {
+        let messages = [Self.thought()]
+        #expect(liveIndex(messages, touched: nil, streaming: true) == nil)
     }
 
     @Test("an empty transcript has no live row")
     func emptyTranscript() {
-        #expect(ACPNarrationLiveness.liveIndex(messages: [], streamingState: .streaming) == nil)
+        #expect(liveIndex([], touched: 0, streaming: true) == nil)
+    }
+
+    private func liveIndex(_ messages: [ACPMessage], touched: Int?, streaming: Bool) -> Int? {
+        ACPNarrationLiveness.liveIndex(
+            messages: messages, isStreaming: streaming, lastContentTouchIndex: touched)
     }
 }
 
@@ -93,6 +117,39 @@ struct ACPNarrationShimmerTests {
         let live = measure(Text("Working…").acpNarrationShimmer(isActive: true), theme: theme)
         let quiet = measure(Text("Working…").acpNarrationShimmer(isActive: false), theme: theme)
         #expect(live == quiet)
+    }
+
+    /// Regression for a real Codex finding: `ACPSubagentMessageRow` used to
+    /// render every `.agent` message through `ACPSubagentTextRow` with no
+    /// distinction for the commentary phase, so a native subagent's
+    /// "Working…" narration never got the header or shimmer the parent
+    /// transcript's `ACPCommentaryRow` shows for the same phase.
+    @Test("a commentary-phase child row gets the same height whether live or not")
+    func childCommentaryHeightIsIndependentOfLiveness() throws {
+        let theme = try ThemeStore().current
+        let buffer = StreamingText("Looking around", phase: .commentary)
+        let live = measure(
+            ACPSubagentTextRow(buffer: buffer, typography: .default, isLive: true), theme: theme)
+        let quiet = measure(
+            ACPSubagentTextRow(buffer: buffer, typography: .default, isLive: false), theme: theme)
+        #expect(live == quiet)
+    }
+
+    /// A commentary-phase child row must be visibly TALLER than a plain
+    /// (final-answer / no-phase) one — otherwise the "Working…" header
+    /// silently isn't being rendered at all, which the height-invariance
+    /// test above can't catch on its own (it only compares live vs. quiet
+    /// of the SAME phase).
+    @Test("a commentary-phase child row renders the Working… header the plain row doesn't")
+    func childCommentaryRowIsTallerThanPlainRow() throws {
+        let theme = try ThemeStore().current
+        let commentary = measure(
+            ACPSubagentTextRow(buffer: StreamingText("Looking around", phase: .commentary), typography: .default),
+            theme: theme)
+        let plain = measure(
+            ACPSubagentTextRow(buffer: StreamingText("Looking around"), typography: .default),
+            theme: theme)
+        #expect(commentary > plain)
     }
 
     /// The lane bar takes its height from the row beside it. A vertical

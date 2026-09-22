@@ -10,35 +10,45 @@ import SwiftUI
 enum ACPNarrationLiveness {
     /// Index of the live narration row, or nil when nothing is being narrated.
     ///
-    /// Only the trailing message can be live: a chunk of thought or
-    /// commentary always lands on the tail (or opens a new tail), and any
-    /// other kind of row after it — a tool call, a file edit, the final
-    /// answer, a fresh user prompt — closes the run, exactly as
-    /// `ACPSession.lastThought()` treats them. `.plan` rows are skipped
-    /// because they never render a row of their own and never close a run.
+    /// Deliberately NOT a tail scan. `lastContentTouchIndex` is the row the
+    /// most recent real content update actually touched — see its doc
+    /// comment on `ACPTranscript` — which is not always the trailing
+    /// message: `ACPSession.appendStreaming` locates a chunk's target row
+    /// by `messageId` regardless of array position, so an identified
+    /// commentary stream can resume into an OLDER row after a later
+    /// `.agent` row has already been appended after it. A tail scan would
+    /// miss that resumed row entirely; reading the pointer directly follows
+    /// whatever row is actually being written to.
     ///
-    /// Gated on `.streaming` rather than any busy state: the broker flips to
-    /// streaming on the first `session/update` of a prompt, so every chunk
-    /// that could make a row live arrives under it, and it is the same state
-    /// the tail caret keys on, so the two cues start and stop together.
+    /// The pointer alone isn't sufficient, though — once something else
+    /// (a tool call, a file edit, a fresh user prompt) appends after a
+    /// narration row with no further chunk landing back on it, the pointer
+    /// itself moves to that new row, and the kind check below naturally
+    /// stops matching. So "the pointer's row is still a thought or
+    /// commentary agent row" is the whole test; no separate closing scan
+    /// is needed.
+    ///
+    /// Gated on `isStreaming` rather than any busy state: the broker flips
+    /// to streaming on the first `session/update` of a prompt, so every
+    /// chunk that could make a row live arrives under it, and it is the
+    /// same state the tail caret keys on, so the two cues start and stop
+    /// together.
     static func liveIndex(
         messages: [ACPMessage],
-        streamingState: ACPSession.StreamingState
+        isStreaming: Bool,
+        lastContentTouchIndex: Int?
     ) -> Int? {
-        guard streamingState == .streaming else { return nil }
-        for i in stride(from: messages.count - 1, through: 0, by: -1) {
-            switch messages[i] {
-            case .plan:
-                continue
-            case .thought:
-                return i
-            case .agent(_, _, let buffer):
-                return buffer.phase == .commentary ? i : nil
-            default:
-                return nil
-            }
+        guard isStreaming, let i = lastContentTouchIndex, messages.indices.contains(i) else {
+            return nil
         }
-        return nil
+        switch messages[i] {
+        case .thought:
+            return i
+        case .agent(_, _, let buffer):
+            return buffer.phase == .commentary ? i : nil
+        default:
+            return nil
+        }
     }
 }
 
