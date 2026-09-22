@@ -350,27 +350,28 @@ struct ChangesPreparationCard: View {
         Button {
             onGGAction(action.kind)
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    if action.isInFlight {
-                        Spinner(lineWidth: 1.5, duration: 0.7)
-                            .frame(width: 10, height: 10)
-                            .accessibilityHidden(true)
-                    } else {
+            HStack(alignment: .center, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                        Text(action.title)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(theme.color("fg"))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 0)
                     }
-                    Text(action.title)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundColor(theme.color("fg"))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
-                    Spacer(minLength: 0)
+                    Text(ggSubtitle(for: action))
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
-                Text(ggSubtitle(for: action))
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                if action.isInFlight {
+                    Spinner(lineWidth: 1.5, duration: 0.7)
+                        .frame(width: 11, height: 11)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 7)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
