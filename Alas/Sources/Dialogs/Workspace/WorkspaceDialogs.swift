@@ -101,11 +101,25 @@ private struct WorkspaceDefinitionEditor: View {
         .interactiveDismissDisabled(isSaving)
         .onExitCommand { if !isSaving { presented = false } }
         .confirmationDialog("Delete workspace?", isPresented: $confirmingDeletion, titleVisibility: .visible) {
-            Button("Delete workspace", role: .destructive, action: deleteWorkspace)
+            if checkoutCount > 0 {
+                Button("Delete Workspace and \(checkoutCount) \(checkoutCount == 1 ? "Checkout" : "Checkouts")", role: .destructive, action: deleteWorkspaceAndCheckouts)
+                Button("Keep Checkouts", role: .destructive, action: deleteWorkspace)
+            } else {
+                Button("Delete workspace", role: .destructive, action: deleteWorkspace)
+            }
             Button("Cancel", role: .cancel) { confirmingDeletion = false }
         } message: {
-            Text("Delete \(workspace?.name ?? "this workspace")? Existing checkouts are retained as Former Workspace checkouts.")
+            if checkoutCount > 0 {
+                Text("Delete \(workspace?.name ?? "this workspace")? It has \(checkoutCount) \(checkoutCount == 1 ? "checkout" : "checkouts"). Keeping them moves them to Former Workspace.")
+            } else {
+                Text("Delete \(workspace?.name ?? "this workspace")?")
+            }
         }
+    }
+
+    private var checkoutCount: Int {
+        guard let workspace else { return 0 }
+        return state.workspacesManager.checkouts.count { $0.workspaceID == workspace.id }
     }
 
     private var hosts: [String] {
@@ -230,6 +244,20 @@ private struct WorkspaceDefinitionEditor: View {
         Task { @MainActor in
             do {
                 try await state.deleteWorkspaceDefinition(id: workspace.id)
+                presented = false
+            } catch {
+                self.error = error.localizedDescription
+            }
+            isSaving = false
+        }
+    }
+
+    private func deleteWorkspaceAndCheckouts() {
+        guard let workspace, !isSaving else { return }
+        isSaving = true
+        Task { @MainActor in
+            do {
+                try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
                 presented = false
             } catch {
                 self.error = error.localizedDescription

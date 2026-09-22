@@ -56,6 +56,66 @@ import Testing
         #expect(model.memberRows.allSatisfy { $0.actions.isEmpty })
     }
 
+    @Test func fullyDeletedCheckoutOnlyOffersForgettingTheRecord() {
+        let deleted = checkout(members: [
+            member(name: "App", availability: .explicitlyDeleted, checkpoint: .planPersisted),
+            member(name: "API", availability: .explicitlyDeleted, checkpoint: .planPersisted),
+        ])
+        let model = WorkspaceCheckoutDetailModel(checkout: deleted)
+
+        #expect(deleted.health == .deleted)
+        #expect(model.status == .deleted("Worktrees deleted"))
+        #expect(model.primaryActions.map(\.kind) == [.forgetCheckout])
+    }
+
+    @Test func memberWhoseDeletionFailedNeedsAttentionWithTheRecordedReason() {
+        var failed = member(name: "App", availability: .available, checkpoint: .setupComplete, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        var checkout = checkout(members: [failed])
+        checkout.diagnostics = [
+            .init(severity: .error, message: "Could not delete App.", memberID: failed.id, detail: "worktree is locked"),
+        ]
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(checkout.health == .needsAttention)
+        #expect(model.status == .needsAttention("Needs Attention"))
+        #expect(model.memberRows[0].status == .needsAttention)
+        #expect(model.memberRows[0].detail == "Could not delete App. worktree is locked")
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
+    @Test func missingMemberWhoseDeletionFailedOffersTheDeletionRetryNotFindExisting() {
+        // A missing-but-owned member's own deletion attempt can itself fail
+        // (e.g. clearing a stale Git registration) without ever changing
+        // availability away from `.missing`. The detail text already says
+        // to delete again; the action must match, not Find Existing /
+        // Resume Creation.
+        var failed = member(name: "App", availability: .missing, checkpoint: .setupComplete, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        let checkout = checkout(members: [failed])
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
+    @Test func deletionFailureTakesPrecedenceOverAnEarlierSetupFailure() {
+        // A member whose setup already failed (checkpoint == .failed) and
+        // whose subsequent deletion attempt also failed must show the more
+        // recent deletion failure and its working retry, not the stale
+        // setup-failure message with a "Retry Setup" that doesn't address
+        // what's actually blocking it now.
+        var failed = member(name: "App", availability: .available, checkpoint: .failed, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        var checkout = checkout(members: [failed])
+        checkout.diagnostics = [
+            .init(severity: .error, message: "Could not delete App.", memberID: failed.id, detail: "worktree is locked"),
+        ]
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(model.memberRows[0].detail == "Could not delete App. worktree is locked")
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
     @Test func reportsLiveProgressAndStopBoundary() {
         let creating = checkout(operation: .creating, members: [
             member(name: "One", availability: .available, checkpoint: .setupComplete),
@@ -205,6 +265,11 @@ import Testing
             )
         )
         if let diagnostic {
+            // Only attaches a cleanup record for the caller to further shape
+            // (e.g. setting `.cleanup?.checkpoint = .failed` to model a
+            // deletion failure); it must not default to `.failed` itself, or
+            // every setup-failure fixture using this parameter would also
+            // read as a deletion failure via `member.deletionFailed`.
             member.cleanup = WorkspaceCheckoutMemberCleanup(
                 plan: WorkspaceCheckoutCleanupPlan(
                     checkoutID: UUID(),
@@ -220,8 +285,7 @@ import Testing
                     branch: "release/1091",
                     expectedLineageID: "lineage-\(name)",
                     branchOwnership: .created
-                ),
-                checkpoint: .failed
+                )
             )
             _ = diagnostic
         }

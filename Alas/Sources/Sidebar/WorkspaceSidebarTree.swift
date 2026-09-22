@@ -19,6 +19,8 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var hoveringWorkspaceID: UUID?
     @State private var plusHoveringWorkspaceID: UUID?
     @State private var hoveringCheckoutID: UUID?
+    @State private var checkoutRowDeletionConfirmation: PendingDeletionConfirmation?
+    @State private var formerWorkspaceDeletionConfirmation: Bool = false
 
     var body: some View {
         let space = state.spacesManager.space(id: spaceID ?? state.spacesManager.activeSpaceId)
@@ -52,6 +54,12 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                             .foregroundColor(theme.color("fg-muted"))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 5)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button("Delete all former checkouts...", role: .destructive) {
+                                    formerWorkspaceDeletionConfirmation = true
+                                }
+                            }
                     case .checkout(let id):
                         if let checkout = checkouts[id], checkout.workspaceID.map({ !collapsedWorkspaces.contains($0) }) ?? true {
                             checkoutRows(checkout, projects: projects)
@@ -77,20 +85,144 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Delete Workspace", role: .destructive) {
-                if let pending = workspaceDeletionConfirmation {
+            if let pending = workspaceDeletionConfirmation, pending.checkoutCount > 0 {
+                Button("Delete Workspace and \(pending.checkoutCount) \(pending.checkoutCount == 1 ? "Checkout" : "Checkouts")", role: .destructive) {
+                    deleteWorkspaceAndCheckouts(id: pending.id)
+                }
+                Button("Keep Checkouts", role: .destructive) {
                     deleteWorkspace(id: pending.id)
+                }
+            } else {
+                Button("Delete Workspace", role: .destructive) {
+                    if let pending = workspaceDeletionConfirmation {
+                        deleteWorkspace(id: pending.id)
+                    }
                 }
             }
             Button("Cancel", role: .cancel) { workspaceDeletionConfirmation = nil }
         } message: {
             let name = workspaceDeletionConfirmation?.name ?? "this Workspace"
-            Text("Delete \(name)? Existing checkouts are retained as Former Workspace checkouts.")
+            if let pending = workspaceDeletionConfirmation, pending.checkoutCount > 0 {
+                Text("Delete \(name)? It has \(pending.checkoutCount) \(pending.checkoutCount == 1 ? "checkout" : "checkouts"). Keeping them moves them to Former Workspace.")
+            } else {
+                Text("Delete \(name)?")
+            }
+        }
+        .sheet(item: $checkoutRowDeletionConfirmation) { pending in
+            WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
+                confirmCheckoutRowDeletion(action, checkoutID: pending.checkoutID)
+            }
+            .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
+        }
+        .confirmationDialog(
+            "Delete All Former Checkouts?",
+            isPresented: $formerWorkspaceDeletionConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All", role: .destructive) { deleteAllFormerCheckouts() }
+            Button("Cancel", role: .cancel) { formerWorkspaceDeletionConfirmation = false }
+        } message: {
+            Text("Deletes every checkout under Former Workspace and removes their worktrees. Checkouts that cannot be fully removed stay visible.")
         }
         .onChange(of: state.workspaceNavigationState.selectedCheckoutID, initial: true) { _, id in
             guard let id, let checkout = state.workspacesManager.checkout(id: id) else { return }
             expandedCheckouts.insert(id)
             if let workspaceID = checkout.workspaceID { collapsedWorkspaces.remove(workspaceID) }
+        }
+    }
+
+    private func performCheckoutRowAction(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID) {
+        Task { @MainActor in
+            do {
+                switch action {
+                case .archive:
+                    _ = try await state.archiveWorkspaceCheckout(id: checkoutID)
+                case .unarchive:
+                    _ = try await state.unarchiveWorkspaceCheckout(id: checkoutID)
+                case .deleteCheckout:
+                    let confirmation = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                    if confirmation.requiresConfirmation {
+                        checkoutRowDeletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+                    } else {
+                        let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+                        handleCheckoutRowOutcome(outcome, checkoutID: checkoutID)
+                    }
+                case .forgetCheckout:
+                    let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
+                    if confirmation.requiresConfirmation {
+                        checkoutRowDeletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+                    } else {
+                        try await state.forgetWorkspaceCheckout(id: checkoutID)
+                    }
+                default:
+                    break
+                }
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
+
+    private func handleCheckoutRowOutcome(_ outcome: WorkspaceCheckoutDeletionOutcome, checkoutID: UUID) {
+        switch outcome {
+        case .forgotten:
+            break
+        case .artifactsNeedConfirmation:
+            do {
+                let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
+                checkoutRowDeletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        case .retained(_, let failures):
+            guard let first = failures.first else { return }
+            let suffix = failures.count > 1 ? " (\(failures.count - 1) more)" : ""
+            lifecycleError = "Could not delete \(first.memberName): \(first.message)\(suffix)"
+        }
+    }
+
+    private func confirmCheckoutRowDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID) {
+        // A `.deleteCheckout` confirmation can resolve into `.artifactsNeedConfirmation`,
+        // which installs a fresh preserve-artifacts sheet via `handleCheckoutRowOutcome`.
+        // Capture the sheet's identity before that runs, so an unconditional clear below
+        // never wipes out a sheet installed during this very call.
+        let confirmationID = checkoutRowDeletionConfirmation?.id
+        Task { @MainActor in
+            do {
+                switch action {
+                case .deleteCheckout(let confirmingRisks):
+                    let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID, confirmingRisks: confirmingRisks)
+                    handleCheckoutRowOutcome(outcome, checkoutID: checkoutID)
+                case .deleteMember:
+                    break
+                case .forgetCheckout(let confirmedPreserveArtifacts):
+                    try await state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+                }
+                if checkoutRowDeletionConfirmation?.id == confirmationID { checkoutRowDeletionConfirmation = nil }
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteAllFormerCheckouts() {
+        formerWorkspaceDeletionConfirmation = false
+        let formerCheckoutIDs = state.workspacesManager.checkouts
+            .filter { $0.workspaceID == nil }
+            .map(\.id)
+        Task { @MainActor in
+            var remainingFailures = 0
+            for checkoutID in formerCheckoutIDs {
+                do {
+                    let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+                    if outcome != .forgotten { remainingFailures += 1 }
+                } catch {
+                    remainingFailures += 1
+                }
+            }
+            if remainingFailures > 0 {
+                lifecycleError = "\(remainingFailures) former \(remainingFailures == 1 ? "checkout needs" : "checkouts need") attention and could not be deleted."
+            }
         }
     }
 
@@ -188,7 +320,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             Button("Edit workspace...", systemImage: "pencil") { editingWorkspace = workspace }
             Divider()
             Button("Delete workspace...", role: .destructive) {
-                workspaceDeletionConfirmation = .init(id: workspace.id, name: workspace.name)
+                workspaceDeletionConfirmation = .init(id: workspace.id, name: workspace.name, checkoutCount: checkoutCount)
             }
         }
     }
@@ -260,6 +392,17 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             .onHover { hoveringCheckoutID = $0 ? checkout.id : nil }
             .contextMenu {
                 Button("Checkout details...", systemImage: "info.circle") { inspectedCheckout = checkout }
+                Divider()
+                if checkout.archivedAt != nil {
+                    Button("Unarchive") { performCheckoutRowAction(.unarchive, checkoutID: checkout.id) }
+                } else {
+                    Button("Archive") { performCheckoutRowAction(.archive, checkoutID: checkout.id) }
+                }
+                if checkout.health == .deleted {
+                    Button("Forget Record", role: .destructive) { performCheckoutRowAction(.forgetCheckout, checkoutID: checkout.id) }
+                } else {
+                    Button("Delete Checkout...", role: .destructive) { performCheckoutRowAction(.deleteCheckout, checkoutID: checkout.id) }
+                }
             }
             .help(checkout.branch)
             if expanded {
@@ -304,6 +447,17 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         Task { @MainActor in
             do {
                 try await state.deleteWorkspaceDefinition(id: id)
+                workspaceDeletionConfirmation = nil
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteWorkspaceAndCheckouts(id: UUID) {
+        Task { @MainActor in
+            do {
+                try await state.deleteWorkspaceDefinitionAndCheckouts(id: id)
                 workspaceDeletionConfirmation = nil
             } catch {
                 lifecycleError = error.localizedDescription
@@ -365,7 +519,9 @@ struct WorkspaceCheckoutInspector: View {
                     if confirmation.requiresConfirmation {
                         deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
                     } else {
-                        _ = try await state.deleteWorkspaceCheckout(id: checkoutID)
+                        let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+                        guard isCurrentInspector(checkoutID, generation: generation) else { return }
+                        handle(outcome, checkoutID: checkoutID)
                     }
                 case .forgetCheckout:
                     let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
@@ -421,6 +577,26 @@ struct WorkspaceCheckoutInspector: View {
         checkout.id == checkoutID && inspectorGeneration == generation
     }
 
+    /// "Delete Checkout" is really "delete and forget"; this is where the
+    /// three possible outcomes turn into what the user sees.
+    private func handle(_ outcome: WorkspaceCheckoutDeletionOutcome, checkoutID: UUID) {
+        switch outcome {
+        case .forgotten:
+            dismiss()
+        case .artifactsNeedConfirmation:
+            do {
+                let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
+                deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        case .retained(_, let failures):
+            guard let first = failures.first else { return }
+            let suffix = failures.count > 1 ? " (\(failures.count - 1) more)" : ""
+            lifecycleError = "Could not delete \(first.memberName): \(first.message)\(suffix)"
+        }
+    }
+
     static func detailModel(for checkout: WorkspaceCheckout, rollupBuilder: MemberReviewRollupBuilder = .init()) -> WorkspaceCheckoutDetailModel {
         WorkspaceCheckoutDetailModel(
             checkout: checkout,
@@ -436,7 +612,9 @@ struct WorkspaceCheckoutInspector: View {
             do {
                 switch action {
                 case .deleteCheckout(let confirmingRisks):
-                    _ = try await state.deleteWorkspaceCheckout(id: checkoutID, confirmingRisks: confirmingRisks)
+                    let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID, confirmingRisks: confirmingRisks)
+                    guard isCurrentInspector(checkoutID, generation: generation) else { return }
+                    handle(outcome, checkoutID: checkoutID)
                 case .deleteMember(let confirmingRisks):
                     if let memberID {
                         _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
@@ -524,6 +702,7 @@ private struct WorkspaceLifecycleErrorAlert: ViewModifier {
 private struct PendingWorkspaceDefinitionDeletion {
     var id: UUID
     var name: String
+    var checkoutCount: Int = 0
 }
 
 private struct PendingDeletionConfirmation: Identifiable {

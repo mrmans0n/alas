@@ -89,8 +89,14 @@ struct WorktreeRowView: View {
         "fg-faint"
     }
 
-    static func showsRemovalActions(isMain: Bool) -> Bool {
-        !isMain
+    /// A worktree an active Workspace checkout owns must be deleted from the
+    /// checkout, not this row — the checkout freezes destination/lineage and
+    /// removing the worktree out from under it leaves a "missing" member with
+    /// no signal pointing back at the checkout that actually needs attention.
+    /// An archived or Former Workspace checkout no longer manages the
+    /// worktree's lifecycle, so this row's own actions apply again.
+    static func showsRemovalActions(isMain: Bool, workspaceOwned: Bool = false) -> Bool {
+        !isMain && !workspaceOwned
     }
 
     nonisolated static func visibleHarnessSessionCount(for sessionCount: Int) -> Int {
@@ -586,7 +592,7 @@ struct WorktreeRowView: View {
             Divider()
             availableWorktreeContextMenuContent
         } else if case .deleteFailed = operationState {
-            if Self.showsRemovalActions(isMain: isMain) {
+            if Self.showsRemovalActions(isMain: isMain, workspaceOwned: workspaceCheckout?.isActive == true) {
                 Button("Retry Delete", action: onRetryDelete)
                 Button("Archive", action: onArchive)
             }
@@ -629,12 +635,14 @@ struct WorktreeRowView: View {
             }
             Divider()
         }
-        if Self.showsRemovalActions(isMain: isMain) {
+        if Self.showsRemovalActions(isMain: isMain, workspaceOwned: workspaceCheckout?.isActive == true) {
             Button("Archive", action: onArchive)
             Button("Delete Worktree…", role: .destructive, action: onDelete)
             if showKeepBranchOption {
                 Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
             }
+        } else if workspaceCheckout?.isActive == true {
+            Text("Managed by Workspace checkout \(workspaceCheckout!.name)")
         }
     }
 

@@ -123,6 +123,26 @@ struct WorkspaceCheckoutSetupOperation: Sendable {
     var script: String
 }
 
+/// One member that a whole-checkout deletion could not remove. The message
+/// is user-facing and mirrors the diagnostic persisted on the checkout.
+struct WorkspaceMemberDeletionFailure: Equatable, Sendable {
+    var memberID: UUID
+    var memberName: String
+    var message: String
+}
+
+/// What became of a checkout after "delete everything and forget it".
+enum WorkspaceCheckoutDeletionOutcome: Equatable, Sendable {
+    /// Every member was removed and the record is gone.
+    case forgotten
+    /// Every member was removed, but leftovers or a retained branch need the
+    /// preserve-artifacts acknowledgement before the record can be dropped.
+    case artifactsNeedConfirmation(WorkspaceCheckout)
+    /// The record stays: either a member could not be removed (listed in
+    /// `failures`) or a stop request paused the deletion.
+    case retained(WorkspaceCheckout, failures: [WorkspaceMemberDeletionFailure])
+}
+
 struct WorkspaceMemberDeletionPreview: Equatable, Sendable {
     var member: WorkspaceCheckoutMember
     var plan: WorkspaceCheckoutCleanupPlan
@@ -403,6 +423,11 @@ actor WorkspaceCheckoutCoordinator {
                 current.members[index].cleanupOwnership = .init()
                 current.members[index].recreationSourceCheckpoint = nil
                 current.members[index].recreationWorktreeCreationBegan = false
+                // Every successful deletion clears its own stale failure
+                // diagnostic here, whether reached through the whole-checkout
+                // loop or a direct per-member retry from the details view —
+                // a resolved error must not keep showing as unresolved.
+                current.diagnostics.removeAll { $0.isDeletionFailure(for: memberID) }
                 if !checkoutOperationAlreadyClaimed {
                     current.operation = .idle
                     current.stopAfterCurrentOperations = false
@@ -540,8 +565,38 @@ actor WorkspaceCheckoutCoordinator {
     }
 
     /// Runs member cleanup in snapshot order. A request to stop is honored at
-    /// the next member boundary; failed members remain independently visible.
+    /// the next member boundary; failed members remain independently visible,
+    /// each with a persisted diagnostic explaining why it stayed.
     func deleteCheckout(checkoutID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        try await runCheckoutDeletion(checkoutID: checkoutID, confirmingRisks: confirmingRisks).checkout
+    }
+
+    /// The "delete" the user actually means: remove every member worktree and
+    /// drop the record in one step. The record survives only when a member
+    /// could not be removed or when leftovers need an explicit acknowledgement.
+    func deleteCheckoutAndForget(
+        checkoutID: UUID,
+        confirmingRisks: Bool = false,
+        confirmedPreserveArtifacts: Bool = false
+    ) async throws -> WorkspaceCheckoutDeletionOutcome {
+        let result = try await runCheckoutDeletion(checkoutID: checkoutID, confirmingRisks: confirmingRisks)
+        guard result.failures.isEmpty,
+              result.checkout.members.allSatisfy({ $0.availability == .explicitlyDeleted })
+        else {
+            return .retained(result.checkout, failures: result.failures)
+        }
+        do {
+            try await forget(checkoutID: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+        } catch WorkspaceCheckoutCoordinatorError.cleanupIncomplete {
+            return .artifactsNeedConfirmation(result.checkout)
+        }
+        return .forgotten
+    }
+
+    private func runCheckoutDeletion(
+        checkoutID: UUID,
+        confirmingRisks: Bool
+    ) async throws -> (checkout: WorkspaceCheckout, failures: [WorkspaceMemberDeletionFailure]) {
         guard !activeCheckoutDeletions.contains(checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
@@ -562,6 +617,7 @@ actor WorkspaceCheckoutCoordinator {
             state.checkouts[index].operation = .deleting
         }
         let initial = try await checkout(id: checkoutID)
+        var failures: [WorkspaceMemberDeletionFailure] = []
         for member in initial.members where member.availability != .explicitlyDeleted {
             let current = try await checkout(id: checkoutID)
             if current.stopAfterCurrentOperations { break }
@@ -577,9 +633,28 @@ actor WorkspaceCheckoutCoordinator {
                         checkoutOperationAlreadyClaimed: true
                     )
                 }
+                try? await mutateCheckout(checkoutID) { current in
+                    current.diagnostics.removeAll { $0.isDeletionFailure(for: member.id) }
+                }
             } catch {
                 // One member's risk, failure, or conflict must not erase the
-                // independent cleanup opportunity for later members.
+                // independent cleanup opportunity for later members, but it
+                // must never be silent either.
+                let failure = WorkspaceMemberDeletionFailure(
+                    memberID: member.id,
+                    memberName: member.fallbackProjectName,
+                    message: Self.deletionFailureMessage(for: error)
+                )
+                failures.append(failure)
+                try? await mutateCheckout(checkoutID) { current in
+                    current.diagnostics.removeAll { $0.isDeletionFailure(for: member.id) }
+                    current.diagnostics.append(.init(
+                        severity: .error,
+                        message: WorkspaceDiagnostic.deletionFailureMessage(memberName: member.fallbackProjectName),
+                        memberID: member.id,
+                        detail: failure.message
+                    ))
+                }
                 continue
             }
         }
@@ -588,7 +663,14 @@ actor WorkspaceCheckoutCoordinator {
             current.operation = .idle
             current.stopAfterCurrentOperations = false
         }
-        return try await checkout(id: checkoutID)
+        return (try await checkout(id: checkoutID), failures)
+    }
+
+    private static func deletionFailureMessage(for error: any Error) -> String {
+        if let described = (error as? LocalizedError)?.errorDescription, !described.isEmpty {
+            return described
+        }
+        return String(describing: error)
     }
 
     private func canDiscardSnapshotOnlyMember(_ member: WorkspaceCheckoutMember) -> Bool {
@@ -1774,6 +1856,39 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case completedWorktreeReturned
 }
 
+extension WorkspaceCheckoutCoordinatorError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .workspaceStateUnavailable:
+            "Workspace storage is unavailable."
+        case .checkoutAlreadyExists:
+            "A checkout with this identity already exists."
+        case .checkoutMissing:
+            "The Workspace checkout no longer exists."
+        case .planDoesNotMatchWorkspaceMember(let id):
+            "The frozen plan does not match Workspace member \(id.uuidString)."
+        case .workspaceIDMismatch:
+            "The checkout belongs to a different Workspace."
+        case .incompletePlan:
+            "The checkout plan is incomplete."
+        case .operationInProgress:
+            "Another operation is already running on this checkout."
+        case .cleanupUnavailable:
+            "This member has no verified worktree to remove."
+        case .cleanupIdentityConflict:
+            "The worktree on disk is not the one this checkout created."
+        case .cleanupIncomplete:
+            "Cleanup left artifacts behind that need to be acknowledged."
+        case .cleanupConfirmationRequired:
+            "The worktree has changes that need to be confirmed before it can be removed."
+        case .lockedStaleRegistration:
+            "The stale worktree registration is locked."
+        case .completedWorktreeReturned:
+            "The worktree reappeared while cleanup was running."
+        }
+    }
+}
+
 extension String {
     func inheritsGlobalSetupPrefix(_ global: String) -> Bool {
         let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1957,6 +2072,23 @@ struct WorkspaceSetupScriptRunner: WorkspaceScriptRunning {
 /// check to the read-only observer and never asks `remove` to delete a branch.
 struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     private let remote: WorkspaceRemoteTransport
+    /// Finder drops these into any folder it browses. They are never the
+    /// user's work, so they neither count as leftovers nor keep an otherwise
+    /// empty checkout root alive.
+    static let ignoredRootEntries: Set<String> = [".DS_Store"]
+
+    /// True only for a plain file matching an ignored name. Matching by name
+    /// alone would let a directory that happens to be named `.DS_Store` (rare,
+    /// but not impossible — a copied folder, a deliberate rename) disappear
+    /// unconfirmed, recursively, along with everything inside it.
+    private static func isDisposableFinderMetadataEntry(_ name: String, in directory: URL) -> Bool {
+        guard ignoredRootEntries.contains(name) else { return false }
+        // Not just "not a directory": a FIFO, socket, or device node named
+        // `.DS_Store` isn't Finder metadata either. Only a genuine regular
+        // file qualifies, matching the remote path's `-f` check.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(name).path)
+        return attributes?[.type] as? FileAttributeType == .typeRegular
+    }
     private static let staleRegistrationTombstoneMarker = "alas-stale-registration-tombstone"
     private static let staleRegistrationOriginalNameMarker = "alas-stale-registration-original-name"
 
@@ -1987,7 +2119,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             })
             managedNames.insert(WorkspaceCheckoutManifest.fileName)
             let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
-                .filter { !managedNames.contains($0) }
+                .filter { !managedNames.contains($0) && !Self.isDisposableFinderMetadataEntry($0, in: root) }
                 .sorted() ?? []
             return .init(isContained: true, leftovers: leftovers)
         case .ssh(let host):
@@ -2739,7 +2871,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 }
                 try FileManager.default.removeItem(at: manifestURL)
             }
-            if ((try? FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)) ?? []).isEmpty {
+            let remaining = (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) ?? []
+            if remaining.allSatisfy({ Self.isDisposableFinderMetadataEntry($0, in: rootURL) }) {
+                for entry in remaining {
+                    try? FileManager.default.removeItem(at: rootURL.appendingPathComponent(entry))
+                }
                 try? FileManager.default.removeItem(at: rootURL)
             }
         case .ssh(let host):
@@ -2747,13 +2883,36 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let manifest = SSHCommand.shellQuote(URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path)
             let expectedCheckoutID = SSHCommand.shellQuote("\"checkoutID\":\"\(checkout.id.uuidString)\"")
             let expectedRootPath = SSHCommand.shellQuote(WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: checkout.rootPath))
+            let ignoredEntries = Self.ignoredRootEntries.sorted().map {
+                SSHCommand.shellQuote(URL(fileURLWithPath: checkout.rootPath).appendingPathComponent($0).path)
+            }
+            // Finder metadata is only removed when it is the last thing left,
+            // so a root that still holds user files keeps everything intact.
             let command = """
             if [ -e \(manifest) ]; then
               grep -F \(expectedCheckoutID) \(manifest) >/dev/null 2>&1 || exit 73
               grep -F \(expectedRootPath) \(manifest) >/dev/null 2>&1 || exit 73
               rm -f \(manifest) || exit 74
             fi
-            rmdir \(root) 2>/dev/null || true
+            if [ -d \(root) ]; then
+              leftovers=0
+              for p in \(root)/* \(root)/.[!.]* \(root)/..?*; do
+                [ -e "$p" ] || [ -L "$p" ] || continue
+                case "${p##*/}" in
+                  \(Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: "|")))
+                    # `test -f` follows symlinks, so a symlink to a regular
+                    # file elsewhere would otherwise pass — excluding it
+                    # separately keeps only a genuine regular file disposable.
+                    [ -f "$p" ] && [ ! -L "$p" ] || leftovers=1
+                    ;;
+                  *) leftovers=1 ;;
+                esac
+              done
+              if [ "$leftovers" = 0 ]; then
+                rm -f \(ignoredEntries.joined(separator: " "))
+                rmdir \(root) 2>/dev/null || true
+              fi
+            fi
             """
             let result = try await remote.run(host: host, command: command)
             guard result.exitCode == 0 else {
@@ -2802,6 +2961,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         var managedNames = Set(plan.managedMemberPaths.map { URL(fileURLWithPath: $0).lastPathComponent })
         managedNames.insert(WorkspaceCheckoutManifest.fileName)
         let managedList = managedNames.isEmpty ? "''" : managedNames.map(SSHCommand.shellQuote).joined(separator: " ")
+        let ignoredList = Self.ignoredRootEntries.isEmpty ? "''" : Self.ignoredRootEntries.sorted().map(SSHCommand.shellQuote).joined(separator: " ")
+        // A managed member or the manifest is always skipped by name; Finder
+        // metadata is only skipped when it is actually a plain file — a
+        // directory that happens to share that name must still surface as a
+        // leftover.
         let command = """
         r=$(cd \(SSHCommand.shellQuote(plan.rootPath)) 2>/dev/null && pwd -P) || exit 2
         for p in "$r"/* "$r"/.[!.]* "$r"/..?*; do
@@ -2809,6 +2973,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
           n=${p##*/}
           skip=0
           for managed in \(managedList); do [ "$n" = "$managed" ] && skip=1; done
+          if [ "$skip" = 0 ]; then
+            for ignored in \(ignoredList); do
+              [ "$n" = "$ignored" ] && [ -f "$p" ] && [ ! -L "$p" ] && skip=1
+            done
+          fi
           [ "$skip" = 1 ] || printf '%s\\n' "$n"
         done
         """

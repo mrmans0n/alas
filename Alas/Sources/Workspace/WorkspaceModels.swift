@@ -194,6 +194,8 @@ enum WorkspaceCheckoutHealth: String, Codable, Equatable, Sendable {
     case ready
     case incomplete
     case needsAttention
+    /// Every member worktree was explicitly deleted; only the record remains.
+    case deleted
 }
 
 enum WorkspaceCheckoutCheckpoint: String, Codable, Equatable, Sendable {
@@ -382,6 +384,16 @@ struct WorkspaceDiagnostic: Codable, Equatable, Identifiable, Sendable {
         severity == .error && (memberID == nil || memberID == member.id)
             && (message == "Workspace creation failed for \(member.fallbackProjectName)."
                 || message == "Workspace setup failed for \(member.fallbackProjectName).")
+    }
+
+    static func deletionFailureMessage(memberName: String) -> String {
+        "Could not delete \(memberName)."
+    }
+
+    /// A whole-checkout deletion could not remove this member. Replaced on
+    /// every retry so the checkout never accumulates stale reasons.
+    func isDeletionFailure(for memberID: UUID) -> Bool {
+        severity == .error && self.memberID == memberID && message.hasPrefix("Could not delete ")
     }
 }
 
@@ -612,12 +624,22 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
     }
 
     var health: WorkspaceCheckoutHealth {
-        if members.contains(where: { $0.availability == .identityConflict || $0.checkpoint == .failed }) {
+        if members.contains(where: { $0.availability == .identityConflict || $0.checkpoint == .failed || $0.deletionFailed }) {
             return .needsAttention
+        }
+        if !members.isEmpty, members.allSatisfy({ $0.availability == .explicitlyDeleted }) {
+            return .deleted
         }
         if members.contains(where: { $0.availability != .available }) {
             return .incomplete
         }
         return .ready
+    }
+}
+
+extension WorkspaceCheckoutMember {
+    /// The last attempt to remove this worktree failed and it is still here.
+    var deletionFailed: Bool {
+        availability != .explicitlyDeleted && cleanup?.checkpoint == .failed
     }
 }

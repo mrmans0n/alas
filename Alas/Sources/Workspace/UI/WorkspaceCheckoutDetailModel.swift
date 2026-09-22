@@ -12,6 +12,7 @@ enum WorkspaceCheckoutDetailStatus: Equatable, Sendable {
     case needsAttention(String)
     case archived(String)
     case formerWorkspace(String)
+    case deleted(String)
 }
 
 enum WorkspaceCheckoutHeaderBadge: Equatable, Sendable {
@@ -100,6 +101,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return .partial("Partially available")
         case .needsAttention:
             return .needsAttention("Needs Attention")
+        case .deleted:
+            return .deleted("Worktrees deleted")
         }
     }
 
@@ -142,6 +145,11 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 ? [.init(.resumeCreation, title: "Resume Creation")]
                 : [.init(.resumeCreation, title: "Resume Creation"), .init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
         case .idle:
+            if checkout.health == .deleted {
+                // Every worktree is gone; the only thing left to do with the
+                // record is drop it. Members keep their own recreate action.
+                return [.init(.forgetCheckout, title: "Forget Record", isDestructive: true)]
+            }
             var actions: [WorkspaceCheckoutAction] = [.init(.archive, title: "Archive")]
             if checkout.members.contains(where: { $0.availability == .missing || $0.checkpoint == .failed || ($0.availability == .pending && $0.checkpoint != .setupComplete) }) {
                 actions.append(.init(.resumeCreation, title: "Resume Creation"))
@@ -207,6 +215,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
 
     private func status(for member: WorkspaceCheckoutMember) -> WorkspaceCheckoutMemberPresentationStatus {
         switch member.availability {
+        case .available where member.deletionFailed:
+            return .needsAttention
         case .available where member.checkpoint == .setupComplete:
             return .ready
         case .available where member.checkpoint == .failed:
@@ -227,6 +237,19 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
     }
 
     private func detail(for member: WorkspaceCheckoutMember) -> String {
+        // A deletion failure is always the more recent, more actionable
+        // concern: it means the user already asked to remove this member and
+        // that attempt failed. That holds even when an earlier setup attempt
+        // also failed — the stale setup-failure message and "Retry Setup"
+        // would otherwise hide both the real reason and the working retry.
+        if member.deletionFailed {
+            if let diagnostic = checkout.diagnostics.last(where: { $0.isDeletionFailure(for: member.id) }) {
+                return [diagnostic.message, diagnostic.detail ?? ""]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+            return "The worktree could not be removed. Delete it again to retry."
+        }
         switch member.availability {
         case .missing: return "Worktree not found at \(member.worktreePath)"
         case .unavailable: return "Could not access \(member.worktreePath)"
@@ -262,8 +285,18 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return [.init(.findExisting, title: "Find Existing"), .init(.deleteMember, title: "Delete Snapshot", isDestructive: true)]
         case .explicitlyDeleted:
             return [.init(.recreateMember, title: "Recreate from Frozen Plan")]
+        case .missing, .unavailable where member.deletionFailed:
+            // A missing-but-owned member's own deletion attempt can itself
+            // fail (e.g. clearing a stale Git registration) without ever
+            // changing availability away from `.missing`. The detail text
+            // already says to delete again; the action must offer that
+            // instead of Find Existing / Resume Creation, neither of which
+            // retries the thing that actually failed.
+            return [.init(.deleteMember, title: "Delete Worktree", isDestructive: true)]
         case .missing, .unavailable:
             return [.init(.findExisting, title: "Find Existing"), .init(.resumeCreation, title: "Resume Creation")]
+        case .available where member.deletionFailed:
+            return [.init(.deleteMember, title: "Delete Worktree", isDestructive: true)]
         case .available where member.checkpoint == .failed:
             return [.init(.retrySetup, title: "Retry Setup")]
         case .available:
@@ -302,22 +335,38 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
         )
     }
 
-    static func checkoutDeletion(risks: [String]) -> WorkspaceLifecycleConfirmationModel {
+    /// `requiresForce` separates "Git will force-remove content" from softer
+    /// risks such as sessions that will close; only the former should make
+    /// the coordinator pass a force flag to Git.
+    static func checkoutDeletion(risks: [String], requiresForce: Bool? = nil) -> WorkspaceLifecycleConfirmationModel {
         WorkspaceLifecycleConfirmationModel(
             title: "Delete Workspace Checkout?",
             risks: risks,
-            confirmAction: .deleteCheckout(confirmingRisks: !risks.isEmpty),
+            confirmAction: .deleteCheckout(confirmingRisks: requiresForce ?? !risks.isEmpty),
             canForceDelete: false
         )
     }
 
-    static func forgetCheckout(cleanups: [WorkspaceCheckoutMemberCleanup], confirmedPreserveArtifacts: Bool) -> WorkspaceLifecycleConfirmationModel {
+    /// `unverifiedMemberCount` counts members with no cleanup record at all —
+    /// snapshot-only members whose creation never produced a worktree. The
+    /// coordinator refuses to forget those without `confirmedPreserveArtifacts`,
+    /// but they carry no concrete leftover to list, so without surfacing them
+    /// here `requiresConfirmation` would stay false and nothing would ever
+    /// set that flag — the record could never actually be forgotten.
+    static func forgetCheckout(
+        cleanups: [WorkspaceCheckoutMemberCleanup],
+        unverifiedMemberCount: Int = 0,
+        confirmedPreserveArtifacts: Bool
+    ) -> WorkspaceLifecycleConfirmationModel {
         var risks: [String] = []
         for cleanup in cleanups {
             risks.append(contentsOf: cleanup.sharedRootLeftovers)
             if cleanup.plan.branchOwnership == .created, cleanup.branchRemoved == false {
                 risks.append("Retained branch \(cleanup.plan.branch)")
             }
+        }
+        if unverifiedMemberCount > 0 {
+            risks.append("\(unverifiedMemberCount) \(unverifiedMemberCount == 1 ? "member was" : "members were") never verified as removed")
         }
         return WorkspaceLifecycleConfirmationModel(
             title: risks.isEmpty ? "Forget Workspace Checkout?" : "Forget Workspace Checkout and Preserve Artifacts?",

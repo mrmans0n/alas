@@ -40,6 +40,7 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     case spacePlacementFailed
     case workspacePersistenceFailed
     case spacePlacementRollbackFailed
+    case checkoutsNotFullyRemoved
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +50,8 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
             "Could not save the Workspace definition."
         case .spacePlacementRollbackFailed:
             "Could not restore the active Space after the Workspace definition failed to save."
+        case .checkoutsNotFullyRemoved:
+            "Some checkouts still need attention. Delete them individually, then delete the workspace."
         }
     }
 }
@@ -3010,7 +3013,14 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
     }
 
-    func deleteWorkspaceDefinition(id workspaceID: UUID) async throws {
+    /// `requireNoCheckouts` closes the gap a re-scanning caller (like
+    /// `deleteWorkspaceDefinitionAndCheckouts`) still has after its last scan:
+    /// a checkout finishing creation between that scan and this call would
+    /// otherwise get silently detached into Former Workspace here. The check
+    /// runs inside the same atomic store mutation that removes the
+    /// definition, against the live store rather than a cache, so nothing
+    /// can land in between the check and the removal.
+    func deleteWorkspaceDefinition(id workspaceID: UUID, requireNoCheckouts: Bool = false) async throws {
         guard workspaceMutationAvailable else {
             throw WorkspaceStoreError.recoveryRequired
         }
@@ -3043,6 +3053,9 @@ final class AppState {
                 guard state.workspaces.contains(where: { $0.id == workspaceID }) else {
                     throw WorkspaceCheckoutCoordinatorError.checkoutMissing
                 }
+                if requireNoCheckouts, state.checkouts.contains(where: { $0.workspaceID == workspaceID }) {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
                 state.workspaces.removeAll { $0.id == workspaceID }
                 for index in state.checkouts.indices where state.checkouts[index].workspaceID == workspaceID {
                     state.checkouts[index].workspaceID = nil
@@ -3061,10 +3074,48 @@ final class AppState {
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
                 }
             }
+            // The atomic requireNoCheckouts guard's refusal is the one error
+            // here actionable by the user (something still needs deleting),
+            // not a storage failure — preserve it through the rollback
+            // rather than flattening it into the generic case below.
+            if case WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved = error {
+                throw error
+            }
             throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
         }
         await workspacesManager.refreshCheckoutSnapshots()
         workspaceNavigationState.removeWorkspace(workspaceID)
+    }
+
+    /// Deletes every checkout still owned by this Workspace before dropping
+    /// the definition. Stops at the first checkout that cannot be fully
+    /// removed (busy, a failed member, or leftovers needing acknowledgement)
+    /// and leaves both the definition and the remaining checkouts in place
+    /// rather than orphaning the rest into Former Workspace.
+    func deleteWorkspaceDefinitionAndCheckouts(id workspaceID: UUID) async throws {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        // Re-scan after every pass rather than snapshotting the checkout list
+        // once: a checkout can be persisted under this Workspace while an
+        // earlier one is still being deleted (an already-open creation dialog
+        // completing mid-loop). Without this, `deleteWorkspaceDefinition`
+        // below would silently detach that new checkout into Former
+        // Workspace instead of it being part of "delete everything".
+        var processedCheckoutIDs = Set<UUID>()
+        while true {
+            await workspacesManager.refreshCheckoutSnapshots()
+            let pending = workspacesManager.checkouts
+                .filter { $0.workspaceID == workspaceID && !processedCheckoutIDs.contains($0.id) }
+                .map(\.id)
+            guard !pending.isEmpty else { break }
+            for checkoutID in pending {
+                let outcome = try await deleteAndForgetWorkspaceCheckout(id: checkoutID)
+                guard outcome == .forgotten else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
+                processedCheckoutIDs.insert(checkoutID)
+            }
+        }
+        try await deleteWorkspaceDefinition(id: workspaceID, requireNoCheckouts: true)
     }
 
     func preflightWorkspaceCheckout(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
@@ -3375,6 +3426,33 @@ final class AppState {
         }
     }
 
+    /// A worktree id is nothing but its own standardized path (`Worktree.makeId`),
+    /// so it's always derivable from a member's persisted path without needing
+    /// a live, verified `Worktree` — unlike dirty-buffer resolution, runtime
+    /// session cleanup doesn't need that verification, only the id tabs would
+    /// have been registered under.
+    ///
+    /// Only meaningful when this checkout actually owns the path: a
+    /// snapshot-only member (creation never produced a worktree) or an
+    /// already-deleted one (cleanup ownership is reset once its own deletion
+    /// completes) has `cleanupOwnership.worktreeCreated == false`, and that
+    /// path could since be occupied by something this checkout never
+    /// touched — closing tabs or clearing selection there would tear down
+    /// an unrelated worktree's runtime state instead of this member's own.
+    private static func synthesizedWorktreeIfOwned(for member: WorkspaceCheckoutMember) -> Worktree? {
+        guard member.cleanupOwnership.worktreeCreated else { return nil }
+        let path = URL(fileURLWithPath: member.worktreePath)
+        return Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: member.projectID,
+            name: member.fallbackProjectName,
+            branch: "",
+            path: path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+    }
+
     func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().deleteMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
@@ -3410,12 +3488,24 @@ final class AppState {
         return model
     }
 
+    /// Every entry point this preview feeds — the row menu and the details
+    /// sheet — leads straight into deletion, so unarchiving here (rather
+    /// than leaving it to a later step) is preparing that one action, not a
+    /// surprising side effect of a read. The coordinator refuses to touch an
+    /// archived checkout at all, so without this the preview itself would
+    /// throw before the user ever sees a confirmation.
     func workspaceCheckoutDeletionConfirmation(checkoutID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+        guard var checkout = workspacesManager.checkout(id: checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
+        if checkout.archivedAt != nil {
+            checkout = try await workspaceCoordinator().unarchive(checkoutID: checkoutID)
+            await workspacesManager.refreshCheckoutSnapshots()
+        }
+        let resolvedWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
         var risks: [String] = []
+        var requiresForce = false
         for member in checkout.members where member.availability != .explicitlyDeleted {
             let preview: WorkspaceMemberDeletionPreview
             do {
@@ -3425,9 +3515,50 @@ final class AppState {
             }
             var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
             model.risks.append(contentsOf: preview.rootObservation.leftovers)
+            requiresForce = requiresForce || preview.preflight.requiresForce
             risks.append(contentsOf: model.risks.map { "\(member.fallbackProjectName): \($0)" })
+            // Mirrors the deletion path's own fallback: a member that's
+            // `.missing` right now (stale reconciliation) is skipped by the
+            // availability-gated resolution above, but deletion still
+            // synthesizes its path-derived id and closes whatever sessions
+            // are registered under it — so the risk shown here must count
+            // the same sessions it's about to silently terminate.
+            if let worktreeID = resolvedWorktreeIDs[member.id]
+                ?? (member.cleanupOwnership.worktreeCreated ? Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath)) : nil) {
+                let sessionCount = worktreeCleanupSessionIDs(worktreeId: worktreeID).count
+                if sessionCount > 0 {
+                    risks.append("\(member.fallbackProjectName): \(sessionCount) \(sessionCount == 1 ? "session" : "sessions") will close")
+                }
+            }
         }
-        return WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: risks)
+        // A checkout-owned terminal or ACP tab (opened at the checkout root,
+        // not tied to any one member) has no worktree to key off, so the
+        // per-member loop above never sees it — but `forget` still tears it
+        // down, so it belongs in the risk count too.
+        let checkoutSessionCount = workspaceCheckoutOwnedSessionIDs(checkout).count
+        if checkoutSessionCount > 0 {
+            risks.append("\(checkoutSessionCount) checkout \(checkoutSessionCount == 1 ? "session" : "sessions") will close")
+        }
+        return WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: risks, requiresForce: requiresForce)
+    }
+
+    private func workspaceCheckoutOwnedSessionIDs(_ checkout: WorkspaceCheckout) -> Set<String> {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let persistedSessionIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
+            switch tab {
+            case .terminal(let state): return state.root.leaves().map(\.sessionId)
+            case .acpSession(let state): return [state.sessionId]
+            default: return []
+            }
+        }
+        // Mirrors `stopWorkspaceCheckoutSessions`'s own two sources: the
+        // registry is authoritative for a freshly opened terminal whose tab
+        // hasn't been persisted yet, so a risk count built from tabs alone
+        // can undercount relative to what teardown actually terminates.
+        let liveTerminalSessionIDs = terminal.registry.all
+            .filter { $0.owner == owner && $0.zmxSessionName != nil }
+            .map(\.id)
+        return Set(persistedSessionIDs + liveTerminalSessionIDs)
     }
 
     func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
@@ -3437,32 +3568,117 @@ final class AppState {
         }
         return WorkspaceLifecycleConfirmationModel.forgetCheckout(
             cleanups: checkout.members.compactMap(\.cleanup),
+            unverifiedMemberCount: checkout.members.filter { $0.cleanup == nil }.count,
             confirmedPreserveArtifacts: false
         )
     }
 
-    func deleteWorkspaceCheckout(id: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+    /// "Delete Checkout" now means what it says: remove every member worktree
+    /// and drop the record. The record only survives when a member could not
+    /// be removed or leftovers need the preserve-artifacts acknowledgement —
+    /// see `WorkspaceCheckoutDeletionOutcome`.
+    func deleteAndForgetWorkspaceCheckout(
+        id: UUID,
+        confirmingRisks: Bool = false,
+        confirmedPreserveArtifacts: Bool = false
+    ) async throws -> WorkspaceCheckoutDeletionOutcome {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        // Archived is a settled state, not a lock: deletion always
+        // supersedes it. The coordinator itself refuses to touch an
+        // archived checkout, so unarchive first rather than dead-ending.
+        if before.archivedAt != nil {
+            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+        }
+        let activeMembers = spacesManager.activeSpace?.members
+            ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
+            ?? []
+        let ordered = WorkspaceSidebarLayout.visibleCheckoutIDs(
+            members: activeMembers,
+            workspaces: workspacesManager.workspaces,
+            checkouts: workspacesManager.checkouts
+        )
+        let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
         var resolvedWorktrees: [UUID: Worktree] = [:]
         for member in before.members {
             if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
                 resolvedWorktrees[member.id] = worktree
             }
         }
+        // `deleteMember` resets a member's `cleanupOwnership` to unowned once
+        // its own deletion succeeds, so the ownership gate below must be
+        // read from this pre-deletion snapshot — reading it from whatever
+        // member snapshot comes back afterward would make every member this
+        // very call just finished deleting look exactly like one that was
+        // never owned at all, and its stale sessions would never close.
+        let ownershipBeforeDeletion = Dictionary(uniqueKeysWithValues: before.members.map { ($0.id, $0) })
+        func worktreeToCleanUp(for member: WorkspaceCheckoutMember) -> Worktree? {
+            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap(Self.synthesizedWorktreeIfOwned)
+        }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         for worktree in resolvedWorktrees.values {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
         }
-        let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id, confirmingRisks: confirmingRisks)
-        for member in checkout.members where member.availability == .explicitlyDeleted {
-            if let worktree = resolvedWorktrees[member.id] {
+        let outcome: WorkspaceCheckoutDeletionOutcome
+        do {
+            outcome = try await workspaceCoordinator().deleteCheckoutAndForget(
+                checkoutID: id,
+                confirmingRisks: confirmingRisks,
+                confirmedPreserveArtifacts: confirmedPreserveArtifacts
+            )
+        } catch {
+            // Member worktrees can already be durably removed even when this
+            // later stage (session teardown, root-artifact cleanup) throws —
+            // the coordinator commits each member's deletion independently as
+            // it goes. Reconcile the runtime and the cached snapshot against
+            // whatever actually got persisted before surfacing the error, so
+            // tabs and terminals for now-deleted worktrees don't linger.
+            await workspacesManager.refreshCheckoutSnapshots()
+            if let refreshed = workspacesManager.checkout(id: id) {
+                for member in refreshed.members where member.availability == .explicitlyDeleted {
+                    if let worktree = worktreeToCleanUp(for: member) {
+                        await cleanupDeletedWorkspaceMemberRuntime(worktree)
+                    }
+                }
+            }
+            throw error
+        }
+        let removedMembers: [WorkspaceCheckoutMember]
+        switch outcome {
+        case .forgotten:
+            removedMembers = before.members
+        case .artifactsNeedConfirmation(let checkout), .retained(let checkout, _):
+            removedMembers = checkout.members.filter { $0.availability == .explicitlyDeleted }
+        }
+        for member in removedMembers {
+            // A member already `.missing` before deletion started is never
+            // resolved into `resolvedWorktrees` (that resolution only trusts
+            // a verified `.available` worktree) but the coordinator still
+            // deletes it — and any stale terminal/ACP tabs left over from
+            // before it went missing need closing too, keyed by the same
+            // deterministic path-derived id those tabs were opened under.
+            // Gated to members this checkout actually owned a worktree for
+            // *before this call started* (see `ownershipBeforeDeletion`
+            // above), so a snapshot-only or already-cleaned-up member never
+            // tears down state for whatever unrelated worktree its old path
+            // might now hold.
+            if let worktree = worktreeToCleanUp(for: member) {
                 await cleanupDeletedWorkspaceMemberRuntime(worktree)
             }
         }
         await workspacesManager.refreshCheckoutSnapshots()
-        selectWorkspaceCheckout(id: id)
-        return checkout
+        switch outcome {
+        case .forgotten:
+            workspaceNavigationState.removeCheckout(id)
+            if let nearest {
+                selectWorkspaceCheckout(id: nearest)
+            } else {
+                selectedWorktreeId = nil
+            }
+        case .artifactsNeedConfirmation, .retained:
+            selectWorkspaceCheckout(id: id)
+        }
+        return outcome
     }
 
     private func requireCheckpointWorktreeRemovalAllowedAfterDiscovery(_ worktree: Worktree) async throws {
@@ -3473,6 +3689,13 @@ final class AppState {
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        // Same reasoning as `deleteAndForgetWorkspaceCheckout`: a checkout
+        // can be archived after its members were already deleted, and
+        // forgetting that record is still a stronger, terminal action than
+        // archiving — it must not be blocked by the archived guard.
+        if workspacesManager.checkout(id: id)?.archivedAt != nil {
+            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+        }
         let activeMembers = spacesManager.activeSpace?.members
             ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
             ?? []
@@ -9288,7 +9511,43 @@ final class AppState {
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
     /// failure sets `pendingForceDeleteWorktree` so SwiftUI can present a
     /// state-driven confirmation. Cleans up in-app state on success.
+    /// A Workspace checkout still owning this worktree must be the one that
+    /// deletes it — going through the plain worktree path leaves the
+    /// checkout record behind pointing at a "missing" member with no hint
+    /// that the checkout, not the worktree, is what needs attention.
+    private func workspaceOwnershipDeletionRefusal(for worktree: Worktree) -> String? {
+        guard Self.workspaceCleanupOwnershipAvailable(
+            workspacesEnabled: config.workspacesEnabled,
+            workspacesCanMutate: workspacesManager.canMutate
+        ) else {
+            return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+        }
+        // Only a checkout still actively managing this worktree's lifecycle
+        // owns the delete. An archived or Former Workspace checkout no
+        // longer does, and the row's own removal actions are the only way
+        // to clear those — refusing here would make them dead ends.
+        guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) else { return nil }
+        return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
+    }
+
+    /// Both the CLI and interactive delete paths confirm well before the
+    /// actual removal — a modal alert's nested run loop and a CLI's checkpoint
+    /// discovery and git preflight each yield the main actor at least once
+    /// in between, wide enough for a checkout to get unarchived in the gap.
+    /// Called as the first statement of the scheduled deletion, right before
+    /// the real removal, mirroring the batch-delete path's own
+    /// re-validation-right-before-execution pattern.
+    private func recheckWorkspaceOwnershipBeforeRemoval(_ worktree: Worktree) -> Bool {
+        guard let refusal = workspaceOwnershipDeletionRefusal(for: worktree) else { return true }
+        projectsManager.setOperationState(id: worktree.id, state: .deleteFailed(message: refusal))
+        return false
+    }
+
     func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
+        if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
+            showFileActionError(title: "Delete Failed", message: refusal)
+            return
+        }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
@@ -10083,6 +10342,7 @@ final class AppState {
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
 
         Task { @MainActor in
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
@@ -10124,6 +10384,9 @@ final class AppState {
         default:
             break
         }
+        if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
+            return .error(refusal)
+        }
         // Claim immediately, before any `await`: every check below yields
         // to other main-actor work (checkpoint discovery, the git
         // preflight), and an unclaimed gap here is exactly the
@@ -10162,6 +10425,7 @@ final class AppState {
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
         Task { @MainActor in
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
@@ -10612,6 +10876,11 @@ final class AppState {
         projectsManager.setOperationState(id: pending.id, state: .deleting)
 
         Task { @MainActor in
+            // This SwiftUI alert stays open for arbitrary user think-time —
+            // the same async gap the CLI and interactive paths already
+            // recheck ownership across, so this force-confirmation path
+            // needs the identical recheck immediately before removal.
+            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: pending.repoPath,
