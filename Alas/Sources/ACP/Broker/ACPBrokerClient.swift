@@ -73,6 +73,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private let initialBrokerGeneration: ACPBrokerGeneration?
     private let onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)?
     private let onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)?
+    /// Invoked (outside `stateLock`) the instant `dispatch(_:)` has published
+    /// an event as dispatched — the exact instant from which a concurrent
+    /// replay of the same cursor starts skipping it. Lets a test act in that
+    /// window and prove the cursor's durable protection is already in place
+    /// by then; unused in production.
+    private let onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)?
 
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
@@ -172,7 +178,8 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         backgroundPollActiveIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollActiveIntervalNanoseconds,
         backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
-        onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil
+        onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
+        onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)? = nil
     ) {
         self.service = service
         self.brokerId = brokerId
@@ -188,6 +195,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         self.backgroundPollIdleIntervalNanoseconds = backgroundPollIdleIntervalNanoseconds
         self.onDurableStateChanged = onDurableStateChanged
         self.onTurnStateChanged = onTurnStateChanged
+        self.onEventDispatchedForTesting = onEventDispatchedForTesting
 
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
         incomingUpdates = AsyncStream { u = $0 }
@@ -667,6 +675,37 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         stateLock.unlock()
     }
 
+    /// Adapter notifications whose dispatch can hand a
+    /// `durableConsumptionAcknowledgement` to a consumer, i.e. the ones whose
+    /// cursor has to be protected from premature acknowledgement. Keep in
+    /// sync with `dispatchAdapterNotification(method:params:cursor:)`: a
+    /// durable method missing here loses its durability guarantee, while a
+    /// non-durable method listed here would never be released and would
+    /// block every later ack forever.
+    private static let durableAdapterNotificationMethods: Set<String> = [
+        "session/update",
+        ACPOpenCodeChildUpdate.method,
+        "_auth/status_update"
+    ]
+
+    /// Marks the event as dispatched AND claims its durable-cursor
+    /// protection in one `stateLock` critical section — deliberately, not
+    /// incidentally.
+    ///
+    /// Splitting the two (mark here, protect down in the per-kind handler)
+    /// leaves a window where the cursor is already visible as "dispatched"
+    /// but not yet protected. The background poller and a foreground broker
+    /// RPC routinely replay overlapping event ranges, so the other call can
+    /// land in exactly that window: it sees the cursor as dispatched, skips
+    /// it, moves on to a later event, and a consumer's acknowledgement of
+    /// that later cursor advances the broker's acknowledged cursor past this
+    /// one while nothing has consumed it yet — the durability loss the
+    /// durable-ack design exists to prevent.
+    ///
+    /// Protection is therefore claimed optimistically for every kind that
+    /// *can* hand out an acknowledgement, and released again (see
+    /// `releaseUnconsumedDurableCursor`) by the handlers that turn out to
+    /// have nothing to deliver.
     private func dispatch(_ event: ACPBrokerEvent, pendingRequestIds: Set<String>? = nil) {
         stateLock.lock()
         if dispatchedEventCursors.contains(event.cursor) {
@@ -674,18 +713,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             return
         }
         dispatchedEventCursors.insert(event.cursor)
-        stateLock.unlock()
-
         switch event.kind {
-        case .adapterNotification(let method, let params):
-            dispatchAdapterNotification(method: method, params: params, cursor: event.cursor)
-        case .pendingRequest(let request):
-            if let pendingRequestIds, !pendingRequestIds.contains(request.requestId) {
-                return
+        case .adapterNotification(let method, _):
+            if Self.durableAdapterNotificationMethods.contains(method) {
+                unacknowledgedDurableEventCursors.insert(event.cursor)
             }
-            dispatchPendingRequest(request, cursor: event.cursor)
         case .operationCompleted(let operationKey, let outcome):
-            stateLock.lock()
             operationCompletionCursors[operationKey] = event.cursor
             // Protect this cursor from `ackAfterEarlierDurableEvents`
             // immediately, at the moment ANY caller observes it — not only
@@ -715,12 +748,41 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 preRegisteredOperationCompletions[operationKey] = (outcome, event.cursor)
                 preRegisteredOperationTerminalOutcomes[operationKey] = outcome
             }
-            stateLock.unlock()
-        case .turnStateChanged(let state):
-            setTurnState(state)
         default:
             break
         }
+        stateLock.unlock()
+        onEventDispatchedForTesting?(event.cursor)
+
+        switch event.kind {
+        case .adapterNotification(let method, let params):
+            dispatchAdapterNotification(method: method, params: params, cursor: event.cursor)
+        case .pendingRequest(let request):
+            if let pendingRequestIds, !pendingRequestIds.contains(request.requestId) {
+                return
+            }
+            dispatchPendingRequest(request, cursor: event.cursor)
+        case .turnStateChanged(let state):
+            setTurnState(state)
+        default:
+            // `.operationCompleted` is fully handled above, under the same
+            // lock that claimed its protection.
+            break
+        }
+    }
+
+    /// Drops the durable protection `dispatch(_:)` claimed up front for a
+    /// notification that turned out to carry nothing to deliver — a payload
+    /// that fails to decode, or an OpenCode child update that normalizes to
+    /// zero updates. No consumer ever receives an acknowledgement for those,
+    /// so leaving the cursor protected would defer every later ack forever.
+    /// Flushes whatever already deferred behind it.
+    private func releaseUnconsumedDurableCursor(_ cursor: ACPBrokerEventCursor) {
+        stateLock.lock()
+        let wasProtected = unacknowledgedDurableEventCursors.remove(cursor) != nil
+        stateLock.unlock()
+        guard wasProtected else { return }
+        flushDeferredOrderedAcks()
     }
 
     private func dispatchAdapterNotification(
@@ -731,11 +793,11 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         switch method {
         case "session/update":
             guard let decoded = try? JSONDecoder().decode(ACPSessionUpdateParams.self, from: params.data) else {
+                releaseUnconsumedDurableCursor(cursor)
                 return
             }
             stateLock.lock()
             _yieldedUpdateCount += 1
-            unacknowledgedDurableEventCursors.insert(cursor)
             stateLock.unlock()
             updatesCont.yield(.init(
                 sessionId: decoded.sessionId,
@@ -747,12 +809,17 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         case ACPOpenCodeChildUpdate.method:
             // Normalized into the standard shapes so downstream routing only
             // knows one wire format; the cursor is acked by the last of them.
-            guard let payload = try? params.data else { return }
+            guard let payload = try? params.data else {
+                releaseUnconsumedDurableCursor(cursor)
+                return
+            }
             let normalized = ACPOpenCodeChildUpdate.normalize(params: payload)
-            guard !normalized.isEmpty else { return }
+            guard !normalized.isEmpty else {
+                releaseUnconsumedDurableCursor(cursor)
+                return
+            }
             stateLock.lock()
             _yieldedUpdateCount += normalized.count
-            unacknowledgedDurableEventCursors.insert(cursor)
             stateLock.unlock()
             let ack: ACPDurableConsumptionAcknowledgement = { [weak self] in
                 self?.ackDurableEvent(cursor: cursor)
@@ -774,17 +841,16 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 cancelRequestsCont.yield(decoded.id)
             }
         case "_auth/status_update":
-            if let decoded = try? JSONDecoder().decode(ACPAuthStatusUpdateParams.self, from: params.data) {
-                stateLock.lock()
-                unacknowledgedDurableEventCursors.insert(cursor)
-                stateLock.unlock()
-                authStatusCont.yield(.init(
-                    status: decoded.authStatus,
-                    durableConsumptionAcknowledgement: { [weak self] in
-                        self?.ackDurableEvent(cursor: cursor)
-                    }
-                ))
+            guard let decoded = try? JSONDecoder().decode(ACPAuthStatusUpdateParams.self, from: params.data) else {
+                releaseUnconsumedDurableCursor(cursor)
+                return
             }
+            authStatusCont.yield(.init(
+                status: decoded.authStatus,
+                durableConsumptionAcknowledgement: { [weak self] in
+                    self?.ackDurableEvent(cursor: cursor)
+                }
+            ))
         case "adapter/exit":
             cancelBackgroundPolling()
             finishStreams()
