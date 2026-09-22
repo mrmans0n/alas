@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import CoreGraphics
 import Testing
 @testable import Alas
@@ -111,6 +112,84 @@ struct DiffPaneTextDocumentBuilderTests {
 
         #expect(pillRect.minY >= rowRect.minY)
         #expect(pillRect.maxY <= rowRect.maxY)
+    }
+
+    /// tree-sitter-kotlin-ng's external scanner has two annotation-scanning
+    /// loops (constructor and get/set accessor contexts) that used to
+    /// advance without checking EOF. `DiffPaneTextDocumentBuilder` slices a
+    /// document's syntax source into per-hunk segments
+    /// (`highlightedCodeDocument`); a hunk that adds a bare `@Foo` as its
+    /// last line — its annotated declaration lives outside the hunk, which
+    /// is completely ordinary for a diff — produces exactly that truncated
+    /// segment. Alas's real background `DiffHighlightPrewarmer` queue builds
+    /// this same document off the main thread ahead of scrolling, which is
+    /// the exact path the live hang was sampled in. This drives that real
+    /// queue (not a synchronous call) and polls the shared document cache
+    /// with a bounded deadline, so a scanner regression fails this test in
+    /// a few seconds instead of hanging the prewarm queue — and the test
+    /// process — forever.
+    @MainActor
+    @Test func kotlinTruncatedAnnotationDoesNotHangDiffHighlightPrewarmQueue() async throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let theme = try ThemeStore().current
+        let cases: [(label: String, lines: [ParsedDiff.Hunk.Line])] = [
+            (
+                "top-level truncated annotation (get/set accessor context)",
+                [
+                    .init(kind: .context, text: "val x = 1", oldNumber: 1, newNumber: 1),
+                    .init(kind: .add, text: "@Foo", oldNumber: nil, newNumber: 2),
+                ]
+            ),
+            (
+                "class-body truncated annotation (constructor context)",
+                [
+                    .init(kind: .context, text: "class A {", oldNumber: 1, newNumber: 1),
+                    .init(kind: .context, text: "val x = 1", oldNumber: 2, newNumber: 2),
+                    .init(kind: .add, text: "@Foo", oldNumber: nil, newNumber: 3),
+                ]
+            ),
+        ]
+
+        for testCase in cases {
+            let hunk = ParsedDiff.Hunk(
+                header: "@@ -1,\(testCase.lines.count) +1,\(testCase.lines.count) @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: testCase.lines
+            )
+            let group = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [hunk]), filePath: "a.kt").groups[0]
+            let rows = DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: [])
+
+            DiffPaneDocumentCache.shared.removeAll()
+            DiffPaneDocumentCache.shared.resetStatisticsForTests()
+
+            DiffHighlightPrewarmer.prewarm(
+                groups: [group],
+                expandedCollapsedRowIDs: [],
+                layoutMode: .split,
+                fileExtension: "kt",
+                font: font,
+                showWhitespace: false,
+                theme: theme
+            )
+
+            let deadline = Date().addingTimeInterval(5)
+            while DiffPaneDocumentCache.shared.statisticsForTests.misses < 1, Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            #expect(
+                DiffPaneDocumentCache.shared.statisticsForTests.misses >= 1,
+                "\(testCase.label): diff-highlight-prewarm queue never finished within 5s — kotlin-ng scanner likely hung on the truncated annotation"
+            )
+
+            // The prewarm above populated the cache, so this is a hit, not a
+            // rebuild — safe to call synchronously. Confirms the annotation
+            // text survived the segment slice and truncated parse intact.
+            let result = DiffPaneDocumentCache.shared.splitResult(
+                rows: rows, fileExtension: "kt", font: font, showWhitespace: false, theme: theme
+            )
+            #expect(result.newCode.attributedString.string.contains("@Foo"), "\(testCase.label): annotation text was lost")
+        }
     }
 
     private func expandableContextRow(

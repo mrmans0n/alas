@@ -412,6 +412,59 @@ mod tests {
             .expect("KOTLIN_HIGHLIGHTS must compile against tree-sitter-kotlin-ng's grammar");
     }
 
+    /// tree-sitter-kotlin-ng 1.1.0's external scanner has two
+    /// annotation-scanning loops (`CONSTRUCTOR` and `GET`/`SET` branches of
+    /// the `@` case in `tree_sitter_kotlin_external_scanner_scan`) that
+    /// advance on `lexer->lookahead` without checking `lexer->eof(lexer)`.
+    /// A source that ends mid-annotation — exactly what Alas produces when
+    /// `TreeSitterHighlighter`/`DiffPaneTextDocumentBuilder` parse a syntax
+    /// segment sliced at an incomplete `@Foo` — leaves `lookahead` stuck at
+    /// EOF, so the loop spins forever. The `tree-sitter` 0.26 Rust bindings
+    /// dropped `ts_parser_set_timeout_micros` in favor of a progress
+    /// callback, but that would not help here either: any such mechanism is
+    /// only polled between scanner calls, and the hanging call never
+    /// returns.
+    ///
+    /// The real guard is `thread::spawn` + `recv_timeout`: if the vendored
+    /// EOF fix (`ThirdParty/treesitter-pack/vendor/tree-sitter-kotlin-ng-1.1.0`)
+    /// ever regresses, this test fails in ~2s instead of hanging `cargo test`
+    /// indefinitely.
+    #[test]
+    fn kotlin_annotation_at_eof_does_not_hang() {
+        // GET/SET context (top level, no enclosing class) and CONSTRUCTOR
+        // context (inside a class body) both reach the `@` branch guarded by
+        // the scanner patch. `\n@Foo(` additionally exercises the paren
+        // look-ahead inside the GET/SET branch. The two `\n`-terminated
+        // sources are controls: they never hit EOF mid-annotation, so they
+        // must keep parsing (and stay non-hanging) unchanged by the patch.
+        let cases: &[(&str, &str)] = &[
+            ("top-level truncated annotation (GET/SET)", "val x = 1\n@Foo"),
+            ("top-level truncated annotation with paren (GET/SET)", "val x = 1\n@Foo("),
+            ("class-body truncated annotation (CONSTRUCTOR)", "class A {\nval x = 1\n@Foo"),
+            ("top-level complete annotation, control", "val x = 1\n@Foo\n"),
+            ("no annotation, control", "val x = 1"),
+        ];
+
+        for (label, source) in cases {
+            let owned = source.to_string();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
+                let mut parser = tree_sitter::Parser::new();
+                parser.set_language(&language).unwrap();
+                let tree = parser.parse(&owned, None);
+                // A deliberately unresolved send is fine: if this thread is
+                // the one that hung, nothing ever reads `rx` again and the
+                // thread leaks harmlessly until the test process exits.
+                let _ = tx.send(tree.is_some());
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(returned) => assert!(returned, "{label}: parser.parse returned None (timed out internally)"),
+                Err(_) => panic!("{label}: kotlin-ng scanner hung past the 2s bound scanning {source:?}"),
+            }
+        }
+    }
+
     /// Compiling proves the query is well-formed; it says nothing about
     /// whether any pattern actually matches. Parse a small real Kotlin
     /// snippet and confirm the query fires for the capture categories that
@@ -471,3 +524,4 @@ mod tests {
         }
     }
 }
+
