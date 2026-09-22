@@ -85,6 +85,11 @@ struct WorktreeRowHeightTests {
         #expect(WorktreeRowView.showsRemovalActions(isMain: false))
     }
 
+    @Test func workspaceOwnedWorktreeDoesNotShowRemovalActions() {
+        #expect(!WorktreeRowView.showsRemovalActions(isMain: false, workspaceOwned: true))
+        #expect(WorktreeRowView.showsRemovalActions(isMain: false, workspaceOwned: false))
+    }
+
     @Test func thirdHarnessSessionRemainsVisibleBeforeOverflow() {
         #expect(WorktreeRowView.visibleHarnessSessionCount(for: 2) == 2)
         #expect(WorktreeRowView.visibleHarnessSessionCount(for: 3) == 3)

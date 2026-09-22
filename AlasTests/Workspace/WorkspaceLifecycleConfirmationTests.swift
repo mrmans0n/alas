@@ -30,6 +30,16 @@ import Testing
         #expect(plan.canForceDelete == false)
     }
 
+    @Test func sessionOnlyCheckoutRisksConfirmWithoutForcingGit() {
+        let plan = WorkspaceLifecycleConfirmationModel.checkoutDeletion(
+            risks: ["App: 2 sessions will close"],
+            requiresForce: false
+        )
+
+        #expect(plan.requiresConfirmation == true)
+        #expect(plan.confirmAction == .deleteCheckout(confirmingRisks: false))
+    }
+
     @Test func cleanCheckoutDeletionDoesNotRequireConfirmation() {
         let plan = WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: [])
 

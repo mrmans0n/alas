@@ -12,6 +12,7 @@ enum WorkspaceCheckoutDetailStatus: Equatable, Sendable {
     case needsAttention(String)
     case archived(String)
     case formerWorkspace(String)
+    case deleted(String)
 }
 
 enum WorkspaceCheckoutHeaderBadge: Equatable, Sendable {
@@ -100,6 +101,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return .partial("Partially available")
         case .needsAttention:
             return .needsAttention("Needs Attention")
+        case .deleted:
+            return .deleted("Worktrees deleted")
         }
     }
 
@@ -142,6 +145,11 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 ? [.init(.resumeCreation, title: "Resume Creation")]
                 : [.init(.resumeCreation, title: "Resume Creation"), .init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
         case .idle:
+            if checkout.health == .deleted {
+                // Every worktree is gone; the only thing left to do with the
+                // record is drop it. Members keep their own recreate action.
+                return [.init(.forgetCheckout, title: "Forget Record", isDestructive: true)]
+            }
             var actions: [WorkspaceCheckoutAction] = [.init(.archive, title: "Archive")]
             if checkout.members.contains(where: { $0.availability == .missing || $0.checkpoint == .failed || ($0.availability == .pending && $0.checkpoint != .setupComplete) }) {
                 actions.append(.init(.resumeCreation, title: "Resume Creation"))
@@ -207,6 +215,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
 
     private func status(for member: WorkspaceCheckoutMember) -> WorkspaceCheckoutMemberPresentationStatus {
         switch member.availability {
+        case .available where member.deletionFailed:
+            return .needsAttention
         case .available where member.checkpoint == .setupComplete:
             return .ready
         case .available where member.checkpoint == .failed:
@@ -227,6 +237,14 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
     }
 
     private func detail(for member: WorkspaceCheckoutMember) -> String {
+        if member.deletionFailed, member.checkpoint != .failed {
+            if let diagnostic = checkout.diagnostics.last(where: { $0.isDeletionFailure(for: member.id) }) {
+                return [diagnostic.message, diagnostic.detail ?? ""]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+            return "The worktree could not be removed. Delete it again to retry."
+        }
         switch member.availability {
         case .missing: return "Worktree not found at \(member.worktreePath)"
         case .unavailable: return "Could not access \(member.worktreePath)"
@@ -302,11 +320,14 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
         )
     }
 
-    static func checkoutDeletion(risks: [String]) -> WorkspaceLifecycleConfirmationModel {
+    /// `requiresForce` separates "Git will force-remove content" from softer
+    /// risks such as sessions that will close; only the former should make
+    /// the coordinator pass a force flag to Git.
+    static func checkoutDeletion(risks: [String], requiresForce: Bool? = nil) -> WorkspaceLifecycleConfirmationModel {
         WorkspaceLifecycleConfirmationModel(
             title: "Delete Workspace Checkout?",
             risks: risks,
-            confirmAction: .deleteCheckout(confirmingRisks: !risks.isEmpty),
+            confirmAction: .deleteCheckout(confirmingRisks: requiresForce ?? !risks.isEmpty),
             canForceDelete: false
         )
     }

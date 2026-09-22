@@ -758,6 +758,125 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(result.members[1].availability == .explicitlyDeleted)
     }
 
+    @Test func wholeDeletionRecordsADiagnosticForEachFailedMember() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let failing = fixture.checkout.members[0]
+        let lifecycle = FixtureLifecycle(failingMember: failing.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        let failures = result.diagnostics.filter { $0.severity == .error && $0.memberID == failing.id }
+        #expect(failures.map(\.message) == ["Could not delete \(failing.fallbackProjectName)."])
+        #expect(failures.first?.detail?.isEmpty == false)
+        #expect(result.members[0].cleanup?.checkpoint == .failed)
+        #expect(result.diagnostics.contains { $0.memberID == fixture.checkout.members[1].id } == false)
+    }
+
+    @Test func wholeDeletionReplacesTheEarlierFailureDiagnosticWhenRetried() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let failing = fixture.checkout.members[0]
+        let lifecycle = FixtureLifecycle(failingMember: failing.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(result.diagnostics.filter { $0.memberID == failing.id }.count == 1)
+    }
+
+    @Test func deletingAndForgettingDropsTheRecordOnceEveryMemberIsRemoved() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let sessions = LifecycleSessions()
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: sessions, lifecycle: lifecycle)
+
+        let outcome = try await coordinator.deleteCheckoutAndForget(checkoutID: fixture.checkout.id)
+
+        #expect(outcome == .forgotten)
+        #expect(await sessions.stopped == [fixture.checkout.id])
+        #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
+    @Test func deletingAndForgettingKeepsTheRecordWhenAMemberCannotBeRemoved() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let failing = fixture.checkout.members[0]
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: sessions, lifecycle: FixtureLifecycle(failingMember: failing.id))
+
+        let outcome = try await coordinator.deleteCheckoutAndForget(checkoutID: fixture.checkout.id)
+
+        guard case .retained(let checkout, let failures) = outcome else {
+            Issue.record("Expected the checkout to be retained, got \(outcome)")
+            return
+        }
+        #expect(checkout.id == fixture.checkout.id)
+        #expect(failures.map(\.memberID) == [failing.id])
+        #expect(failures.map(\.memberName) == [failing.fallbackProjectName])
+        #expect(failures.first?.message.isEmpty == false)
+        #expect(await sessions.stopped.isEmpty)
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.count == 1)
+    }
+
+    @Test func deletingAndForgettingStopsAtTheArtifactAcknowledgement() async throws {
+        let fixture = try await Fixture.make()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: FixtureLifecycle(leftovers: ["notes.txt"]))
+
+        let outcome = try await coordinator.deleteCheckoutAndForget(checkoutID: fixture.checkout.id)
+
+        guard case .artifactsNeedConfirmation(let checkout) = outcome else {
+            Issue.record("Expected an artifact acknowledgement, got \(outcome)")
+            return
+        }
+        #expect(checkout.members.allSatisfy { $0.availability == .explicitlyDeleted })
+        #expect(checkout.members[0].cleanup?.sharedRootLeftovers == ["notes.txt"])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.count == 1)
+    }
+
+    @Test func deletingAndForgettingWithAcknowledgedArtifactsDropsTheRecord() async throws {
+        let fixture = try await Fixture.make()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: FixtureLifecycle(leftovers: ["notes.txt"], branchRemoved: false))
+
+        let outcome = try await coordinator.deleteCheckoutAndForget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        #expect(outcome == .forgotten)
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
+    @Test func deletingAndForgettingHonorsAStopRequestWithoutReportingFailures() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        try await fixture.store.mutate { state in state.checkouts[0].stopAfterCurrentOperations = true }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let outcome = try await coordinator.deleteCheckoutAndForget(checkoutID: fixture.checkout.id)
+
+        guard case .retained(let checkout, let failures) = outcome else {
+            Issue.record("Expected the checkout to be retained, got \(outcome)")
+            return
+        }
+        #expect(failures.isEmpty)
+        #expect(checkout.operation == .idle)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func wholeDeletionRetainsTheCheckoutClaimUntilTheOuterLoopFinishes() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
         let lifecycle = StoreInspectingLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
@@ -1754,6 +1873,128 @@ struct WorkspaceCheckoutLifecycleTests {
 
         #expect(inspection.isContained)
         #expect(inspection.leftovers == ["notes.txt"])
+    }
+
+    @Test func localRootInspectionIgnoresFinderMetadata() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        let member = root.appendingPathComponent("a")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: member, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(".DS_Store"))
+        try Data().write(to: root.appendingPathComponent("notes.txt"))
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [member.path],
+            worktreePath: member.path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let inspection = await WorkspaceCheckoutLifecycleOperator().inspectRoot(plan)
+
+        #expect(inspection.leftovers == ["notes.txt"])
+    }
+
+    @Test func remoteRootInspectionIgnoresFinderMetadata() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: ".DS_Store\nnotes.txt\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .ssh("example.com"),
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: "/checkout",
+            managedMemberPaths: ["/checkout/a"],
+            worktreePath: "/checkout/a",
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let root = await lifecycle.inspectRoot(plan)
+
+        #expect(root.leftovers == ["notes.txt"])
+    }
+
+    @Test func localRootCleanupRemovesFinderMetadataAlongWithTheEmptyRoot() async throws {
+        let checkoutID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(checkoutID: checkoutID, rootPath: root.path, branch: "feature", members: [])
+        try JSONEncoder().encode(manifest).write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        try Data().write(to: root.appendingPathComponent(".DS_Store"))
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: root.path,
+            members: []
+        )
+
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
+    }
+
+    @Test func localRootCleanupKeepsARootThatStillHoldsUserFiles() async throws {
+        let checkoutID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(".DS_Store"))
+        try Data().write(to: root.appendingPathComponent("notes.txt"))
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: root.path,
+            members: []
+        )
+
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("notes.txt").path))
+    }
+
+    @Test func remoteRootCleanupRemovesFinderMetadataBeforeRemovingTheRoot() async throws {
+        let runner = RemoteLifecycleRunner(results: [.init(exitCode: 0, stdout: "", stderr: "")])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .ssh("example.com"),
+            branch: "feature",
+            rootPath: "/checkout",
+            members: []
+        )
+
+        try await lifecycle.removeCheckoutRootArtifacts(for: checkout)
+
+        let command = await runner.commands.joined(separator: "\n")
+        #expect(command.contains("rm -f") && command.contains(".DS_Store"))
+        #expect(command.contains("rmdir"))
     }
 
     @Test func localRootCleanupRemovesOwnedManifestAndEmptyRoot() async throws {

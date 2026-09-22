@@ -56,6 +56,34 @@ import Testing
         #expect(model.memberRows.allSatisfy { $0.actions.isEmpty })
     }
 
+    @Test func fullyDeletedCheckoutOnlyOffersForgettingTheRecord() {
+        let deleted = checkout(members: [
+            member(name: "App", availability: .explicitlyDeleted, checkpoint: .planPersisted),
+            member(name: "API", availability: .explicitlyDeleted, checkpoint: .planPersisted),
+        ])
+        let model = WorkspaceCheckoutDetailModel(checkout: deleted)
+
+        #expect(deleted.health == .deleted)
+        #expect(model.status == .deleted("Worktrees deleted"))
+        #expect(model.primaryActions.map(\.kind) == [.forgetCheckout])
+    }
+
+    @Test func memberWhoseDeletionFailedNeedsAttentionWithTheRecordedReason() {
+        var failed = member(name: "App", availability: .available, checkpoint: .setupComplete, diagnostic: "failed")
+        failed.cleanup?.checkpoint = .failed
+        var checkout = checkout(members: [failed])
+        checkout.diagnostics = [
+            .init(severity: .error, message: "Could not delete App.", memberID: failed.id, detail: "worktree is locked"),
+        ]
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(checkout.health == .needsAttention)
+        #expect(model.status == .needsAttention("Needs Attention"))
+        #expect(model.memberRows[0].status == .needsAttention)
+        #expect(model.memberRows[0].detail == "Could not delete App. worktree is locked")
+        #expect(model.memberRows[0].actions.map(\.kind) == [.deleteMember])
+    }
+
     @Test func reportsLiveProgressAndStopBoundary() {
         let creating = checkout(operation: .creating, members: [
             member(name: "One", availability: .available, checkpoint: .setupComplete),

@@ -137,7 +137,7 @@ struct WorkspaceCheckoutDetailView: View {
         default: break
         }
         switch model.status {
-        case .ready(let value), .creating(let value), .partial(let value), .needsAttention(let value), .archived(let value), .formerWorkspace(let value):
+        case .ready(let value), .creating(let value), .partial(let value), .needsAttention(let value), .archived(let value), .formerWorkspace(let value), .deleted(let value):
             return value
         }
     }
