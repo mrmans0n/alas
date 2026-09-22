@@ -213,6 +213,46 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(state.workspacesManager.checkouts.isEmpty)
     }
 
+    @Test func deleteWorkspaceDefinitionRefusesWhenACheckoutIsPersistedJustBeforeTheAtomicRemoval() async throws {
+        // Even after `deleteWorkspaceDefinitionAndCheckouts`'s re-scan finds
+        // nothing pending, a checkout can still finish creation in the
+        // window before the final removal — this writes directly to the
+        // live store (bypassing the cached manager) to simulate exactly
+        // that, and the atomic requireNoCheckouts guard must still catch it.
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delete-workspace-race-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let spaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
+        ])
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let lateCheckout = WorkspaceCheckout(
+            workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
+            branch: "release/late", rootPath: "/checkouts/late", members: []
+        )
+        try await workspaceStore.mutate { state in state.checkouts.append(lateCheckout) }
+
+        await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
+            try await state.deleteWorkspaceDefinition(id: workspace.id, requireNoCheckouts: true)
+        }
+
+        guard case .loaded(let stored) = await workspaceStore.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(stored.workspaces.contains { $0.id == workspace.id })
+        #expect(stored.checkouts.contains { $0.id == lateCheckout.id && $0.workspaceID == workspace.id })
+    }
+
     /// Avoids touching real app-support files: `deleteWorkspaceDefinition`
     /// persists the Space placement change through this store.
     private final class InMemoryWorkspaceDeletionStore: PersistenceStoreProtocol, @unchecked Sendable {

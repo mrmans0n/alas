@@ -2998,7 +2998,14 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
     }
 
-    func deleteWorkspaceDefinition(id workspaceID: UUID) async throws {
+    /// `requireNoCheckouts` closes the gap a re-scanning caller (like
+    /// `deleteWorkspaceDefinitionAndCheckouts`) still has after its last scan:
+    /// a checkout finishing creation between that scan and this call would
+    /// otherwise get silently detached into Former Workspace here. The check
+    /// runs inside the same atomic store mutation that removes the
+    /// definition, against the live store rather than a cache, so nothing
+    /// can land in between the check and the removal.
+    func deleteWorkspaceDefinition(id workspaceID: UUID, requireNoCheckouts: Bool = false) async throws {
         guard workspaceMutationAvailable else {
             throw WorkspaceStoreError.recoveryRequired
         }
@@ -3030,6 +3037,9 @@ final class AppState {
             try await workspaceStore.mutate { state in
                 guard state.workspaces.contains(where: { $0.id == workspaceID }) else {
                     throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+                }
+                if requireNoCheckouts, state.checkouts.contains(where: { $0.workspaceID == workspaceID }) {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
                 }
                 state.workspaces.removeAll { $0.id == workspaceID }
                 for index in state.checkouts.indices where state.checkouts[index].workspaceID == workspaceID {
@@ -3083,7 +3093,7 @@ final class AppState {
                 processedCheckoutIDs.insert(checkoutID)
             }
         }
-        try await deleteWorkspaceDefinition(id: workspaceID)
+        try await deleteWorkspaceDefinition(id: workspaceID, requireNoCheckouts: true)
     }
 
     func preflightWorkspaceCheckout(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
