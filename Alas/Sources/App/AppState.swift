@@ -3575,6 +3575,16 @@ final class AppState {
                 resolvedWorktrees[member.id] = worktree
             }
         }
+        // `deleteMember` resets a member's `cleanupOwnership` to unowned once
+        // its own deletion succeeds, so the ownership gate below must be
+        // read from this pre-deletion snapshot — reading it from whatever
+        // member snapshot comes back afterward would make every member this
+        // very call just finished deleting look exactly like one that was
+        // never owned at all, and its stale sessions would never close.
+        let ownershipBeforeDeletion = Dictionary(uniqueKeysWithValues: before.members.map { ($0.id, $0) })
+        func worktreeToCleanUp(for member: WorkspaceCheckoutMember) -> Worktree? {
+            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap(Self.synthesizedWorktreeIfOwned)
+        }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         for worktree in resolvedWorktrees.values {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
@@ -3596,7 +3606,7 @@ final class AppState {
             await workspacesManager.refreshCheckoutSnapshots()
             if let refreshed = workspacesManager.checkout(id: id) {
                 for member in refreshed.members where member.availability == .explicitlyDeleted {
-                    if let worktree = resolvedWorktrees[member.id] ?? Self.synthesizedWorktreeIfOwned(for: member) {
+                    if let worktree = worktreeToCleanUp(for: member) {
                         await cleanupDeletedWorkspaceMemberRuntime(worktree)
                     }
                 }
@@ -3617,11 +3627,12 @@ final class AppState {
             // deletes it — and any stale terminal/ACP tabs left over from
             // before it went missing need closing too, keyed by the same
             // deterministic path-derived id those tabs were opened under.
-            // Gated to members this checkout actually owned a worktree for,
-            // so a snapshot-only or already-cleaned-up member never tears
-            // down state for whatever unrelated worktree its old path might
-            // now hold.
-            if let worktree = resolvedWorktrees[member.id] ?? Self.synthesizedWorktreeIfOwned(for: member) {
+            // Gated to members this checkout actually owned a worktree for
+            // *before this call started* (see `ownershipBeforeDeletion`
+            // above), so a snapshot-only or already-cleaned-up member never
+            // tears down state for whatever unrelated worktree its old path
+            // might now hold.
+            if let worktree = worktreeToCleanUp(for: member) {
                 await cleanupDeletedWorkspaceMemberRuntime(worktree)
             }
         }

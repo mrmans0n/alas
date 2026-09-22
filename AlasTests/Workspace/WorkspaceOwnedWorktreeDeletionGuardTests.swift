@@ -183,6 +183,92 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(!fixture.state.tabs.tabs(forWorktree: unrelatedWorktreeID).isEmpty)
     }
 
+    @Test func partialFailureStillClosesStaleSessionsForAMemberThatSucceededDespiteBeingMissing() async throws {
+        // Two members: one `.missing`-but-owned that succeeds, one dirty
+        // that fails without a risk confirmation — the overall outcome is
+        // `.retained`, not `.forgotten`. `deleteMember` resets the succeeded
+        // member's cleanupOwnership on success, so the ownership gate must
+        // be read from before the call started, not from the outcome
+        // snapshot, or the missing member's stale session never closes.
+        let suffix = "partial-failure-missing"
+        let repoA = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-a-\(UUID().uuidString)")
+        let repoB = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-b-\(UUID().uuidString)")
+        let checkoutRoot = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-root-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repoA)
+            try? FileManager.default.removeItem(at: repoB)
+            try? FileManager.default.removeItem(at: checkoutRoot)
+        }
+        try FileManager.default.createDirectory(at: repoA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repoB, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: checkoutRoot, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoA)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoA)
+        let headA = try await Process.git(["rev-parse", "HEAD"], cwd: repoA).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoB)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoB)
+        let headB = try await Process.git(["rev-parse", "HEAD"], cwd: repoB).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-workspace-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let state = AppState(workspaceStore: workspaceStore)
+        state.config.workspacesEnabled = true
+        _ = await state.workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast),
+        ]))
+        let projectA = try await state.projectsManager.addProject(path: repoA, displayName: "\(suffix)-a", color: "#5fb7c4")
+        let projectB = try await state.projectsManager.addProject(path: repoB, displayName: "\(suffix)-b", color: "#5fb7c4")
+        let linkedA = checkoutRoot.appendingPathComponent("a")
+        let linkedB = checkoutRoot.appendingPathComponent("b")
+        _ = try await WorktreeService().add(repoPath: repoA, base: "main", branch: "feature/a", destination: linkedA, projectId: projectA.id)
+        _ = try await WorktreeService().add(repoPath: repoB, base: "main", branch: "feature/b", destination: linkedB, projectId: projectB.id)
+        try await state.projectsManager.refreshWorktrees(projectId: projectA.id)
+        try await state.projectsManager.refreshWorktrees(projectId: projectB.id)
+        // Makes B's deletion need a risk confirmation this call never gives.
+        try Data("dirty".utf8).write(to: linkedB.appendingPathComponent("dirty.txt"))
+
+        let memberAID = UUID()
+        let memberBID = UUID()
+        let checkoutID = UUID()
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release",
+            rootPath: checkoutRoot.path,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: memberAID, workspaceMemberID: UUID(), projectID: projectA.id, fallbackProjectName: "A", fallbackRepositoryRoot: repoA.path,
+                    worktreePath: linkedA.path, gitLineageID: WorktreeService.existingLocalLineageID(forWorktreeAt: linkedA),
+                    availability: .missing, checkpoint: .setupComplete,
+                    cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .reused),
+                    plan: .init(checkoutMemberID: memberAID, projectID: projectA.id, sourceRepositoryPath: repoA.path, destinationPath: linkedA.path, baseReference: "main", baseCommit: headA, branchIntent: .reuse)
+                ),
+                WorkspaceCheckoutMember(
+                    id: memberBID, workspaceMemberID: UUID(), projectID: projectB.id, fallbackProjectName: "B", fallbackRepositoryRoot: repoB.path,
+                    worktreePath: linkedB.path, gitLineageID: WorktreeService.existingLocalLineageID(forWorktreeAt: linkedB),
+                    availability: .available, checkpoint: .setupComplete,
+                    cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .reused),
+                    plan: .init(checkoutMemberID: memberBID, projectID: projectB.id, sourceRepositoryPath: repoB.path, destinationPath: linkedB.path, baseReference: "main", baseCommit: headB, branchIntent: .reuse)
+                ),
+            ]
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        await state.workspacesManager.refreshCheckoutSnapshots()
+        let staleWorktreeID = Worktree.makeId(path: linkedA)
+        _ = state.tabs.appendTerminal(worktreeId: staleWorktreeID, title: "term", sessionId: "stale-session")
+
+        let outcome = try await state.deleteAndForgetWorkspaceCheckout(id: checkoutID)
+
+        guard case .retained = outcome else {
+            Issue.record("Expected a retained outcome, got \(outcome)")
+            return
+        }
+        #expect(state.tabs.tabs(forWorktree: staleWorktreeID).isEmpty)
+    }
+
     @Test func checkoutDeletionConfirmationCountsCheckoutOwnedSessionsAsARisk() async throws {
         // A terminal opened at the checkout root (not tied to any one
         // member) is owned by the checkout itself, not by a member worktree,
