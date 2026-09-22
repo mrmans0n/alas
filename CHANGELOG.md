@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.5] - 2026-09-22
+
+### ✨ Features
+
+- Aggregate sessions from trusted Macs in the remote hub, route scoped messages to the owning peer, and keep peer session state in sync (#1419).
+
+### 🐛 Fixes
+
+- Fold checkout deletion into the forget workflow and fix Former Workspace entries, ownership tracking, and deletion safeguards (#1411).
+- Stop syntax colors and inlay hints from churning while typing (#1413).
+
 ## [0.19.4] - 2026-09-22
 
 ### ✨ Features
