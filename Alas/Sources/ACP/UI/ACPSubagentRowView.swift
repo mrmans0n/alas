@@ -148,12 +148,19 @@ struct ACPSubagentRowView: View {
                 // `applyReplayedUserChunk`), which would give both rows the
                 // same key and reintroduce the identity collision this
                 // fix exists to prevent.
-                ForEach(run.messages, id: \.rowViewIdentity) { message in
+                // A child has no `streamingState`; its run state is the
+                // equivalent gate, and the trailing narration is live for
+                // as long as the child is still working.
+                let liveIndex = run.isRunning
+                    ? ACPNarrationLiveness.liveIndex(messages: run.messages, streamingState: .streaming)
+                    : nil
+                ForEach(Array(run.messages.enumerated()), id: \.element.rowViewIdentity) { index, message in
                     ACPSubagentMessageRow(
                         stableId: "\(descriptor.subagentSessionId)#\(message.stableId)",
                         message: message,
                         typography: typography,
-                        trustedImageRoot: trustedImageRoot)
+                        trustedImageRoot: trustedImageRoot,
+                        isLiveNarration: index == liveIndex)
                 }
             }
             .padding(.leading, 2)
@@ -170,6 +177,7 @@ private struct ACPSubagentMessageRow: View {
     let message: ACPMessage
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
+    let isLiveNarration: Bool
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -177,7 +185,7 @@ private struct ACPSubagentMessageRow: View {
         case .agent(_, _, let buffer):
             ACPSubagentTextRow(buffer: buffer, typography: typography)
         case .thought(_, _, let buffer):
-            ACPThoughtView(buffer: buffer)
+            ACPThoughtView(buffer: buffer, isLive: isLiveNarration)
         case .user(_, _, let text, let attachments, _):
             ACPSubagentPromptRow(text: text, attachments: attachments)
         case .toolCall(let toolCall):

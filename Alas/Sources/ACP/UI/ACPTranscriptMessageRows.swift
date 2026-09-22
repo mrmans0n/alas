@@ -109,6 +109,9 @@ struct ACPCommentaryRow: View {
     let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
     let typography: ACPChatTypography
+    /// Whether the agent is still writing this narration — see
+    /// `ACPThoughtView.isLive`.
+    var isLive: Bool = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -116,6 +119,7 @@ struct ACPCommentaryRow: View {
             Rectangle()
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
+                .acpNarrationShimmer(isActive: isLive, axis: .vertical)
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 7) {
@@ -126,6 +130,7 @@ struct ACPCommentaryRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
+                .acpNarrationShimmer(isActive: isLive)
                 AgentMessageRow(
                     messageId: messageId,
                     transcript: transcript,

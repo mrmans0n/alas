@@ -4,6 +4,10 @@ import SwiftUI
 /// reasoning text. Visually anchored by a left vertical accent bar.
 struct ACPThoughtView: View {
     @ObservedObject var buffer: StreamingText
+    /// Whether the agent is still writing into this thought. Decided by
+    /// `ACPNarrationLiveness` at the transcript level, since the buffer
+    /// alone cannot tell "finished" from "paused between chunks".
+    var isLive: Bool = false
     @State private var expanded = false
     @Environment(\.theme) private var theme
 
@@ -12,6 +16,7 @@ struct ACPThoughtView: View {
             Rectangle()
                 .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
+                .acpNarrationShimmer(isActive: isLive, axis: .vertical)
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 6) {
                 Button { expanded.toggle() } label: {
@@ -23,6 +28,7 @@ struct ACPThoughtView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(theme.color("fg-faint"))
                     }
+                    .acpNarrationShimmer(isActive: isLive)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
