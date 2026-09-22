@@ -9,6 +9,11 @@ import Testing
 /// replacements, so none of AppKit's items may appear in the built menus.
 @MainActor
 struct SystemMenuItemsTests {
+    // `AlasApp.init` only calls `registerOptOut()` and declares the
+    // replacement commands under `#available(macOS 26, *)`, since that's the
+    // only OS known to hit the crash; these four tests assert what that gate
+    // produces, so they need the same availability constraint.
+    @available(macOS 26, *)
     @Test func appOptsOutOfEveryAutomaticMenuInsertion() {
         let defaults = UserDefaults.standard
         #expect(defaults.object(forKey: "NSFullScreenMenuItemEverywhere") as? Bool == false)
@@ -47,6 +52,7 @@ struct SystemMenuItemsTests {
         }
     }
 
+    @available(macOS 26, *)
     @Test func editMenuCarriesOnlySwiftUIOwnedItems() throws {
         let titles = try #require(mainMenu(titled: "Edit")).items.map(\.title)
         #expect(!titles.contains("Start Dictation…"))
@@ -55,6 +61,7 @@ struct SystemMenuItemsTests {
         #expect(titles.filter { $0 == SystemMenuItems.emojiAndSymbolsTitle }.count == 1)
     }
 
+    @available(macOS 26, *)
     @Test func viewMenuOwnsItsFullScreenItem() throws {
         let items = try #require(mainMenu(titled: "View")).items.filter { $0.title.hasSuffix("Full Screen") }
         #expect(items.count == 1)

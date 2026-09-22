@@ -16,6 +16,12 @@ import SwiftUI
 /// Opting out of the automatic insertions keeps SwiftUI on its in-place diff
 /// path. The items Alas still wants are declared in its commands instead; see
 /// `SystemMenuItems`.
+///
+/// Only macOS 26 is known to hit this crash, so `AlasApp` gates both the
+/// opt-out and the replacement commands behind `#available(macOS 26, *)`:
+/// older, unaffected systems (`project.yml` supports back to macOS 15) keep
+/// AppKit's native Dictation, AutoFill, and Writing Tools items rather than
+/// losing them for a bug they can't hit.
 enum AppKitMenuInjection {
     /// Computed rather than a stored constant: `[String: Any]` isn't `Sendable`,
     /// and a stored global would need to be, even though the value is fixed.
