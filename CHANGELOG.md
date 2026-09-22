@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-09-22
+
+### ✨ Features
+
+- Record recent schedule firings, link them to run reports, and redesign the schedule editor with previews, weekday presets, and optional agent prompts (#1358, #1390).
+- Add the first phase of Mac-to-Mac federation for reciprocal peer trust behind the Remote peers experiment (#1346).
+- Render native ACP subagents as expandable child transcripts and support session notices, richer tool metadata, authentication status, and permission details (#1372, #1374, #1375, #1377, #1378, #1381).
+- Open transcript links to absolute paths outside the current worktree and simplify worktree deletion (#1371, #1379).
+
+### 🐛 Fixes
+
+- Generate schedule worktree names accepted by the host and validate worktree branch names without filtering user input (#1361, #1370).
+- Preserve GG trailers and fenced examples that use nested code-fence delimiters (#1376, #1383).
+- Improve ACP compatibility and recovery for Cursor, Gemini, Copilot, OpenCode, Codex, and legacy brokers (#1373, #1380, #1385).
+
+### 🎨 Changed
+
+- Restyle checkpoint rows as inset cards with clearer state and actions (#1382).
+
+### 🏗️ Internal
+
+- Update Swift Markdown to 0.9.0 and relax timing in detached-child watchdog tests under heavy CI load (#1386, #1387).
+
 ## [0.19.2] - 2026-09-21
 
 ### ✨ Features
