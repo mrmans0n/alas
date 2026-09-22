@@ -6,9 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Internal
+## [0.19.4] - 2026-09-22
 
-- Keep real Bonjour integration checks off hosted runners and isolate rename formatting tests from large ordinary Swift batches.
+### ✨ Features
+
+- Discover nearby Alas instances over Bonjour as the second phase of Mac-to-Mac federation, and bind peer records to verified key material (#1395, #1406).
+- Shimmer the ACP thinking and working header while activity is live (#1394).
+- Launch ACP-capable scheduled agents in a chat session with configurable agent and model selection (#1407).
+
+### 🐛 Fixes
+
+- Make ACP cursor dispatch atomic, start authentication-status listening before session creation, and send Cursor extension replies synchronously (#1392, #1402, #1403).
+- Resolve and connect to discovered peers over IPv6 and handle deferred pairing edge cases (#1396, #1404).
+- Prevent AppKit-injected menu items from crashing Alas on macOS 26 (#1399).
+- Keep generated worktree and gg stack names free of duplicated branch prefixes (#1397, #1400).
+- Center the gg action spinner and make Land Through Here start immediately while waiting for approvals (#1398, #1405).
+- Prevent the Kotlin tree-sitter parser from hanging on truncated annotations (#1414).
+
+### 🏗️ Internal
+
+- Keep real Bonjour integration checks off hosted runners and isolate rename formatting tests from large ordinary Swift batches (#1412).
 
 ## [0.19.3] - 2026-09-22
 
