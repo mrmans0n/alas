@@ -1,0 +1,223 @@
+import Testing
+import Foundation
+@testable import Alas
+
+@MainActor
+struct FederatedSessionsProviderTests {
+    @MainActor
+    final class FakeLinks: FederatedPeerLinks {
+        var sessionCarryingPeers: [FederatedPeerInfo] = []
+        var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
+        var sent: [(serverId: String, message: RemoteClientMessage)] = []
+        func sendToPeer(_ message: RemoteClientMessage, serverId: String) {
+            guard sessionCarryingPeers.contains(where: { $0.serverId == serverId }) else { return }
+            sent.append((serverId, message))
+        }
+        func goOnline(_ serverId: String, name: String) {
+            sessionCarryingPeers.append(FederatedPeerInfo(serverId: serverId, name: name))
+            onFederationEvent?(.availabilityChanged(serverId: serverId))
+        }
+        func goOffline(_ serverId: String) {
+            sessionCarryingPeers.removeAll { $0.serverId == serverId }
+            onFederationEvent?(.availabilityChanged(serverId: serverId))
+        }
+        func receive(_ message: RemoteServerMessage, from serverId: String) {
+            onFederationEvent?(.message(serverId: serverId, message))
+        }
+        func sent(to serverId: String) -> [RemoteClientMessage] { sent.filter { $0.serverId == serverId }.map(\.message) }
+    }
+
+    @MainActor
+    final class Client {
+        var received: [RemoteServerMessage] = []
+        var listRefreshes = 0
+        private(set) var downstream: FederatedDownstream!
+        init() {
+            downstream = FederatedDownstream(
+                send: { [weak self] in self?.received.append($0) },
+                sessionListChanged: { [weak self] in self?.listRefreshes += 1 })
+        }
+    }
+
+    private func row(_ id: String, serverId: String? = nil) -> RemoteSessionSummary {
+        RemoteSessionSummary(id: id, title: "T \(id)", agentId: "claude", status: "idle", canDrive: false,
+                             serverId: serverId, serverName: serverId.map { "Name \($0)" })
+    }
+
+    @Test func aPeerComingOnlineIsAskedForItsSessionsAndItsRowsAreTaggedAndNamespaced() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        #expect(links.sent(to: "srv-b") == [.listSessions])
+        links.receive(.sessionList(sessions: [row("s1"), row("s2")]), from: "srv-b")
+        let rows = provider.peerSessionSummaries
+        #expect(rows.map(\.id) == ["srv-b:s1", "srv-b:s2"])
+        #expect(rows.allSatisfy { $0.serverId == "srv-b" && $0.serverName == "Mac B" })
+        #expect(rows.first?.title == "T s1")
+        #expect(client.listRefreshes == 1)
+    }
+
+    @Test func rowsAPeerItselfForwardedAreNeverReExported() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.sessionList(sessions: [row("s1"), row("srv-c:s9", serverId: "srv-c")]), from: "srv-b")
+        #expect(provider.peerSessionSummaries.map(\.id) == ["srv-b:s1"])
+    }
+
+    @Test func anUnchangedPeerListDoesNotRefreshDownstreams() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.sessionList(sessions: [row("s1")]), from: "srv-b")
+        links.receive(.sessionList(sessions: [row("s1")]), from: "srv-b")
+        #expect(client.listRefreshes == 1)
+    }
+
+    @Test func listSessionsFromAClientIsForwardedToEveryPeerAndStillHandledLocally() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.goOnline("srv-c", name: "Mac C")
+        links.sent.removeAll()
+        #expect(provider.route(.listSessions, from: client.downstream) == false)
+        #expect(links.sent(to: "srv-b") == [.listSessions])
+        #expect(links.sent(to: "srv-c") == [.listSessions])
+    }
+
+    @Test func subscribeIsForwardedWithTheLocalIdAndRepliesComeBackNamespaced() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        #expect(provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream))
+        #expect(links.sent(to: "srv-b").contains(.subscribe(sessionId: "s1")))
+        links.receive(.transcriptDelta(sessionId: "s1", streamingState: "idle", canDrive: true, upserts: [], epoch: 0, revision: 1),
+                      from: "srv-b")
+        #expect(client.received == [
+            .transcriptDelta(sessionId: "srv-b:s1", streamingState: "idle", canDrive: true, upserts: [], epoch: 0, revision: 1)
+        ])
+    }
+
+    @Test func framesForASessionNobodySubscribedToAreDropped() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        links.receive(.worktreeList(worktrees: []), from: "srv-b")
+        #expect(client.received.isEmpty)
+    }
+
+    @Test func localAndUnknownIdsAreNotRouted() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        #expect(provider.route(.subscribe(sessionId: "s1"), from: client.downstream) == false)
+        #expect(provider.route(.subscribe(sessionId: "srv-z:s1"), from: client.downstream) == false)
+        #expect(provider.route(.createSession(worktreeId: "w", agentId: "a"), from: client.downstream) == false)
+        #expect(links.sent(to: "srv-b") == [.listSessions])
+    }
+
+    @Test func driveVerbsAreForwardedVerbatimApartFromTheId() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        let prompt = RemoteClientMessage.sendPrompt(sessionId: "srv-b:s1", text: "go", attachments: [], intent: "steer")
+        #expect(provider.route(prompt, from: client.downstream))
+        #expect(provider.route(.stop(sessionId: "srv-b:s1"), from: client.downstream))
+        #expect(provider.route(.fetchOlder(sessionId: "srv-b:s1", beforeIndex: 4, limit: 20), from: client.downstream))
+        #expect(links.sent(to: "srv-b") == [
+            .sendPrompt(sessionId: "s1", text: "go", attachments: [], intent: "steer"),
+            .stop(sessionId: "s1"),
+            .fetchOlder(sessionId: "s1", beforeIndex: 4, limit: 20),
+        ])
+    }
+
+    @Test func twoClientsShareOneUpstreamSubscriptionAndBothGetFrames() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let one = Client()
+        let two = Client()
+        provider.attach(one.downstream)
+        provider.attach(two.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: one.downstream)
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: two.downstream)
+        // Each downstream subscribe re-asks upstream so the newcomer gets a
+        // fresh snapshot; the peer answers a re-subscribe with one.
+        #expect(links.sent(to: "srv-b") == [.subscribe(sessionId: "s1"), .subscribe(sessionId: "s1")])
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        #expect(one.received == [.stopPending(sessionId: "srv-b:s1")])
+        #expect(two.received == [.stopPending(sessionId: "srv-b:s1")])
+        // The first to leave does not unsubscribe upstream; the last does.
+        _ = provider.route(.unsubscribe(sessionId: "srv-b:s1"), from: one.downstream)
+        #expect(!links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        #expect(one.received.count == 1)
+        #expect(two.received.count == 2)
+        provider.detach(two.downstream)
+        #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
+    }
+
+    @Test func aPeerGoingOfflineClosesItsSessionsAndDropsItsRows() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.sessionList(sessions: [row("s1")]), from: "srv-b")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
+        let refreshesBefore = client.listRefreshes
+        links.goOffline("srv-b")
+        #expect(client.received.contains(.sessionClosed(sessionId: "srv-b:s1")))
+        #expect(provider.peerSessionSummaries.isEmpty)
+        #expect(client.listRefreshes == refreshesBefore + 1)
+        // Nothing further is forwarded for a peer that is gone, and its id
+        // no longer parses as federated.
+        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
+        #expect(!client.received.contains(.stopPending(sessionId: "srv-b:s1")))
+        #expect(provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream) == false)
+    }
+
+    @Test func sessionClosedFromThePeerForgetsTheSubscription() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
+        links.receive(.sessionClosed(sessionId: "s1"), from: "srv-b")
+        #expect(client.received == [.sessionClosed(sessionId: "srv-b:s1")])
+        links.sent.removeAll()
+        provider.detach(client.downstream)
+        #expect(links.sent.isEmpty)   // nothing left to unsubscribe
+    }
+
+    @Test func availabilityCallbackFiresOnlyWhenTheSetOfCarryingPeersChanges() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        var fired = 0
+        provider.onPeerAvailabilityChanged = { fired += 1 }
+        links.goOnline("srv-b", name: "Mac B")
+        #expect(fired == 1)
+        links.onFederationEvent?(.availabilityChanged(serverId: "srv-b"))   // same set
+        #expect(fired == 1)
+        links.goOffline("srv-b")
+        #expect(fired == 2)
+    }
+}
