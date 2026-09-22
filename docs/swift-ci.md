@@ -28,11 +28,11 @@ is assigned once to execution or an exclusion in `scripts/ci-swift-test-policy.t
 New tests default to ordinary execution without editing that file or the workflow.
 
 The policy records selectors, execution requirements, reasons, and tracking issues.
-Ghostty runtime smoke, SSH integration, live LSP verification, and Gemini E2E
-remain explicit opt-ins outside PR CI. The three historically disabled subprocess
-suites retain #23 as their follow-up. The subprocess list preserves the conservative
-isolation baseline gathered during #1277; it does not assert every listed suite
-individually reproduced a hang. Shrink it using measured runs, not source heuristics.
+Ghostty runtime smoke, real Bonjour discovery, SSH integration, live LSP
+verification, and Gemini E2E remain explicit opt-ins outside PR CI.
+The three historically disabled subprocess suites retain #23 as their follow-up.
+The subprocess list preserves the conservative isolation baseline gathered during
+#1277; it does not assert every listed suite individually reproduced a hang.
 
 The build runner publishes compiled products and the test plan, then finishes.
 Two dependent test runners balance all six ordinary batches and the subprocess
