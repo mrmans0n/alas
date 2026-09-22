@@ -17,11 +17,15 @@ import SwiftUI
 /// path. The items Alas still wants are declared in its commands instead; see
 /// `SystemMenuItems`.
 ///
-/// Only macOS 26 is known to hit this crash, so `AlasApp` gates both the
-/// opt-out and the replacement commands behind `#available(macOS 26, *)`:
-/// older, unaffected systems (`project.yml` supports back to macOS 15) keep
-/// AppKit's native Dictation, AutoFill, and Writing Tools items rather than
-/// losing them for a bug they can't hit.
+/// Only macOS 26 is known to hit this crash (`isAffectedOS`), so older
+/// systems (`project.yml` supports back to macOS 15) keep AppKit's native
+/// Dictation, AutoFill, and Writing Tools items rather than losing them for a
+/// bug they can't hit. `applyOptOut` runs unconditionally on every launch and
+/// reverts the opt-out on those systems, not just skips reapplying it — the
+/// values are written directly into the app's own persistent preferences
+/// domain (see below), so a prior launch on an affected OS could otherwise
+/// leave them stuck after e.g. a downgrade or a preferences restore onto an
+/// older Mac.
 enum AppKitMenuInjection {
     /// Computed rather than a stored constant: `[String: Any]` isn't `Sendable`,
     /// and a stored global would need to be, even though the value is fixed.
@@ -37,20 +41,37 @@ enum AppKitMenuInjection {
         ]
     }
 
-    /// Must run before AppKit finishes launching; `AlasApp.init` is early enough.
+    /// True only on the one OS known to crash on AppKit's automatic menu
+    /// insertions; see the type-level doc comment.
+    static var isAffectedOS: Bool {
+        if #available(macOS 26, *) { true } else { false }
+    }
+
+    /// Must run before AppKit finishes launching; `AlasApp.init` is early
+    /// enough. Safe and idempotent to call on every launch.
     ///
-    /// Sets the values directly rather than via `register(defaults:)`. The
-    /// registration domain is the lowest-priority fallback UserDefaults
-    /// consults, so it would be silently ignored if any of these keys were
-    /// already present in the app's own domain or in `NSGlobalDomain` — which
-    /// `NSFullScreenMenuItemEverywhere` in particular is documented to be, as
-    /// a systemwide toggle some users or MDM profiles set directly. Writing
-    /// the app's own domain outranks `NSGlobalDomain` in the standard lookup
-    /// order, so this always wins and the opt-out can never be silently
-    /// defeated by a pre-existing value.
-    static func registerOptOut(in defaults: UserDefaults = .standard) {
-        for (key, value) in optOutDefaults {
-            defaults.set(value, forKey: key)
+    /// On an affected OS, sets the values directly rather than via
+    /// `register(defaults:)`. The registration domain is the lowest-priority
+    /// fallback UserDefaults consults, so it would be silently ignored if any
+    /// of these keys were already present in the app's own domain or in
+    /// `NSGlobalDomain` — which `NSFullScreenMenuItemEverywhere` in
+    /// particular is documented to be, as a systemwide toggle some users or
+    /// MDM profiles set directly. Writing the app's own domain outranks
+    /// `NSGlobalDomain` in the standard lookup order, so this always wins.
+    ///
+    /// On any other OS, removes those same keys from the app's own domain,
+    /// undoing whatever a prior launch on an affected OS may have persisted
+    /// there — otherwise the opt-out would silently survive onto a system
+    /// that was never exposed to the crash it exists to prevent.
+    static func applyOptOut(isAffectedOS: Bool = AppKitMenuInjection.isAffectedOS, in defaults: UserDefaults = .standard) {
+        if isAffectedOS {
+            for (key, value) in optOutDefaults {
+                defaults.set(value, forKey: key)
+            }
+        } else {
+            for key in optOutDefaults.keys {
+                defaults.removeObject(forKey: key)
+            }
         }
     }
 }

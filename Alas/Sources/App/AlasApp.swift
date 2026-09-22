@@ -11,12 +11,11 @@ struct AlasApp: App {
     private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
     init() {
-        // Only macOS 26 is known to crash on AppKit's automatic menu
-        // insertions (see SystemMenuItems.swift); leave older, unaffected
-        // systems with their native Dictation/AutoFill/Writing Tools items.
-        if #available(macOS 26, *) {
-            AppKitMenuInjection.registerOptOut()
-        }
+        // Enforces (or, on an unaffected OS, reverts) the AppKit menu-crash
+        // workaround; see SystemMenuItems.swift. Runs unconditionally so a
+        // downgrade or a preferences restore onto an older Mac can't leave a
+        // prior launch's opt-out stuck.
+        AppKitMenuInjection.applyOptOut()
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())
         } else {
@@ -255,7 +254,7 @@ struct AlasApp: App {
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(!state.hasActiveCodeEditorTab)
-            if #available(macOS 26, *) {
+            if AppKitMenuInjection.isAffectedOS {
                 Divider()
                 Button(SystemMenuItems.emojiAndSymbolsTitle) {
                     SystemMenuItems.showEmojiAndSymbols()
@@ -483,7 +482,7 @@ struct AlasApp: App {
                 NSApp.sendAction(#selector(FontSizeResponder.resetFontSize(_:)), to: nil, from: nil)
             }
             .keyboardShortcut(state.shortcut(for: .resetFontSize))
-            if #available(macOS 26, *) {
+            if AppKitMenuInjection.isAffectedOS {
                 Divider()
                 Button(SystemMenuItems.fullScreenTitle(isFullScreen: fullScreenMenu.isKeyWindowFullScreen)) {
                     SystemMenuItems.toggleFullScreen()
