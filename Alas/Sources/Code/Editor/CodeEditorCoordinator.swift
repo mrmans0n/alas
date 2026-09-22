@@ -1425,7 +1425,7 @@ final class CodeEditorCoordinator {
         inlayLayout = EditorInlayLayout(textView: textView)
         inlayFeature = InlayHintsFeature(request: { [weak self] range in
             await self?.requestInlayHints(range: range)
-        }, apply: { [weak self] hints in self?.applyInlayHints(hints) }, clear: { [weak self] in
+        }, apply: { [weak self] hints, outstanding in self?.applyInlayHints(hints, covering: outstanding) }, clear: { [weak self] in
             self?.inlayLayout?.clear()
             self?.inlayResponse = nil
             self?.inlayResponsesByPosition = [:]
@@ -1527,7 +1527,7 @@ final class CodeEditorCoordinator {
         } catch { return nil }
     }
 
-    private func applyInlayHints(_ hints: [LSPInlayHint]) {
+    private func applyInlayHints(_ hints: [LSPInlayHint], covering: [NSRange]) {
         guard let response = inlayResponse, let settings = inlaySettings, let layout = inlayLayout,
               isLSPRequestCurrent(response.context), buffer?.editGeneration == response.revision else { return }
         layout.isCurrent = { [weak self] in
@@ -1548,7 +1548,7 @@ final class CodeEditorCoordinator {
             guard let chosen = try? LSPCodeAction(wireValue: .object(action)) else { return }
             codeActionsFeature?.performInlayAction(chosen, client: origin.client, context: origin.context, generations: origin.generations)
         }
-        do { try layout.replace(hints, revision: response.revision, settings: settings) }
+        do { try layout.replace(hints, covering: covering, revision: response.revision, settings: settings) }
         catch { layout.clear() }
     }
 

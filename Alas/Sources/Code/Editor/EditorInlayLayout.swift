@@ -54,7 +54,19 @@ final class EditorInlayLayout {
         textView?.toolTip = nil
     }
 
-    func replace(_ values: [LSPInlayHint], revision: Int, settings: InlayHintSettings) throws {
+    /// `covering` names the source ranges still outstanding — requested but
+    /// not yet answered by `values`. Chunks answer one at a time, so a
+    /// response that resolves only part of the viewport's requested window
+    /// must not evict the decorations of sibling chunks still in flight —
+    /// that dropped and restored every offscreen hint on each keystroke. But
+    /// a hint whose range already answered (even with an empty result) is
+    /// not outstanding, so it relies on `values` alone — otherwise a hint the
+    /// server has since dropped would linger forever. And a hint entirely
+    /// outside `covering` belongs to a viewport nothing is asking about
+    /// anymore, so it must not be carried over either — there is no longer a
+    /// pending request that would ever replace or expire it. Passing `nil`
+    /// claims the whole document.
+    func replace(_ values: [LSPInlayHint], covering: [NSRange]? = nil, revision: Int, settings: InlayHintSettings) throws {
         guard let view = textView, let adapter = view.displayAdapter, adapter.buffer.editGeneration == revision else { return }
         let fontSize = max(8, (view.font?.pointSize ?? 13) - 2)
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
@@ -69,7 +81,13 @@ final class EditorInlayLayout {
         for hint in values where InlayHintsFeature.isVisible(kind: hint.kind, settings: settings) {
             let occurrence = occurrences[hint.position, default: 0]
             occurrences[hint.position] = occurrence + 1
-            let id = "\(revision):\(hint.position.line):\(hint.position.character):\(occurrence)"
+            // Identify a hint by the position it annotates, not by the revision
+            // that produced it. `applySourceEdit` retains untouched hints across
+            // an edit under their original ids while shifting their offsets, so
+            // a revision-keyed id made every repeated hint look new and forced
+            // the projection to relay out every line between the first and last
+            // hint on each keystroke.
+            let id = "\(hint.position.line):\(hint.position.character):\(occurrence)"
             if self.revision == revision, hints[id]?.wireValue == hint.wireValue,
                let existing = previous[id], existing.fontSize == fontSize {
                 display.append(existing)
@@ -91,6 +109,53 @@ final class EditorInlayLayout {
             display.append(.init(id: id, sourceOffset: start + column, label: hint.label,
                                  size: CGSize(width: max(1, x + (hint.paddingRight ? padding : 0)), height: max(1, height)), parts: parts, fontSize: fontSize))
             retained[id] = hint
+        }
+        if let covering {
+            // Carry over decorations that are still outstanding — no response
+            // has spoken for their range yet. They keep the offsets
+            // `applySourceEdit` shifted for them, so the projection diffs
+            // them as unchanged and leaves their layout alone. They stay out
+            // of `retained`, which is what makes them non-actionable.
+            var claimedOffsets = Dictionary(uniqueKeysWithValues: display.map { ($0.id, $0.sourceOffset) })
+            // Chunks abut, so a hint on a boundary belongs to the chunk that
+            // starts there — except at EOF, which the last chunk owns.
+            func isOutstanding(_ offset: Int) -> Bool {
+                covering.contains { offset >= $0.location
+                    && (offset < NSMaxRange($0) || NSMaxRange($0) == source.length) }
+            }
+            for run in adapter.document.map.hintRuns where isOutstanding(run.hint.sourceOffset) {
+                // Same id at the same offset: this slot is already
+                // represented by a fresh `values` entry — nothing more to
+                // carry over.
+                guard claimedOffsets[run.hint.id] != run.hint.sourceOffset else { continue }
+                var hint = run.hint
+                if claimedOffsets[hint.id] != nil {
+                    // Same id, different offset: a retained hint's id is
+                    // frozen at the line/character it had when the server
+                    // first reported it — a newline inserted earlier in the
+                    // document shifts its offset without ever rewriting that
+                    // id, so it can now collide with an unrelated, freshly-
+                    // answered hint that legitimately reports the same old
+                    // line/character. Keep both rather than let the collision
+                    // suppress the outstanding one: disambiguate by current
+                    // offset, which stays stable across repeated calls until
+                    // another edit moves it again.
+                    let disambiguated = "\(hint.id)@\(hint.sourceOffset)"
+                    guard claimedOffsets[disambiguated] == nil else { continue }
+                    hint = .init(id: disambiguated, sourceOffset: hint.sourceOffset, label: hint.label,
+                                size: hint.size, parts: hint.parts, fontSize: hint.fontSize)
+                }
+                claimedOffsets[hint.id] = hint.sourceOffset
+                display.append(hint)
+            }
+            // Carried-over hints from a chunk before this one would otherwise
+            // trail the answer and make an unchanged projection compare
+            // unequal. Order them the way the map does, stably, so hints
+            // sharing an offset keep the answer's precedence.
+            display = display.enumerated().sorted {
+                $0.element.sourceOffset == $1.element.sourceOffset
+                    ? $0.offset < $1.offset : $0.element.sourceOffset < $1.element.sourceOffset
+            }.map(\.element)
         }
         try adapter.updateHints(display, revision: revision)
         generation = UUID()

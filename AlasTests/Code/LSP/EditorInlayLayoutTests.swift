@@ -83,10 +83,12 @@ struct EditorInlayLayoutTests {
         #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
         try await eventually("refresh retained hints") { requests.count >= 3 }
         try reply(requests[2])
-        try await eventually("fresh hints replace retained visuals") {
-            guard let id = view.displayAdapter?.document.map.hintRuns.first?.hint.id else { return false }
-            return id != retainedID && view.inlayAccessibilityActions?(id).isEmpty == false
+        // The response repeats the hint the edit did not disturb, so the
+        // retained decoration is adopted as-is and only regains its anchor.
+        try await eventually("fresh hints restore retained visuals") {
+            view.inlayAccessibilityActions?(retainedID).isEmpty == false
         }
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
         // Moving through a prefetched chunk and back must not request or
         // recreate the already-visible hints at the beginning of the file.
         let cachedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
@@ -216,5 +218,187 @@ struct EditorInlayLayoutTests {
         #expect(try #require(view.displayAdapter).document.map.hintRuns.isEmpty)
         #expect(buffer.storage.string == "x")
         #expect(await layout.resolved(runs[0].hint.id) == nil)
+    }
+
+    /// A fresh response that repeats the hints a keystroke did not disturb must
+    /// reuse their decorations. Rebuilding them relays out every line between
+    /// the first and last hint, which reads on screen as the whole viewport
+    /// blinking once per keypress.
+    @Test func identicalHintsAfterAnEditReuseTheirDecorations() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = (0 ..< 40).map { "let value\($0) = compute\($0)()" }.joined(separator: "\n") + "\n"
+        try Data(text.utf8).write(to: root.appendingPathComponent("test.swift"))
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "test.swift")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.close(persistDirtySnapshot: false) }
+        let manager = NSLayoutManager(), container = NSTextContainer(size: CGSize(width: 900, height: 100_000))
+        manager.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 900, height: 600), textContainer: container)
+        view.bindUndo(to: buffer)
+        try view.bindDisplay(to: buffer)
+        defer { try? view.bindDisplay(to: nil) }
+        let hints = try stride(from: 0, to: 40, by: 4).map { line in
+            try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(
+                #"{"position":{"line":\#(line),"character":9},"label":": Int","kind":1}"#.utf8)))
+        }
+        let layout = EditorInlayLayout(textView: view)
+        try layout.replace(hints, revision: buffer.editGeneration, settings: .init())
+        let display = try #require(view.textStorage)
+        func attachments() -> [String: EditorHintAttachment] {
+            var result: [String: EditorHintAttachment] = [:]
+            for run in view.displayAdapter?.document.map.hintRuns ?? [] {
+                result[run.hint.id] = display.attribute(.attachment, at: run.displayOffset, effectiveRange: nil) as? EditorHintAttachment
+            }
+            return result
+        }
+        let before = attachments()
+        #expect(before.count == hints.count)
+
+        // Type one character on a line that carries no hint.
+        let starts = EditorDisplayAdapter.lineStarts(in: buffer.storage.string)
+        view.setSourceSelectedRange(NSRange(location: starts[21] + 3, length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let afterEdit = attachments()
+        #expect(afterEdit.count == hints.count)
+        #expect(afterEdit.allSatisfy { before[$0.key] === $0.value })
+
+        var mutations = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: display, queue: .main) { [weak view] _ in
+            MainActor.assumeIsolated {
+                guard let storage = view?.textStorage, storage.editedMask.contains(.editedCharacters) else { return }
+                mutations += storage.editedRange.length
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        // A projection rebuild makes every owner of temporary attributes — the
+        // semantic token colors among them — drop and repaint its ranges, which
+        // is the other half of the flicker this guards against.
+        var projections = 0
+        let projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: view, queue: .main) { _ in
+            MainActor.assumeIsolated { projections += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(projectionObserver) }
+        try layout.replace(hints, revision: buffer.editGeneration, settings: .init())
+        #expect(mutations == 0)
+        #expect(projections == 0)
+        let afterApply = attachments()
+        #expect(afterApply.count == hints.count)
+        #expect(afterApply.allSatisfy { afterEdit[$0.key] === $0.value })
+        // The refreshed hints are protocol anchors again, retained visuals are not.
+        #expect(view.inlayAccessibilityActions?(try #require(afterApply.keys.sorted().first)).isEmpty == false)
+
+        // `covering` names ranges still outstanding — requested but not yet
+        // answered — not the whole viewport window and not what this
+        // response itself answers. A response for the first of two chunks
+        // must leave the still-unanswered second chunk alone instead of
+        // evicting it until its own answer arrives.
+        mutations = 0
+        let firstHalf = NSRange(location: 0, length: starts[20])
+        let secondHalf = NSRange(location: starts[20], length: buffer.storage.length - starts[20])
+        projections = 0
+        try layout.replace(Array(hints.prefix(5)), covering: [secondHalf], revision: buffer.editGeneration, settings: .init())
+        #expect(mutations == 0)
+        #expect(projections == 0)
+        #expect(view.displayAdapter?.document.map.hintRuns.count == hints.count)
+        // Only the answered half is actionable; the carried-over half is not.
+        #expect(view.inlayAccessibilityActions?("0:9:0").isEmpty == false)
+        #expect(view.inlayAccessibilityActions?("36:9:0").isEmpty == true)
+        // A chunk that already answered must not keep carrying a hint the
+        // server has since dropped just because its range still sits inside
+        // some looser notion of "the viewport." The caller stops naming an
+        // already-answered range as outstanding — modeled here by simply not
+        // including firstHalf in `covering` again — so a hint missing from
+        // this second answer for firstHalf disappears instead of lingering.
+        try layout.replace(Array(hints[1 ..< 5]), covering: [secondHalf], revision: buffer.editGeneration, settings: .init())
+        #expect(view.displayAdapter?.document.map.hintRuns.count == hints.count - 1)
+        #expect(view.displayAdapter?.document.map.hintRuns.contains { $0.hint.id == "0:9:0" } == false)
+        // Same shape for a chunk in the middle, whose carried-over neighbours
+        // sit on both sides of the answer — both are still outstanding.
+        let middle = NSRange(location: starts[12], length: starts[28] - starts[12])
+        let beforeMiddle = NSRange(location: 0, length: middle.location)
+        let afterMiddle = NSRange(location: NSMaxRange(middle), length: buffer.storage.length - NSMaxRange(middle))
+        try layout.replace(Array(hints), revision: buffer.editGeneration, settings: .init())
+        mutations = 0
+        projections = 0
+        try layout.replace(Array(hints[3 ..< 7]), covering: [beforeMiddle, afterMiddle], revision: buffer.editGeneration, settings: .init())
+        #expect(mutations == 0)
+        #expect(projections == 0)
+        #expect(view.displayAdapter?.document.map.hintRuns.count == hints.count)
+        // A response with no `covering` at all claims the whole document is
+        // now authoritatively answered, so hints the server dropped disappear.
+        try layout.replace(Array(hints.prefix(5)), revision: buffer.editGeneration, settings: .init())
+        #expect(view.displayAdapter?.document.map.hintRuns.count == 5)
+        // A hint entirely outside the requested window — the viewport
+        // scrolled away and stopped asking about it — must not be carried
+        // over either: nothing will ever answer for it again, so carrying it
+        // would leave a decoration with no path to being refreshed or
+        // cleared.
+        try layout.replace(hints, revision: buffer.editGeneration, settings: .init())
+        try layout.replace(Array(hints[3 ..< 7]), covering: [middle], revision: buffer.editGeneration, settings: .init())
+        #expect(view.displayAdapter?.document.map.hintRuns.count == 4)
+    }
+
+    /// A retained hint's id is frozen at the line/character it had when the
+    /// server first reported it. `applySourceEdit` shifts its *offset* to
+    /// track a newline inserted earlier in the document, but never rewrites
+    /// that frozen id — so after such an edit, a still-outstanding retained
+    /// hint can share its stale id with an unrelated, freshly-answered hint
+    /// that now legitimately occupies that old line number. The id-based
+    /// `claimed` check must not let that collision suppress the retained
+    /// hint.
+    @Test func retainedHintSurvivesAnIDCollisionAfterALineShiftingEdit() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = (0 ..< 10).map { "let value\($0) = compute\($0)()" }.joined(separator: "\n") + "\n"
+        try Data(text.utf8).write(to: root.appendingPathComponent("test.swift"))
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "test.swift")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.close(persistDirtySnapshot: false) }
+        let manager = NSLayoutManager(), container = NSTextContainer(size: CGSize(width: 900, height: 100_000))
+        manager.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 900, height: 600), textContainer: container)
+        view.bindUndo(to: buffer)
+        try view.bindDisplay(to: buffer)
+        defer { try? view.bindDisplay(to: nil) }
+        func hint(line: Int) throws -> LSPInlayHint {
+            try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(
+                #"{"position":{"line":\#(line),"character":9},"label":": Int","kind":1}"#.utf8)))
+        }
+        // The hint on line 4 is the one that will end up with a stale,
+        // colliding id once the edit below shifts it to line 5.
+        let shiftedHint = try hint(line: 4)
+        let layout = EditorInlayLayout(textView: view)
+        try layout.replace([shiftedHint], revision: buffer.editGeneration, settings: .init())
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == "4:9:0")
+
+        // Insert a newline at the very start of the document. Every hint
+        // after it — including the one on line 4 — shifts down one line, but
+        // `applySourceEdit` only moves its offset; its id stays "4:9:0".
+        view.setSourceSelectedRange(NSRange(location: 0, length: 0))
+        view.insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let starts = EditorDisplayAdapter.lineStarts(in: buffer.storage.string)
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == "4:9:0")
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.sourceOffset == starts[5] + 9)
+
+        // A fresh response now reports a hint truly at (post-edit) line 4 —
+        // whatever used to sit at line 3 before the newline was inserted.
+        // Its id is also "4:9:0", genuinely and correctly, since it reflects
+        // the server's current, accurate position. The now-line-5 retained
+        // hint is still outstanding (its own chunk hasn't answered) and must
+        // survive this collision rather than silently disappear.
+        let freshHint = try hint(line: 4)
+        try layout.replace([freshHint], covering: [NSRange(location: starts[5], length: buffer.storage.length - starts[5])],
+                           revision: buffer.editGeneration, settings: .init())
+        let runs = try #require(view.displayAdapter?.document.map.hintRuns)
+        #expect(runs.count == 2)
+        #expect(runs.contains { $0.hint.sourceOffset == starts[4] + 9 })
+        #expect(runs.contains { $0.hint.sourceOffset == starts[5] + 9 })
     }
 }
