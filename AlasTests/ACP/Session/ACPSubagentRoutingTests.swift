@@ -356,6 +356,47 @@ struct ACPSubagentRoutingTests {
         #expect(acknowledged.value == true)
     }
 
+    @Test("a replayed spawn recovered mid-array re-persists the shifted suffix, not just itself")
+    func replaySpawnInsertionRepersistsShiftedSuffix() async throws {
+        let (runner, store, _) = try makeRunner()
+
+        // A later parent message already persisted (as hydration would
+        // restore it) BEFORE the spawn — whose own row never reached
+        // SQLite — is replayed.
+        runner.session.appendSystemNotice("later notice")
+        runner.persistIndices([0])
+        await runner.flushPersistence()
+        let before = try store.loadMessages(sessionId: "s")
+        #expect(before.count == 1)
+        #expect(before[0].seq == 0)
+
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore"))))
+        await runner.flushPersistence()
+
+        // In memory: the recovered spawn lands BEFORE the notice.
+        #expect(runner.session.transcript.messages.count == 2)
+        guard case .toolCall = runner.session.transcript.messages[0],
+              case .systemNotice = runner.session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn before the already-persisted notice")
+            return
+        }
+
+        // On disk: BOTH rows must be re-persisted at their new positions —
+        // not just the recovered one — or the notice's content is either
+        // overwritten by the spawn's (same seq, same id) or never rewritten
+        // at its own new seq at all.
+        let after = try store.loadMessages(sessionId: "s")
+        #expect(after.count == 2)
+        let seqZero = try #require(after.first { $0.seq == 0 })
+        let seqOne = try #require(after.first { $0.seq == 1 })
+        #expect(seqZero.kind == "tool_call")
+        #expect(seqOne.kind == "system")
+        #expect(String(data: seqOne.payload, encoding: .utf8)?.contains("later notice") == true)
+    }
+
     @Test("a replayed nested lifecycle update is reconciled, its content is not")
     func replayReconcilesNestedLifecycleOnly() async throws {
         let (runner, _, _) = try makeRunner()

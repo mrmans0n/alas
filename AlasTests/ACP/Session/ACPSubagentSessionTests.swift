@@ -799,7 +799,11 @@ struct ACPSubagentSessionTests {
         let dirty = session.applySuppressedReplaySideEffects(
             .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
 
-        #expect(dirty == [0])
+        // The insertion shifts the later message's own array position, so
+        // it must be re-persisted too — not just the recovered row — or
+        // its stored row is left under its now-stale seq. See
+        // `registerSubagent`.
+        #expect(dirty == [0, 1])
         #expect(session.transcript.messages.count == 2)
         guard case .toolCall(let spawnRow) = session.transcript.messages[0],
               case .agent = session.transcript.messages[1] else {

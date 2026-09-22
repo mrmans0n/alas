@@ -1058,13 +1058,17 @@ final class ACPSession: ObservableObject, Identifiable {
         default:
             return []
         }
-        // Advances past whichever row this update resolved to (matched OR
-        // recovered), so a LATER recovered row — a subagent spawn whose own
-        // write never reached SQLite while later messages did — inserts at
-        // the correct chronological position instead of the tail. See
-        // `registerSubagent`.
-        if let touchedMax = dirty.max() {
-            suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedMax + 1)
+        // Advances past whichever row this update itself resolved to
+        // (matched OR recovered), so a LATER recovered row — a subagent
+        // spawn whose own write never reached SQLite while later messages
+        // did — inserts at the correct chronological position instead of
+        // the tail. See `registerSubagent`. `dirty.min()`, not `.max()`:
+        // `registerSubagent`'s own dirty set spans the recovered row AND
+        // every later row re-persisted because the insertion shifted its
+        // position — the cursor must land right after the recovered row
+        // itself, not after that whole shifted (already-reconciled) tail.
+        if let touchedIndex = dirty.min() {
+            suppressedReplayInsertionCursor = max(suppressedReplayInsertionCursor, touchedIndex + 1)
         }
         return dirty
     }
@@ -1739,11 +1743,11 @@ final class ACPSession: ObservableObject, Identifiable {
         let row = ACPMessage.toolCall(descriptor(for: run).toolCall(
             executionStartedAt: timestamp,
             executionFinishedAt: nil))
-        let index: Int
+        let dirty: Set<Int>
         if flushingReplayCandidates {
             flushPendingReplayCandidates()
             transcript.appendMessage(row, createdAt: timestamp)
-            index = transcript.messages.count - 1
+            dirty = [transcript.messages.count - 1]
         } else {
             // Reaching here during suppressed replay means this child was
             // never hydrated at all — its row is genuinely missing from
@@ -1751,12 +1755,24 @@ final class ACPSession: ObservableObject, Identifiable {
             // messages that DID persist; appending it would place the
             // child's row after output that chronologically preceded it.
             // Insert at the replay position instead.
-            index = min(suppressedReplayInsertionCursor, transcript.messages.count)
+            let index = min(suppressedReplayInsertionCursor, transcript.messages.count)
             transcript.insertMessage(row, at: index, createdAt: timestamp)
+            // `persistIndices` keys a parent row by its ARRAY POSITION
+            // (`msg-<session>-<index>`, seq == index) — unlike a child
+            // transcript, which stores a seq independent of array position
+            // specifically so it can tolerate this. Inserting here shifts
+            // every later row's position without touching its stored SQL
+            // row, so the ENTIRE shifted suffix must be re-persisted too,
+            // not just the inserted row — otherwise persisting only the
+            // new row's index overwrites whatever was previously stored
+            // under that id (the row now one position later, unrelated to
+            // the spawn), and the row that shifted into it is never
+            // rewritten at its own new position at all.
+            dirty = Set(index..<transcript.messages.count)
         }
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
-        return [index]
+        return dirty
     }
 
     /// Applies a child's lifecycle transition, updating its row.
