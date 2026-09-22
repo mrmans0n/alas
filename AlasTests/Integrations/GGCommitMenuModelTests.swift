@@ -260,6 +260,71 @@ struct GGCommitMenuModelTests {
         #expect(model.item(for: .landThrough)?.disabledReason == "A lower commit is not ready to land.")
     }
 
+    private static let waitingCapableGG = GGCapabilities(
+        structuredSplit: true,
+        keepCurrentUnstack: true,
+        landJSONL: true
+    )
+
+    @Test func landStaysAvailableOnAnUnapprovedReviewWhenGGCanWait() {
+        let model = GGCommitMenuModel.make(context: context(
+            target: entry(position: 1, approved: false, ciStatus: .running),
+            capabilities: Self.waitingCapableGG
+        ))
+
+        #expect(model.item(for: .landThrough)?.isEnabled == true)
+        #expect(model.item(for: .landThrough)?.disabledReason == nil)
+    }
+
+    @Test func landExplainsStatesThatWaitingCannotResolve() {
+        func reason(_ target: GGStackEntry, provider: CodeHostKind = .github) -> String? {
+            GGCommitMenuModel.make(context: context(
+                target: target,
+                provider: provider,
+                capabilities: Self.waitingCapableGG
+            )).item(for: .landThrough)?.disabledReason
+        }
+
+        #expect(reason(entry(position: 1, prState: .merged)) == "This commit is already merged.")
+        #expect(reason(entry(position: 1, prState: .closed)) == "This commit's PR is closed.")
+        #expect(reason(entry(position: 1, prState: .draft))
+            == "Mark this commit's PR ready for review first.")
+        #expect(reason(entry(position: 1, prNumber: nil, prState: nil), provider: .gitlab)
+            == "Sync the stack to open a MR for this commit first.")
+        #expect(reason(entry(position: 1, ciStatus: .failed)) == "CI failed for this commit.")
+    }
+
+    @Test func landStillBlocksOnAnUnlandableLowerCommitWhenGGCanWait() {
+        let target = entry(position: 2)
+        let unreviewedLower = GGStackEntry(
+            position: 1,
+            sha: "sha-1",
+            title: "Not pushed yet",
+            ggId: "change-1"
+        )
+        let stack = GGStack(
+            name: "feature",
+            base: "main",
+            totalCommits: 2,
+            syncedCommits: 0,
+            currentPosition: 2,
+            behindBase: 0,
+            entries: [unreviewedLower, target]
+        )
+        let model = GGCommitMenuModel.make(context: GGCommitMenuContext(
+            entry: target,
+            stack: stack,
+            provider: .github,
+            capabilities: Self.waitingCapableGG,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            hasBlockingGitOperation: false,
+            selectionIsStale: false
+        ))
+
+        #expect(model.item(for: .landThrough)?.disabledReason == "A lower commit can't be landed yet.")
+    }
+
     @Test func unavailableStructuredSplitHasUpdateReason() {
         let capabilities = GGCapabilities(structuredSplit: false, keepCurrentUnstack: true)
         let model = GGCommitMenuModel.make(context: context(capabilities: capabilities))

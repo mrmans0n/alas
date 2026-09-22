@@ -488,4 +488,80 @@ struct GGLandingStoreTests {
         #expect(store.sessions["p"]?.phase == .cancelled)
         #expect(store.sessions["p"]?.rows[0].outcome == outcome)
     }
+
+    @Test func reconcilePreflightSeedWidensConfirmedScopeWithNewlyDiscoveredRows() {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-1", "c-2"])
+
+        // A preflight that discovers a row the confirmed scope hadn't seen
+        // yet widens both the displayed rows and the retry baseline, so a
+        // later restart's scope comparison is built from what gg actually
+        // preflighted rather than the original (narrower) confirmation.
+        let widerSeed = GGLandingSession.Seed(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [
+                .init(position: 0, title: "Zero", ggId: "c-0", prNumber: 40),
+                .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
+                .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
+            ]
+        )
+        store.reconcilePreflightSeed(widerSeed, projectId: "p")
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-0", "c-1", "c-2"])
+    }
+
+    @Test func reconcilePreflightSeedDropsUnconfirmedMissingRowsButRetainsCompletedOnes() {
+        let store = GGLandingStore()
+        #expect(store.begin(.init(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [
+                .init(position: 0, title: "Zero", ggId: "c-0", prNumber: 40),
+                .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
+                .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
+            ]
+        )))
+
+        // Nothing has landed yet, so a preflight that no longer sees `c-0`
+        // means the original cached scope was simply wrong — it must be
+        // dropped, not preserved forever as if it had been landed.
+        let seedWithoutC0 = GGLandingSession.Seed(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [
+                .init(position: 1, title: "One", ggId: "c-1", prNumber: 41),
+                .init(position: 2, title: "Two", ggId: "c-2", prNumber: 42),
+            ]
+        )
+        store.reconcilePreflightSeed(seedWithoutC0, projectId: "p")
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-1", "c-2"])
+
+        // `c-1` actually lands and drops out of the live stack. Because it's
+        // recorded in `completedIDs`, a later preflight that no longer sees
+        // it must keep it in the confirmed scope for restart bookkeeping.
+        store.receive(.entry(.init(position: 1, ggId: "c-1", prNumber: 41, action: "merged")), projectId: "p")
+        #expect(store.sessions["p"]?.completedIDs == Set(["c-1"]))
+
+        let seedWithOnlyTarget = GGLandingSession.Seed(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2",
+            rows: [.init(position: 2, title: "Two", ggId: "c-2", prNumber: 42)]
+        )
+        store.reconcilePreflightSeed(seedWithOnlyTarget, projectId: "p")
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-2"])
+        #expect(store.sessions["p"]?.confirmedScope.rows.map(\.ggId) == ["c-1", "c-2"])
+    }
+
+    @Test func reconcilePreflightSeedIsANoOpOutsideTheRunningPhase() {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+        store.fail(projectId: "p", message: "stopped")
+        let originalScope = store.sessions["p"]?.confirmedScope
+
+        store.reconcilePreflightSeed(
+            .init(projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c-2", rows: []),
+            projectId: "p"
+        )
+
+        #expect(store.sessions["p"]?.rows.map(\.ggId) == ["c-1", "c-2"])
+        #expect(store.sessions["p"]?.confirmedScope == originalScope)
+    }
 }

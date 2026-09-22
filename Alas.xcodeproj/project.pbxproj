@@ -1956,6 +1956,7 @@
 		FBB6CB050566D78617BFE5FB /* ACPToolCallGroupRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BB85FBA80F935B794FBCD0E /* ACPToolCallGroupRowTests.swift */; };
 		FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */; };
 		FBFAB8DAB738CC7A21076D22 /* GGCommitMenuModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7C5CADC042EF509370EB87 /* GGCommitMenuModel.swift */; };
+		FC1A1B3C232D6C239CEB2D0B /* GGLandReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2452CF78E768EB991F19642 /* GGLandReadiness.swift */; };
 		FC7824BA0FCB09A23321634D /* WorkspaceEditJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F646D9B04452A668B487DAB /* WorkspaceEditJournal.swift */; };
 		FC9BC95960AE236F82D69E0B /* ACPQuestionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4306DE43C5ADCC65310C1169 /* ACPQuestionPrompt.swift */; };
 		FCB5091692C10A45B4E5D6BB /* AppConfigWorktreeOrderingDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0458AFA9BCBC4484B084085 /* AppConfigWorktreeOrderingDecodeTests.swift */; };
@@ -3235,6 +3236,7 @@
 		A203964F9055BEF3F6142684 /* CodexACPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexACPInstallerTests.swift; sourceTree = "<group>"; };
 		A218B5125FC963339E40605E /* TabsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManager.swift; sourceTree = "<group>"; };
 		A2345B9578E57D570FDB058B /* InlineErrorStripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineErrorStripTests.swift; sourceTree = "<group>"; };
+		A2452CF78E768EB991F19642 /* GGLandReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGLandReadiness.swift; sourceTree = "<group>"; };
 		A2506BDBA9F67B6516CE2BEF /* ReviewTargetPaletteModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewTargetPaletteModelTests.swift; sourceTree = "<group>"; };
 		A2943FBB1D6371EFAC9BBE68 /* PaneTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneTree.swift; sourceTree = "<group>"; };
 		A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitTabStateTests.swift; sourceTree = "<group>"; };
@@ -7067,6 +7069,7 @@
 				79485A502B7856609349A138 /* GGInstallController.swift */,
 				18E3BD9A15E5E342941AF18B /* GGLandingStore.swift */,
 				D0A595A3292A96562C2C89DC /* GGLandingTabView.swift */,
+				A2452CF78E768EB991F19642 /* GGLandReadiness.swift */,
 				9B1E93FE66457A82A3348EDA /* GGMCPInjection.swift */,
 				CCB8945B6B3ECFCD8BA28B82 /* GGMutationCoordinator.swift */,
 				993FD1C9788DEA6AD643A444 /* GGMutationModels.swift */,
@@ -7929,6 +7932,7 @@
 				E073EEE9E37052E17CB026A0 /* GGInboxStore.swift in Sources */,
 				56286C44BC30C1716CD44363 /* GGInboxTabView.swift in Sources */,
 				EBF83E611756C005753D7F25 /* GGInstallController.swift in Sources */,
+				FC1A1B3C232D6C239CEB2D0B /* GGLandReadiness.swift in Sources */,
 				385D919650403F661CCE822C /* GGLandingStore.swift in Sources */,
 				40E0CA81ED98DDC94855BD8C /* GGLandingTabView.swift in Sources */,
 				E6119C80C9AFF38EB308301A /* GGMCPInjection.swift in Sources */,

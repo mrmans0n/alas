@@ -188,19 +188,10 @@ struct GGCommitMenuModel: Equatable {
     }
 
     private static func landDisabledReason(context: GGCommitMenuContext) -> String? {
-        guard context.entry.prState == .open,
-              context.entry.approved,
-              context.entry.ciStatus == nil || context.entry.ciStatus == .success
-        else { return "This commit is not ready to land." }
-
-        let lowerEntriesAreReady = context.stack.entries
-            .filter { $0.position < context.entry.position }
-            .allSatisfy { entry in
-                entry.prState == .merged
-                    || (entry.prState == .open
-                        && entry.approved
-                        && (entry.ciStatus == nil || entry.ciStatus == .success))
-            }
-        return lowerEntriesAreReady ? nil : "A lower commit is not ready to land."
+        GGLandReadiness.blocker(
+            target: context.entry,
+            in: context.stack,
+            canWaitForReadiness: context.capabilities.landJSONL
+        )?.message(reviewLabel: context.provider?.reviewRequestLabel ?? "PR")
     }
 }

@@ -63,6 +63,25 @@ struct GGLandingPresentationTests {
         #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Cancelled")
     }
 
+    @Test func preparingRowReportsTheStackCheckUntilGGReportsProgress() {
+        var session = session()
+        session.isPreparing = true
+        // The tab opens before `gg ls` re-validates the stack; the head row
+        // must say so instead of claiming the merge already started.
+        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Checking stack…")
+        #expect(GGLandingPresentation.detail(for: session.rows[1], in: session) == "Pending")
+
+        session.isPreparing = false
+        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Landing…")
+
+        // A live wait always wins over both.
+        session.isPreparing = true
+        session.activeWait = wait(approved: false)
+        session.rows[0].wait = wait(approved: false)
+        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session)
+            == "Waiting for approval · Waiting 20s")
+    }
+
     private func wait(ci: String? = nil, approved: Bool? = nil) -> GGLandWait {
         .init(position: 1, prNumber: 42, phase: .readiness, poll: 2,
               elapsedSeconds: 20, ciStatus: ci, approved: approved,

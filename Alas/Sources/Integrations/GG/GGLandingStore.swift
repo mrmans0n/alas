@@ -24,7 +24,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
         let stack: String
         let base: String
         let target: String
-        let rows: [GGLandingRow]
+        var rows: [GGLandingRow]
     }
 
     let id: UUID
@@ -33,10 +33,14 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     let stack: String
     let base: String
     let target: String
-    let confirmedScope: Seed
+    var confirmedScope: Seed
     let startedAt: Date
     var rows: [GGLandingRow]
     var phase: GGLandingPhase
+    /// True between opening the session and gg emitting its first event: the
+    /// stack re-validation (`gg ls`) that precedes `gg land` hits the forge
+    /// and can take seconds, and the tab is already on screen by then.
+    var isPreparing: Bool = false
     var activeWait: GGLandWait?
     var warning: String?
     var result: GGLandResult?
@@ -85,6 +89,7 @@ final class GGLandingStore {
             startedAt: now,
             rows: seed.rows,
             phase: .running,
+            isPreparing: true,
             activeWait: nil,
             warning: nil,
             result: nil,
@@ -94,9 +99,32 @@ final class GGLandingStore {
         return true
     }
 
-    func updatePendingRows(_ rows: [GGLandingRow], projectId: String) {
-        guard sessions[projectId]?.phase == .running else { return }
-        sessions[projectId]?.rows = rows
+    /// Corrects the displayed rows from a fresh preflight and reconciles
+    /// `confirmedScope`, the baseline a later `restartGGLand` rebuilds from.
+    /// Updating `rows` alone leaves `confirmedScope` pinned to the original
+    /// (possibly stale) seed, so a drift this session already absorbed would
+    /// make every retry fail with `staleConfirmation`.
+    ///
+    /// A row from the old scope survives only if the fresh preflight still
+    /// reports it, or it's in `completedIDs` (already landed in a prior
+    /// attempt and expected to have dropped out of the live stack). Any other
+    /// row the old scope had — cached data that turned out stale before this
+    /// session ever executed anything — is replaced, not preserved: nothing
+    /// ran against it, so there's nothing to protect. Newly discovered rows
+    /// widen the scope.
+    func reconcilePreflightSeed(_ seed: GGLandingSession.Seed, projectId: String) {
+        guard let session = sessions[projectId], session.phase == .running else { return }
+        sessions[projectId]?.rows = seed.rows
+        func id(_ row: GGLandingRow) -> String { row.stableID ?? row.ggId ?? "\(row.position)" }
+        let freshIDs = Set(seed.rows.map(id))
+        let retainedOldRows = session.confirmedScope.rows.filter { row in
+            freshIDs.contains(id(row)) || session.completedIDs.contains(id(row))
+        }
+        let knownIDs = Set(retainedOldRows.map(id))
+        let newRows = seed.rows.filter { !knownIDs.contains(id($0)) }
+        var reconciled = session.confirmedScope
+        reconciled.rows = (retainedOldRows + newRows).sorted { $0.position < $1.position }
+        sessions[projectId]?.confirmedScope = reconciled
     }
 
     @discardableResult
@@ -110,6 +138,8 @@ final class GGLandingStore {
         }
         guard session.phase == .running || session.phase == .cancelling || streamFailedAfterSummary
         else { return true }
+        // Any land event means gg is live; the pre-launch revalidation is over.
+        session.isPreparing = false
 
         switch event {
         case .start(let stack, let base, let totalEntries):
@@ -250,6 +280,7 @@ final class GGLandingStore {
             guard let phase = self.sessions[projectId]?.phase else { return }
             if phase == .cancelling {
                 self.sessions[projectId]?.phase = .cancelled
+                self.sessions[projectId]?.isPreparing = false
                 self.sessions[projectId]?.endedAt = Date()
                 self.sessions[projectId]?.activeWait = nil
                 self.sessions[projectId]?.warning = nil
@@ -312,6 +343,7 @@ final class GGLandingStore {
               session.phase == .running || (session.phase == .cancelling && operations[projectId] == nil)
         else { return }
         session.phase = session.phase == .cancelling ? .cancelled : .failed
+        session.isPreparing = false
         session.activeWait = nil
         session.warning = nil
         session.error = session.phase == .cancelled ? nil : message

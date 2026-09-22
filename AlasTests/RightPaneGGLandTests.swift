@@ -252,6 +252,7 @@ struct RightPaneGGLandTests {
         state.ggCapabilities = { GGCapabilities(structuredSplit: false, keepCurrentUnstack: false, landJSONL: supported) }
         state.ggService = GGService(runner: runner)
         state.ggStack = stack([entry(id: "change-1", prState: .open, approved: true, ci: .success)])
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
         return state
     }
 
@@ -306,8 +307,12 @@ struct RightPaneGGLandTests {
         #expect(store.sessions["live-project"]?.phase == .running)
         #expect(store.sessions["live-project"]?.target == "change-1")
         #expect(!runner.calls.contains { $0.first == "land" })
+        #expect(store.sessions["live-project"]?.isPreparing == true)
         try await waitForLand("live landing runner call") { runner.calls.contains { $0.first == "land" } }
         #expect(runner.calls.contains(["land", "--until", "change-1", "--wait", "--jsonl", "--no-clean"]))
+        try await waitForLand("gg land start event") {
+            store.sessions["live-project"]?.isPreparing == false
+        }
         store.cancel(projectId: "live-project")
         await store.waitForOperation(projectId: "live-project")
         #expect(runner.cancellationCount == 1)
@@ -316,21 +321,42 @@ struct RightPaneGGLandTests {
         #expect(state.ggActionState.lastError == nil)
     }
 
-    @Test func liveLandingSeedsRowsFromFreshPreparedStack() async throws {
+    @Test func landConfirmationIsStagedWithoutAForgeRoundTrip() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+
+        state.requestGGLand(.until(entryId: "change-1", title: "Target"))
+
+        // The dialog must be on screen before any `gg ls` refresh: staging it
+        // behind the forge round-trip is what made the menu click feel frozen.
+        #expect(state.pendingGGLand == .until(entryId: "change-1", title: "Target"))
+        #expect(runner.calls.isEmpty)
+        #expect(state.pendingGGLandConfirmationMessage
+            == "Land the stack up to and including \u{201C}Target\u{201D}.")
+    }
+
+    @Test func liveLandingCorrectsOptimisticRowsFromFreshPreflight() async throws {
         let store = GGLandingStore()
         let runner = LiveLandGGRunner()
         runner.replaceStack(with: #"{"version":1,"stack":{"name":"feat","base":"main","total_commits":2,"synced_commits":2,"entries":[{"position":1,"sha":"s1","title":"Lower","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true,"ci_status":"success"},{"position":2,"sha":"s2","title":"Target","gg_id":"change-2","pr_number":6,"pr_state":"open","approved":true,"ci_status":"success"}]}}"#)
         let state = landingState(store: store, runner: runner, supported: true)
         state.ggStack = stack([entry(id: "change-2", position: 2, prState: .open, approved: true, ci: .success)])
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
 
         state.requestGGLand(.until(entryId: "change-2", title: "Target"))
-        try await waitForLand("fresh prepared land confirmation") { state.pendingGGLand != nil }
+        #expect(state.pendingGGLand != nil)
         try await allowCheckpointMutations(state)
         state.performGGLand(appState: AppState(store: MemoryStore()))
+
+        // Session and rows exist immediately, seeded from the on-screen stack
+        // and flagged as still being checked.
+        #expect(store.sessions["live-project"]?.rows.map(\.ggId) == ["change-2"])
+        #expect(store.sessions["live-project"]?.isPreparing == true)
+
         try await waitForLand("fresh prepared live landing rows") {
             store.sessions["live-project"]?.rows.map(\.ggId) == ["change-1", "change-2"]
         }
-
         #expect(store.sessions["live-project"]?.rows.map(\.ggId) == ["change-1", "change-2"])
         await store.cancelAllAndWait()
     }
@@ -729,22 +755,28 @@ struct RightPaneGGLandTests {
         #expect(!state.ggLandTargetStillLandable(.until(entryId: "missing", title: "t"), in: s))
     }
 
-    @Test func untilRequiresReadyTargetEntry() {
+    private func landabilityState(canWait: Bool) -> RightPaneState {
         let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
                           path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
         let state = rightPaneState(worktree: wt, baseBranch: "main")
+        state.ggCapabilities = {
+            GGCapabilities(structuredSplit: true, keepCurrentUnstack: true, landJSONL: canWait)
+        }
+        return state
+    }
 
-        #expect(!state.ggLandTargetStillLandable(
+    @Test func untilStartsOnUnapprovedTargetWhenGGCanWait() {
+        let state = landabilityState(canWait: true)
+
+        // gg land --wait polls for the approval itself, so the action starts
+        // now and the landing tab shows the wait.
+        #expect(state.ggLandTargetStillLandable(
             .until(entryId: "a", title: "t"),
             in: stack([entry(id: "a", prState: .open, approved: false, ci: .success)])
         ))
-        #expect(!state.ggLandTargetStillLandable(
+        #expect(state.ggLandTargetStillLandable(
             .until(entryId: "a", title: "t"),
-            in: stack([entry(id: "a", prState: .draft, approved: true, ci: .success)])
-        ))
-        #expect(!state.ggLandTargetStillLandable(
-            .until(entryId: "a", title: "t"),
-            in: stack([entry(id: "a", prState: .open, approved: true, ci: .failed)])
+            in: stack([entry(id: "a", prState: .open, approved: false, ci: .running)])
         ))
         #expect(state.ggLandTargetStillLandable(
             .until(entryId: "a", title: "t"),
@@ -752,18 +784,48 @@ struct RightPaneGGLandTests {
         ))
     }
 
-    @Test func untilRequiresReadyLowerEntries() {
-        let wt = Worktree(id: "i", projectId: "p", name: "f", branch: "f",
-                          path: URL(fileURLWithPath: "/tmp/x"), status: .clean, lastActivity: Date())
-        let state = rightPaneState(worktree: wt, baseBranch: "main")
+    @Test func untilRejectsStatesNoAmountOfWaitingResolves() {
+        let state = landabilityState(canWait: true)
+
+        for blocked in [
+            entry(id: "a", prState: .draft, approved: true, ci: .success),
+            entry(id: "a", prState: .closed, approved: true, ci: .success),
+            entry(id: "a", prState: .merged, approved: true, ci: .success),
+            entry(id: "a", prState: .open, approved: true, ci: .failed),
+            GGStackEntry(position: 1, sha: "s", title: "t", ggId: "a", prNumber: nil, prState: nil),
+        ] {
+            #expect(!state.ggLandTargetStillLandable(
+                .until(entryId: "a", title: "t"),
+                in: stack([blocked])
+            ))
+        }
+    }
+
+    @Test func untilRequiresFullReadinessWhenGGCannotWait() {
+        let state = landabilityState(canWait: false)
+
+        #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .open, approved: false, ci: .success)])
+        ))
+        #expect(state.ggLandTargetStillLandable(
+            .until(entryId: "a", title: "t"),
+            in: stack([entry(id: "a", prState: .open, approved: true, ci: nil)])
+        ))
+    }
+
+    @Test(arguments: [true, false])
+    func untilNeedsEveryLowerEntryMergedOrLandable(canWait: Bool) {
+        let state = landabilityState(canWait: canWait)
         func positionedEntry(
             id: String,
             position: Int,
-            prState: GGPRState,
+            prState: GGPRState?,
             approved: Bool,
             ci: GGCIStatus?
         ) -> GGStackEntry {
-            GGStackEntry(position: position, sha: "s\(position)", title: "t\(position)", ggId: id, prNumber: 5 + position,
+            GGStackEntry(position: position, sha: "s\(position)", title: "t\(position)", ggId: id,
+                         prNumber: prState == nil ? nil : 5 + position,
                          prState: prState, approved: approved, ciStatus: ci)
         }
 
@@ -781,13 +843,23 @@ struct RightPaneGGLandTests {
                 positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
             ])
         ))
+        // An unreviewed lower commit blocks either way: gg cannot merge a
+        // commit that has no review open.
         #expect(!state.ggLandTargetStillLandable(
+            .until(entryId: "b", title: "t2"),
+            in: stack([
+                positionedEntry(id: "a", position: 1, prState: nil, approved: false, ci: nil),
+                positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
+            ])
+        ))
+        // An unapproved lower commit only blocks the one-shot land.
+        #expect(state.ggLandTargetStillLandable(
             .until(entryId: "b", title: "t2"),
             in: stack([
                 positionedEntry(id: "a", position: 1, prState: .open, approved: false, ci: .success),
                 positionedEntry(id: "b", position: 2, prState: .open, approved: true, ci: .success),
             ])
-        ))
+        ) == canWait)
     }
 
     @Test func requestWithoutCachedStackDoesNotStageLandConfirmation() {

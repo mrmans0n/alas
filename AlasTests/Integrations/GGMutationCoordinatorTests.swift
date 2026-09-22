@@ -737,6 +737,60 @@ struct GGMutationCoordinatorTests {
         #expect(harness.refreshes.isEmpty)
     }
 
+    @Test func waitingCapableLandSurvivesAnApprovalThatDisappearsMidFlight() async throws {
+        let ready = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Ready", ggId: "change-1",
+                prNumber: 7, prState: .open, approved: true, ciStatus: .success,
+                isCurrent: true
+            ),
+        ]
+        let unapproved = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Ready", ggId: "change-1",
+                prNumber: 7, prState: .open, approved: false, ciStatus: .pending,
+                isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [
+            stack(head: "a", entries: ready),
+            stack(head: "a", entries: unapproved),
+        ], landJSONL: true)
+        let prepared = try await harness.coordinator.prepare(.land(target: "change-1"))
+
+        // gg land --wait polls the forge itself, so an approval that lapses
+        // between confirmation and execution must not cancel the land.
+        try await harness.coordinator.apply(prepared)
+
+        #expect(harness.service.requests == [.land(target: "change-1")])
+        #expect(harness.actionState.lastError == nil)
+    }
+
+    @Test func startApplyingReportsTheFreshlyPreflightedStack() async throws {
+        let entries = [
+            GGStackEntry(
+                position: 1, sha: "a", title: "Lower", ggId: "change-1",
+                prNumber: 7, prState: .open, approved: true, ciStatus: .success
+            ),
+            GGStackEntry(
+                position: 2, sha: "b", title: "Target", ggId: "change-2",
+                prNumber: 8, prState: .open, approved: false, ciStatus: nil,
+                isCurrent: true
+            ),
+        ]
+        let harness = GGMutationHarness(stacks: [stack(head: "b", entries: entries)], landJSONL: true)
+        var preflighted: GGStack?
+        let started = harness.coordinator.startApplying(
+            .land(target: "change-2"),
+            confirmedAgainst: nil,
+            onPreflight: { preflighted = $0.stack }
+        )
+        let task = try #require(started)
+        try await task.value
+
+        #expect(preflighted?.entries.map(\.id) == ["change-1", "change-2"])
+    }
+
     @Test func secondConcurrentRequestIsRefusedInsteadOfQueued() async throws {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
         harness.service.blockExecution = true

@@ -199,10 +199,14 @@ final class GGMutationCoordinator {
         )
     }
 
+    /// `onPreflight` reports the freshly re-validated stack just before the
+    /// command launches — the point where a caller that optimistically drew UI
+    /// from a cached snapshot can correct it (see the live landing session).
     func startApplying(
         _ request: GGMutationRequest,
         confirmedAgainst identity: GGStackIdentity?,
         expectedTarget: GGStackTargetIdentity? = nil,
+        onPreflight: @escaping @MainActor (GGPreparedMutation) -> Void = { _ in },
         onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Error>? {
         guard reserve(request) else { return nil }
@@ -212,6 +216,7 @@ final class GGMutationCoordinator {
                 confirmedAgainst: identity,
                 confirmedWith: nil,
                 expectedTarget: expectedTarget,
+                onPreflight: onPreflight,
                 onExecutionStarted: onExecutionStarted
             )
         }
@@ -241,6 +246,7 @@ final class GGMutationCoordinator {
         confirmedAgainst identity: GGStackIdentity?,
         confirmedWith confirmation: GGMutationConfirmation?,
         expectedTarget: GGStackTargetIdentity? = nil,
+        onPreflight: @escaping @MainActor (GGPreparedMutation) -> Void = { _ in },
         onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         var didReleaseAction = false
@@ -311,6 +317,7 @@ final class GGMutationCoordinator {
             if let confirmation, prepared.confirmation != confirmation {
                 throw GGMutationError.staleConfirmation
             }
+            onPreflight(prepared)
             continuedOperationID = prepared.snapshot.operationID
         }
         try await validateUndoRequest(request, currentStackName: snapshot?.stack?.name)
@@ -463,19 +470,12 @@ final class GGMutationCoordinator {
             }
         case .land(let target):
             guard let targetEntry = stack.entry(matchingStableID: target),
-                  targetEntry.prState == .open,
-                  targetEntry.approved,
-                  targetEntry.ciStatus == nil || targetEntry.ciStatus == .success
+                  GGLandReadiness.canStartLand(
+                      target: targetEntry,
+                      in: stack,
+                      canWaitForReadiness: landJSONLCapability()
+                  )
             else { throw GGMutationError.staleConfirmation }
-            let lowerEntriesAreReady = stack.entries
-                .filter { $0.position < targetEntry.position }
-                .allSatisfy {
-                    $0.prState == .merged
-                        || ($0.prState == .open
-                            && $0.approved
-                            && ($0.ciStatus == nil || $0.ciStatus == .success))
-                }
-            guard lowerEntriesAreReady else { throw GGMutationError.staleConfirmation }
         case .applySplit(_, let identity, _):
             let target = stack.splitTarget(matching: identity)
             guard target != nil else { throw GGMutationError.staleConfirmation }
@@ -592,13 +592,10 @@ final class GGMutationCoordinator {
             )
         case .land(let target):
             guard let entry = stack.entry(matchingStableID: target) else { return nil }
-            let count = stack.entries.filter {
-                $0.position <= entry.position
-                    && $0.prState == .open
-                    && $0.approved
-                    && ($0.ciStatus == nil || $0.ciStatus == .success)
-            }.count
-            return .land(target: target, readyCommits: count)
+            return .land(
+                target: target,
+                commits: GGLandReadiness.scope(upTo: entry, in: stack).count
+            )
         case .clean:
             return .clean(mergedCommits: stack.entries.filter { $0.prState == .merged }.count)
         default:

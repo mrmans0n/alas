@@ -124,7 +124,11 @@ enum GGMutationConfirmation: Equatable, Sendable {
         lowerStack: String,
         newStack: String
     )
-    case land(target: String, readyCommits: Int)
+    /// `commits` counts the not-yet-merged entries at or below the target —
+    /// the land's scope. Deliberately not a "ready" count: approvals landing
+    /// between confirmation and execution must not invalidate the dialog the
+    /// user already accepted.
+    case land(target: String, commits: Int)
     case clean(mergedCommits: Int)
 
     var message: String {
@@ -135,8 +139,8 @@ enum GGMutationConfirmation: Equatable, Sendable {
             return "Drop \(target) and rewrite \(descendants).\(reviewWarning)"
         case .unstack(_, let targetTitle, let movedCommits, let lowerStack, let newStack):
             return "Split at \u{201C}\(targetTitle)\u{201D}. Move \(Self.commitCount(movedCommits)) from \(lowerStack) to \(newStack)."
-        case .land(let target, let readyCommits):
-            return "Land \(Self.commitCount(readyCommits, qualifier: "ready")) through \(target)."
+        case .land(let target, let commits):
+            return "Land \(Self.commitCount(commits)) through \(target)."
         case .clean(let mergedCommits):
             return "Clean \(Self.commitCount(mergedCommits, qualifier: "merged"))."
         }
