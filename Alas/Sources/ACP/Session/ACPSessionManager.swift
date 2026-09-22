@@ -3917,6 +3917,26 @@ extension ACPSessionManager {
                 runnerStarted = true
                 startedRunner = runner
             }
+            // Consume `_auth/status_update` from here rather than from
+            // `startRunnerIfNeeded()`: the session-creation call below can
+            // fail for reasons that say nothing about auth (network drop,
+            // timeout, any error `ACPAuthFailure.message(from:)` doesn't
+            // recognize), and those paths return without ever starting the
+            // runner. The agent's fresh status would stay buffered in the
+            // client, leaving the restored `.needsAuth` banner applied after
+            // `initialize` up even though the live adapter already reported
+            // being signed in. Listening from here makes the status track the
+            // live agent no matter how that call ends.
+            runner.startAuthStatusListening()
+            defer {
+                // The listener retains the runner while suspended on the
+                // stream, so every path that abandons this attach has to
+                // cancel it. Once the runner is the registered one, its own
+                // `stop()` owns the teardown instead.
+                if runners[sessionId] !== runner {
+                    runner.cancelAuthStatusListening()
+                }
+            }
             if shouldSuppressLoadReplay {
                 startRunnerIfNeeded()
             }
@@ -4509,15 +4529,21 @@ extension ACPSessionManager {
             } else if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
-                // The preserved-status path above assumes a fresh process's
-                // own first notification will arrive and correct a stale
-                // value in moments — true once the runner starts, but that
-                // notification is buffered until then, and this failure
-                // means it never will. Drop the stale value now: an
-                // explicit auth failure is definitive proof it's wrong, and
-                // leaving it would show a contradictory signed-in pill
-                // right next to this very banner.
-                if session.authStatus != nil, let fence = leaseFence(sessionId: sessionId) {
+                // Drop a status the failure contradicts: leaving a signed-in
+                // pill right next to this very banner is the exact confusion
+                // the preserved-status path above risks whenever the agent's
+                // own first notification never lands (an `initialize` that
+                // throws fails before the auth-status listener is even
+                // started, and a broker-adopted reattach never re-emits at
+                // all).
+                //
+                // A signed-out status is the one kind an auth failure agrees
+                // with rather than refutes, so it stays — whether it was
+                // restored or just confirmed live by the listener started
+                // before session creation.
+                if session.authStatus != nil,
+                   session.authStatus?.kind != ACPAuthStatus.Kind.none,
+                   let fence = leaseFence(sessionId: sessionId) {
                     session.authStatus = nil
                     enqueuePersistence { persistence in
                         _ = try await persistence.setAuthStatus(sessionId: sessionId, status: nil, fence: fence)
