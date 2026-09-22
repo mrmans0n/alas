@@ -218,7 +218,18 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     // Checkouts" bulk path: refuse a checkout with
                     // unconfirmed risks (including live sessions that would
                     // otherwise close silently) instead of deleting it
-                    // without ever showing them.
+                    // without ever showing them. An archived checkout is
+                    // refused without ever calling
+                    // workspaceCheckoutDeletionConfirmation — that call
+                    // unarchives as prep for an imminent deletion, and
+                    // there's no side-effect-free way to restore that here
+                    // if this loop ends up not deleting it after all (the
+                    // only restore path, the coordinator's archive(), stops
+                    // live sessions and would defeat this very fix).
+                    guard state.workspacesManager.checkout(id: checkoutID)?.archivedAt == nil else {
+                        remainingFailures += 1
+                        continue
+                    }
                     let confirmation = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
                     guard !confirmation.requiresConfirmation else {
                         remainingFailures += 1

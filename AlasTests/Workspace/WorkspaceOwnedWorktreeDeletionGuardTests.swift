@@ -494,6 +494,42 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(state.workspacesManager.checkouts.contains { $0.id == checkout.id })
     }
 
+    @Test func deleteWorkspaceDefinitionAndCheckoutsRefusesAnArchivedCheckoutWithoutUnarchivingIt() async throws {
+        // workspaceCheckoutDeletionConfirmation unarchives as prep for an
+        // imminent deletion — fine when the caller goes on to delete, but
+        // this bulk path refuses instead. Restoring the archive afterward
+        // isn't an option (the only restore path stops live sessions), so
+        // an archived checkout must never be unarchived by this refusal in
+        // the first place.
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delete-workspace-archived-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        let checkout = WorkspaceCheckout(
+            workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
+            branch: "release/a", rootPath: "/checkouts/a", archivedAt: .now, members: []
+        )
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace], checkouts: [checkout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let spaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
+        ])
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        await #expect(throws: WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved) {
+            try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
+        }
+
+        #expect(state.workspacesManager.workspaces.contains { $0.id == workspace.id })
+        #expect(state.workspacesManager.checkout(id: checkout.id)?.archivedAt != nil)
+    }
+
     /// Avoids touching real app-support files: `deleteWorkspaceDefinition`
     /// persists the Space placement change through this store.
     private final class InMemoryWorkspaceDeletionStore: PersistenceStoreProtocol, @unchecked Sendable {

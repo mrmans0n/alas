@@ -3116,6 +3116,19 @@ final class AppState {
                 // risks via confirmingRisks — this closes the gap for
                 // session risks, which forget() has no confirmingRisks gate
                 // for at all.
+                //
+                // An archived checkout is refused here without ever calling
+                // workspaceCheckoutDeletionConfirmation: that call unarchives
+                // as prep for an imminent deletion, which is fine when the
+                // caller goes on to actually delete, but this refusal path
+                // does not — restoring the archive afterward isn't an option
+                // either, since the only way to re-archive goes through the
+                // coordinator's archive(), which stops live sessions as a
+                // side effect and would defeat this very fix. An archived
+                // checkout needs the interactive flow first.
+                guard workspacesManager.checkout(id: checkoutID)?.archivedAt == nil else {
+                    throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
+                }
                 let confirmation = try await workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
                 guard !confirmation.requiresConfirmation else {
                     throw WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved
