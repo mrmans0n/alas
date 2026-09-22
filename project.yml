@@ -64,6 +64,9 @@ targets:
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: "Alas uses the microphone to dictate text into the chat composer."
         NSSpeechRecognitionUsageDescription: "Alas uses on-device speech recognition to transcribe dictated text into the chat composer."
+        NSLocalNetworkUsageDescription: "Alas uses the local network to find and pair with other Macs running Alas."
+        NSBonjourServices:
+          - _alas._tcp
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         LSApplicationCategoryType: public.app-category.developer-tools

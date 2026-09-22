@@ -229,6 +229,14 @@ final class RemotePeerManager {
     /// offering a counter-code so that Mac pairs back with us.
     func addPeer(link: String) async -> AddError? {
         guard let parts = RemotePairingLink.parse(link) else { return .invalidLink }
+        return await addPeer(code: parts.code, origins: parts.origins)
+    }
+
+    /// The same exchange with the code and origins already separated — a
+    /// discovered instance supplies its origins, the user types its code.
+    func addPeer(code: String, origins: [String]) async -> AddError? {
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, !origins.isEmpty else { return .invalidLink }
         let me = boundedIdentity()
         // With no advertisable address the counter-code is unusable: the far
         // side's pair-back finds nothing to dial, gives up, and revokes the
@@ -249,7 +257,7 @@ final class RemotePeerManager {
         let startedAt = Date()
         let counterCode = pairing.beginPairing()
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins, counterCode: counterCode)
-        switch await pairer.pair(origins: parts.origins, code: parts.code, deviceName: me.name, advertisement: advertisement) {
+        switch await pairer.pair(origins: origins, code: code, deviceName: me.name, advertisement: advertisement) {
         case .paired(let token, let serverId, let name, let origin):
             // An origin is an address, never an identity. Standing in for a
             // missing `serverId` with one would key the record — and the
@@ -291,7 +299,7 @@ final class RemotePeerManager {
             // chain of several overlapping, ultimately-failed attempts,
             // rather than just undoing one sibling's edit into another's.
             let previousState = durableStateByServerId[serverId]
-            upsert(serverId: serverId, name: name ?? origin, origins: parts.origins,
+            upsert(serverId: serverId, name: name ?? origin, origins: origins,
                    lastOrigin: origin, token: token, localDeviceId: nil)
             lastUpsertOwnerByServerId[serverId] = counterCode
             // `upsert` proves OUR call to A succeeded — nothing more. Our own

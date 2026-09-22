@@ -42,6 +42,10 @@ final class RemoteServer {
     var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
+    /// Bonjour advertisement applied to the live listener, and to any listener
+    /// `start()` creates later (a port-fallback restart must keep advertising).
+    /// Nil means not discoverable.
+    private(set) var advertisement: RemoteBonjourAdvertisement?
 
     /// Callers with app state should pass a diagnostics closure; the default is
     /// a safe empty fallback for contexts that do not have app state available.
@@ -120,6 +124,7 @@ final class RemoteServer {
         listener.newConnectionHandler = { [weak self] nwConn in
             Task { @MainActor in self?.accept(nwConn) }
         }
+        listener.service = advertisement?.service
         listener.start(queue: queue)
         self.listener = listener
     }
@@ -134,6 +139,15 @@ final class RemoteServer {
         connections.removeAll()
         connectionDevice.removeAll()
         onConnectionDeviceCountsChange?([:])
+    }
+
+    /// Registers (or, with nil, withdraws) this listener's Bonjour service.
+    /// `NWListener.service` may be reassigned on a running listener, so this
+    /// never restarts the server or touches live connections.
+    func advertise(_ advertisement: RemoteBonjourAdvertisement?) {
+        guard self.advertisement != advertisement else { return }
+        self.advertisement = advertisement
+        listener?.service = advertisement?.service
     }
 
     /// Immediately closes every live connection authenticated as `deviceId`.

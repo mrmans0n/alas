@@ -37,8 +37,14 @@
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_alas._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Nacho Lopez</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Alas uses the local network to find and pair with other Macs running Alas.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Alas uses the microphone to dictate text into the chat composer.</string>
 	<key>NSPrincipalClass</key>

@@ -10,6 +10,10 @@ struct RemoteServerPane: View {
     @State private var peerLink = ""
     @State private var peerError: String?
     @State private var isAddingPeer = false
+    /// The nearby instance whose inline code field is open, by `serverId`.
+    @State private var selectedNearbyId: String?
+    @State private var nearbyCode = ""
+    private let resolver = RemoteDiscoveredInstanceResolver.live
     /// Rotates the displayed pairing code well within its 120s TTL so the QR on
     /// screen is never stale. Prior codes stay valid until they expire, so a
     /// device that scanned just before a rotation still pairs.
@@ -106,12 +110,28 @@ struct RemoteServerPane: View {
                                         state.saveConfig()
                                         // Clients only learn the name from hello — push a fresh
                                         // one so connected browsers don't show a stale name until
-                                        // their next reconnect.
+                                        // their next reconnect. The Bonjour name follows too.
                                         state.remoteServer?.broadcastHello()
+                                        state.syncRemoteDiscovery()
                                     }
                                 ),
                                 placeholder: state.remoteDisplayName
                             )
+                        }
+                        if state.config.remote.federationEnabled {
+                            SettingsRow(
+                                name: "Discoverable on this network",
+                                desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Pairing still needs the code the other Mac shows."
+                            ) {
+                                AlasToggle(on: Binding(
+                                    get: { state.config.remote.discoverable },
+                                    set: {
+                                        state.config.remote.discoverable = $0
+                                        state.saveConfig()
+                                        state.syncRemoteDiscovery()
+                                    }
+                                ))
+                            }
                         }
                         SettingsRow(
                             name: "Allowed origins",
@@ -144,11 +164,19 @@ struct RemoteServerPane: View {
                             QRView(text: link)
                                 .frame(width: 180, height: 180)
                                 .padding(.top, 8)
+                            if state.config.remote.federationEnabled {
+                                Text(code)
+                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .padding(.top, 6)
+                            }
                             AlasButton(title: "Copy pairing link", style: .subtle) {
                                 copyAddress(link)
                             }
                             .padding(.top, 6)
-                            Text("Refreshes automatically — scan it, or paste the copied link into Alas remote on another device to add this Mac.")
+                            Text(state.config.remote.federationEnabled
+                                 ? "Refreshes automatically — scan it, paste the copied link into Alas remote on another device, or type the code into a nearby Mac's Peers list."
+                                 : "Refreshes automatically — scan it, or paste the copied link into Alas remote on another device to add this Mac.")
                                 .font(.system(size: 11))
                                 .foregroundColor(theme.color("fg-dim"))
                                 .padding(.bottom, 8)
@@ -214,7 +242,7 @@ struct RemoteServerPane: View {
                 if state.config.remote.enabled, state.config.remote.federationEnabled {
                     SettingsGroup(title: "Peers") {
                         if state.remotePeers.peers.isEmpty {
-                            SettingsRow(name: "No peers", desc: "Paste another Mac's pairing link below. Both Macs end up paired with each other.") {
+                            SettingsRow(name: "No peers", desc: "Pick a nearby Mac or paste another Mac's pairing link below. Both Macs end up paired with each other.") {
                                 EmptyView()
                             }
                         }
@@ -223,6 +251,24 @@ struct RemoteServerPane: View {
                                 AlasButton(title: "Forget", style: .subtle) {
                                     state.remotePeers.forget(peerId: peer.id)
                                 }
+                            }
+                        }
+                        if state.config.remote.discoverable {
+                            let nearby = state.remotePeerBrowser.instances
+                            if nearby.isEmpty {
+                                SettingsRow(name: "Nearby", desc: state.remotePeerBrowser.lastError.map { "Can't browse the local network: \($0)" }
+                                            ?? "Looking for other Macs running Alas on this network…") {
+                                    EmptyView()
+                                }
+                            }
+                            ForEach(nearby) { instance in
+                                SettingsRow(name: instance.name, desc: nearbyDescription(instance)) {
+                                    nearbyAction(instance)
+                                }
+                            }
+                        } else {
+                            SettingsRow(name: "Nearby", desc: "Turn on Discoverable on this network above to see other Macs running Alas.") {
+                                EmptyView()
                             }
                         }
                         SettingsRow(name: "Add peer", desc: "Copy the pairing link from the other Mac's Remote settings and paste it here.") {
@@ -241,6 +287,19 @@ struct RemoteServerPane: View {
                                 .foregroundColor(theme.color("warn"))
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 8)
+                        }
+                    }
+                    .task(id: state.config.remote.discoverable) {
+                        // Browse only while this section is on screen and discovery is on;
+                        // leaving the pane or turning the toggle off cancels this task.
+                        guard state.config.remote.discoverable else {
+                            state.remotePeerBrowser.stop()
+                            return
+                        }
+                        state.remotePeerBrowser.start()
+                        defer { state.remotePeerBrowser.stop() }
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(60))
                         }
                     }
                 }
@@ -320,24 +379,94 @@ struct RemoteServerPane: View {
         Task { @MainActor in
             let error = await state.remotePeers.addPeer(link: link)
             isAddingPeer = false
-            switch error {
-            case nil:
+            if let error {
+                peerError = describe(error, viaLink: true)
+            } else {
                 peerLink = ""
-            case .invalidLink?:
-                peerError = "That doesn't look like an Alas pairing link."
-            case .expiredCode?:
-                peerError = "That code expired. Tap Pair a device on the other Mac and copy a fresh link."
-            case .originRejected?:
-                peerError = "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
-            case .unreachable?:
-                peerError = "Couldn't reach that Mac at any of its addresses."
-            case .noLocalAddress?:
-                peerError = "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
-            case .reciprocalPairingFailed?:
-                peerError = "Paired, but that Mac couldn't pair back to confirm it. Try again — it may need to reach this Mac at one of the addresses above."
-            case .cancelled?:
-                peerError = "Cancelled — that peer was forgotten while pairing was still in progress."
             }
+        }
+    }
+
+    private func nearbyDescription(_ instance: RemoteDiscoveredInstance) -> String {
+        var parts: [String] = []
+        if let model = instance.model { parts.append(model) }
+        if instance.protocolVersion != RemoteProtocolVersion.current {
+            parts.append("Needs a matching Alas version (protocol \(instance.protocolVersion)).")
+        }
+        return parts.isEmpty ? "Found on this network" : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func nearbyAction(_ instance: RemoteDiscoveredInstance) -> some View {
+        if state.remotePeers.peers.contains(where: { $0.serverId == instance.id }) {
+            Text("Paired")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+        } else if selectedNearbyId == instance.id {
+            HStack(spacing: 8) {
+                AlasField(text: $nearbyCode, placeholder: "Code shown on that Mac", monospaced: true)
+                    .frame(width: 170)
+                AlasButton(title: isAddingPeer ? "Pairing…" : "Pair", style: .subtle) {
+                    pairNearby(instance)
+                }
+                .disabled(isAddingPeer || nearbyCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                AlasButton(title: "Cancel", style: .subtle) {
+                    selectedNearbyId = nil
+                    nearbyCode = ""
+                }
+                .disabled(isAddingPeer)
+            }
+        } else {
+            AlasButton(title: "Pair…", style: .subtle) {
+                selectedNearbyId = instance.id
+                nearbyCode = ""
+                peerError = nil
+            }
+            .disabled(isAddingPeer)
+        }
+    }
+
+    private func pairNearby(_ instance: RemoteDiscoveredInstance) {
+        isAddingPeer = true
+        peerError = nil
+        // Codes are minted uppercase; accept however the user typed it.
+        let code = nearbyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        Task { @MainActor in
+            defer { isAddingPeer = false }
+            switch await resolver.origins(for: instance) {
+            case .failure(.unreachable):
+                peerError = "Couldn't reach \(instance.name). Make sure remote control is on there and both Macs are on the same network."
+            case .failure(.identityMismatch):
+                peerError = "A different Mac answered at \(instance.name)'s address. Wait a moment for the list to refresh and try again."
+            case .success(let origins):
+                if let error = await state.remotePeers.addPeer(code: code, origins: origins) {
+                    peerError = describe(error, viaLink: false)
+                } else {
+                    selectedNearbyId = nil
+                    nearbyCode = ""
+                }
+            }
+        }
+    }
+
+    private func describe(_ error: RemotePeerManager.AddError, viaLink: Bool) -> String {
+        switch error {
+        case .invalidLink:
+            return viaLink ? "That doesn't look like an Alas pairing link." : "Type the code shown under the pairing QR on the other Mac."
+        case .expiredCode:
+            return viaLink
+                ? "That code expired. Tap Pair a device on the other Mac and copy a fresh link."
+                : "That code wasn't accepted. Check it against the other Mac's screen — it refreshes every 45 seconds."
+        case .originRejected:
+            return "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+        case .unreachable:
+            return "Couldn't reach that Mac at any of its addresses."
+        case .noLocalAddress:
+            return "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
+        case .reciprocalPairingFailed:
+            return "Paired, but that Mac couldn't pair back to confirm it. Try again — it may need to reach this Mac at one of the addresses above."
+        case .cancelled:
+            return "Cancelled — that peer was forgotten while pairing was still in progress."
         }
     }
 

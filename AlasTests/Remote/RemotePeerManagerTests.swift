@@ -112,6 +112,15 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
     }
 
+    @Test func addPeerWithCodeAndOriginsRefusesEmptyInputWithoutNetwork() async {
+        let requests = Requests()
+        let manager = makeManager(pairer: pairer([:], requests: requests), links: Links())
+        #expect(await manager.addPeer(code: "ABC123", origins: []) == .invalidLink)
+        #expect(await manager.addPeer(code: "  ", origins: ["http://10.0.0.1:8765"]) == .invalidLink)
+        #expect(requests.seen.isEmpty)
+        #expect(manager.peers.isEmpty)
+    }
+
     @Test func addPeerPairsStoresAndAdvertisesACounterCode() async throws {
         let requests = Requests()
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
