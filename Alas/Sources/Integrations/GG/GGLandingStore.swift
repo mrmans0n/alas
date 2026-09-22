@@ -99,25 +99,32 @@ final class GGLandingStore {
         return true
     }
 
-    /// Corrects the displayed rows from a fresh preflight and widens
-    /// `confirmedScope` with any row it hadn't recorded yet. Updating rows
-    /// alone leaves `confirmedScope` pinned to the original (possibly stale)
-    /// seed; a later `restartGGLand` rebuilds from `confirmedScope` and
-    /// compares it against the current stack, so a drift this session
-    /// already absorbed would otherwise make every retry fail with
-    /// `staleConfirmation`. Widening only (never replacing) preserves rows
-    /// that have since landed and dropped out of the live stack — those stay
-    /// recorded so a later restart still recognizes them via `completedIDs`
-    /// instead of treating them as newly missing.
+    /// Corrects the displayed rows from a fresh preflight and reconciles
+    /// `confirmedScope`, the baseline a later `restartGGLand` rebuilds from.
+    /// Updating `rows` alone leaves `confirmedScope` pinned to the original
+    /// (possibly stale) seed, so a drift this session already absorbed would
+    /// make every retry fail with `staleConfirmation`.
+    ///
+    /// A row from the old scope survives only if the fresh preflight still
+    /// reports it, or it's in `completedIDs` (already landed in a prior
+    /// attempt and expected to have dropped out of the live stack). Any other
+    /// row the old scope had — cached data that turned out stale before this
+    /// session ever executed anything — is replaced, not preserved: nothing
+    /// ran against it, so there's nothing to protect. Newly discovered rows
+    /// widen the scope.
     func reconcilePreflightSeed(_ seed: GGLandingSession.Seed, projectId: String) {
         guard let session = sessions[projectId], session.phase == .running else { return }
         sessions[projectId]?.rows = seed.rows
-        let knownIDs = Set(session.confirmedScope.rows.map { $0.stableID ?? $0.ggId ?? "\($0.position)" })
-        let newRows = seed.rows.filter { !knownIDs.contains($0.stableID ?? $0.ggId ?? "\($0.position)") }
-        guard !newRows.isEmpty else { return }
-        var widened = session.confirmedScope
-        widened.rows = (widened.rows + newRows).sorted { $0.position < $1.position }
-        sessions[projectId]?.confirmedScope = widened
+        func id(_ row: GGLandingRow) -> String { row.stableID ?? row.ggId ?? "\(row.position)" }
+        let freshIDs = Set(seed.rows.map(id))
+        let retainedOldRows = session.confirmedScope.rows.filter { row in
+            freshIDs.contains(id(row)) || session.completedIDs.contains(id(row))
+        }
+        let knownIDs = Set(retainedOldRows.map(id))
+        let newRows = seed.rows.filter { !knownIDs.contains(id($0)) }
+        var reconciled = session.confirmedScope
+        reconciled.rows = (retainedOldRows + newRows).sorted { $0.position < $1.position }
+        sessions[projectId]?.confirmedScope = reconciled
     }
 
     @discardableResult
