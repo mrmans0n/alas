@@ -1144,7 +1144,6 @@ struct ACPSessionRunnerTests {
         #expect(generationCount == 1)
     }
 
-
     @Test("suppressed retry history does not affect live retry status")
     func suppressedRetryHistoryDoesNotAffectLiveStatus() async throws {
         let url = FileManager.default.temporaryDirectory
