@@ -49,4 +49,14 @@ struct SemanticTokensSchedulingTests {
         #expect(applied == [[.init(range: c, capture: .type)]])
         feature.stop()
     }
+
+    @Test func editInvalidationCanPreserveCurrentPresentation() {
+        var clears = 0
+        let feature = SemanticTokensFeature(request: { _ in nil }, apply: { _, _ in }, clear: { clears += 1 })
+
+        feature.invalidate(preservingPresentation: true)
+        #expect(clears == 0)
+        feature.invalidate()
+        #expect(clears == 1)
+    }
 }

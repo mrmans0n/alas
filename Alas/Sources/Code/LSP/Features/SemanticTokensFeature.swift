@@ -41,10 +41,10 @@ final class SemanticTokensFeature {
         }
     }
 
-    func invalidate() {
+    func invalidate(preservingPresentation: Bool = false) {
         revision &+= 1
         pending = nil
-        clear()
+        if !preservingPresentation { clear() }
     }
 
     func stop() {

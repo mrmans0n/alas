@@ -6,6 +6,11 @@ extension Notification.Name {
     static let editorSourceDidChange = Notification.Name("alas.editorSourceDidChange")
 }
 
+enum EditorDisplayProjectionUserInfo {
+    static let sourceEdit = "sourceEdit"
+    static let revision = "revision"
+}
+
 extension CodeTextView {
     func displayHint(atViewPoint point: NSPoint) -> EditorDisplayHint? {
         guard let adapter = displayAdapter, adapter.document.map.revision == adapter.buffer.editGeneration,

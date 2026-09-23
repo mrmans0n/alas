@@ -36,7 +36,6 @@ final class EditorCompositionBridge {
             guard adapter.buffer.beginComposition(owner: owner, settle: { [weak self] in self?.commit() }, invalidate: { [weak self] in self?.invalidate() }) else { return }
             state = State(owner: owner, original: adapter.buffer.storage.string, selections: view.sourceSelectedRanges, originalRange: sourceRange,
                           typingAttributes: view.typingAttributes, range: sourceRange, attributed: attributed)
-            adapter.beginCompositionPresentation()
         }
         guard var current = state else { return }
         // Overlay coordinates describe the replacement, including explicit absolute
@@ -88,7 +87,7 @@ final class EditorCompositionBridge {
         adapter.buffer.endComposition(owner: current.owner)
         adapter.buffer.registerSourceInverse(range: NSRange(location: change.range.location, length: change.replacement.utf16.count),
                                              expected: change.replacement, replacement: old, selections: finalSelections, restoredSelections: current.selections)
-        adapter.finishCompositionPresentation()
+        adapter.finishCompositionPresentation(restoring: NSRange(location: change.range.location, length: change.replacement.utf16.count))
     }
 
     func cancel() {
@@ -98,7 +97,7 @@ final class EditorCompositionBridge {
         return }
         state = nil
         adapter.buffer.endComposition(owner: current.owner)
-        adapter.finishCompositionPresentation()
+        adapter.finishCompositionPresentation(restoring: NSRange(location: change.range.location, length: change.replacement.utf16.count))
         adapter.view?.restoreSourceSelections(current.selections)
     }
 
@@ -107,7 +106,7 @@ final class EditorCompositionBridge {
         guard let current = state else { return }
         state = nil
         adapter.buffer.endComposition(owner: current.owner)
-        adapter.finishCompositionPresentation()
+        adapter.finishCompositionPresentation(restoring: current.range)
     }
 
     func applyOverlay() {

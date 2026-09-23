@@ -32,8 +32,7 @@ final class EditorDisplayAdapter {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.buffer.storage.editedMask.contains(.editedCharacters) {
-                    if self.isApplyingSourceEdit || self.buffer.undoManager.isUndoing || self.buffer.undoManager.isRedoing,
-                       !self.composition.isActive {
+                    if self.isApplyingSourceEdit || self.buffer.undoManager.isUndoing || self.buffer.undoManager.isRedoing {
                         // The buffer's delegate publishes the committed revision
                         // after this notification. Owned typing updates there once.
                         self.deferredSourceNotification = true
@@ -112,15 +111,13 @@ final class EditorDisplayAdapter {
         return true
     }
 
-    func beginCompositionPresentation() {
-        hints = []
-        rebuild()
-    }
-
-    func finishCompositionPresentation() {
-        if let pending = deferredHints, pending.revision == buffer.editGeneration { hints = pending.hints }
+    func finishCompositionPresentation(restoring range: NSRange) {
+        if let pending = deferredHints, pending.revision == buffer.editGeneration {
+            hints = pending.hints
+            rebuild(hintsOnly: true)
+        }
         deferredHints = nil
-        rebuild()
+        _ = document.restoreSourceAttributes(source: buffer.storage, revision: buffer.editGeneration, range: range)
         view?.inputContext?.discardMarkedText()
     }
 
@@ -178,13 +175,23 @@ final class EditorDisplayAdapter {
         let scroll = captureScrollAnchor()
         // Owners clear only their painted ranges while old display coordinates
         // are still valid, then reapply current results after the projection.
-        NotificationCenter.default.post(name: .editorDisplayProjectionWillChange, object: view)
+        var projectionUserInfo: [AnyHashable: Any] = [
+            EditorDisplayProjectionUserInfo.revision: buffer.editGeneration
+        ]
+        if let sourceEdit {
+            projectionUserInfo[EditorDisplayProjectionUserInfo.sourceEdit] = sourceEdit
+        }
+        NotificationCenter.default.post(
+            name: .editorDisplayProjectionWillChange,
+            object: view,
+            userInfo: projectionUserInfo
+        )
         // Publish matching text and line offsets before native storage observers
         // can query geometry. Only validated incremental edits may reuse the index.
         document.storage.beginEditing()
         var appliedEdit = false
         do {
-            appliedEdit = !composition.isActive && sourceEdit.map {
+            appliedEdit = sourceEdit.map {
                 document.applySourceEdit($0, source: buffer.storage, revision: buffer.editGeneration, preservingUneditedLineHints: true)
             } == true
             if appliedEdit {

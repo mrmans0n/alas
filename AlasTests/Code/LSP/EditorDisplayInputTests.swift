@@ -24,32 +24,34 @@ struct EditorDisplayInputTests {
         #expect(f.document.storage.string == "prefix\nvalue\u{FFFC}\nsuffix\n")
     }
 
-    @Test func typingRetainsHintsOutsideTouchedLinesWithoutReplacingTheirAttachments() async throws {
+    @Test func typingRetainsAndShiftsHintsWithoutReplacingTheirAttachments() async throws {
         let f = try await Fixture("aa\nbb\ncc\n")
         defer { f.remove() }
         let adapter = try #require(f.view.displayAdapter)
         let hints = [1, 4, 7].map { EditorDisplayHint(id: "hint-\($0)", sourceOffset: $0, label: "x:", size: CGSize(width: 12, height: 16)) }
         try adapter.updateHints(hints, revision: f.buffer.editGeneration)
         let before = try #require(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment)
+        let editedLine = try #require(f.document.storage.attribute(.attachment, at: 5, effectiveRange: nil) as? EditorHintAttachment)
         let after = try #require(f.document.storage.attribute(.attachment, at: 9, effectiveRange: nil) as? EditorHintAttachment)
         let recorder = DisplayEditRecorder()
         f.document.storage.delegate = recorder
         defer { f.document.storage.delegate = nil }
         #expect(adapter.replaceSource(NSRange(location: 4, length: 0), with: "🙂\n"))
         #expect(f.buffer.storage.string == "aa\nb🙂\nb\ncc\n")
-        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 10])
-        #expect(f.document.storage.string == "a\u{FFFC}a\nb🙂\nb\nc\u{FFFC}c\n")
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 7, 10])
+        #expect(f.document.storage.string == "a\u{FFFC}a\nb🙂\n\u{FFFC}b\nc\u{FFFC}c\n")
         #expect(f.document.storage.attribute(.attachment, at: 1, effectiveRange: nil) as? EditorHintAttachment === before)
-        #expect(f.document.storage.attribute(.attachment, at: 11, effectiveRange: nil) as? EditorHintAttachment === after)
+        #expect(f.document.storage.attribute(.attachment, at: 8, effectiveRange: nil) as? EditorHintAttachment === editedLine)
+        #expect(f.document.storage.attribute(.attachment, at: 12, effectiveRange: nil) as? EditorHintAttachment === after)
         #expect(recorder.requestedEdits.count == 1)
         #expect(recorder.requestedEdits.first?.range == NSRange(location: 5, length: 3))
         #expect(adapter.sourceLineStarts == [0, 3, 7, 9, 12])
-        // Joining lines invalidates hints on both sides of the removed newline.
+        // Joining lines shifts the provisional hints without replacing them.
         #expect(adapter.replaceSource(NSRange(location: 2, length: 1), with: ""))
-        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [9])
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 6, 9])
         f.document.storage.delegate = nil
         f.buffer.undoManager.undo()
-        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [10])
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 7, 10])
     }
 
     @Test func sourceEditRemovesShiftedCommandHoverUnderline() async throws {
@@ -80,7 +82,7 @@ struct EditorDisplayInputTests {
         #expect(f.view.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: 10, effectiveRange: nil) == nil)
     }
 
-    @Test func sourceEditsClearOwnedHighlightsWithoutErasingOtherBackgrounds() async throws {
+    @Test func sourceEditsShiftSemanticHighlightsWithoutErasingOtherBackgrounds() async throws {
         let layout = TemporaryClearRecorder()
         let f = try await Fixture("alpha\nbeta\nomega\n", layout: layout)
         defer { f.remove() }
@@ -96,11 +98,28 @@ struct EditorDisplayInputTests {
         find.render(matches: [NSRange(location: 6, length: 4)], activeIndex: 0, inactiveColor: .yellow, activeColor: .orange)
         layout.clearedRanges = []
         #expect(adapter.replaceSource(NSRange(location: 0, length: 0), with: "x"))
-        #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: 7, effectiveRange: nil) == nil)
+        #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: 7, effectiveRange: nil) != nil)
         #expect(layout.temporaryAttribute(.backgroundColor, atCharacterIndex: 7, effectiveRange: nil) as? NSColor == .blue)
         #expect(layout.temporaryAttribute(.backgroundColor, atCharacterIndex: 12, effectiveRange: nil) as? NSColor == .purple)
         #expect(!layout.clearedRanges.isEmpty)
         #expect(layout.clearedRanges.allSatisfy { $0 == NSRange(location: 6, length: 4) })
+    }
+
+    @Test func typingInsideSemanticTokenExtendsItsProvisionalColor() async throws {
+        let f = try await Fixture("alpha beta")
+        defer { f.remove() }
+        try f.view.displayAdapter?.updateHints([], revision: f.buffer.editGeneration)
+        let layout = try #require(f.view.layoutManager)
+        let semantic = EditorSemanticLayer(layoutManager: layout, theme: EditorTheme(theme: try ThemeStore().current), textView: f.view, isCurrent: { _ in true })
+        let context = EditorRequestContext(document: .init(host: nil, worktreeID: "test", uri: "file:///test.txt"), version: 1,
+                                           serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 10)))
+        semantic.replace([HighlightSpan(range: NSRange(location: 0, length: 5), capture: .function)], context: context)
+
+        #expect(try #require(f.view.displayAdapter).replaceSource(NSRange(location: 2, length: 0), with: "X"))
+
+        for offset in 0..<6 {
+            #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: offset, effectiveRange: nil) != nil)
+        }
     }
 
     private final class TemporaryClearRecorder: NSLayoutManager {
@@ -185,29 +204,29 @@ struct EditorDisplayInputTests {
         #expect(view.displayAdapter?.document.map.revision == buffer.editGeneration)
     }
 
-    @Test func typingAfterHintRemovalAndUndoStillUsesCurrentSourceCoordinates() async throws {
+    @Test func typingWithRetainedHintsAndUndoStillUsesCurrentSourceCoordinates() async throws {
         let f = try await Fixture("abcd")
         defer { f.remove() }
         f.view.setSourceSelectedRange(NSRange(location: 2, length: 0))
         f.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(f.document.map.hintRuns.isEmpty)
-        #expect(f.document.storage.string == "abXcd")
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [1, 1])
+        #expect(f.document.storage.string == "a\u{FFFC}\u{FFFC}bXcd")
         let recorder = DisplayEditRecorder()
         f.document.storage.delegate = recorder
         defer { f.document.storage.delegate = nil }
         f.view.insertText("Y", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(recorder.requestedEdits.count == 1)
-        #expect(recorder.requestedEdits.first?.range == NSRange(location: 3, length: 1))
-        #expect(f.document.storage.string == "abXYcd")
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 5, length: 1))
+        #expect(f.document.storage.string == "a\u{FFFC}\u{FFFC}bXYcd")
         f.buffer.undoManager.undo()
-        #expect(f.document.storage.string == "abcd")
+        #expect(f.document.storage.string == "a\u{FFFC}\u{FFFC}bcd")
         f.buffer.undoManager.redo()
-        #expect(f.document.storage.string == "abXYcd")
+        #expect(f.document.storage.string == "a\u{FFFC}\u{FFFC}bXYcd")
         recorder.requestedEdits.removeAll()
         f.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(recorder.requestedEdits.count == 1)
-        #expect(recorder.requestedEdits.first?.range == NSRange(location: 4, length: 1))
-        #expect(f.document.storage.string == "abXY!cd")
+        #expect(recorder.requestedEdits.first?.range == NSRange(location: 6, length: 1))
+        #expect(f.document.storage.string == "a\u{FFFC}\u{FFFC}bXY!cd")
         #expect(f.document.map.revision == f.buffer.editGeneration)
     }
 
@@ -609,6 +628,41 @@ struct EditorDisplayInputTests {
         f.buffer.undoManager.undo()
         #expect(!f.view.hasMarkedText())
         #expect(f.view.sourceString == "ab")
+    }
+
+    @Test func markedQuoteRetainsUntouchedHintAttachmentsThroughCommit() async throws {
+        let f = try await Fixture("abcd")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        try adapter.updateHints([
+            .init(id: "before", sourceOffset: 0, label: "x:", size: CGSize(width: 12, height: 16)),
+            .init(id: "after", sourceOffset: 4, label: "type:", size: CGSize(width: 40, height: 16))
+        ], revision: f.buffer.editGeneration)
+        let before = try #require(f.document.storage.attribute(.attachment, at: 0, effectiveRange: nil) as? EditorHintAttachment)
+        let after = try #require(f.document.storage.attribute(.attachment, at: 5, effectiveRange: nil) as? EditorHintAttachment)
+        f.view.setSourceSelectedRange(NSRange(location: 2, length: 0))
+
+        f.view.setMarkedText("\"", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(f.view.sourceString == "ab\"cd")
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [0, 5])
+        #expect(f.document.storage.attribute(.attachment, at: 0, effectiveRange: nil) as? EditorHintAttachment === before)
+        #expect(f.document.storage.length > 6)
+        if f.document.storage.length > 6 {
+            #expect(f.document.storage.attribute(.attachment, at: 6, effectiveRange: nil) as? EditorHintAttachment === after)
+        }
+
+        f.view.insertText("\"", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(f.view.sourceString == "ab\"cd")
+        #expect(f.document.map.hintRuns.map(\.hint.sourceOffset) == [0, 5])
+        #expect(f.document.storage.attribute(.attachment, at: 0, effectiveRange: nil) as? EditorHintAttachment === before)
+        #expect(f.document.storage.length > 6)
+        if f.document.storage.length > 6 {
+            #expect(f.document.storage.attribute(.attachment, at: 6, effectiveRange: nil) as? EditorHintAttachment === after)
+        }
+        f.buffer.undoManager.undo()
+        #expect(f.view.sourceString == "abcd")
     }
 
     @Test(arguments: ["deleteWordBackward:", "deleteWordForward:", "deleteToBeginningOfLine:", "deleteToEndOfLine:", "deleteToBeginningOfParagraph:", "deleteToEndOfParagraph:", "deleteBackwardByDecomposingPreviousCharacter:"])

@@ -76,24 +76,13 @@ final class EditorInlayLayout {
         let source = adapter.buffer.storage.string as NSString
         var display: [EditorDisplayHint] = []
         var retained: [String: LSPInlayHint] = [:]
-        let previous = Dictionary(uniqueKeysWithValues: adapter.document.map.hintRuns.map { ($0.hint.id, $0.hint) })
+        let previousByOffset = Dictionary(grouping: adapter.document.map.hintRuns.map(\.hint), by: \.sourceOffset)
+        var claimedIDs = Set<String>()
         var occurrences: [LSPPosition: Int] = [:]
         for hint in values where InlayHintsFeature.isVisible(kind: hint.kind, settings: settings) {
             let occurrence = occurrences[hint.position, default: 0]
             occurrences[hint.position] = occurrence + 1
-            // Identify a hint by the position it annotates, not by the revision
-            // that produced it. `applySourceEdit` retains untouched hints across
-            // an edit under their original ids while shifting their offsets, so
-            // a revision-keyed id made every repeated hint look new and forced
-            // the projection to relay out every line between the first and last
-            // hint on each keystroke.
-            let id = "\(hint.position.line):\(hint.position.character):\(occurrence)"
-            if self.revision == revision, hints[id]?.wireValue == hint.wireValue,
-               let existing = previous[id], existing.fontSize == fontSize {
-                display.append(existing)
-                retained[id] = hint
-                continue
-            }
+            let canonicalID = "\(hint.position.line):\(hint.position.character):\(occurrence)"
             guard starts.indices.contains(hint.position.line) else { continue }
             let start = starts[hint.position.line]
             let end = hint.position.line + 1 < starts.count ? starts[hint.position.line + 1] : source.length
@@ -106,9 +95,33 @@ final class EditorInlayLayout {
                 defer { x += width }
                 return EditorDisplayHint.Part(label: part.value, rect: CGRect(x: x, y: 0, width: width, height: height))
             }
-            display.append(.init(id: id, sourceOffset: start + column, label: hint.label,
-                                 size: CGSize(width: max(1, x + (hint.paddingRight ? padding : 0)), height: max(1, height)), parts: parts, fontSize: fontSize))
-            retained[id] = hint
+            let sourceOffset = start + column
+            let size = CGSize(width: max(1, x + (hint.paddingRight ? padding : 0)), height: max(1, height))
+            // A validated edit shifts retained decorations before the server
+            // answers. Match the fresh response by its current offset and
+            // visual payload so a changed LSP line/character does not replace
+            // an otherwise identical attachment. Interaction state still uses
+            // the fresh protocol value below.
+            let existing = previousByOffset[sourceOffset]?.first {
+                !claimedIDs.contains($0.id) && $0.label == hint.label && $0.size == size
+                    && $0.parts == parts && $0.fontSize == fontSize
+            }
+            let decoration: EditorDisplayHint
+            if let existing {
+                decoration = existing
+            } else {
+                var id = canonicalID
+                var collision = 0
+                while claimedIDs.contains(id) {
+                    collision += 1
+                    id = "\(canonicalID)@\(sourceOffset)#\(collision)"
+                }
+                decoration = .init(id: id, sourceOffset: sourceOffset, label: hint.label,
+                                   size: size, parts: parts, fontSize: fontSize)
+            }
+            claimedIDs.insert(decoration.id)
+            display.append(decoration)
+            retained[decoration.id] = hint
         }
         if let covering {
             // Carry over decorations that are still outstanding — no response
