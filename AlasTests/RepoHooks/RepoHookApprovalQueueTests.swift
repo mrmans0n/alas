@@ -44,7 +44,7 @@ struct RepoHookApprovalQueueTests {
         let activeID = queue.activeRequest?.id
         #expect(queue.activeRequest?.hook == sharedHook)
         #expect(queue.activeRuntimeRequest?.id == activeID)
-        #expect(queue.activeProjectSettingsRequest == nil)
+        #expect(queue.activeProjectDialogRequest == nil)
 
         queue.decide(.approve)
         #expect(await firstTask.value == .approve)
@@ -89,13 +89,39 @@ struct RepoHookApprovalQueueTests {
 
     @Test func routesProjectSettingsRequestsToNestedPresenter() async {
         let queue = RepoHookApprovalQueue()
+        let presenterID = UUID()
+        queue.registerProjectDialogPresenter(id: presenterID)
         let task = Task {
             await queue.requestDecision(hook: hook("settings"), projectID: "project", context: .projectSettings)
         }
 
         await Task.yield()
-        #expect(queue.activeProjectSettingsRequest?.id == queue.activeRequest?.id)
+        #expect(queue.activeProjectDialogRequest?.id == queue.activeRequest?.id)
         #expect(queue.activeRuntimeRequest == nil)
+        queue.decide(.approve)
+        #expect(await task.value == .approve)
+        queue.unregisterProjectDialogPresenter(id: presenterID)
+    }
+
+    @Test func routesRuntimeRequestsThroughOpenProjectDialogAndBackToRoot() async {
+        let queue = RepoHookApprovalQueue()
+        let presenterID = UUID()
+        queue.registerProjectDialogPresenter(id: presenterID)
+        let task = Task {
+            await queue.requestDecision(hook: hook("runtime"), projectID: "project", context: .sessionOpen)
+        }
+
+        await Task.yield()
+        let activeID = queue.activeRequest?.id
+        #expect(queue.activeProjectDialogRequest?.id == activeID)
+        #expect(queue.activeRuntimeRequest == nil)
+
+        queue.activeRuntimeRequest = nil
+        #expect(queue.activeRequest?.id == activeID)
+
+        queue.unregisterProjectDialogPresenter(id: presenterID)
+        #expect(queue.activeProjectDialogRequest == nil)
+        #expect(queue.activeRuntimeRequest?.id == activeID)
         queue.decide(.approve)
         #expect(await task.value == .approve)
     }

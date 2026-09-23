@@ -89,6 +89,19 @@ final class RepoHookApprovalQueue {
     }
 
     private var entries: [Entry] = []
+    private var projectDialogPresenterIDs = Set<UUID>()
+
+    private var hasProjectDialogPresenter: Bool {
+        !projectDialogPresenterIDs.isEmpty
+    }
+
+    func registerProjectDialogPresenter(id: UUID) {
+        _ = projectDialogPresenterIDs.insert(id)
+    }
+
+    func unregisterProjectDialogPresenter(id: UUID) {
+        _ = projectDialogPresenterIDs.remove(id)
+    }
 
     var activeRequest: RepoHookApprovalRequest? {
         get { entries.first?.request }
@@ -100,11 +113,16 @@ final class RepoHookApprovalQueue {
 
     var activeRuntimeRequest: RepoHookApprovalRequest? {
         get {
-            guard let request = activeRequest, request.context.kind != .projectSettings else { return nil }
+            guard !hasProjectDialogPresenter,
+                  let request = activeRequest,
+                  request.context.kind != .projectSettings else {
+                return nil
+            }
             return request
         }
         set {
-            guard newValue == nil,
+            guard !hasProjectDialogPresenter,
+                  newValue == nil,
                   let activeRequest,
                   activeRequest.context.kind != .projectSettings
             else {
@@ -114,18 +132,13 @@ final class RepoHookApprovalQueue {
         }
     }
 
-    var activeProjectSettingsRequest: RepoHookApprovalRequest? {
+    var activeProjectDialogRequest: RepoHookApprovalRequest? {
         get {
-            guard let request = activeRequest, request.context.kind == .projectSettings else { return nil }
-            return request
+            guard hasProjectDialogPresenter else { return nil }
+            return activeRequest
         }
         set {
-            guard newValue == nil,
-                  let activeRequest,
-                  activeRequest.context.kind == .projectSettings
-            else {
-                return
-            }
+            guard hasProjectDialogPresenter, newValue == nil else { return }
             self.activeRequest = nil
         }
     }

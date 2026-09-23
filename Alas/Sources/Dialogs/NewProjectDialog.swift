@@ -25,12 +25,16 @@ struct EditProjectDialog: View {
 
 private struct ProjectDialogRepoHookApprovalPresentationHandler: ViewModifier {
     let approvalQueue: RepoHookApprovalQueue
+    @State private var presenterID = UUID()
 
     func body(content: Content) -> some View {
         @Bindable var queue = approvalQueue
-        content.sheet(item: $queue.activeProjectSettingsRequest) { request in
-            RepoHookApprovalSheet(request: request, queue: queue)
-        }
+        content
+            .onAppear { queue.registerProjectDialogPresenter(id: presenterID) }
+            .onDisappear { queue.unregisterProjectDialogPresenter(id: presenterID) }
+            .sheet(item: $queue.activeProjectDialogRequest) { request in
+                RepoHookApprovalSheet(request: request, queue: queue)
+            }
     }
 }
 
