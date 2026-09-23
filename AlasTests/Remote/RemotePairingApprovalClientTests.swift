@@ -174,11 +174,11 @@ struct RemotePairingApprovalClientTests {
         return }
         guard case .approved(let session) = result else { Issue.record("Expected approval before deadline")
         return }
-        // The receiver advances independently before redemption and refuses the stale authorization.
+        // The receiver advances independently before redemption and reports the stale authorization as expired.
         exchange.receiverOffset += 2
         let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
             origins: exchange.requester.origins, counterCode: "counter", publicKey: exchange.requester.publicKey))
-        #expect(outcome == .identityUnproven)
+        #expect(outcome == .approvalExpired)
         #expect(exchange.issues == 0)
     }
 
