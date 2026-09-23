@@ -4045,12 +4045,6 @@ final class AppState {
             selectWorktree(id: optimistic.id)
         }
 
-        let startupScript = StartupScriptResolver.worktreeCreateScript(
-            global: config.terminal,
-            repoScript: nil,
-            project: project
-        )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task { @MainActor in
             do {
@@ -4072,6 +4066,19 @@ final class AppState {
                     base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                let repoStartupScript = try await self.preparedRepoHook(
+                    event: .worktreeCreate,
+                    project: project,
+                    worktree: newWorktree,
+                    context: .worktreeCreate,
+                    includeUserStartupScript: runStartup
+                )
+                let startupScript = StartupScriptResolver.worktreeCreateScript(
+                    global: self.config.terminal,
+                    repoScript: repoStartupScript,
+                    project: project
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
                 if runStartup && !startupScript.isEmpty {
                     if let host = project.host ?? RemoteHostRegistry.shared.host(forPath: newWorktree.path.path) {
                         _ = try? await RemoteExec.run(host: host, cwd: newWorktree.path.path, command: startupScript)
