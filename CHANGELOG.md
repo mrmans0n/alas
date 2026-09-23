@@ -6,9 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Internal
+## [0.19.6] - 2026-09-23
 
-- Run the web preview automation suite under subprocess CI isolation and split Swift batches seven ways so the subprocess lane fits its budget (#1426).
+### 🐛 Fixes
+
+- Refuse bulk checkout deletion when Alas cannot confirm the risk, keep worktree name carets stable during programmatic edits, and present the project icon picker correctly (#1420, #1425, #1429).
+- Refresh federated peer lists after every state transition and close live remote sockets synchronously during shutdown (#1421, #1422).
+- Preserve LSP semantic tokens and inlay-hint presentation while applying local editor changes (#1428).
+
+### 🎨 Changed
+
+- Replace the Alas app icon (#1424).
+
+### 🏗️ Internal
+
+- Isolate the web preview automation suite and split Swift CI into seven batches so the subprocess lane stays within its time budget (#1427).
+
+## [0.19.5] - 2026-09-22
 
 ### ✨ Features
 
