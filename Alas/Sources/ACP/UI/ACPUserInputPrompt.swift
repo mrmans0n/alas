@@ -65,7 +65,7 @@ struct ACPUserInputPrompt: View {
             if shouldShowPromptText {
                 promptText
             }
-            ForEach(request.fields.filter { $0.isSupported || $0.required }) { field in
+            ForEach(renderedFields) { field in
                 fieldView(field)
             }
         }
@@ -96,13 +96,22 @@ struct ACPUserInputPrompt: View {
         request.title != nil && request.title != request.message
     }
 
+    private var renderedFields: [ACPUserInputField] {
+        Self.renderedFields(for: request)
+    }
+
     static func shouldShowMessage(for request: ACPUserInputRequest) -> Bool {
-        guard request.fields.count == 1, let field = request.fields.first else {
+        let renderedFields = renderedFields(for: request)
+        guard renderedFields.count == 1, let field = renderedFields.first else {
             return true
         }
         let whitespace = CharacterSet.whitespacesAndNewlines
         return request.message.trimmingCharacters(in: whitespace)
             != field.label.trimmingCharacters(in: whitespace)
+    }
+
+    static func renderedFields(for request: ACPUserInputRequest) -> [ACPUserInputField] {
+        request.fields.filter { $0.isSupported || $0.required }
     }
 
     @ViewBuilder

@@ -189,6 +189,20 @@ struct ACPUserInputFormStateTests {
         #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
     }
 
+    @Test("form keeps a matching message when its only field is not rendered")
+    func unsupportedOptionalFieldKeepsMessage() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Advanced configuration",
+          "requestedSchema":{"properties":{
+            "advanced":{"type":"object","title":"Advanced configuration"}
+          }}
+        }
+        """#)
+
+        #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
+    }
+
     private func formRequest(_ json: String) throws -> ACPUserInputRequest {
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,
