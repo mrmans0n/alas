@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum ACPComposerControlPresentation {
+    static func modeUsesWarningTint(_ spec: ChipSpec) -> Bool {
+        spec.options.first(where: { $0.id == spec.currentId })?.kind == .fullAccess
+    }
+
     static func fastModeIconName(isEnabled: Bool) -> String {
         isEnabled ? "bolt.fill" : "bolt"
     }
@@ -115,6 +119,38 @@ enum ACPComposerControlPresentation {
     }
 }
 
+enum ACPComposerOverflowItem: Hashable {
+    case mode
+    case thinking
+    case fastMode
+    case autoRun
+    case parameter(String)
+    case boolean(String)
+    case provider
+    case authentication
+
+    static func items(
+        hasMode: Bool,
+        hasThinking: Bool,
+        hasFastMode: Bool,
+        parameterIDs: [String],
+        booleanIDs: [String],
+        hasProvider: Bool,
+        hasAuthentication: Bool
+    ) -> [Self] {
+        var result: [Self] = []
+        if hasMode { result.append(.mode) }
+        if hasThinking { result.append(.thinking) }
+        if hasFastMode { result.append(.fastMode) }
+        result.append(.autoRun)
+        result.append(contentsOf: parameterIDs.map(Self.parameter))
+        result.append(contentsOf: booleanIDs.map(Self.boolean))
+        if hasProvider { result.append(.provider) }
+        if hasAuthentication { result.append(.authentication) }
+        return result
+    }
+}
+
 enum ACPComposerPlacement: Equatable {
     case bottom
     case inFlow
@@ -157,6 +193,7 @@ struct ACPComposer: View {
     @State private var inputFocused = false
     @State private var hasText: Bool = false
     @State private var composerNotice: String?
+    @State private var showingCompactOptions = false
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
     /// Languages ready to use without a download, for the mic's menu.
     @State private var installedDictationLocales: [String] = []
@@ -357,60 +394,9 @@ struct ACPComposer: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                hint
-                Spacer()
-                ACPContextUsageButton(usage: session.contextUsage,
-                                      modelName: session.currentModelDisplayName,
-                                      lastTurnQuota: session.lastTurnQuota,
-                                      sessionQuotaTotal: session.sessionQuotaTotal)
-                if dictation.state != .unavailable {
-                    micButton
-                }
-                attachButton
-                if let fastMode = fastModeParameter {
-                    selectFastModeToggle(fastMode)
-                } else if let fastMode = fastModeBooleanOption {
-                    booleanFastModeToggle(fastMode)
-                }
-                autoRunToggle
-                if let thinking = session.chipState.thinking {
-                    thinkingChip(thinking)
-                }
-                ForEach(parameterChips) { parameter in
-                    parameterChip(parameter)
-                }
-                ForEach(booleanConfigOptions) { option in
-                    booleanConfigToggle(option)
-                }
-                if let providerName = session.currentProviderDisplayName {
-                    providerPill(providerName)
-                }
-                // kind == .none is already covered by the sign-in banner
-                // above the composer, so the pill only shows once signed in.
-                if let status = session.authStatus, status.kind != .none {
-                    authStatusPill(status)
-                }
-                if let mode = session.chipState.mode {
-                    modeChip(mode)
-                }
-                if let models = session.chipState.models {
-                    modelChip(models)
-                }
-                ACPComposerActionButton(
-                    action: currentAction,
-                    onPrimary: handlePrimary,
-                    onMenu: handleMenu,
-                    onSchedule: { actions.submitWithIntent?(.schedule($0)) },
-                    queueBadgeCount: session.visibleQueueCount
-                )
-                // Send/Queue/Stop is the row's primary action, so it must never
-                // be the thing that ellipsizes when the composer is narrow.
-                // `fixedSize` stops it compressing below its ideal width;
-                // `layoutPriority` makes the stack hand it space before the
-                // chips, which truncate instead.
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(1)
+            ViewThatFits(in: .horizontal) {
+                expandedToolbar
+                compactToolbar
             }
             .padding(.horizontal, 2)
         }
@@ -440,6 +426,228 @@ struct ACPComposer: View {
                 .strokeBorder(borderColor, lineWidth: 0.75)
         )
         .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+    }
+
+    private var contextUsageButton: some View {
+        ACPContextUsageButton(usage: session.contextUsage,
+                              modelName: session.currentModelDisplayName,
+                              lastTurnQuota: session.lastTurnQuota,
+                              sessionQuotaTotal: session.sessionQuotaTotal)
+    }
+
+    private var actionButton: some View {
+        ACPComposerActionButton(
+            action: currentAction,
+            onPrimary: handlePrimary,
+            onMenu: handleMenu,
+            onSchedule: { actions.submitWithIntent?(.schedule($0)) },
+            queueBadgeCount: session.visibleQueueCount
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+    }
+
+    private var expandedToolbar: some View {
+        HStack(spacing: 8) {
+            hint
+            Spacer(minLength: 0)
+            contextUsageButton
+            if dictation.state != .unavailable { micButton }
+            attachButton
+            if let fastMode = fastModeParameter {
+                selectFastModeToggle(fastMode)
+            } else if let fastMode = fastModeBooleanOption {
+                booleanFastModeToggle(fastMode)
+            }
+            autoRunToggle
+            if let thinking = session.chipState.thinking {
+                thinkingChip(thinking).fixedSize(horizontal: true, vertical: false)
+            }
+            ForEach(parameterChips) { parameter in
+                parameterChip(parameter).fixedSize(horizontal: true, vertical: false)
+            }
+            ForEach(booleanConfigOptions) { option in
+                booleanConfigToggle(option).fixedSize(horizontal: true, vertical: false)
+            }
+            if let providerName = session.currentProviderDisplayName {
+                providerPill(providerName).fixedSize(horizontal: true, vertical: false)
+            }
+            if let status = visibleAuthStatus {
+                authStatusPill(status).fixedSize(horizontal: true, vertical: false)
+            }
+            if let mode = session.chipState.mode {
+                modeChip(mode).fixedSize(horizontal: true, vertical: false)
+            }
+            if let models = session.chipState.models {
+                modelChip(models).fixedSize(horizontal: true, vertical: false)
+            }
+            actionButton
+        }
+    }
+
+    private var compactToolbar: some View {
+        HStack(spacing: 8) {
+            contextUsageButton
+            if dictation.state != .unavailable { micButton }
+            attachButton
+            Spacer(minLength: 0)
+            if let models = session.chipState.models {
+                modelChip(models)
+                    .frame(maxWidth: 160)
+            }
+            compactOptionsButton
+            actionButton
+        }
+    }
+
+    private var visibleAuthStatus: ACPAuthStatus? {
+        guard let status = session.authStatus, status.kind != .none else { return nil }
+        return status
+    }
+
+    private var overflowItems: [ACPComposerOverflowItem] {
+        ACPComposerOverflowItem.items(
+            hasMode: session.chipState.mode != nil,
+            hasThinking: session.chipState.thinking != nil,
+            hasFastMode: fastModeParameter != nil || fastModeBooleanOption != nil,
+            parameterIDs: parameterChips.map(\.id),
+            booleanIDs: booleanConfigOptions.map(\.id),
+            hasProvider: session.currentProviderDisplayName != nil,
+            hasAuthentication: visibleAuthStatus != nil
+        )
+    }
+
+    private var compactOptionsButton: some View {
+        Button {
+            showingCompactOptions.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                if session.autoRunEnabled {
+                    Circle()
+                        .fill(theme.color("caution"))
+                        .frame(width: 5, height: 5)
+                }
+                Text("Options")
+                    .font(.system(size: 11, weight: .semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(theme.color("fg"))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3")))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Session options")
+        .popover(isPresented: $showingCompactOptions, arrowEdge: .top) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Session settings")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .padding(.bottom, 3)
+                    ForEach(overflowItems, id: \.self) { item in
+                        compactOptionRow(item)
+                    }
+                }
+                .padding(12)
+            }
+            .frame(width: 310)
+            .frame(maxHeight: 370)
+            .background(theme.color("bg-1"))
+        }
+    }
+
+    @ViewBuilder
+    private func compactOptionRow(_ item: ACPComposerOverflowItem) -> some View {
+        switch item {
+        case .mode:
+            if let mode = session.chipState.mode {
+                compactSelectRow("Mode", spec: mode, accent: modeAccent(mode))
+            }
+        case .thinking:
+            if let thinking = session.chipState.thinking {
+                compactSelectRow("Thinking", spec: thinking, accent: theme.color("warn"))
+            }
+        case .fastMode:
+            compactFastModeRow
+        case .autoRun:
+            HStack {
+                Text("Auto-run")
+                Spacer(minLength: 8)
+                Button(session.autoRunEnabled ? "On" : "Off", action: toggleAutoRun)
+                    .disabled(autoRunDisabled)
+                    .help(autoRunHelp)
+            }
+        case .parameter(let id):
+            if let parameter = parameterChips.first(where: { $0.id == id }) {
+                compactSelectRow(parameter.label, spec: parameter.spec, accent: theme.color("fg-muted"))
+            }
+        case .boolean(let id):
+            if let option = booleanConfigOptions.first(where: { $0.id == id }) {
+                booleanConfigToggle(option)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .provider:
+            if let name = session.currentProviderDisplayName {
+                compactInfoRow("Provider", value: name)
+            }
+        case .authentication:
+            if let status = visibleAuthStatus {
+                compactInfoRow("Sign-in", value: status.label)
+                    .help(authStatusHoverText(status))
+            }
+        }
+    }
+
+    private func compactSelectRow(_ title: String, spec: ChipSpec, accent: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            chip(spec: spec,
+                 label: selectedName(spec: spec, fallback: title),
+                 placeholder: title,
+                 accent: accent)
+                .frame(maxWidth: 170)
+        }
+        .font(.system(size: 11, weight: .medium))
+    }
+
+    @ViewBuilder
+    private var compactFastModeRow: some View {
+        if let parameter = fastModeParameter {
+            HStack {
+                Text("Fast mode")
+                Spacer(minLength: 8)
+                Button(isFastModeEnabled(parameter.spec) ? "On" : "Off") {
+                    guard let targetId = fastModeToggleTarget(for: parameter.spec) else { return }
+                    apply(spec: parameter.spec, selectedId: targetId)
+                }
+                .disabled(fastModeToggleTarget(for: parameter.spec) == nil)
+            }
+        } else if let option = fastModeBooleanOption {
+            HStack {
+                Text("Fast mode")
+                Spacer(minLength: 8)
+                Button(option.currentBoolValue == true ? "On" : "Off") {
+                    apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true))
+                }
+            }
+        }
+    }
+
+    private func compactInfoRow(_ title: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(theme.color("fg-muted"))
+                .lineLimit(1)
+        }
+        .font(.system(size: 11, weight: .medium))
     }
 
     private var hint: some View {
@@ -516,10 +724,7 @@ struct ACPComposer: View {
     // MARK: - Auto-run pill (was in the toolbar)
 
     private var autoRunToggle: some View {
-        Button {
-            session.autoRunEnabled.toggle()
-            manager.persist(session)
-        } label: {
+        Button(action: toggleAutoRun) {
             Image(systemName: ACPComposerControlPresentation.autoRunIconName(isEnabled: session.autoRunEnabled))
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(autoRunFg)
@@ -537,6 +742,11 @@ struct ACPComposer: View {
         .disabled(autoRunDisabled)
         .opacity(autoRunDisabled ? 0.5 : 1.0)
         .help(autoRunHelp)
+    }
+
+    private func toggleAutoRun() {
+        session.autoRunEnabled.toggle()
+        manager.persist(session)
     }
 
     private var autoRunDisabled: Bool {
@@ -754,7 +964,6 @@ struct ACPComposer: View {
     // MARK: - Chip builders driven by ACPChipState
 
     private func modeChip(_ spec: ChipSpec) -> some View {
-        let currentKind = spec.options.first(where: { $0.id == spec.currentId })?.kind
         return chip(spec: spec,
              label: chipLabel(prefix: "Mode", spec: spec),
              placeholder: "Mode",
@@ -762,7 +971,12 @@ struct ACPComposer: View {
              // per-action approval, so the chip switches to the warning
              // tint as a passive heads-up. Every other kind — including no
              // kind at all — keeps the standard accent.
-             accent: currentKind == .fullAccess ? theme.color("warn") : theme.color("accent"))
+             accent: modeAccent(spec))
+    }
+
+    private func modeAccent(_ spec: ChipSpec) -> Color {
+        ACPComposerControlPresentation.modeUsesWarningTint(spec)
+            ? theme.color("warn") : theme.color("accent")
     }
 
     private func thinkingChip(_ spec: ChipSpec) -> some View {
