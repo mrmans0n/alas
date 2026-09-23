@@ -298,14 +298,14 @@ import Testing
     @Test func keyRotationCannotBypassGlobalAdmission() throws {
         let f = ApprovalFixture()
         f.coordinator.setEnabled(true)
-        for index in 0..<10 {
+        for index in 0..<32 {
             let peer = f.peer(CoordinatorSigner(), id: "peer-\(index)")
             _ = try f.coordinator.challenge(requester: peer, attemptNonce: String(repeating: "a", count: 64))
         }
         #expect(throws: ApprovalFailure.throttled) {
             try f.coordinator.challenge(requester: f.requester, attemptNonce: String(repeating: "a", count: 64))
         }
-        f.time.addTimeInterval(60)
+        f.time.addTimeInterval(30)
         #expect(try f.challenge().payload.phase == .challenged)
     }
 

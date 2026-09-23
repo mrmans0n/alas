@@ -78,7 +78,7 @@ enum ApprovalFailure: Error, Equatable {
             return try signed(existing.entry.payload)
         }
         // Charge anonymous challenge admission, before a caller can rotate keys.
-        guard admissions.count < 10 else { throw ApprovalFailure.throttled }
+        guard admissions.count < 32 else { throw ApprovalFailure.throttled }
         guard records.values.filter({ $0.entry.phase == .challenged }).count < 32
         else { throw ApprovalFailure.capacity }
         let reply = try signed(payload)
@@ -303,7 +303,7 @@ enum ApprovalFailure: Error, Equatable {
                 break
             }
         }
-        admissions.removeAll { time - $0 >= 60_000 }
+        admissions.removeAll { time - $0 >= 30_000 }
         submissions = submissions.compactMapValues { times in
             let remaining = times.filter { time - $0 < 60_000 }
             return remaining.isEmpty ? nil : remaining
