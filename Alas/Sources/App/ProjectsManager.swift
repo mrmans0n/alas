@@ -456,6 +456,19 @@ final class ProjectsManager {
         return worktrees(projectId: projectId).filter { !hidden.contains(canonical($0.path)) }
     }
 
+    /// Clears the per-worktree metadata a removed instance left behind at
+    /// `worktreeId` — gg mode and issue attachment — while keeping the row
+    /// itself. Used when a checkout is recreated at a deleted path before the
+    /// post-delete refresh: the row that survives the refresh belongs to the
+    /// *new* checkout, so the removed instance's metadata must not carry over
+    /// (a different branch inheriting a deleted checkout's issue preamble, for
+    /// example). Callers persist via `saveProjects()`.
+    func resetRemovedInstanceMetadata(id: String, projectId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].ggWorktreeModes.removeValue(forKey: id)
+        projects[idx].issueAttachments.removeValue(forKey: id)
+    }
+
     func archivedWorktrees(projectId: String) -> [Worktree] {
         let hidden = hiddenSet(projectId: projectId)
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }

@@ -253,6 +253,7 @@ struct RemoteProtocolTests {
     @Test func worktreeOptionRoundTrips() throws {
         let option = RemoteWorktreeOption(
             id: "wt1",
+            projectId: "project-a",
             projectName: "alas",
             worktreeName: "feature-a",
             branch: "nacho/feature-a",
@@ -268,6 +269,31 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(option) == option)
     }
 
+    @Test func worktreeOptionPreservesProjectIdentityFromTheWire() throws {
+        let option = RemoteWorktreeOption(
+            id: "wt1",
+            projectId: nil,
+            projectName: "alas",
+            worktreeName: "feature-a",
+            branch: "nacho/feature-a",
+            path: "/tmp/alas-feature-a",
+            metricsAvailable: false,
+            comparisonRef: nil,
+            commitCount: 0,
+            changedFileCount: 0,
+            addedLines: 0,
+            deletedLines: 0,
+            conflictCount: 0
+        )
+        var payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(option)) as? [String: Any])
+        payload["projectId"] = "project-b"
+        let incoming = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(RemoteWorktreeOption.self, from: incoming)
+        let outgoing = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+
+        #expect(outgoing["projectId"] as? String == "project-b")
+    }
+
     @Test func agentOptionRoundTrips() throws {
         let option = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)
         #expect(try roundTrip(option) == option)
@@ -280,6 +306,17 @@ struct RemoteProtocolTests {
             try roundTrip(RemoteClientMessage.createSession(worktreeId: "wt1", agentId: "claude"))
                 == .createSession(worktreeId: "wt1", agentId: "claude")
         )
+        let scoped = RemoteClientMessage.createSessionInProject(
+            worktreeId: "wt1",
+            projectId: "project-b",
+            agentId: "claude"
+        )
+        #expect(try roundTrip(scoped) == scoped)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(scoped)) as? [String: Any])
+        #expect(object["type"] as? String == "createSessionInProject")
+        #expect(object["worktreeId"] as? String == "wt1")
+        #expect(object["projectId"] as? String == "project-b")
+        #expect(object["agentId"] as? String == "claude")
     }
 
     @Test func clientCreationMessagesDecode() throws {
@@ -300,11 +337,18 @@ struct RemoteProtocolTests {
             from: Data(#"{"type":"createSession","worktreeId":"wt1","agentId":"claude"}"#.utf8)
         )
         #expect(create == .createSession(worktreeId: "wt1", agentId: "claude"))
+
+        let scoped = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"createSessionInProject","worktreeId":"wt1","projectId":"project-b","agentId":"claude"}"#.utf8)
+        )
+        #expect(scoped == .createSessionInProject(worktreeId: "wt1", projectId: "project-b", agentId: "claude"))
     }
 
     @Test func serverCreationMessagesRoundTrip() throws {
         let worktree = RemoteWorktreeOption(
             id: "wt1",
+            projectId: "project-a",
             projectName: "alas",
             worktreeName: "feature-a",
             branch: "nacho/feature-a",

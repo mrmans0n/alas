@@ -314,13 +314,16 @@ struct RemoteWebAssetTests {
 
     @Test func remoteWebIncludesNewSessionMessageTypes() throws {
         let js = try asset("app.js")
+        let ordering = try asset("session-ordering.js")
         #expect(js.contains(#"type: "listWorktrees""#))
         #expect(js.contains(#"type: "listAgents""#))
-        #expect(js.contains(#"type: "createSession""#))
+        #expect(js.contains("RemoteSessionOrdering.createSessionRequest(selectedWorktree, createState.selectedAgentId)"))
         #expect(js.contains(#"case "worktreeList""#))
         #expect(js.contains(#"case "agentList""#))
         #expect(js.contains(#"case "sessionCreated""#))
         #expect(js.contains(#"case "createSessionFailed""#))
+        #expect(ordering.contains(#"type: "createSessionInProject""#))
+        #expect(ordering.contains(#"type: "createSession""#))
     }
 
     @Test func remoteWebIntegratesWorktreeCreationController() throws {
@@ -398,10 +401,10 @@ struct RemoteWebAssetTests {
         let js = try asset("app.js")
 
         #expect(js.contains("createState.worktrees = msg.worktrees || [];"))
-        #expect(js.contains("!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)"))
+        #expect(js.contains("!createState.worktrees.some(w => RemoteSessionOrdering.worktreeOptionKey(w) === createState.selectedWorktreeKey)"))
         #expect(js.contains("createState.agents = msg.agents || [];"))
         #expect(js.contains("!createState.agents.some(a => a.id === createState.selectedAgentId)"))
-        #expect(js.contains("!!createState.selectedWorktreeId && !!createState.selectedAgentId"))
+        #expect(js.contains("!!selectedWorktree && !!createState.selectedAgentId"))
         #expect(js.contains("worktrees: [],"))
         #expect(js.contains("agents: [],"))
     }

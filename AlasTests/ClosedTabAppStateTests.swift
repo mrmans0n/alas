@@ -205,6 +205,58 @@ struct ClosedTabAppStateTests {
         #expect(state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
     }
 
+    @Test func reopeningDoesNotUseAnotherProjectsSamePathWhenRecordedProjectLostCheckout() async {
+        let sharedID = "closed-tabs-removed-project-id"
+        let recordedProject = ProjectConfig(
+            id: "closed-tabs-recorded-project",
+            name: "Recorded",
+            path: "/tmp/closed-tabs-recorded-project",
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let otherProject = ProjectConfig(
+            id: "closed-tabs-other-project",
+            name: "Other",
+            path: "/tmp/closed-tabs-other-project",
+            color: "green",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        let state = AppState(store: MemoryStore())
+        state.projectsManager = ProjectsManager(persistedProjects: [recordedProject, otherProject])
+        let recordedWorktree = Worktree(
+            id: sharedID,
+            projectId: recordedProject.id,
+            name: "recorded",
+            branch: "recorded",
+            path: URL(fileURLWithPath: "/tmp/closed-tabs-recorded"),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let otherWorktree = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "other",
+            branch: "other",
+            path: URL(fileURLWithPath: "/tmp/closed-tabs-other"),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(recordedWorktree)
+        state.projectsManager.insertOptimisticWorktree(otherWorktree)
+        let tab = state.tabs.appendEditor(
+            worktreeId: sharedID,
+            title: "Recorded project tab",
+            relativePath: "README.md"
+        )
+        state.requestCloseTab(worktreeId: sharedID, projectId: recordedProject.id, tabId: tab.id)
+        state.projectsManager.removeOptimisticWorktree(id: sharedID, projectId: recordedProject.id)
+
+        await state.reopenLastClosedTab()
+
+        #expect(!state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
+    }
+
     @Test func centerTabNavigationUsesTheWorktreeActiveTab() {
         let fixture = makeFixture()
         let first = fixture.state.tabs.appendEditor(

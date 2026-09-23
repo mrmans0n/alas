@@ -640,6 +640,7 @@ struct RemoteAppStateAccessTests {
 
         #expect(worktrees.contains { $0.id == worktreeId })
         #expect(worktrees.first { $0.id == worktreeId }?.projectName == "test")
+        #expect(worktrees.first { $0.id == worktreeId }?.projectId == state.projects.first?.id)
     }
 
     @Test func remoteWorktreesFilterTransientOperationStates() async throws {

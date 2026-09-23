@@ -57,7 +57,7 @@ let createState = {
   step: "worktree",
   worktrees: [],
   agents: [],
-  selectedWorktreeId: null,
+  selectedWorktreeKey: null,
   selectedAgentId: null,
   filter: "",
   busy: false,
@@ -302,7 +302,7 @@ function resetServerScopedState() {
   if (currentSession) showSessions();
   hideCreateSheet(true);
   worktreeCreation.disconnect();
-  createState = { ...createState, open: false, step: "worktree", worktrees: [], agents: [], selectedWorktreeId: null, selectedAgentId: null, filter: "", busy: false, error: "" };
+  createState = { ...createState, open: false, step: "worktree", worktrees: [], agents: [], selectedWorktreeKey: null, selectedAgentId: null, filter: "", busy: false, error: "" };
   listedSessions = new Map(); sessionTitles = new Map(); expandedWorktrees = new Set();
   repoOverrides = new Map();
   dismissedQuestion = null; deferredCreatePrompt = null;
@@ -373,11 +373,15 @@ function handle(msg) {
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
       createState.worktrees = msg.worktrees || [];
-      const recoveredWorktreeId = worktreeCreation.snapshot().selectedWorktreeId;
-      if (recoveredWorktreeId && createState.worktrees.some(w => w.id === recoveredWorktreeId)) {
-        createState.selectedWorktreeId = recoveredWorktreeId;
-      } else if (!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)) {
-        createState.selectedWorktreeId = null;
+      const recoveryState = worktreeCreation.snapshot();
+      const recoveredWorktree = createState.worktrees.find(w =>
+        w.id === recoveryState.selectedWorktreeId &&
+        (!w.projectId || !recoveryState.projectId || w.projectId === recoveryState.projectId)
+      );
+      if (recoveredWorktree) {
+        createState.selectedWorktreeKey = RemoteSessionOrdering.worktreeOptionKey(recoveredWorktree);
+      } else if (!createState.worktrees.some(w => RemoteSessionOrdering.worktreeOptionKey(w) === createState.selectedWorktreeKey)) {
+        createState.selectedWorktreeKey = null;
       }
       worktreeCreation.markRecoveryListLoaded("worktrees");
       renderCreateSheet();
@@ -410,7 +414,10 @@ function handle(msg) {
     case "worktreeSessionCreationFailed":
       if (worktreeCreation.receive(msg)) {
         const state = worktreeCreation.snapshot();
-        if (state.selectedWorktreeId) createState.selectedWorktreeId = state.selectedWorktreeId;
+        const selectedWorktree = createState.worktrees.find(w =>
+          w.id === state.selectedWorktreeId && (!w.projectId || !state.projectId || w.projectId === state.projectId)
+        );
+        if (selectedWorktree) createState.selectedWorktreeKey = RemoteSessionOrdering.worktreeOptionKey(selectedWorktree);
         renderCreateSheet();
       }
       break;
@@ -1600,7 +1607,7 @@ function showCreateSheet() {
     step: "worktree",
     worktrees: [],
     agents: [],
-    selectedWorktreeId: null,
+    selectedWorktreeKey: null,
     selectedAgentId: null,
     filter: "",
     busy: false,
@@ -1701,9 +1708,10 @@ function renderCreateSheet() {
   renderNewWorktreeReview(creationState, isNewWorktree && !inWorktreeStep);
 
   const next = $("create-next");
+  const selectedWorktree = createState.worktrees.find(w => RemoteSessionOrdering.worktreeOptionKey(w) === createState.selectedWorktreeKey);
   const canProceed = isNewWorktree
     ? (inWorktreeStep ? worktreeCreation.canAdvance() : worktreeCreation.canSubmit())
-    : (inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedWorktreeId && !!createState.selectedAgentId);
+    : (inWorktreeStep ? !!selectedWorktree : !!selectedWorktree && !!createState.selectedAgentId);
   next.disabled = busy || !canProceed;
   next.textContent = inWorktreeStep
     ? "Next"
@@ -1783,11 +1791,12 @@ function renderCreateWorktrees(busy) {
     const row = el("button", "create-row");
     row.type = "button";
     row.disabled = busy;
-    row.classList.toggle("is-selected", worktree.id === createState.selectedWorktreeId);
-    row.setAttribute("aria-pressed", String(worktree.id === createState.selectedWorktreeId));
+    const worktreeKey = RemoteSessionOrdering.worktreeOptionKey(worktree);
+    row.classList.toggle("is-selected", worktreeKey === createState.selectedWorktreeKey);
+    row.setAttribute("aria-pressed", String(worktreeKey === createState.selectedWorktreeKey));
     row.onclick = () => {
       if (busy) return;
-      createState.selectedWorktreeId = worktree.id;
+      createState.selectedWorktreeKey = worktreeKey;
       createState.error = "";
       renderCreateSheet();
     };
@@ -1860,18 +1869,19 @@ function advanceCreateSheet() {
     return;
   }
   createState.error = "";
+  const selectedWorktree = createState.worktrees.find(w => RemoteSessionOrdering.worktreeOptionKey(w) === createState.selectedWorktreeKey);
 
   if (createState.step === "worktree") {
-    if (!createState.selectedWorktreeId) return;
+    if (!selectedWorktree) return;
     createState.step = "agent";
     renderCreateSheet();
     return;
   }
 
-  if (!createState.selectedWorktreeId || !createState.selectedAgentId) return;
+  if (!selectedWorktree || !createState.selectedAgentId) return;
   createState.busy = true;
   renderCreateSheet();
-  send({ type: "createSession", worktreeId: createState.selectedWorktreeId, agentId: createState.selectedAgentId });
+  send(RemoteSessionOrdering.createSessionRequest(selectedWorktree, createState.selectedAgentId));
 }
 
 function backCreateSheet() {

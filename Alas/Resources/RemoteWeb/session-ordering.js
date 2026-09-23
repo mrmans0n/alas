@@ -34,6 +34,21 @@ function worktreeRecency(worktree) {
   );
 }
 
+function worktreeOptionKey(option) {
+  const id = String(option?.id || "");
+  const projectId = String(option?.projectId || "");
+  return JSON.stringify([projectId || null, id]);
+}
+
+function createSessionRequest(worktree, agentId) {
+  const worktreeId = String(worktree?.id || "");
+  const projectId = String(worktree?.projectId || "");
+  if (projectId) {
+    return { type: "createSessionInProject", worktreeId, projectId, agentId };
+  }
+  return { type: "createSession", worktreeId, agentId };
+}
+
 function compareWorktrees(a, b) {
   const recency = worktreeRecency(b) - worktreeRecency(a);
   if (recency) return recency;
@@ -100,4 +115,4 @@ function groupSessions(sessions) {
   });
 }
 
-globalThis.RemoteSessionOrdering = { groupSessions, sessionIsActive };
+globalThis.RemoteSessionOrdering = { groupSessions, sessionIsActive, worktreeOptionKey, createSessionRequest };

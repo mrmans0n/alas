@@ -4,7 +4,7 @@ const SHELL_ASSETS = [
   "/index.html",
   "/style.css?v=54",
   "/repo-filter.js?v=3",
-  "/session-ordering.js?v=2",
+  "/session-ordering.js?v=3",
   "/worktree-creation.js?v=1",
   "/changes-view.js?v=8",
   "/file-browser.js?v=3",

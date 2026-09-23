@@ -62,6 +62,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var remoteBranchesCallCount = 0
     var remoteBranchesCompletionCount = 0
     var remoteBranchRequests: [String] = []
+    var createProjectRequests: [String?] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
     var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String)] = []
@@ -137,8 +138,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         remoteAgentsCallCount += 1
         return agents
     }
-    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
+    func createRemoteSession(worktreeId: String, projectId: String?, agentId: String) async -> RemoteCreateSessionResult {
         createRequests.append((worktreeId, agentId))
+        createProjectRequests.append(projectId)
         return createResults["\(worktreeId)|\(agentId)"] ?? .failure("Could not create session.")
     }
     func createRemoteWorktreeSession(
@@ -472,6 +474,7 @@ struct RemoteSessionGatewayTests {
         provider.worktrees = [
             RemoteWorktreeOption(
                 id: "wt1",
+                projectId: nil,
                 projectName: "alas",
                 worktreeName: "feature-a",
                 branch: "nacho/feature-a",
@@ -666,6 +669,7 @@ struct RemoteSessionGatewayTests {
         provider.worktrees = [
             RemoteWorktreeOption(
                 id: "worktree-1",
+                projectId: nil,
                 projectName: "Alas",
                 worktreeName: "Feature remote",
                 branch: "feature/remote",
@@ -742,6 +746,7 @@ struct RemoteSessionGatewayTests {
         provider.worktrees = [
             RemoteWorktreeOption(
                 id: "worktree-1",
+                projectId: nil,
                 projectName: "Alas",
                 worktreeName: "Feature remote",
                 branch: "feature/remote",
@@ -795,6 +800,7 @@ struct RemoteSessionGatewayTests {
         #expect(provider.createRequests.count == 1)
         #expect(provider.createRequests.first?.worktreeId == "wt1")
         #expect(provider.createRequests.first?.agentId == "claude")
+        #expect(provider.createProjectRequests == [nil])
         #expect(sent.contains(.sessionCreated(session: summary)))
         #expect(provider.sessionSummariesCallCount == 1)
         #expect(sent.contains(.sessionList(sessions: provider.summaries)))
@@ -808,6 +814,20 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.createSession(worktreeId: "missing", agentId: "claude"))
 
+        #expect(sent == [.createSessionFailed(message: "Worktree is no longer available.")])
+    }
+
+    @Test func projectScopedCreateSessionPreservesProjectIdentity() async {
+        let provider = FakeSessionsProvider()
+        provider.createResults["wt1|claude"] = .failure("Worktree is no longer available.")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createSessionInProject(worktreeId: "wt1", projectId: "project-b", agentId: "claude"))
+
+        #expect(provider.createRequests.map(\.worktreeId) == ["wt1"])
+        #expect(provider.createRequests.map(\.agentId) == ["claude"])
+        #expect(provider.createProjectRequests == ["project-b"])
         #expect(sent == [.createSessionFailed(message: "Worktree is no longer available.")])
     }
 
@@ -855,6 +875,7 @@ struct RemoteSessionGatewayTests {
         provider.worktrees = [
             RemoteWorktreeOption(
                 id: "wt1",
+                projectId: nil,
                 projectName: "alas",
                 worktreeName: "feature-a",
                 branch: "nacho/feature-a",

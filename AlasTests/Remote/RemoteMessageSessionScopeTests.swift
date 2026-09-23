@@ -37,6 +37,7 @@ struct RemoteMessageSessionScopeTests {
             .listBranches(projectId: "p"),
             .createWorktreeSession(projectId: "p", base: "main", branch: "b", agentId: "x"),
             .createSession(worktreeId: "w", agentId: "x"),
+            .createSessionInProject(worktreeId: "w", projectId: "p", agentId: "x"),
         ]
         for message in unscoped {
             #expect(message.sessionId == nil, "\(message)")

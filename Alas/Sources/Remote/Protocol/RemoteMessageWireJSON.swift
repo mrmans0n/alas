@@ -43,6 +43,7 @@ struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
 
 struct RemoteWorktreeOption: Codable, Equatable, Sendable {
     let id: String
+    let projectId: String?
     let projectName: String
     let worktreeName: String
     let branch: String

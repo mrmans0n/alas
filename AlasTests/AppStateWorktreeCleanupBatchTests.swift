@@ -124,6 +124,41 @@ struct AppStateWorktreeCleanupBatchTests {
         }
     }
 
+    @Test func selectionIsReconciledAfterSingleDeleteRemovesTheSelectedWorktree() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        #expect(fixture.state.projects.map(\.id) == [fixture.project.id])
+        fixture.state.selectWorktree(id: target.id)
+
+        let result = await fixture.state.cliDeleteWorktree(target, force: true, keepBranch: true)
+
+        #expect(result == .ok)
+        for _ in 0..<100 {
+            let stillListed = fixture.state.projectsManager
+                .worktrees(projectId: fixture.project.id)
+                .contains { $0.id == target.id }
+            let stillClaimed = fixture.state.projectsManager.operationState(
+                forWorktreeId: target.id,
+                projectId: fixture.project.id
+            ) != nil
+            if !stillListed, !stillClaimed, fixture.state.selectedWorktreeId != target.id { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let otherProjectsStillListingTarget = fixture.state.projects.filter { project in
+            project.id != fixture.project.id && fixture.state.projectsManager
+                .worktrees(projectId: project.id)
+                .contains { $0.id == target.id }
+        }
+        #expect(otherProjectsStillListingTarget.isEmpty)
+        #expect(fixture.state.selectedWorktreeId != target.id)
+        if let selected = fixture.state.selectedWorktreeId {
+            #expect(fixture.state.projectsManager
+                .worktrees(projectId: fixture.project.id)
+                .contains { $0.id == selected })
+        }
+    }
+
     /// The scan that produced a worktree's cached `Worktree.branch` can be
     /// stale by the time the batch actually runs. If something switches the
     /// checkout to a detached HEAD in that window, deleting on the stale

@@ -12,7 +12,7 @@ extension RemoteClientMessage {
     var sessionId: String? {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession:
+             .createWorktreeSession, .createSession, .createSessionInProject:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
              .listChanges(let id):
@@ -29,7 +29,7 @@ extension RemoteClientMessage {
     func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession:
+             .createWorktreeSession, .createSession, .createSessionInProject:
             return self
         case .subscribe: return .subscribe(sessionId: new)
         case .unsubscribe: return .unsubscribe(sessionId: new)

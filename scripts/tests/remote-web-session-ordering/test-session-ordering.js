@@ -69,4 +69,23 @@ const equalRecencySections = ordering.groupSessions([
 ]);
 assert.deepStrictEqual(equalRecencySections.map(({ id }) => id), ["repo-a", "repo-z"]);
 
+const samePathInA = { id: "/shared/path", projectId: "project-a" };
+const samePathInB = { id: "/shared/path", projectId: "project-b" };
+assert.notEqual(
+  ordering.worktreeOptionKey(samePathInA),
+  ordering.worktreeOptionKey(samePathInB),
+  "same-path worktrees from different projects must have distinct selection keys"
+);
+assert.deepStrictEqual(ordering.createSessionRequest(samePathInB, "claude"), {
+  type: "createSessionInProject",
+  worktreeId: "/shared/path",
+  projectId: "project-b",
+  agentId: "claude",
+});
+assert.deepStrictEqual(ordering.createSessionRequest({ id: "legacy" }, "claude"), {
+  type: "createSession",
+  worktreeId: "legacy",
+  agentId: "claude",
+}, "older servers without project identity keep the legacy request shape");
+
 console.log("session ordering tests passed");
