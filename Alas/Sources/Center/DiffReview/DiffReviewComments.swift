@@ -90,7 +90,7 @@ enum ReviewDraftQuote {
             }
         }
         let fence = String(repeating: "`", count: max(3, longestBacktickRun + 1))
-        let language = LanguageRegistry.highlighterExtension(forPath: path)
+        let language = LanguageRegistry.codeFenceLanguage(forPath: path)
         return "\(fence)\(language)\n\(code)\n\(fence)"
     }
 
@@ -104,6 +104,48 @@ enum ReviewDraftQuote {
     }
 }
 
+/// What the composer header shows and what "Insert code" drops into the
+/// message. `anchorDescription` mirrors the rail's line labels ("lines 12-15");
+/// `codeSnippet` is `nil` for whole-file anchors, where there is nothing to
+/// quote.
+struct ReviewDraftComposerContext {
+    let fileLabel: String
+    let lineDescription: String?
+    let codeSnippet: String?
+
+    init(path: String, selectedText: String?, lineRange: ClosedRange<Int>?) {
+        self.fileLabel = (path as NSString).lastPathComponent
+        self.lineDescription = lineRange.map { range in
+            range.lowerBound == range.upperBound
+                ? "line \(range.lowerBound)"
+                : "lines \(range.lowerBound)-\(range.upperBound)"
+        }
+        if let selectedText, !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            codeSnippet = ReviewDraftQuote.markdown(path: path, selectedText: selectedText)
+        } else {
+            codeSnippet = nil
+        }
+    }
+
+    init(path: String, anchor: ReviewDraftCommentAnchor?) {
+        switch anchor {
+        case .line(_, let startLine, let endLine, let selectedText):
+            self.init(
+                path: path,
+                selectedText: selectedText,
+                lineRange: min(startLine, endLine ?? startLine)...max(startLine, endLine ?? startLine)
+            )
+        default:
+            self.init(path: path, selectedText: nil, lineRange: nil)
+        }
+    }
+
+    var headerText: String {
+        lineDescription.map { "Adding a comment on \(fileLabel) \($0)" }
+            ?? "Adding a comment on \(fileLabel)"
+    }
+}
+
 struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let theme: Theme
@@ -112,6 +154,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     let quoteMarkdown: String?
     let quoteInsertionGeneration: Int
     let codeBlockStyle: MarkdownCodeBlockStyle?
+    var composerContext: ReviewDraftComposerContext? = nil
+    var insertCodeGeneration: Int = 0
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -123,6 +167,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         quoteMarkdown: String? = nil,
         quoteInsertionGeneration: Int = 0,
         codeBlockStyle: MarkdownCodeBlockStyle? = nil,
+        composerContext: ReviewDraftComposerContext? = nil,
+        insertCodeGeneration: Int = 0,
         onSave: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -133,6 +179,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         self.quoteMarkdown = quoteMarkdown
         self.quoteInsertionGeneration = quoteInsertionGeneration
         self.codeBlockStyle = codeBlockStyle
+        self.composerContext = composerContext
+        self.insertCodeGeneration = insertCodeGeneration
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -196,12 +244,14 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         applyTheme(to: scrollView, textView: textView)
         applyCodeBlockStyle(to: textView)
         context.coordinator.requestQuoteInsertionIfNeeded()
+        context.coordinator.requestInsertCodeIfNeeded()
         context.coordinator.requestFocusIfNeeded()
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.cancelScheduledFocusRequest()
         coordinator.cancelScheduledQuoteInsertion()
+        coordinator.cancelScheduledInsertCode()
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
         textView.onWindowChanged = nil
@@ -238,6 +288,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         private var latestFulfilledFocusRequestGeneration = 0
         private var latestQuoteInsertionGeneration = 0
         private var scheduledQuoteInsertionTask: Task<Void, Never>?
+        private var latestInsertCodeGeneration = 0
+        private var scheduledInsertCodeTask: Task<Void, Never>?
 
         func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var scheduledFocusRequestGeneration: Int?
@@ -250,6 +302,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         deinit {
             scheduledFocusTask?.cancel()
             scheduledQuoteInsertionTask?.cancel()
+            scheduledInsertCodeTask?.cancel()
         }
 
         func textDidChange(_ notification: Notification) {
@@ -278,7 +331,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             }
             guard generation != latestQuoteInsertionGeneration else { return }
             latestQuoteInsertionGeneration = generation
-            scheduledQuoteInsertionTask?.cancel()
             scheduledQuoteInsertionTask = Task { @MainActor [weak self] in
                 await Task.yield()
                 guard !Task.isCancelled,
@@ -293,6 +345,36 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
                     textView.insertText(insertion, replacementRange: range)
                 }
             }
+        }
+
+        func requestInsertCodeIfNeeded() {
+            let generation = parent.insertCodeGeneration
+            if generation == 0 {
+                latestInsertCodeGeneration = 0
+                scheduledInsertCodeTask?.cancel()
+                return
+            }
+            guard generation != latestInsertCodeGeneration else { return }
+            latestInsertCodeGeneration = generation
+            scheduledInsertCodeTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled,
+                      let self,
+                      self.parent.insertCodeGeneration == generation,
+                      let markdown = self.parent.composerContext?.codeSnippet,
+                      let textView = self.textView as? PairedDelimiterTextView
+                else { return }
+                let range = textView.selectedRange()
+                let insertion = ReviewDraftQuote.insertion(markdown: markdown, in: textView.string, replacing: range)
+                textView.performNativeTextInsertion {
+                    textView.insertText(insertion, replacementRange: range)
+                }
+            }
+        }
+
+        func cancelScheduledInsertCode() {
+            scheduledInsertCodeTask?.cancel()
+            scheduledInsertCodeTask = nil
         }
 
         func cancelScheduledQuoteInsertion() {

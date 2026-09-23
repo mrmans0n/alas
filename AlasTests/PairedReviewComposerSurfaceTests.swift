@@ -19,6 +19,50 @@ struct PairedReviewComposerSurfaceTests {
         """)
     }
 
+    @Test func codeFenceLanguageUsesCanonicalLanguageNamesNotExtensions() {
+        #expect(LanguageRegistry.codeFenceLanguage(forPath: "app/src/MainActivity.kt") == "kotlin")
+        #expect(LanguageRegistry.codeFenceLanguage(forPath: "src/main.py") == "python")
+        #expect(LanguageRegistry.codeFenceLanguage(forPath: "lib/service.rs") == "rust")
+        #expect(LanguageRegistry.codeFenceLanguage(forPath: "Dockerfile") == "dockerfile")
+        // Extensions with no grammar entry stay as-is, matching fence tags
+        // that markdown highlighters recognize anyway.
+        #expect(LanguageRegistry.codeFenceLanguage(forPath: "Notes.txt") == "txt")
+    }
+
+    @Test func reviewDraftComposerContextBuildsHeaderAndSnippet() {
+        let lineContext = ReviewDraftComposerContext(
+            path: "Sources/App/UserView.swift",
+            anchor: .line(side: .new, startLine: 12, endLine: 15, selectedText: "let value = 1")
+        )
+        #expect(lineContext.fileLabel == "UserView.swift")
+        #expect(lineContext.headerText == "Adding a comment on UserView.swift lines 12-15")
+        #expect(lineContext.codeSnippet == """
+        ```swift
+        let value = 1
+        ```
+        """)
+
+        let singleLine = ReviewDraftComposerContext(
+            path: "Main.kt",
+            anchor: .line(side: .new, startLine: 3, endLine: nil, selectedText: "fun main() {}")
+        )
+        #expect(singleLine.headerText == "Adding a comment on Main.kt line 3")
+        #expect(singleLine.codeSnippet?.hasPrefix("```kotlin\n") == true)
+
+        let wholeFile = ReviewDraftComposerContext(path: "README.md", anchor: .file)
+        #expect(wholeFile.headerText == "Adding a comment on README.md")
+        #expect(wholeFile.codeSnippet == nil)
+    }
+
+    @Test func reviewDraftComposerContextOmitsSnippetForEmptySelections() {
+        let blank = ReviewDraftComposerContext(
+            path: "A.swift",
+            anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: "   \n  ")
+        )
+        #expect(blank.codeSnippet == nil)
+        #expect(blank.headerText == "Adding a comment on A.swift line 1")
+    }
+
     @Test func reviewDraftComposerInsertsRequestedQuoteAtTheSelection() async throws {
         let quote = ReviewDraftQuote.markdown(path: "Sources/App.swift", selectedText: "let value = 1")
         let model = ReviewDraftComposerCapture(text: "beforeafter", quoteMarkdown: quote)
@@ -35,6 +79,42 @@ struct PairedReviewComposerSurfaceTests {
         await drain(controller.view)
 
         #expect(model.text == "before\n\n\(quote)\n\nafter")
+    }
+
+    @Test func reviewDraftComposerInsertsCodeSnippetAtTheSelection() async throws {
+        let context = ReviewDraftComposerContext(
+            path: "Sources/App.swift",
+            anchor: .line(side: .new, startLine: 2, endLine: nil, selectedText: "let value = 1")
+        )
+        let model = ReviewDraftComposerCapture(text: "beforeafter", composerContext: context)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(textView(containing: model.text, in: controller.view))
+        composer.setSelectedRange(NSRange(location: 6, length: 0))
+        model.insertCodeGeneration += 1
+        await drain(controller.view)
+
+        #expect(model.text == "before\n\n\(context.codeSnippet!)\n\nafter")
+    }
+
+    @Test func reviewDraftComposerInsertCodeIsANoOpWithoutAContext() async throws {
+        let model = ReviewDraftComposerCapture(text: "beforeafter")
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        model.insertCodeGeneration += 1
+        await drain(controller.view)
+
+        #expect(model.text == "beforeafter")
     }
 
     @Test func reviewDraftComposerWrapsSelectionAndRoutesKeyboardActions() async throws {
@@ -376,14 +456,22 @@ struct PairedReviewComposerSurfaceTests {
 private final class ReviewDraftComposerCapture: ObservableObject {
     @Published var text: String
     @Published var quoteInsertionGeneration = 0
+    @Published var insertCodeGeneration = 0
     let quoteMarkdown: String?
+    let composerContext: ReviewDraftComposerContext?
     let codeBlockStyle: MarkdownCodeBlockStyle?
     var saveCount = 0
     var cancelCount = 0
 
-    init(text: String, quoteMarkdown: String? = nil, codeBlockStyle: MarkdownCodeBlockStyle? = nil) {
+    init(
+        text: String,
+        quoteMarkdown: String? = nil,
+        composerContext: ReviewDraftComposerContext? = nil,
+        codeBlockStyle: MarkdownCodeBlockStyle? = nil
+    ) {
         self.text = text
         self.quoteMarkdown = quoteMarkdown
+        self.composerContext = composerContext
         self.codeBlockStyle = codeBlockStyle
     }
 }
@@ -402,6 +490,8 @@ private struct ReviewDraftComposerCaptureHarness: View {
             quoteMarkdown: model.quoteMarkdown,
             quoteInsertionGeneration: model.quoteInsertionGeneration,
             codeBlockStyle: model.codeBlockStyle,
+            composerContext: model.composerContext,
+            insertCodeGeneration: model.insertCodeGeneration,
             onSave: { model.saveCount += 1 },
             onCancel: { model.cancelCount += 1 }
         )

@@ -126,6 +126,20 @@ enum LanguageRegistry {
         return (path as NSString).pathExtension.lowercased()
     }
 
+    /// Canonical language name for markdown code-fence info strings — the
+    /// tree-sitter grammar id (`kotlin`), not the raw extension (`kt`).
+    /// `highlighterExtension` must stay extension-shaped because grammar
+    /// lookups key on it; fences are human-facing tags and need the name.
+    static func codeFenceLanguage(forPath path: String) -> String {
+        let filename = (path as NSString).lastPathComponent.lowercased()
+        if let byFilename = extensionsByFilename[filename],
+           let id = languageIDsByExtension[byFilename] {
+            return id
+        }
+        let ext = (path as NSString).pathExtension.lowercased()
+        return languageIDsByExtension[ext] ?? ext
+    }
+
     static func language(forFileExtension ext: String) -> Language? {
         let key = ext.lowercased()
         cacheLock.lock()

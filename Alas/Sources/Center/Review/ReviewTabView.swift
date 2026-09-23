@@ -21,6 +21,20 @@ enum ReviewTabPendingReviewPresentation {
     }
 }
 
+/// Maps a rail click on a staged comment to the file the diff should show.
+/// Falls back to the first loaded file when the comment's file is no longer
+/// part of the session (e.g. the diff refreshed after the comment was staged).
+enum ReviewTabCommentJump {
+    static func fileID(
+        for comment: StagedComment,
+        session: ReviewChangesLoadedSession
+    ) -> DiffReviewFileID? {
+        let match = session.summary.files.first { $0.path == comment.filePath }
+        if let match { return match.id }
+        return session.summary.files.first?.id
+    }
+}
+
 enum ReviewTabStartupRecoveryReadiness {
     static func reviewRefreshSettled(
         hasSnapshot: Bool,
@@ -68,6 +82,9 @@ struct ReviewTabView: View {
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
     @State private var pendingReviewRailCollapsed = false
+    @State private var pendingCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    @State private var pendingCommentScrollController = DiffReviewDraftCommentScrollController()
+    @State private var focusedPendingCommentID: String?
     @State private var showVerdictSheet = false
     @State private var wrapLines = false
     @State private var showWhitespace = false
@@ -233,7 +250,10 @@ struct ReviewTabView: View {
                ) {
                 PendingReviewRail(
                     pendingReview: pendingReview,
-                    collapsed: $pendingReviewRailCollapsed
+                    collapsed: $pendingReviewRailCollapsed,
+                    onSelectComment: { comment in
+                        selectPendingComment(comment)
+                    }
                 ) {
                     showVerdictSheet = true
                 }
@@ -372,6 +392,21 @@ struct ReviewTabView: View {
 
     // MARK: - Review surface
 
+    /// Rail click on a staged comment: focus its file in the diff and fire a
+    /// draft-comment scroll command. The AppKit resolver falls back to the
+    /// file header because staged comments render only in the rail, so the
+    /// viewport lands on the file the comment anchors to.
+    private func selectPendingComment(_ comment: StagedComment) {
+        guard let session else { return }
+        guard let fileID = ReviewTabCommentJump.fileID(for: comment, session: session) else { return }
+        focusedPendingCommentID = comment.id.uuidString
+        selectedFileID = fileID
+        pendingCommentScrollCommand = pendingCommentScrollController.command(
+            commentID: comment.id.uuidString,
+            fileID: fileID
+        )
+    }
+
     private func reviewSurface(_ session: ReviewChangesLoadedSession) -> some View {
         DiffReviewSurface(
             session: session,
@@ -387,6 +422,8 @@ struct ReviewTabView: View {
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
+            focusedDraftCommentID: focusedPendingCommentID,
+            draftCommentScrollCommand: pendingCommentScrollCommand,
             onSaveDraftComment: { _, path, _, anchor, body in
                 guard let pr = pendingReview else { return }
                 guard case .line(let side, let line, let endLine, _) = anchor else { return }

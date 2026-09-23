@@ -3,6 +3,7 @@ import SwiftUI
 struct PendingReviewRail: View {
     @Bindable var pendingReview: PendingReview
     @Binding var collapsed: Bool
+    var onSelectComment: (StagedComment) -> Void = { _ in }
     var onFinish: () -> Void = {}
 
     @Environment(\.theme) private var theme
@@ -88,14 +89,17 @@ struct PendingReviewRail: View {
     }
 
     private var commentList: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pendingReview.staged) { comment in
-                    commentRow(comment)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pendingReview.staged) { comment in
+                        commentRow(comment)
+                            .id(comment.id)
+                    }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
     }
 
@@ -122,6 +126,15 @@ struct PendingReviewRail: View {
             }
             .buttonStyle(.plain)
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelectComment(comment)
+        }
+        .help("Show in diff")
     }
 
     private func commentLabel(_ comment: StagedComment) -> String {

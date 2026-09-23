@@ -169,6 +169,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
 
@@ -186,6 +187,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = anchor
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
 
@@ -194,6 +196,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.isDraftComposerFocused = false
     }
 
@@ -765,6 +768,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         var hasher = Hasher()
         hasher.combine(state.draftComposerFocusRequestGeneration)
         hasher.combine(state.quoteInsertionGeneration)
+        hasher.combine(state.insertCodeGeneration)
         return hasher.finalize()
     }
 
@@ -1611,9 +1615,28 @@ struct AppKitDiffReviewComposerRowBody: View {
     let input: AppKitDiffReviewRowInput
     @FocusState private var isFocused: Bool
 
+    private var composerContext: ReviewDraftComposerContext? {
+        input.state.pendingDraftAnchor.map {
+            ReviewDraftComposerContext(path: $0.path, anchor: .line(
+                side: $0.side,
+                startLine: $0.line,
+                endLine: $0.endLine,
+                selectedText: $0.selectedText
+            ))
+        }
+    }
+
     var body: some View {
         DiffFeedbackLaneView(lane: input.state.pendingDraftAnchor.map(DiffFeedbackLaneResolver.lane) ?? .full, layoutMode: input.layoutMode, rows: rows) {
             VStack(alignment: .leading, spacing: 10) {
+                if let composerContext {
+                    Text(composerContext.headerText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(input.theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("diff-review-draft-composer-header")
+                }
                 ReviewDraftComposerTextEditor(
                     text: Binding(
                         get: { input.state.pendingDraftBody },
@@ -1632,6 +1655,8 @@ struct AppKitDiffReviewComposerRowBody: View {
                         baseColor: NSColor(input.theme.color("fg")),
                         monoSize: 12
                     ),
+                    composerContext: composerContext,
+                    insertCodeGeneration: input.state.insertCodeGeneration,
                     onSave: input.savePendingDraft,
                     onCancel: input.clearPendingDraft
                 )
@@ -1657,6 +1682,15 @@ struct AppKitDiffReviewComposerRowBody: View {
                             .background(input.theme.color("bg-3"))
                             .clipShape(RoundedRectangle(cornerRadius: 5))
                             .accessibilityIdentifier("diff-review-draft-composer-quote")
+                    }
+                    if composerContext?.codeSnippet != nil {
+                        Button("Insert code") { input.state.insertCodeGeneration &+= 1 }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(input.theme.color("fg-muted"))
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(input.theme.color("bg-3"))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .accessibilityIdentifier("diff-review-draft-composer-insert-code")
                     }
                     Spacer()
                     Button("Cancel", action: input.clearPendingDraft)

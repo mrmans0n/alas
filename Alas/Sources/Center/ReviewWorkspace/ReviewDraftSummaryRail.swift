@@ -314,18 +314,32 @@ struct ReviewDraftSummaryRail: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             expandedHeader
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 10) {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(groupedComments) { group in
-                            commentGroup(group)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(groupedComments) { group in
+                                commentGroup(group)
+                            }
+                        }
+                        if hasFeedback {
+                            feedbackSection
                         }
                     }
-                    if hasFeedback {
-                        feedbackSection
+                    .padding(10)
+                }
+                .onChange(of: focusedDraftCommentID) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo("review-draft-summary-comment-\(newValue)", anchor: .center)
                     }
                 }
-                .padding(10)
+                .onChange(of: focusedFeedbackID) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo("review-summary-feedback-\(newValue)", anchor: .center)
+                    }
+                }
             }
         }
     }
@@ -712,6 +726,7 @@ struct ReviewDraftSummaryRail: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("review-summary-feedback-\(item.id)")
+        .id("review-summary-feedback-\(item.id)")
         .accessibilityLabel(feedbackAccessibilityLabel(for: item))
         .padding(8)
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
@@ -789,6 +804,7 @@ struct ReviewDraftSummaryRail: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("review-draft-summary-comment-\(comment.id)")
+                .id("review-draft-summary-comment-\(comment.id)")
                 .accessibilityLabel(accessibilityLabel(for: comment))
             }
 

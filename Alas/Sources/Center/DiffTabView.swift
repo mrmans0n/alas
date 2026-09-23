@@ -48,6 +48,7 @@ struct DiffTabView: View {
     @State private var pendingDraftBody = ""
     @State private var draftComposerFocusRequestGeneration = 0
     @State private var quoteInsertionGeneration = 0
+    @State private var insertCodeGeneration = 0
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var wrapLines = false
     @State private var showWhitespace = false
@@ -570,6 +571,7 @@ struct DiffTabView: View {
         pendingDraftAnchor = nil
         pendingDraftBody = ""
         quoteInsertionGeneration = 0
+        insertCodeGeneration = 0
         draftComposerFocused = false
     }
 
@@ -577,6 +579,7 @@ struct DiffTabView: View {
         pendingDraftAnchor = anchor
         pendingDraftBody = ""
         quoteInsertionGeneration = 0
+        insertCodeGeneration = 0
         draftComposerFocusRequestGeneration &+= 1
     }
 
@@ -888,7 +891,26 @@ struct DiffTabView: View {
     }
 
     private var reviewDraftComposerContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let composerContext = pendingDraftAnchor.map { anchor in
+            ReviewDraftComposerContext(
+                path: anchor.path,
+                anchor: .line(
+                    side: anchor.side,
+                    startLine: anchor.line,
+                    endLine: anchor.endLine,
+                    selectedText: anchor.selectedText
+                )
+            )
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            if let composerContext {
+                Text(composerContext.headerText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("diff-review-draft-composer-header")
+            }
             ReviewDraftComposerTextEditor(
                 text: $pendingDraftBody,
                 theme: theme,
@@ -904,6 +926,8 @@ struct DiffTabView: View {
                     baseColor: NSColor(theme.color("fg")),
                     monoSize: 12
                 ),
+                composerContext: composerContext,
+                insertCodeGeneration: insertCodeGeneration,
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )
@@ -922,6 +946,17 @@ struct DiffTabView: View {
                     .background(theme.color("bg-3"))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .accessibilityIdentifier("diff-review-draft-composer-quote")
+                if composerContext?.codeSnippet != nil {
+                    Button("Insert code") { insertCodeGeneration &+= 1 }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .background(theme.color("bg-3"))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .accessibilityIdentifier("diff-review-draft-composer-insert-code")
+                }
                 Spacer(minLength: 0)
                 Button("Cancel") { clearPendingDraft() }
                     .buttonStyle(.plain)
