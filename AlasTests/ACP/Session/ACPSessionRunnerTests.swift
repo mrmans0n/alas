@@ -747,6 +747,88 @@ struct ACPSessionRunnerTests {
         #expect(row.currentModel == "sonnet")
     }
 
+    @Test("session_config_options_update persists non-model config values")
+    func sessionConfigOptionsUpdatePersistsNonModelValues() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(
+                    id: "effort",
+                    name: "Thinking",
+                    currentValue: "high",
+                    options: [
+                        ACPConfigOptionItem(id: "medium", name: "Medium"),
+                        ACPConfigOptionItem(id: "high", name: "High"),
+                    ]
+                ),
+                ACPConfigOption(
+                    id: "autoApprove",
+                    name: "Auto approve",
+                    type: "boolean",
+                    currentValue: .boolean(true)
+                ),
+            ])
+        ))
+
+        try await waitUntil {
+            runner.session.availableConfigOptions.count == 2
+        }
+        await runner.flushPersistence()
+        let row = try #require(try await runner.persistence.loadSession(id: "s"))
+        #expect(row.configOptionValues == [
+            "effort": .string("high"),
+            "autoApprove": .boolean(true),
+        ])
+    }
+
+    @Test("session row persistence preserves config values during restoration")
+    func sessionRowPersistencePreservesConfigValuesDuringRestoration() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-config-restore-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let persistedValues: [String: ACPConfigValue] = ["effort": .string("high")]
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            configOptionValues: persistedValues,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "medium",
+            options: [
+                ACPConfigOptionItem(id: "medium", name: "Medium"),
+                ACPConfigOptionItem(id: "high", name: "High"),
+            ]
+        )]
+        session.isRestoringPersistedConfigOptions = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        runner.persistSessionRow()
+        await runner.flushPersistence()
+
+        #expect(try store.loadSession(id: "s")?.configOptionValues == persistedValues)
+    }
+
     @Test("session_info_update preserves manual title")
     func sessionInfoUpdatePreservesManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory

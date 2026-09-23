@@ -31,6 +31,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Fold checkout deletion into the forget workflow and fix Former Workspace entries, ownership tracking, and deletion safeguards (#1411).
+- Restore each ACP session's mode, thinking level, permission level, and other configuration when reconnecting its worktree.
 - Stop syntax colors and inlay hints from churning while typing (#1413).
 - Collapse the right rail when the selected worktree is deleted, leaving the pane open for every other worktree.
 

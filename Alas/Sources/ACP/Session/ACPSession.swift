@@ -67,9 +67,56 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = [] {
-        didSet { availableConfigOptionsRevision += 1 }
+        didSet {
+            availableConfigOptionsRevision += 1
+            hasReceivedConfigOptions = true
+        }
     }
     private(set) var availableConfigOptionsRevision = 0
+    private(set) var hasReceivedConfigOptions = false
+    private var userConfigOptionEditRevisions: [String: UInt64] = [:]
+
+    func markUserConfigOptionEdit(for id: String) {
+        userConfigOptionEditRevisions[id, default: 0] &+= 1
+    }
+
+    func userConfigOptionEditRevision(for id: String) -> UInt64 {
+        userConfigOptionEditRevisions[id, default: 0]
+    }
+
+    func userConfigOptionEditRevisionsSnapshot() -> [String: UInt64] {
+        userConfigOptionEditRevisions
+    }
+    var isRestoringPersistedConfigOptions = false
+    private var pendingConfigOptionRestorations: [String: (value: ACPConfigValue, loadedValue: ACPConfigValue?)] = [:]
+
+    func retainConfigOptionRestoration(_ value: ACPConfigValue, loadedValue: ACPConfigValue?, for id: String) {
+        pendingConfigOptionRestorations[id] = (value, loadedValue)
+    }
+
+    func clearPendingConfigOptionRestoration(for id: String) {
+        pendingConfigOptionRestorations[id] = nil
+    }
+
+    func configOptionValuesForPersistence() -> [String: ACPConfigValue] {
+        var values = ACPConfigOption.currentValues(in: availableConfigOptions)
+        var obsoleteIDs: [String] = []
+        for (id, restoration) in pendingConfigOptionRestorations {
+            guard let option = availableConfigOptions.first(where: { $0.id == id }),
+                  option.currentValue == restoration.loadedValue,
+                  option.acceptsPersistedValue(restoration.value)
+            else {
+                obsoleteIDs.append(id)
+                continue
+            }
+            values[id] = restoration.value
+        }
+        for id in obsoleteIDs {
+            pendingConfigOptionRestorations[id] = nil
+        }
+        return values
+    }
+
     /// Runtime-only provider state learned from the adapter on each attach.
     @Published var providerCapabilities: EmptyObject?
     @Published var availableProviders: [ACPProviderInfo] = []
