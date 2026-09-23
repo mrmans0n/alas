@@ -1211,6 +1211,7 @@ struct ReviewSessionTabView: View {
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
         guard loaded?.session.files.contains(where: { $0.id == comment.fileID }) == true else { return }
+        focusedFeedbackID = nil
         setFocusedDraftCommentID(comment.id, persist: true)
         setSelectedFileID(comment.fileID, persist: true)
         let command = draftCommentScrollController.command(
@@ -1236,6 +1237,7 @@ struct ReviewSessionTabView: View {
             return
         }
         setSelectedFileID(request.fileID, persist: false)
+        focusedFeedbackID = nil
         setFocusedDraftCommentID(request.commentID, persist: false)
         let command = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
         attentionCommentCommand = (command, request)
@@ -1253,6 +1255,7 @@ struct ReviewSessionTabView: View {
         guard let loaded else { return }
         let grouped = inlineFeedbackByFileID(for: loaded)
         guard let fileID = Self.fileID(forFeedbackID: item.id, in: grouped) else { return }
+        setFocusedDraftCommentID(nil, persist: true)
         focusedFeedbackID = item.id
         setSelectedFileID(fileID, persist: true)
         inlineFeedbackScrollCommand = inlineFeedbackScrollController.command(

@@ -81,6 +81,28 @@ struct AppKitDiffReviewRowPlanTests {
         ])
     }
 
+    @Test func nonLineDraftComposerBuildsContextFromTheFileAnchor() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let body = AppKitDiffReviewComposerRowBody(rows: [], input: input)
+
+        let context = try #require(body.composerContext)
+        #expect(context.headerText == "Adding a comment on Example.swift")
+    }
+
+    @Test func nonLineDraftComposerBuildsContextFromTheImageAnchor() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .image(side: .new, normalizedX: 0.25, normalizedY: 0.75)
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let body = AppKitDiffReviewComposerRowBody(rows: [], input: input)
+
+        let context = try #require(body.composerContext)
+        #expect(context.headerText == "Adding a comment on logo.png")
+    }
+
     @Test func nonLineDraftComposerFollowsDraftCreationGate() {
         let file = textFile()
         let state = AppKitDiffReviewFileState()

@@ -1652,15 +1652,21 @@ struct AppKitDiffReviewComposerRowBody: View {
     let input: AppKitDiffReviewRowInput
     @FocusState private var isFocused: Bool
 
-    private var composerContext: ReviewDraftComposerContext? {
-        input.state.pendingDraftAnchor.map {
-            ReviewDraftComposerContext(path: $0.path, anchor: .line(
-                side: $0.side,
-                startLine: $0.line,
-                endLine: $0.endLine,
-                selectedText: $0.selectedText
+    /// Not private so tests can exercise the file/image-anchor branch
+    /// directly rather than relying on brittle accessibility-tree rendering.
+    var composerContext: ReviewDraftComposerContext? {
+        if let anchor = input.state.pendingDraftAnchor {
+            return ReviewDraftComposerContext(path: anchor.path, anchor: .line(
+                side: anchor.side,
+                startLine: anchor.line,
+                endLine: anchor.endLine,
+                selectedText: anchor.selectedText
             ))
         }
+        if input.state.pendingNonLineDraftAnchor != nil {
+            return ReviewDraftComposerContext(path: input.file.summary.path, anchor: input.state.pendingNonLineDraftAnchor)
+        }
+        return nil
     }
 
     var body: some View {
