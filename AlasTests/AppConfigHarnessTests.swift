@@ -65,6 +65,21 @@ struct AppConfigHarnessTests {
         #expect(decoded.harness.acpCollapseFinishedToolCalls)
     }
 
+    @Test("on-device titles can be disabled without disabling legacy configs")
+    func localTitleOptOutPersists() throws {
+        var config = AppConfig.defaults
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        var harness = try #require(object["harness"] as? [String: Any])
+        harness.removeValue(forKey: "acpLocalTitlesEnabled")
+        object["harness"] = harness
+        let legacy = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(legacy.harness.acpLocalTitlesEnabled)
+
+        config.harness.acpLocalTitlesEnabled = false
+        let restored = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(!restored.harness.acpLocalTitlesEnabled)
+    }
+
     @Test("populated values round-trip")
     func roundTrip() throws {
         var cfg = AppConfig.defaults

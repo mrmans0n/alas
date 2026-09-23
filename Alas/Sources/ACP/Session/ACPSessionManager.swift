@@ -135,6 +135,7 @@ final class ACPSessionManager: ObservableObject {
     /// the user's unsaved edits rather than stale disk bytes.
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
+    private let localTitlesEnabled: @MainActor () -> Bool
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
@@ -650,6 +651,7 @@ final class ACPSessionManager: ObservableObject {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
+         localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
@@ -687,6 +689,7 @@ final class ACPSessionManager: ObservableObject {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.localTitlesEnabled = localTitlesEnabled
         self.onInputAwaiting = onInputAwaiting
         self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
@@ -2062,7 +2065,7 @@ final class ACPSessionManager: ObservableObject {
             id: UUID().uuidString,
             agentId: discovered.agentId,
             title: title.isEmpty ? "Agent session" : title,
-            titleSource: title.isEmpty ? .placeholder : .generated,
+            titleSource: title.isEmpty ? .placeholder : .provider,
             remoteSessionId: discovered.remoteSessionId,
             origin: origin,
             currentModel: nil,
@@ -3911,6 +3914,7 @@ extension ACPSessionManager {
                                               self?.onSessionTitleUpdated?(sessionId, title)
                                               self?.changeNotifier.post()
                                           },
+                                          localTitlesEnabled: localTitlesEnabled,
                                           onModelsObserved: { [weak self] agentId, models in
                                               self?.onModelsObserved?(agentId, models)
                                           },

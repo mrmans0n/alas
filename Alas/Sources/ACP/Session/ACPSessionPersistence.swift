@@ -336,11 +336,11 @@ actor ACPSessionPersistence {
         )
     }
 
-    func updateGeneratedTitleIfPlaceholder(id: String, title: String, updatedAt: Int64) throws -> Bool {
-        try openedStore().updateGeneratedTitleIfPlaceholder(id: id, title: title, updatedAt: updatedAt)
+    func updateFallbackTitleIfPlaceholder(id: String, title: String, updatedAt: Int64) throws -> Bool {
+        try openedStore().updateFallbackTitleIfPlaceholder(id: id, title: title, updatedAt: updatedAt)
     }
 
-    func updateGeneratedTitleIfPlaceholder(
+    func updateFallbackTitleIfPlaceholder(
         id: String,
         title: String,
         updatedAt: Int64,
@@ -348,7 +348,20 @@ actor ACPSessionPersistence {
     ) throws -> Bool {
         let store = try openedStore()
         let operation = {
-            try store.updateGeneratedTitleIfPlaceholder(id: id, title: title, updatedAt: updatedAt)
+            try store.updateFallbackTitleIfPlaceholder(id: id, title: title, updatedAt: updatedAt)
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try operation()
+    }
+    func updateLocalTitleIfFallback(
+        id: String,
+        title: String,
+        updatedAt: Int64,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = {
+            try store.updateLocalTitleIfFallback(id: id, title: title, updatedAt: updatedAt)
         }
         if let fence { return try store.withLeaseFence(fence, operation) ?? false }
         return try operation()

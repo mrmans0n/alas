@@ -1664,7 +1664,7 @@ struct ACPSessionTests {
         session.recordUserPrompt(text: prompt, attachments: [])
 
         #expect(session.title == "Fix the session title inference")
-        #expect(session.titleSource == .generated)
+        #expect(session.titleSource == .fallback)
         if case .user(_, _, let text, _, _) = session.transcript.messages.first {
             #expect(text == prompt)
         } else {
@@ -1950,7 +1950,7 @@ struct ACPSessionTests {
 
         let goal = try #require(session.currentGoal)
         #expect(session.title == "Investigate ACP events")
-        #expect(session.titleSource == .generated)
+        #expect(session.titleSource == .provider)
         #expect(goal.objective == "Surface richer ACP events")
         #expect(goal.status == "in_progress")
         #expect(goal.tokenBudget == 12_000)

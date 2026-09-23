@@ -402,8 +402,8 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.titleSource == .placeholder)
     }
 
-    @Test("generated title update only changes placeholder title rows")
-    func generatedTitleUpdateOnlyChangesPlaceholderRows() throws {
+    @Test("prompt fallback only changes placeholder rows")
+    func fallbackTitleUpdateOnlyChangesPlaceholderRows() throws {
         let store = try tmp()
         try store.upsertSession(.init(
             id: "placeholder",
@@ -432,12 +432,12 @@ struct ACPSessionStoreCRUDTests {
             archived: false
         ))
 
-        let placeholderChanged = try store.updateGeneratedTitleIfPlaceholder(
+        let placeholderChanged = try store.updateFallbackTitleIfPlaceholder(
             id: "placeholder",
             title: "Generated Title",
             updatedAt: 4
         )
-        let manualChanged = try store.updateGeneratedTitleIfPlaceholder(
+        let manualChanged = try store.updateFallbackTitleIfPlaceholder(
             id: "manual",
             title: "Stale Generated Title",
             updatedAt: 4
@@ -447,10 +447,37 @@ struct ACPSessionStoreCRUDTests {
         let manual = try #require(try store.loadSession(id: "manual"))
         #expect(placeholderChanged)
         #expect(placeholder.title == "Generated Title")
-        #expect(placeholder.titleSource == .generated)
+        #expect(placeholder.titleSource == .fallback)
         #expect(manualChanged == false)
         #expect(manual.title == "Remote Title")
         #expect(manual.titleSource == .manual)
+    }
+
+    @Test("late local result cannot replace stored provider, manual, or legacy titles")
+    func localTitleOnlyReplacesFallback() throws {
+        let store = try tmp()
+        for (id, source) in [
+            ("fallback", ACPSessionTitleSource.fallback),
+            ("provider", .provider),
+            ("manual", .manual),
+            ("legacy", .generated)
+        ] {
+            try store.upsertSession(.init(
+                id: id, agentId: "claude", title: "Before", titleSource: source,
+                currentModel: nil, currentMode: nil, autoRun: false,
+                createdAt: 1, updatedAt: 2, lastOpenedAt: 3, archived: false
+            ))
+        }
+
+        for id in ["provider", "manual", "legacy"] {
+            #expect(try !store.updateLocalTitleIfFallback(id: id, title: "Late model", updatedAt: 4))
+            let row = try #require(try store.loadSession(id: id))
+            #expect(row.title == "Before")
+        }
+        #expect(try store.updateLocalTitleIfFallback(id: "fallback", title: "Local title", updatedAt: 4))
+        let row = try #require(try store.loadSession(id: "fallback"))
+        #expect(row.title == "Local title")
+        #expect(row.titleSource == .local)
     }
 
     @Test("session info title update changes placeholder and generated rows")
@@ -498,11 +525,11 @@ struct ACPSessionStoreCRUDTests {
         let generated = try #require(try store.loadSession(id: "generated"))
         #expect(placeholderChanged)
         #expect(placeholder.title == "Adapter Title")
-        #expect(placeholder.titleSource == .generated)
+        #expect(placeholder.titleSource == .provider)
         #expect(placeholder.updatedAt == 10)
         #expect(generatedChanged)
         #expect(generated.title == "Better Adapter Title")
-        #expect(generated.titleSource == .generated)
+        #expect(generated.titleSource == .provider)
         #expect(generated.updatedAt == 11)
     }
 
