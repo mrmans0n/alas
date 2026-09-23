@@ -716,8 +716,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentMode == "ask")
     }
 
-    @Test("model and mode picks made before attach persist and restore")
-    func modelAndModePicksMadeBeforeAttachPersistAndRestore() async throws {
+    @Test("pre-attach model and mode picks apply after lease acquisition")
+    func preAttachModelAndModePicksApplyAfterLeaseAcquisition() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -755,8 +755,10 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.isEmpty)
 
         await manager.flushAllPersistence()
-        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
-        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
 
         await manager.attach(to: session.id, freshlyCreated: false)
         try await waitUntil {
@@ -779,6 +781,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(modeParams.modeId == "ask")
         #expect(session.currentModel == "haiku")
         #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
     }
 
     @Test("model and mode picks are rejected on a live mirror")

@@ -532,10 +532,6 @@ final class ACPSessionManager: ObservableObject {
             guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
             session.currentModel = modelId
             pendingModel[id] = modelId
-            // The initial lease check must succeed before this pick is durable.
-            if !awaitingLeaseClaim {
-                persist(session)
-            }
             return
         }
         guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
@@ -562,10 +558,6 @@ final class ACPSessionManager: ObservableObject {
             guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
             session.currentMode = modeId
             pendingMode[id] = modeId
-            // The initial lease check must succeed before this pick is durable.
-            if !awaitingLeaseClaim {
-                persist(session)
-            }
             return
         }
         guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
