@@ -1,6 +1,6 @@
 # Peer pairing by approval
 
-Status: proposed for review.
+Status: approved. See the [implementation plan](2026-09-23-peer-pairing-approval-implementation.md).
 
 ## Intent
 
