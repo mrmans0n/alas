@@ -101,7 +101,7 @@ extension AppState {
         case .sessionOpen: project.startupScripts.sessionOpenMode
         case .worktreeCreate: project.startupScripts.worktreeCreateMode
         }
-        return mode == .useGlobal || mode == .appendToGlobal
+        return mode.usesInheritedScripts
     }
 
     func preparedWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {

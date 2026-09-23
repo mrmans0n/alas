@@ -13,6 +13,14 @@ enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable, Sendabl
     case appendToGlobal
     case overrideGlobal
     case disabled
+    var usesInheritedScripts: Bool {
+        switch self {
+        case .useGlobal, .appendToGlobal:
+            true
+        case .overrideGlobal, .disabled:
+            false
+        }
+    }
 }
 
 // MARK: - ProjectStartupScripts

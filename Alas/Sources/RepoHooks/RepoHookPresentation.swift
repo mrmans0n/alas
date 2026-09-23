@@ -22,6 +22,24 @@ enum RepoHookPresentation: Equatable, Sendable {
         }
     }
 
+    enum Action: Equatable, Sendable {
+        case review
+        case retry
+    }
+
+    func action(for mode: ProjectStartupScriptMode) -> Action? {
+        switch self {
+        case .approved:
+            .review
+        case .approvalRequired:
+            mode.usesInheritedScripts ? .review : nil
+        case .unreadable:
+            mode.usesInheritedScripts ? .retry : nil
+        case .notFound, .checkAfterRepositoryAvailable:
+            nil
+        }
+    }
+
     var summary: String {
         switch self {
         case .approved:

@@ -799,6 +799,13 @@ private struct ProjectDialog: View {
         }
     }
 
+    private func repoHookScriptMode(for event: RepoHookEvent) -> ProjectStartupScriptMode {
+        switch event {
+        case .sessionOpen: sessionOpenMode
+        case .worktreeCreate: worktreeCreateMode
+        }
+    }
+
     @ViewBuilder
     private func repoHookStatusRow(for event: RepoHookEvent) -> some View {
         let presentation = repoHookPresentations[event] ?? .checkAfterRepositoryAvailable
@@ -808,16 +815,16 @@ private struct ProjectDialog: View {
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            switch presentation {
-            case .approved(_), .approvalRequired(_):
+            switch presentation.action(for: repoHookScriptMode(for: event)) {
+            case .some(.review):
                 Button("Review") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .medium))
-            case .unreadable(_):
+            case .some(.retry):
                 Button("Retry") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .medium))
-            case .notFound, .checkAfterRepositoryAvailable:
+            case nil:
                 EmptyView()
             }
         }
@@ -872,6 +879,10 @@ private struct ProjectDialog: View {
                         guard requestID == repoHookInspectionID else { return }
                         return
                     }
+                    guard repoHookScriptMode(for: event).usesInheritedScripts else {
+                        repoHookPresentations[event] = .approvalRequired(hook)
+                        return
+                    }
                     let decision = await state.repoHookApprovalQueue.requestDecision(
                         hook: hook,
                         projectID: inspection.projectID,
@@ -880,6 +891,10 @@ private struct ProjectDialog: View {
                     guard requestID == repoHookInspectionID else { return }
                     switch decision {
                     case .approve:
+                        guard repoHookScriptMode(for: event).usesInheritedScripts else {
+                            repoHookPresentations[event] = .approvalRequired(hook)
+                            return
+                        }
                         do {
                             if case .edit = mode {
                                 try state.persistRepoHookApproval(projectId: inspection.projectID, hash: hook.hash)

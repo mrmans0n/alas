@@ -20,4 +20,20 @@ struct RepoHookPresentationTests {
         #expect(RepoHookPresentation.make(result: .failed(source: .local, message: "bad UTF-8"), isApproved: { _ in false }) == .unreadable("bad UTF-8"))
         #expect(RepoHookPresentation.make(result: nil, isApproved: { _ in false }) == .checkAfterRepositoryAvailable)
     }
+    @Test("approval actions follow repository hook execution mode")
+    func actionsFollowRepositoryHookMode() {
+        let approvalRequired = RepoHookPresentation.approvalRequired(hook)
+        let approved = RepoHookPresentation.approved(hook)
+        let unreadable = RepoHookPresentation.unreadable("read failed")
+
+        #expect(approvalRequired.action(for: .useGlobal) == .review)
+        #expect(approvalRequired.action(for: .appendToGlobal) == .review)
+        #expect(approvalRequired.action(for: .overrideGlobal) == nil)
+        #expect(approvalRequired.action(for: .disabled) == nil)
+        #expect(approved.action(for: .overrideGlobal) == .review)
+        #expect(approved.action(for: .disabled) == .review)
+        #expect(unreadable.action(for: .useGlobal) == .retry)
+        #expect(unreadable.action(for: .overrideGlobal) == nil)
+        #expect(unreadable.action(for: .disabled) == nil)
+    }
 }
