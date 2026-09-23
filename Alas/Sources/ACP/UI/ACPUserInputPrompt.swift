@@ -62,7 +62,9 @@ struct ACPUserInputPrompt: View {
 
     private var formBody: some View {
         VStack(alignment: .leading, spacing: 14) {
-            promptText
+            if shouldShowPromptText {
+                promptText
+            }
             ForEach(request.fields.filter { $0.isSupported || $0.required }) { field in
                 fieldView(field)
             }
@@ -72,16 +74,35 @@ struct ACPUserInputPrompt: View {
 
     private var promptText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let title = request.title, title != request.message {
+            if shouldShowTitle, let title = request.title {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
             }
-            Text(request.message)
-                .font(.system(size: 12.5))
-                .foregroundStyle(theme.color("fg"))
-                .fixedSize(horizontal: false, vertical: true)
+            if Self.shouldShowMessage(for: request) {
+                Text(request.message)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.color("fg"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private var shouldShowPromptText: Bool {
+        shouldShowTitle || Self.shouldShowMessage(for: request)
+    }
+
+    private var shouldShowTitle: Bool {
+        request.title != nil && request.title != request.message
+    }
+
+    static func shouldShowMessage(for request: ACPUserInputRequest) -> Bool {
+        guard request.fields.count == 1, let field = request.fields.first else {
+            return true
+        }
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        return request.message.trimmingCharacters(in: whitespace)
+            != field.label.trimmingCharacters(in: whitespace)
     }
 
     @ViewBuilder

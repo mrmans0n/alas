@@ -146,6 +146,49 @@ struct ACPUserInputFormStateTests {
         #expect(state.submittedContent() == ["startsAt": .string("2026-07-10T14:30:00Z")])
     }
 
+    @Test("single-field form hides a message that repeats the field label")
+    func matchingSingleFieldMessageIsHidden() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Choose an authoring model",
+          "requestedSchema":{"properties":{
+            "authoringModel":{"type":"string","title":"  Choose an authoring model  "}
+          }}
+        }
+        """#)
+
+        #expect(!ACPUserInputPrompt.shouldShowMessage(for: request))
+    }
+
+    @Test("single-field form keeps a distinct message")
+    func distinctSingleFieldMessageIsShown() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Configure this project",
+          "requestedSchema":{"properties":{
+            "authoringModel":{"type":"string","title":"Authoring model"}
+          }}
+        }
+        """#)
+
+        #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
+    }
+
+    @Test("multi-field form keeps its message when a field label matches")
+    func matchingMultiFieldMessageIsShown() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Authoring model",
+          "requestedSchema":{"properties":{
+            "authoringModel":{"type":"string","title":"Authoring model"},
+            "enabled":{"type":"boolean","title":"Enabled"}
+          }}
+        }
+        """#)
+
+        #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
+    }
+
     private func formRequest(_ json: String) throws -> ACPUserInputRequest {
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,
